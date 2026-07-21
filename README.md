@@ -11,6 +11,7 @@ Certificates for the Certificate Authority and mTLS clients are located in [`moc
 - [Prerequisites](#prerequisites)
 - [Instructions for macOS / Linux](#instructions-for-macos--linux)
 - [Instructions for Windows](#instructions-for-windows)
+- [Resuming After a Reboot (already set up)](#resuming-after-a-reboot-already-set-up)
 - [Obtaining a Token Using Certificates](#obtaining-a-token-using-certificates)
 
 ---
@@ -174,6 +175,30 @@ In some environments, Docker may fail to locate the `buster` image. If this occu
    - <img width="500" alt="image" src="https://github.com/user-attachments/assets/fc88a84f-c291-4768-be95-88e1c4e4ff4d" />
 2. Ensure they are pointing to valid base images (e.g., replace `buster` with an available image that matches your environment).
 3. Return to step [5. Run with Conformance Suite](#5-run-with-conformance-suite)
+
+---
+
+## Resuming After a Reboot (already set up)
+
+If you already went through `make setup`, `make setup-cs`, and `make run-with-cs` at least once, everything needed survives a reboot: Docker images, volumes (`mongo-data`, `maven-cache`, `config`), the cloned + built `conformance-suite/` (including its `target/fapi-test-suite.jar`), the generated certificates, and the `auth.local` / `api.local` / `directory` hosts file entries. None of that needs to be redone.
+
+Only the running containers stop. To bring everything back up:
+
+1. Make sure Docker Desktop is running.
+2. From the repository root:
+   ```bash
+   make run-with-cs
+   ```
+   This rebuilds the `insurance-server-lambdas` image (fast — Gradle cache) and starts every container. No re-clone or Conformance Suite rebuild happens unless you deleted `insurance-server-lambdas/conformance-suite/`.
+3. If you only need the base environment (no Conformance Suite), use `make run` instead.
+
+**Known race condition on cold start:** `auth` and `mtls` depend on `localstack` being healthy, but the healthcheck (presence of `config.txt`) can pass slightly before `localstack` finishes provisioning all SSM parameters and S3 objects (`setup_ssm.sh`). On a full cold start this sometimes makes `auth` and/or `mtls` exit with an error (`ParameterNotFound`, `Could not fetch ssa_jwk from S3`). If that happens, just restart the two once `localstack` has settled:
+```bash
+docker-compose up -d auth mtls
+```
+Verified: on a full stop → cold start test, this raced and failed once, and came back clean immediately on that one retry — it isn't a real configuration problem, just startup ordering.
+
+If `insurance-server-lambdas/conformance-suite/` was deleted or you're setting up on a **new machine**, you also need to reapply the local-Directory patches described in [`Tese/patches/README.md`](Tese/patches/README.md) — the Conformance Suite otherwise tries to validate against Raidiam's real sandbox Directory and fails. Apply those patches, then run `make setup-cs` (both phases, see [Instructions for Windows](#instructions-for-windows) step 4) before `make run-with-cs`.
 
 ---
 
