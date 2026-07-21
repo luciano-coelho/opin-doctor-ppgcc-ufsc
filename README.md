@@ -198,7 +198,7 @@ docker-compose up -d auth mtls
 ```
 Verified: on a full stop → cold start test, this raced and failed once, and came back clean immediately on that one retry — it isn't a real configuration problem, just startup ordering.
 
-If `insurance-server-lambdas/conformance-suite/` was deleted or you're setting up on a **new machine**, you also need to reapply the local-Directory patches described in [`Tese/patches/README.md`](Tese/patches/README.md) — the Conformance Suite otherwise tries to validate against Raidiam's real sandbox Directory and fails. Apply those patches, then run `make setup-cs` (both phases, see [Instructions for Windows](#instructions-for-windows) step 4) before `make run-with-cs`.
+If `insurance-server-lambdas/conformance-suite/` was deleted or you're setting up on a **new machine**, you also need to reapply the local-Directory patches described in [`thesis/patches/README.md`](thesis/patches/README.md) — the Conformance Suite otherwise tries to validate against Raidiam's real sandbox Directory and fails. Apply those patches, then run `make setup-cs` (both phases, see [Instructions for Windows](#instructions-for-windows) step 4) before `make run-with-cs`.
 
 ---
 

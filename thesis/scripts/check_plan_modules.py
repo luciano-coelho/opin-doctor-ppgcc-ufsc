@@ -1,7 +1,7 @@
 """
-Script rapido: cria uma instancia do plano 'Insurance consents api test V3.0.0'
-usando config_template_consents_v3.json e imprime a resposta completa,
-para conferir os nomes exatos dos modulos antes de rodar a automacao completa.
+Quick script: creates an instance of the 'Insurance consents api test V3.0.0'
+plan using config_template_consents_v3.json and prints the full response,
+to check the exact module names before running the full automation.
 """
 
 import json
@@ -32,16 +32,16 @@ def main():
     print()
 
     if not r.ok:
-        print("Resposta (erro):")
+        print("Response (error):")
         print(r.text)
         return
 
     data = r.json()
-    print("Resposta completa:")
+    print("Full response:")
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
     print()
-    print("=== Nomes de modulos ===")
+    print("=== Module names ===")
     for m in data.get("modules", []):
         print(f"- {m.get('testModule')}  (variant={m.get('variant')})")
 

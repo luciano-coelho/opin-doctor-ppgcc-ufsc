@@ -1,23 +1,24 @@
 """
-Automacao de coleta de baseline (criptografia classica) da Conformance Suite MockOPIN,
-para a tese de doutorado sobre migracao PQC.
+Baseline (classical cryptography) collection automation for the MockOPIN
+Conformance Suite, for the doctoral thesis on PQC migration.
 
-Roda os modulos "happy path" (preflight + core/status) dos planos:
+Runs the "happy path" modules (preflight + core/status) of the plans:
   - Insurance consents api test V3.0.0
   - person_test-plan_v2.0.0
 
-Salva logs brutos + metricas agregadas em Tese/resultados/baseline/.
-Le os templates de configuracao de Tese/config/.
+Saves raw logs + aggregated metrics under thesis/results/baseline/.
+Reads config templates from thesis/config/.
 
-Observacoes sobre os resultados:
-- Os modulos "preflight" sempre terminam com result=FAILED: eles chamam uma
-  condicao interna da suite (OpinCheckDirectoryDiscoveryUrl/ApiBase) que exige
-  o Directory real da Raidiam e nao pode ser satisfeita rodando 100% local.
-  E "continue on failure", entao o resto do fluxo roda normalmente -- so o
-  rotulo de resultado fica FAILED mesmo com o trafego real capturado no log.
-- Os modulos de status/core podem pausar em status=WAITING esperando um login
-  + consentimento manual no navegador (ver poll_until_terminal). O script
-  imprime a URL e continua o polling sozinho ate a suite detectar o redirect.
+Notes on the results:
+- The "preflight" modules always end with result=FAILED: they call an
+  internal suite condition (OpinCheckDirectoryDiscoveryUrl/ApiBase) that
+  requires Raidiam's real Directory and can't be satisfied running fully
+  local. It's "continue on failure", so the rest of the flow runs normally
+  -- only the result label ends up FAILED even though the real traffic was
+  captured in the log.
+- The status/core modules may pause at status=WAITING waiting for a manual
+  browser login + consent (see poll_until_terminal). The script prints the
+  URL and keeps polling on its own until the suite detects the redirect.
 """
 
 import io
@@ -35,11 +36,11 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Caminhos relativos ao script (nao ao cwd), pra funcionar independente de
-# onde o script e chamado: Tese/scripts/baseline_automation.py -> Tese/
+# Paths relative to the script (not to cwd), so this works regardless of
+# where the script is invoked from: thesis/scripts/baseline_automation.py -> thesis/
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
-OUTPUT_DIR = BASE_DIR / "resultados" / "baseline"
+OUTPUT_DIR = BASE_DIR / "results" / "baseline"
 
 BASE_URL = "https://localhost:8443"
 POLL_INTERVAL_SECONDS = 5
@@ -48,10 +49,10 @@ TERMINAL_STATUSES = {"FINISHED", "INTERRUPTED"}
 
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)?")
 
-# Cada plano tem 5-11 modulos (o resto sao casos negativos/erro: token
-# expirado, permissao invalida, limites de cliente etc). Rodamos so os dois
-# modulos "felizes" de cada um: o preflight (valida certificados/SSA) e o
-# modulo que efetivamente cria/consulta um consentimento pela API real.
+# Each plan has 5-11 modules (the rest are negative/error cases: expired
+# token, invalid permission, client limits etc). We only run the two
+# "happy" modules of each: preflight (validates certs/SSA) and the module
+# that actually creates/queries a consent through the real API.
 PLANS = [
     {
         "plan_name": "Insurance consents api test V3.0.0",
@@ -104,15 +105,15 @@ def start_module(plan_id: str, test_name: str):
 
 
 def poll_until_terminal(test_id: str, module_label: str):
-    # A doc do /api/runner recomenda explicitamente usar /api/info/{id} para
-    # acompanhar o teste, nao /api/runner/{id} (que tambem existe mas nao
-    # e o caminho documentado para isso).
+    # The /api/runner docs explicitly recommend using /api/info/{id} to
+    # track the test, not /api/runner/{id} (which also exists but isn't
+    # the documented path for this).
     started = time.time()
     already_printed_url = False
     while True:
         elapsed = time.time() - started
         if elapsed > POLL_TIMEOUT_SECONDS:
-            print(f"  [{module_label}] TIMEOUT apos {POLL_TIMEOUT_SECONDS}s, abortando polling.")
+            print(f"  [{module_label}] TIMEOUT after {POLL_TIMEOUT_SECONDS}s, aborting polling.")
             return None
 
         r = api_get(f"/api/info/{test_id}")
@@ -132,8 +133,9 @@ def poll_until_terminal(test_id: str, module_label: str):
                     browser_info = br.json()
                 except ValueError:
                     browser_info = br.text
-                # A resposta real usa "urls" (lista) -- guardamos "url"/"redirect"
-                # como fallback caso a suite mude o formato numa versao futura.
+                # The real response uses "urls" (a list) -- we keep the
+                # "url"/"redirect" fallback in case the suite changes the
+                # format in a future version.
                 urls = []
                 if isinstance(browser_info, dict):
                     urls = browser_info.get("urls") or []
@@ -145,14 +147,14 @@ def poll_until_terminal(test_id: str, module_label: str):
                     urls = [browser_info]
                 if urls:
                     print("\n  " + "=" * 70)
-                    print(f"  >>> INTERACAO MANUAL NECESSARIA para [{module_label}]")
+                    print(f"  >>> MANUAL INTERACTION REQUIRED for [{module_label}]")
                     for u in urls:
-                        print(f"  >>> Abra no navegador: {u}")
-                    # Sem input() de proposito: o polling ja detecta a mudanca de
-                    # status assim que o navegador completa o redirect real, entao
-                    # nao ha necessidade (nem como, num terminal nao-interativo)
-                    # de esperar confirmacao manual aqui.
-                    print("  >>> O polling continua automaticamente; nao e preciso confirmar aqui.")
+                        print(f"  >>> Open in browser: {u}")
+                    # No input() on purpose: polling already detects the status
+                    # change as soon as the browser completes the real redirect,
+                    # so there's no need (and no way, in a non-interactive
+                    # terminal) to wait for manual confirmation here.
+                    print("  >>> Polling continues automatically; no need to confirm here.")
                     print("  " + "=" * 70 + "\n")
                     already_printed_url = True
 
@@ -160,37 +162,38 @@ def poll_until_terminal(test_id: str, module_label: str):
 
 
 def export_log(test_id: str):
-    """GET /api/log/export/{id} devolve um ZIP contendo test-log-<id>.json."""
+    """GET /api/log/export/{id} returns a ZIP containing test-log-<id>.json."""
     r = api_get(f"/api/log/export/{test_id}")
     r.raise_for_status()
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = zf.namelist()
         json_names = [n for n in names if n.endswith(".json")]
         if not json_names:
-            raise RuntimeError(f"Nenhum .json encontrado no export ZIP: {names}")
+            raise RuntimeError(f"No .json found in the export ZIP: {names}")
         with zf.open(json_names[0]) as f:
             return json.load(f)
 
 
 def run_module(plan_id: str, plan_alias: str, test_name: str):
-    print(f"\n=== Modulo: {test_name} (plano {plan_alias}) ===")
+    print(f"\n=== Module: {test_name} (plan {plan_alias}) ===")
     test_id = start_module(plan_id, test_name)
     print(f"  test_id={test_id}")
     info = poll_until_terminal(test_id, test_name)
     if info is None:
-        print(f"  [{test_name}] sem status terminal, pulando export.")
+        print(f"  [{test_name}] no terminal status, skipping export.")
         return None
 
     log_export = export_log(test_id)
-    # O export embrulha as entradas de log de verdade dentro de log_export["results"],
-    # junto com metadados (exportedAt, testInfo etc). Guardamos o dict completo no
-    # arquivo (JSON bruto pedido pela tese) mas so a lista "results" e usada pro parsing.
+    # The export wraps the real log entries inside log_export["results"],
+    # alongside metadata (exportedAt, testInfo etc). We keep the full dict
+    # in the file (raw JSON required by the thesis) but only the "results"
+    # list is used for parsing.
     log_entries = log_export.get("results", []) if isinstance(log_export, dict) else log_export
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_name = test_name.replace("/", "_")
     out_path = OUTPUT_DIR / f"{plan_alias}__{safe_name}_{timestamp}.json"
     out_path.write_text(json.dumps(log_export, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"  log salvo em {out_path} ({len(log_entries)} entradas)")
+    print(f"  log saved to {out_path} ({len(log_entries)} entries)")
 
     return {
         "plan_alias": plan_alias,
@@ -204,10 +207,10 @@ def run_module(plan_id: str, plan_alias: str, test_name: str):
 
 
 def header_bytes(headers: dict) -> int:
-    # Aproximacao do tamanho "on the wire" dos headers (formato "Nome: valor\r\n").
-    # Nao inclui a linha de requisicao/status nem overhead de TLS/TCP -- e uma
-    # estimativa consistente o suficiente para comparar classico vs PQC, nao um
-    # medidor exato de bytes de rede.
+    # Approximation of the "on the wire" header size ("Name: value\r\n"
+    # format). Doesn't include the request/status line or TLS/TCP overhead
+    # -- consistent enough to compare classical vs PQC, not an exact
+    # network byte counter.
     if not headers:
         return 0
     total = 0
@@ -217,10 +220,10 @@ def header_bytes(headers: dict) -> int:
 
 
 def extract_jwts(*texts):
-    # Varre request/response body + header Authorization procurando por
-    # qualquer string no formato JWT (client_assertion, request object,
-    # access/id_token). O tamanho desses tokens e o dado central da tese
-    # (comparar tamanho de assinatura classica vs PQC).
+    # Scans request/response body + the Authorization header for any string
+    # in JWT format (client_assertion, request object, access/id_token).
+    # The size of these tokens is the central data point for the thesis
+    # (comparing classical vs PQC signature size).
     found = []
     for text in texts:
         if not text:
@@ -235,12 +238,12 @@ def extract_jwts(*texts):
 
 
 def parse_calls(log_entries):
-    """Pareia entradas de request/response consecutivas em 'chamadas' HTTP."""
-    # O log da suite nao tem um ID explicito ligando request a response: cada
-    # chamada HTTP vira duas entradas separadas (msg="HTTP request" / "HTTP
-    # response") na sequencia em que aconteceram. Empiricamente a resposta
-    # sempre vem logo em seguida da requisicao correspondente, entao pareamos
-    # por adjacencia no array em vez de por algum campo de correlacao.
+    """Pairs consecutive request/response log entries into HTTP 'calls'."""
+    # The suite's log has no explicit ID linking request to response: each
+    # HTTP call becomes two separate entries (msg="HTTP request" / "HTTP
+    # response") in the order they happened. Empirically the response
+    # always comes right after its matching request, so we pair by
+    # adjacency in the array instead of by some correlation field.
     calls = []
     i = 0
     n = len(log_entries)
@@ -339,45 +342,45 @@ def compute_metrics(all_calls):
 
 def write_report_md(metrics, module_results, path: Path):
     lines = []
-    lines.append("# Relatorio Baseline (Criptografia Classica)")
+    lines.append("# Baseline Report (Classical Cryptography)")
     lines.append("")
-    lines.append(f"Gerado em: {metrics['generated_at']}")
+    lines.append(f"Generated at: {metrics['generated_at']}")
     lines.append("")
-    lines.append("## Resumo geral")
+    lines.append("## Overview")
     lines.append("")
-    lines.append(f"- Total de bytes trocados no fluxo completo (OPINsize classico): **{metrics['total_bytes_exchanged']} bytes**")
-    lines.append(f"- Total de requisicoes HTTP: **{metrics['total_requests']}**")
-    lines.append(f"- JWTs encontrados: **{metrics['jwt_count']}**")
+    lines.append(f"- Total bytes exchanged across the full flow (classical OPINsize): **{metrics['total_bytes_exchanged']} bytes**")
+    lines.append(f"- Total HTTP requests: **{metrics['total_requests']}**")
+    lines.append(f"- JWTs found: **{metrics['jwt_count']}**")
     if metrics["jwt_size_avg_bytes"] is not None:
-        lines.append(f"- Tamanho medio de JWT: **{metrics['jwt_size_avg_bytes']} bytes** (max: {metrics['jwt_size_max_bytes']} bytes)")
+        lines.append(f"- Average JWT size: **{metrics['jwt_size_avg_bytes']} bytes** (max: {metrics['jwt_size_max_bytes']} bytes)")
     lines.append("")
-    lines.append("## Modulos executados")
+    lines.append("## Modules run")
     lines.append("")
-    lines.append("| Plano | Modulo | Status | Resultado | Log |")
+    lines.append("| Plan | Module | Status | Result | Log |")
     lines.append("|---|---|---|---|---|")
     for m in module_results:
         if m is None:
             continue
         lines.append(f"| {m['plan_alias']} | {m['module']} | {m['status']} | {m['result']} | `{m['log_file']}` |")
     lines.append("")
-    lines.append("## Latencia por endpoint")
+    lines.append("## Latency per endpoint")
     lines.append("")
-    lines.append("| Endpoint | Requisicoes | Media (ms) | P50 (ms) | P95 (ms) | P99 (ms) |")
+    lines.append("| Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |")
     lines.append("|---|---|---|---|---|---|")
     for endpoint, stats in sorted(metrics["latency_per_endpoint"].items()):
         lines.append(
             f"| `{endpoint}` | {stats['count']} | {stats['mean_ms']} | {stats['p50_ms']} | {stats['p95_ms']} | {stats['p99_ms']} |"
         )
     lines.append("")
-    lines.append("## Tamanhos de JWT encontrados")
+    lines.append("## JWT sizes found")
     lines.append("")
     if metrics["jwt_sizes_bytes"]:
-        lines.append("| # | Tamanho (bytes) |")
+        lines.append("| # | Size (bytes) |")
         lines.append("|---|---|")
         for idx, size in enumerate(metrics["jwt_sizes_bytes"], start=1):
             lines.append(f"| {idx} | {size} |")
     else:
-        lines.append("Nenhum JWT encontrado nos payloads.")
+        lines.append("No JWT found in the payloads.")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -390,15 +393,16 @@ def main():
 
     for plan_spec in PLANS:
         config = json.loads((CONFIG_DIR / plan_spec["config_file"]).read_text(encoding="utf-8"))
-        # plan_alias e so um rotulo pra organizar arquivos/relatorio. O campo
-        # config["alias"] tem que ser literalmente "mock" nos dois planos: a
-        # suite monta o redirect_uri como https://.../test/a/{alias}/callback,
-        # e o unico redirect_uri registrado pro client_one e ".../test/a/mock/callback"
-        # (fixo em software_statement.json). Um alias diferente causa
+        # plan_alias is just a label used to organize files/report. The
+        # config["alias"] field must literally be "mock" for both plans: the
+        # suite builds the redirect_uri as https://.../test/a/{alias}/callback,
+        # and the only redirect_uri registered for client_one is
+        # ".../test/a/mock/callback" (hardcoded in software_statement.json).
+        # A different alias causes
         # "redirect_uri did not match any of the client's registered redirect_uris".
         plan_alias = plan_spec["report_label"]
 
-        print(f"\n############ Plano: {plan_spec['plan_name']} (alias={plan_alias}) ############")
+        print(f"\n############ Plan: {plan_spec['plan_name']} (alias={plan_alias}) ############")
         plan_id, _modules = create_plan(plan_spec["plan_name"], config)
         print(f"plan_id={plan_id}")
 
@@ -409,13 +413,13 @@ def main():
                 all_calls.extend(parse_calls(result["log"]))
 
     metrics = compute_metrics(all_calls)
-    metrics_path = OUTPUT_DIR / "metricas_baseline.json"
+    metrics_path = OUTPUT_DIR / "baseline_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nMetricas salvas em {metrics_path}")
+    print(f"\nMetrics saved to {metrics_path}")
 
-    report_path = OUTPUT_DIR / "RELATORIO_BASELINE.md"
+    report_path = OUTPUT_DIR / "BASELINE_REPORT.md"
     write_report_md(metrics, module_results, report_path)
-    print(f"Relatorio salvo em {report_path}")
+    print(f"Report saved to {report_path}")
 
 
 if __name__ == "__main__":

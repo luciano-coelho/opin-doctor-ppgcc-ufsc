@@ -1,26 +1,26 @@
-# Relatorio Baseline (Criptografia Classica)
+# Baseline Report (Classical Cryptography)
 
-Gerado em: 2026-07-20T23:10:55.827154+00:00
+Generated at: 2026-07-20T23:10:55.827154+00:00
 
-## Resumo geral
+## Overview
 
-- Total de bytes trocados no fluxo completo (OPINsize classico): **72886 bytes**
-- Total de requisicoes HTTP: **38**
-- JWTs encontrados: **14**
-- Tamanho medio de JWT: **1144.57 bytes** (max: 1810 bytes)
+- Total bytes exchanged across the full flow (classical OPINsize): **72886 bytes**
+- Total HTTP requests: **38**
+- JWTs found: **14**
+- Average JWT size: **1144.57 bytes** (max: 1810 bytes)
 
-## Modulos executados
+## Modules run
 
-| Plano | Modulo | Status | Resultado | Log |
+| Plan | Module | Status | Result | Log |
 |---|---|---|---|---|
 | consents_v3 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `consents_v3__opin-consents_api_preflight_test-module_v3_20260720T230743Z.json` |
 | consents_v3 | opin-consent-api-status-test-v3 | FINISHED | PASSED | `consents_v3__opin-consent-api-status-test-v3_20260720T231014Z.json` |
 | person_v2 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `person_v2__opin-consents_api_preflight_test-module_v3_20260720T231020Z.json` |
 | person_v2 | person_api_core_test-module_v2.0.0 | FINISHED | FAILED | `person_v2__person_api_core_test-module_v2.0.0_20260720T231055Z.json` |
 
-## Latencia por endpoint
+## Latency per endpoint
 
-| Endpoint | Requisicoes | Media (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
+| Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
 | `/issuer-ca.pem` | 4 | 464.75 | 532.5 | 676.0 | 676.0 |
 | `/jwks` | 2 | 14 | 14.0 | 14.9 | 14.98 |
@@ -36,9 +36,9 @@ Gerado em: 2026-07-20T23:10:55.827154+00:00
 | `/root-ca.pem` | 4 | 598 | 620.5 | 949.1 | 969.02 |
 | `/token` | 8 | 48.88 | 29.5 | 116.2 | 124.04 |
 
-## Tamanhos de JWT encontrados
+## JWT sizes found
 
-| # | Tamanho (bytes) |
+| # | Size (bytes) |
 |---|---|
 | 1 | 953 |
 | 2 | 950 |
