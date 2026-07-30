@@ -8,6 +8,11 @@ services:
       context: ../mock-service-os/mock_mtls
     ports:
       - "443:443"
+    # Needed for tc/netem (thesis/scripts/set_latency.sh) to inject artificial
+    # latency on this container's egress interface for Experiment 1's WAN
+    # scenarios. Not required for normal gateway operation.
+    cap_add:
+      - NET_ADMIN
     volumes:
       - ../mock-service-os/certs/:/app/certs/
       - ./participants.json:/app/mocks/participants.json

@@ -1,4 +1,9 @@
 FROM golang:1.23
+# iproute2 (tc/netem) + iputils-ping: used by thesis/scripts/set_latency.sh
+# to inject and verify artificial WAN latency for Experiment 1. Not needed
+# for normal gateway operation.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iproute2 iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Download Go modules
 # COPY certs /app/certs
