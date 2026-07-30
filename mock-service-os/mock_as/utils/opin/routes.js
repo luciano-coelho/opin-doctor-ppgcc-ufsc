@@ -281,11 +281,17 @@ export default (app, provider) => {
   app.use((err, req, res, next) => {
     log(`Error: ${JSON.stringify(err)}`);
     if (err instanceof SessionNotFound) {
-      const orig = res.render;
-      // you'll probably want to use a full blown render engine capable of layouts
-      res.render('error', {
+      // _layout.ejs (shared by every view) reads uid/session/dbg unconditionally,
+      // so those must be supplied here too or the render itself throws. Also
+      // return: falling through to next(err) after a response was already
+      // sent crashes with "headers already sent".
+      return res.render('error', {
+        uid: req.params.uid,
         title: 'Error',
         message: 'No session found. Either the token was already used or it is expired. Please try again.',
+        session: undefined,
+        dbg: { params: '', prompt: '' },
+        layout,
       });
     }
     next(err);

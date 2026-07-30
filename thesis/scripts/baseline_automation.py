@@ -6,8 +6,14 @@ Runs the "happy path" modules (preflight + core/status) of the plans:
   - Insurance consents api test V3.0.0
   - person_test-plan_v2.0.0
 
-Saves raw logs + aggregated metrics under thesis/results/baseline/.
-Reads config templates from thesis/config/.
+Saves raw logs + aggregated metrics under thesis/results/experiment1/{latency_ms}ms/
+(latency_ms comes from the first CLI arg, matching thesis/scripts/set_latency.sh;
+defaults to 0 for ad-hoc local runs). Reads config templates from thesis/config/.
+
+Also collects two more data points added for Experiment 1: bytes exchanged
+per OPIN participant (Client/AS/RS/Directory), isolated JWK sizes from any
+/jwks response seen, and the mTLS-handshake-vs-OPIN-processing time split
+recorded by the gateway itself (see mock-service-os/mock_mtls/main.go).
 
 Notes on the results:
 - The "preflight" modules always end with result=FAILED: they call an
@@ -18,13 +24,22 @@ Notes on the results:
   captured in the log.
 - The status/core modules may pause at status=WAITING waiting for a manual
   browser login + consent (see poll_until_terminal). The script prints the
-  URL and keeps polling on its own until the suite detects the redirect.
+  URL and keeps polling on its own until the suite detects the redirect --
+  no manual confirmation step needed. IMPORTANT: open the printed link
+  exactly ONCE and never reload/re-click it. Doing so replays an
+  already-consumed request_uri/interaction and reliably produces
+  INTERRUPTED/SessionNotFound (root-caused during Experiment 1 baseline
+  testing; see also the views/error.ejs fix in mock-service-os/mock_as for
+  the crash that used to hide this error behind a raw 500).
 """
 
+import base64
 import io
 import json
 import re
 import statistics
+import subprocess
+import sys
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -40,14 +55,29 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # where the script is invoked from: thesis/scripts/baseline_automation.py -> thesis/
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
-OUTPUT_DIR = BASE_DIR / "results" / "baseline"
+# Set for real in main() from the latency-scenario CLI arg; the module-level
+# default here only matters for ad-hoc manual runs / imports (e.g. the
+# report-regeneration snippet used once during the English translation pass).
+OUTPUT_DIR = BASE_DIR / "results" / "experiment1" / "0ms"
 
 BASE_URL = "https://localhost:8443"
+GATEWAY_CONTAINER = "insurance-server-lambdas-mtls-1"
 POLL_INTERVAL_SECONDS = 5
 POLL_TIMEOUT_SECONDS = 600
 TERMINAL_STATUSES = {"FINISHED", "INTERRUPTED"}
 
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)?")
+
+# Maps request URI host -> the OPIN participant that host represents, so
+# request/response bytes can be attributed per participant (Experiment 1,
+# step 4.1). Order matters: checked as substring membership against the
+# host, first match wins.
+PARTICIPANT_HOSTS = [
+    (("auth.local", "matls-auth.local"), "AS"),
+    (("api.local", "matls-api.local"), "RS"),
+    (("directory",), "Directory"),
+    (("sandbox.pki.opinbrasil.com.br",), "PKI/CRL"),
+]
 
 # Each plan has 5-11 modules (the rest are negative/error cases: expired
 # token, invalid permission, client limits etc). We only run the two
@@ -150,12 +180,21 @@ def poll_until_terminal(test_id: str, module_label: str):
                     print(f"  >>> MANUAL INTERACTION REQUIRED for [{module_label}]")
                     for u in urls:
                         print(f"  >>> Open in browser: {u}")
-                    # No input() on purpose: polling already detects the status
-                    # change as soon as the browser completes the real redirect,
-                    # so there's no need (and no way, in a non-interactive
-                    # terminal) to wait for manual confirmation here.
-                    print("  >>> Polling continues automatically; no need to confirm here.")
+                    print("  >>> Protocol: open the link ONCE, log in, select all")
+                    print("  >>> permissions and confirm, wait for the redirect (even if")
+                    print("  >>> the final landing page shows a connection error), then")
+                    print("  >>> come back here. Do NOT reload, reopen, or re-click the link:")
+                    print("  >>> a second hit on an already-used request_uri/interaction is")
+                    print("  >>> rejected by design and was the root cause of the earlier")
+                    print("  >>> INTERRUPTED/SessionNotFound failures.")
                     print("  " + "=" * 70 + "\n")
+                    # No input() here: this script runs unattended/backgrounded
+                    # (no TTY to read a real ENTER from), so synchronization
+                    # relies purely on polling, same as before. The printed
+                    # protocol above is what prevents the duplicate-navigation
+                    # failure -- polling already detects the status change the
+                    # moment the real redirect/callback lands, with no need to
+                    # wait for a manual confirmation signal here.
                     already_printed_url = True
 
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -237,6 +276,108 @@ def extract_jwts(*texts):
     return found
 
 
+def classify_participant(uri: str) -> str:
+    """Maps a request URI to the OPIN participant it targets (AS/RS/Directory/...)."""
+    host = urlparse(uri).netloc or uri
+    for hostnames, participant in PARTICIPANT_HOSTS:
+        if any(h in host for h in hostnames):
+            return participant
+    return "Other"
+
+
+def b64url_decode_len(value: str) -> int:
+    """Byte length of a base64url-encoded JWK field (n, x, y, ...), padded as needed."""
+    padded = value + "=" * (-len(value) % 4)
+    return len(base64.urlsafe_b64decode(padded))
+
+
+def extract_jwk_sizes(response_body):
+    """
+    Parses a /jwks-style response body and returns the size in bytes of each
+    individual public key: the modulus (n) for RSA, x+y for EC. This is the
+    isolated key-material size, distinct from the JWT sizes extract_jwts()
+    finds elsewhere (a JWT's header/claims add overhead on top of whichever
+    key signed it).
+    """
+    if not response_body:
+        return []
+    try:
+        data = json.loads(response_body)
+    except (ValueError, TypeError):
+        return []
+    keys = data.get("keys") if isinstance(data, dict) else None
+    if not isinstance(keys, list):
+        return []
+
+    sizes = []
+    for key in keys:
+        if not isinstance(key, dict):
+            continue
+        kty = key.get("kty")
+        try:
+            if kty == "RSA" and "n" in key:
+                size_bytes = b64url_decode_len(key["n"])
+            elif kty == "EC" and "x" in key and "y" in key:
+                size_bytes = b64url_decode_len(key["x"]) + b64url_decode_len(key["y"])
+            else:
+                continue
+        except Exception:
+            continue
+        sizes.append({
+            "kid": key.get("kid"),
+            "kty": kty,
+            "use": key.get("use"),
+            "size_bytes": size_bytes,
+        })
+    return sizes
+
+
+def collect_gateway_metrics(since: datetime):
+    """
+    Reads the mTLS gateway's own access log (docker logs, JSON lines -- see
+    Experiment 1 step 2's instrumentation in mock-service-os/mock_mtls/main.go)
+    for everything logged since `since`, and extracts the mtlsHandshakeDurationMs
+    / opinDurationMs split per request. This is a second, independent vantage
+    point on latency (measured at the gateway) alongside the Conformance
+    Suite's own client-side timestamps used elsewhere in this script -- it is
+    NOT joined/correlated to individual parse_calls() entries, since the two
+    logs have no shared request ID to match on.
+    """
+    # Must keep the UTC offset: docker's --since parses bare "YYYY-MM-DDTHH:MM:SS"
+    # (no offset) as local time, which would silently shift the window by
+    # however many hours this machine's timezone differs from UTC.
+    since_str = since.isoformat()
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--since", since_str, GATEWAY_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"  [gateway metrics] could not read {GATEWAY_CONTAINER} logs: {e}")
+        return []
+
+    entries = []
+    for line in (result.stdout + result.stderr).splitlines():
+        line = line.strip()
+        if not line or '"msg":"access log"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        entries.append({
+            "host": entry.get("host"),
+            "request": entry.get("request"),
+            "status": entry.get("status"),
+            "opinDurationMs": entry.get("opinDurationMs"),
+            "mtlsHandshakeDurationMs": entry.get("mtlsHandshakeDurationMs"),
+            "tlsVersion": entry.get("tlsVersion"),
+            "cipherSuite": entry.get("cipherSuite"),
+            "clientCertBytes": entry.get("clientCertBytes"),
+        })
+    return entries
+
+
 def parse_calls(log_entries):
     """Pairs consecutive request/response log entries into HTTP 'calls'."""
     # The suite's log has no explicit ID linking request to response: each
@@ -270,14 +411,23 @@ def parse_calls(log_entries):
 
             uri = req.get("request_uri", "")
             endpoint = urlparse(uri).path or uri
+            participant = classify_participant(uri)
 
             jwts = extract_jwts(req_body, req_headers.get("Authorization"), resp_body)
+
+            jwk_sizes = []
+            if endpoint.rstrip("/").endswith("jwks"):
+                jwk_sizes = extract_jwk_sizes(resp_body)
 
             calls.append({
                 "endpoint": endpoint,
                 "full_uri": uri,
                 "method": req.get("request_method"),
                 "src": req.get("src"),
+                # "Client" always sends the request and receives the response;
+                # `participant` is who's on the other end of this call (who
+                # received the request bytes and sent the response bytes).
+                "participant": participant,
                 "request_bytes": req_bytes,
                 "response_bytes": resp_bytes,
                 "total_bytes": req_bytes + resp_bytes,
@@ -285,6 +435,7 @@ def parse_calls(log_entries):
                 "authorization_header": req_headers.get("Authorization"),
                 "jwts": jwts,
                 "jwt_sizes": [len(j) for j in jwts],
+                "jwk_sizes": jwk_sizes,
                 "status_code": (resp or {}).get("response_status_code"),
             })
         i += 1
@@ -303,40 +454,82 @@ def percentile(values, pct):
     return values[f] + (values[c] - values[f]) * (k - f)
 
 
-def compute_metrics(all_calls):
+def latency_stats(values):
+    """Shared mean/P50/P95/P99 helper -- used per-endpoint (4.4) and for the
+    gateway-side handshake-vs-OPIN split (4.3), so both go through the same
+    percentile math."""
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return None
+    return {
+        "count": len(clean),
+        "mean_ms": round(statistics.mean(clean), 2),
+        "p50_ms": round(percentile(clean, 50), 2),
+        "p95_ms": round(percentile(clean, 95), 2),
+        "p99_ms": round(percentile(clean, 99), 2),
+    }
+
+
+def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
+    gateway_entries = gateway_entries or []
+
     total_bytes = sum(c["total_bytes"] for c in all_calls)
     total_requests = len(all_calls)
 
+    # 4.4: latency P50/P95/P99 per endpoint, as measured client-side by the
+    # Conformance Suite (request_uri path -> list of latencies -> stats).
     by_endpoint = {}
     for c in all_calls:
         by_endpoint.setdefault(c["endpoint"], []).append(c["latency_ms"])
+    latency_per_endpoint = {
+        endpoint: stats
+        for endpoint, latencies in by_endpoint.items()
+        if (stats := latency_stats(latencies)) is not None
+    }
 
-    latency_per_endpoint = {}
-    for endpoint, latencies in by_endpoint.items():
-        clean = [l for l in latencies if l is not None]
-        if not clean:
-            continue
-        latency_per_endpoint[endpoint] = {
-            "count": len(clean),
-            "mean_ms": round(statistics.mean(clean), 2),
-            "p50_ms": round(percentile(clean, 50), 2),
-            "p95_ms": round(percentile(clean, 95), 2),
-            "p99_ms": round(percentile(clean, 99), 2),
-        }
+    # 4.1: bytes sent/received per participant. Every call has two legs: the
+    # Client sending the request and receiving the response, and the
+    # counterpart participant (AS/RS/Directory/...) doing the reverse.
+    bytes_by_participant = {}
+    for c in all_calls:
+        client = bytes_by_participant.setdefault("Client", {"sent_bytes": 0, "received_bytes": 0})
+        client["sent_bytes"] += c["request_bytes"]
+        client["received_bytes"] += c["response_bytes"]
+
+        other = bytes_by_participant.setdefault(c["participant"], {"sent_bytes": 0, "received_bytes": 0})
+        other["sent_bytes"] += c["response_bytes"]
+        other["received_bytes"] += c["request_bytes"]
 
     all_jwt_sizes = []
+    all_jwk_sizes = []
     for c in all_calls:
         all_jwt_sizes.extend(c["jwt_sizes"])
+        all_jwk_sizes.extend(c["jwk_sizes"])
+
+    # 4.3: handshake vs. OPIN-processing time, as measured at the gateway
+    # itself (see collect_gateway_metrics) -- an independent vantage point
+    # from the client-side latency_per_endpoint above.
+    handshake_ms = [e["mtlsHandshakeDurationMs"] for e in gateway_entries if e.get("mtlsHandshakeDurationMs") is not None]
+    opin_ms = [e["opinDurationMs"] for e in gateway_entries if e.get("opinDurationMs") is not None]
+    gateway_metrics = {
+        "requests_logged": len(gateway_entries),
+        "handshake_ms": latency_stats(handshake_ms),
+        "opin_processing_ms": latency_stats(opin_ms),
+    }
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "latency_scenario_ms": latency_scenario_ms,
         "total_bytes_exchanged": total_bytes,
         "total_requests": total_requests,
         "latency_per_endpoint": latency_per_endpoint,
+        "bytes_by_participant": bytes_by_participant,
         "jwt_sizes_bytes": all_jwt_sizes,
         "jwt_count": len(all_jwt_sizes),
         "jwt_size_avg_bytes": round(statistics.mean(all_jwt_sizes), 2) if all_jwt_sizes else None,
         "jwt_size_max_bytes": max(all_jwt_sizes) if all_jwt_sizes else None,
+        "jwk_sizes": all_jwk_sizes,
+        "gateway_metrics": gateway_metrics,
     }
 
 
@@ -345,6 +538,8 @@ def write_report_md(metrics, module_results, path: Path):
     lines.append("# Baseline Report (Classical Cryptography)")
     lines.append("")
     lines.append(f"Generated at: {metrics['generated_at']}")
+    if metrics.get("latency_scenario_ms") is not None:
+        lines.append(f"Latency scenario: **{metrics['latency_scenario_ms']}ms** (see thesis/scripts/set_latency.sh)")
     lines.append("")
     lines.append("## Overview")
     lines.append("")
@@ -363,7 +558,7 @@ def write_report_md(metrics, module_results, path: Path):
             continue
         lines.append(f"| {m['plan_alias']} | {m['module']} | {m['status']} | {m['result']} | `{m['log_file']}` |")
     lines.append("")
-    lines.append("## Latency per endpoint")
+    lines.append("## Latency per endpoint (client-side, Conformance Suite)")
     lines.append("")
     lines.append("| Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |")
     lines.append("|---|---|---|---|---|---|")
@@ -372,6 +567,49 @@ def write_report_md(metrics, module_results, path: Path):
             f"| `{endpoint}` | {stats['count']} | {stats['mean_ms']} | {stats['p50_ms']} | {stats['p95_ms']} | {stats['p99_ms']} |"
         )
     lines.append("")
+
+    lines.append("## mTLS handshake vs. OPIN processing time (gateway-side)")
+    lines.append("")
+    gw = metrics["gateway_metrics"]
+    lines.append(f"Requests logged by the gateway in this run: **{gw['requests_logged']}**")
+    lines.append("")
+    lines.append("| Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |")
+    lines.append("|---|---|---|---|---|---|")
+    for label, stats in (("mTLS handshake", gw["handshake_ms"]), ("OPIN processing", gw["opin_processing_ms"])):
+        if stats is None:
+            lines.append(f"| {label} | 0 | - | - | - | - |")
+        else:
+            lines.append(
+                f"| {label} | {stats['count']} | {stats['mean_ms']} | {stats['p50_ms']} | {stats['p95_ms']} | {stats['p99_ms']} |"
+            )
+    lines.append("")
+    lines.append(
+        "Note: for keep-alive connections, only the first request on a given "
+        "connection pays the handshake cost -- every subsequent request on "
+        "that same connection reports the same (already-past) handshake "
+        "timestamps, which is expected."
+    )
+    lines.append("")
+
+    lines.append("## Bytes by participant")
+    lines.append("")
+    lines.append("| Participant | Sent (bytes) | Received (bytes) | Total (bytes) |")
+    lines.append("|---|---|---|---|")
+    for participant, b in sorted(metrics["bytes_by_participant"].items()):
+        lines.append(f"| {participant} | {b['sent_bytes']} | {b['received_bytes']} | {b['sent_bytes'] + b['received_bytes']} |")
+    lines.append("")
+
+    lines.append("## JWK sizes found (isolated public key material)")
+    lines.append("")
+    if metrics["jwk_sizes"]:
+        lines.append("| # | kid | kty | use | Size (bytes) |")
+        lines.append("|---|---|---|---|---|")
+        for idx, jwk in enumerate(metrics["jwk_sizes"], start=1):
+            lines.append(f"| {idx} | {jwk.get('kid')} | {jwk.get('kty')} | {jwk.get('use')} | {jwk['size_bytes']} |")
+    else:
+        lines.append("No /jwks endpoint response found in this run.")
+    lines.append("")
+
     lines.append("## JWT sizes found")
     lines.append("")
     if metrics["jwt_sizes_bytes"]:
@@ -385,9 +623,31 @@ def write_report_md(metrics, module_results, path: Path):
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def parse_latency_arg():
+    """
+    First CLI arg is the latency scenario in ms (matches thesis/scripts/set_latency.sh);
+    defaults to 0 for ad-hoc local runs. Determines where results are saved
+    (thesis/results/experiment1/{ms}ms/) -- it does NOT itself apply the tc
+    delay, that's set_latency.sh's job (run separately, see Experiment 1
+    step 5).
+    """
+    if len(sys.argv) > 1:
+        try:
+            return int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid latency argument {sys.argv[1]!r}, expected an integer (ms).", file=sys.stderr)
+            sys.exit(1)
+    return 0
 
+
+def main():
+    global OUTPUT_DIR
+    latency_ms = parse_latency_arg()
+    OUTPUT_DIR = BASE_DIR / "results" / "experiment1" / f"{latency_ms}ms"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Latency scenario: {latency_ms}ms -> results go to {OUTPUT_DIR}")
+
+    run_start = datetime.now(timezone.utc)
     module_results = []
     all_calls = []
 
@@ -412,7 +672,11 @@ def main():
             if result is not None:
                 all_calls.extend(parse_calls(result["log"]))
 
-    metrics = compute_metrics(all_calls)
+    print("\nCollecting gateway handshake/OPIN-processing metrics...")
+    gateway_entries = collect_gateway_metrics(run_start)
+    print(f"  {len(gateway_entries)} gateway access-log entries captured since {run_start.isoformat()}")
+
+    metrics = compute_metrics(all_calls, gateway_entries=gateway_entries, latency_scenario_ms=latency_ms)
     metrics_path = OUTPUT_DIR / "baseline_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nMetrics saved to {metrics_path}")
