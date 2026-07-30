@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
@@ -38,6 +39,27 @@ var (
 	apiURI    = os.Getenv("API_GATEWAY_URI")
 	ssaJwkURL = os.Getenv("SSA_JWK_URL")
 	ssaJWK    jwk.Key
+)
+
+// handshakeInfo holds the per-connection mTLS handshake metrics, captured
+// once when a connection's handshake completes and reused for every
+// subsequent HTTP request that reuses that same keep-alive connection.
+type handshakeInfo struct {
+	start           time.Time
+	end             time.Time
+	tlsVersion      string
+	cipherSuite     string
+	clientCertBytes int
+}
+
+var (
+	// handshakeStartTimes: remoteAddr -> time the TLS handshake began
+	// (recorded from tls.Config.GetConfigForClient, which fires right after
+	// the ClientHello is parsed, before certificate exchange/verification).
+	handshakeStartTimes sync.Map
+	// handshakeCache: remoteAddr -> handshakeInfo, recorded once the
+	// handshake has completed (detected via http.Server's ConnState hook).
+	handshakeCache sync.Map
 )
 
 func main() {
@@ -74,6 +96,7 @@ func main() {
 		Handler:   mux,
 		ErrorLog:  slog.NewLogLogger(l.Handler(), slog.LevelError),
 		TLSConfig: tlsConfig,
+		ConnState: connStateHandshakeLogger,
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", 443))
 	if err != nil {
@@ -250,7 +273,7 @@ func tlsConfiguration() *tls.Config {
 	}
 
 	caCerts := caCertPool()
-	return &tls.Config{
+	cfg := &tls.Config{
 		Certificates: []tls.Certificate{{
 			Certificate: [][]byte{
 				serverBytes,
@@ -276,6 +299,79 @@ func tlsConfiguration() *tls.Config {
 			tls.TLS_AES_256_GCM_SHA384,
 		},
 	}
+
+	// Purely observational hook: fires right after the ClientHello is parsed,
+	// before certificate exchange/verification, giving us a precise handshake
+	// start time keyed by remote address. Returning (nil, nil) tells the TLS
+	// stack "no per-client override, use cfg as-is" -- this does not alter
+	// negotiation behavior in any way (cipher suites/versions/certs unchanged).
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		if hello.Conn != nil {
+			handshakeStartTimes.Store(hello.Conn.RemoteAddr().String(), time.Now())
+		}
+		return nil, nil
+	}
+
+	return cfg
+}
+
+// connStateHandshakeLogger is registered as http.Server.ConnState. It fires
+// on every connection state transition; we only care about the first
+// transition to StateActive per connection (which happens after the TLS
+// handshake completes, since the server needs decrypted bytes to detect an
+// incoming request), and about cleaning up on close so the maps above don't
+// grow unbounded over a long-running gateway process.
+func connStateHandshakeLogger(c net.Conn, state http.ConnState) {
+	remote := c.RemoteAddr().String()
+
+	switch state {
+	case http.StateActive:
+		if _, alreadyRecorded := handshakeCache.Load(remote); alreadyRecorded {
+			return
+		}
+		startVal, ok := handshakeStartTimes.Load(remote)
+		if !ok {
+			return
+		}
+		info := handshakeInfo{
+			start: startVal.(time.Time),
+			end:   time.Now(),
+		}
+		if tlsConn, ok := c.(*tls.Conn); ok {
+			cs := tlsConn.ConnectionState()
+			info.tlsVersion = tls.VersionName(cs.Version)
+			info.cipherSuite = tls.CipherSuiteName(cs.CipherSuite)
+			if len(cs.PeerCertificates) > 0 {
+				info.clientCertBytes = len(cs.PeerCertificates[0].Raw)
+			}
+		}
+		handshakeCache.Store(remote, info)
+
+		slog.Info("mTLS handshake complete",
+			slog.String("remoteAddr", remote),
+			slog.Time("handshakeStart", info.start),
+			slog.Time("handshakeEnd", info.end),
+			slog.Int64("handshakeDurationMs", info.end.Sub(info.start).Milliseconds()),
+			slog.String("tlsVersion", info.tlsVersion),
+			slog.String("cipherSuite", info.cipherSuite),
+			slog.Int("clientCertBytes", info.clientCertBytes),
+		)
+
+	case http.StateClosed, http.StateHijacked:
+		handshakeStartTimes.Delete(remote)
+		handshakeCache.Delete(remote)
+	}
+}
+
+// lookupHandshakeInfo returns the cached handshake metrics for the
+// connection a given request arrived on, if any were recorded.
+func lookupHandshakeInfo(remoteAddr string) *handshakeInfo {
+	v, ok := handshakeCache.Load(remoteAddr)
+	if !ok {
+		return nil
+	}
+	info := v.(handshakeInfo)
+	return &info
 }
 
 func caCertPool() *x509.CertPool {
@@ -306,8 +402,16 @@ func caCertPool() *x509.CertPool {
 
 func loggingMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// opinRequestStart/End bound the time this specific request spent
+		// being handled -- i.e. from the moment the (already-completed)
+		// mTLS handshake handed off a decrypted request to this handler,
+		// until the response was written back. This is the "OPIN processing
+		// time" half of the split; mtlsHandshake* below is the other half.
+		opinRequestStart := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
 		h.ServeHTTP(rec, r)
+		opinRequestEnd := time.Now()
+
 		attrs := []slog.Attr{
 			slog.String("remoteIP", r.RemoteAddr),
 			slog.String("host", r.Host),
@@ -317,6 +421,23 @@ func loggingMiddleware(h http.Handler) http.Handler {
 			slog.String("status", fmt.Sprintf("%d", rec.status)),
 			slog.String("userAgent", r.UserAgent()),
 			slog.String("referer", r.Referer()),
+			slog.Time("opinRequestStart", opinRequestStart),
+			slog.Time("opinRequestEnd", opinRequestEnd),
+			slog.Int64("opinDurationMs", opinRequestEnd.Sub(opinRequestStart).Milliseconds()),
+		}
+		// Handshake info is cached per-connection (see connStateHandshakeLogger);
+		// for keep-alive connections, every request after the first reports the
+		// same handshake timestamps -- that's expected, since only the first
+		// request on a connection actually paid the handshake cost.
+		if hs := lookupHandshakeInfo(r.RemoteAddr); hs != nil {
+			attrs = append(attrs,
+				slog.Time("mtlsHandshakeStart", hs.start),
+				slog.Time("mtlsHandshakeEnd", hs.end),
+				slog.Int64("mtlsHandshakeDurationMs", hs.end.Sub(hs.start).Milliseconds()),
+				slog.String("tlsVersion", hs.tlsVersion),
+				slog.String("cipherSuite", hs.cipherSuite),
+				slog.Int("clientCertBytes", hs.clientCertBytes),
+			)
 		}
 		if _, ok := h.(*httputil.ReverseProxy); ok {
 			h.(*httputil.ReverseProxy).Director(r)
