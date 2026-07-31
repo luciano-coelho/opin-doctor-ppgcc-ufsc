@@ -332,26 +332,31 @@ def extract_jwk_sizes(response_body):
     return sizes
 
 
-def collect_gateway_metrics(since: datetime):
+def collect_gateway_metrics(since: datetime, until: datetime = None):
     """
     Reads the mTLS gateway's own access log (docker logs, JSON lines -- see
     Experiment 1 step 2's instrumentation in mock-service-os/mock_mtls/main.go)
-    for everything logged since `since`, and extracts the mtlsHandshakeDurationMs
-    / opinDurationMs split per request. This is a second, independent vantage
-    point on latency (measured at the gateway) alongside the Conformance
-    Suite's own client-side timestamps used elsewhere in this script -- it is
-    NOT joined/correlated to individual parse_calls() entries, since the two
-    logs have no shared request ID to match on.
+    for everything logged since `since` (and, if given, before `until`), and
+    extracts the mtlsHandshakeDurationMs / opinDurationMs split per request.
+    This is a second, independent vantage point on latency (measured at the
+    gateway) alongside the Conformance Suite's own client-side timestamps
+    used elsewhere in this script -- it is NOT joined/correlated to
+    individual parse_calls() entries, since the two logs have no shared
+    request ID to match on.
+
+    `until` matters for retroactive recomputation (e.g. re-collecting a past
+    scenario's gateway metrics after the fact): without it, an open-ended
+    `--since` picks up every later scenario's traffic too.
     """
-    # Must keep the UTC offset: docker's --since parses bare "YYYY-MM-DDTHH:MM:SS"
-    # (no offset) as local time, which would silently shift the window by
-    # however many hours this machine's timezone differs from UTC.
-    since_str = since.isoformat()
+    # Must keep the UTC offset: docker's --since/--until parse a bare
+    # "YYYY-MM-DDTHH:MM:SS" (no offset) as local time, which would silently
+    # shift the window by however many hours this machine's timezone differs
+    # from UTC.
+    cmd = ["docker", "logs", "--since", since.isoformat(), GATEWAY_CONTAINER]
+    if until is not None:
+        cmd = ["docker", "logs", "--since", since.isoformat(), "--until", until.isoformat(), GATEWAY_CONTAINER]
     try:
-        result = subprocess.run(
-            ["docker", "logs", "--since", since_str, GATEWAY_CONTAINER],
-            capture_output=True, text=True, timeout=30,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (subprocess.SubprocessError, OSError) as e:
         print(f"  [gateway metrics] could not read {GATEWAY_CONTAINER} logs: {e}")
         return []
@@ -470,6 +475,39 @@ def latency_stats(values):
     }
 
 
+def filter_handshake_outliers(values, multiplier=3):
+    """
+    Drops mTLS handshake samples more than `multiplier` x the scenario's
+    typical (median) handshake time -- e.g. a keep-alive connection that
+    stays open across a scenario boundary reports the SAME cached handshake
+    duration for every request it serves, so the real Experiment 1 data has
+    small *clusters* of identical extreme values (four ~29.4s samples in the
+    14ms scenario, six in 30ms -- one physical connection's genuinely slow
+    handshake, replayed by every request that reused it), not lone outliers.
+
+    P99 doesn't work as the reference here even applied iteratively/
+    leave-one-out: with dozens of samples per scenario, comparing the
+    largest value against "the rest" still leaves the other members of the
+    same duplicate cluster in the reference set, which drags that P99 up
+    with it and the cluster clears its own inflated threshold. The median is
+    unmoved by a handful of correlated duplicates as long as they're a
+    minority of the sample (true here: 4-6 out of ~55-90), so it's used as
+    the base instead. Applied iteratively since removing part of a cluster
+    can lower the median enough to catch the rest of it.
+    """
+    clean = [v for v in values if v is not None]
+    total_dropped = 0
+    while clean:
+        threshold = statistics.median(clean) * multiplier
+        filtered = [v for v in clean if v <= threshold]
+        dropped = len(clean) - len(filtered)
+        if dropped == 0:
+            break
+        clean = filtered
+        total_dropped += dropped
+    return clean, total_dropped
+
+
 def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
     gateway_entries = gateway_entries or []
 
@@ -508,12 +546,16 @@ def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
 
     # 4.3: handshake vs. OPIN-processing time, as measured at the gateway
     # itself (see collect_gateway_metrics) -- an independent vantage point
-    # from the client-side latency_per_endpoint above.
-    handshake_ms = [e["mtlsHandshakeDurationMs"] for e in gateway_entries if e.get("mtlsHandshakeDurationMs") is not None]
+    # from the client-side latency_per_endpoint above. Handshake samples are
+    # outlier-filtered (see filter_handshake_outliers); OPIN processing time
+    # isn't, since it didn't show the same reused-connection artifact.
+    handshake_ms_raw = [e["mtlsHandshakeDurationMs"] for e in gateway_entries if e.get("mtlsHandshakeDurationMs") is not None]
+    handshake_ms, handshake_outliers_dropped = filter_handshake_outliers(handshake_ms_raw)
     opin_ms = [e["opinDurationMs"] for e in gateway_entries if e.get("opinDurationMs") is not None]
     gateway_metrics = {
         "requests_logged": len(gateway_entries),
         "handshake_ms": latency_stats(handshake_ms),
+        "handshake_outliers_dropped": handshake_outliers_dropped,
         "opin_processing_ms": latency_stats(opin_ms),
     }
 
@@ -588,6 +630,11 @@ def write_report_md(metrics, module_results, path: Path):
         "connection pays the handshake cost -- every subsequent request on "
         "that same connection reports the same (already-past) handshake "
         "timestamps, which is expected."
+    )
+    lines.append(
+        f"{gw.get('handshake_outliers_dropped', 0)} handshake sample(s) "
+        "discarded as outliers (> 3x this scenario's P99; see "
+        "filter_handshake_outliers)."
     )
     lines.append("")
 
