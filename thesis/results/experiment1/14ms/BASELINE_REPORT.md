@@ -1,6 +1,6 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-07-31T13:49:41.974472+00:00
+Generated at: 2026-07-31T14:23:45.399297+00:00
 Latency scenario: **14ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
@@ -47,14 +47,16 @@ Requests logged by the gateway in this run: **56**
 | OPIN processing | 56 | 43.54 | 29.0 | 150.0 | 207.8 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
-4 handshake sample(s) discarded as outliers (> 3x this scenario's P99; see filter_handshake_outliers).
+4 handshake sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
 
 ## Bytes by participant
+
+**Client** is the Conformance Suite itself (the OPIN client in this test harness) -- it is one of the two parties on every call this table is built from, so its sent+received always equals the scenario's total bytes exchanged by construction, not a measurement of a separate category. AS/RS/Directory/PKI-CRL are the actual breakdown: who specifically the client was talking to on each call, and they sum to the same total.
 
 | Participant | Sent (bytes) | Received (bytes) | Total (bytes) |
 |---|---|---|---|
 | AS | 16350 | 13346 | 29696 |
-| Client | 19483 | 52281 | 71764 |
+| Client (test tool, total traffic) | 19483 | 52281 | 71764 |
 | Directory | 1311 | 465 | 1776 |
 | PKI/CRL | 19814 | 800 | 20614 |
 | RS | 14806 | 4872 | 19678 |

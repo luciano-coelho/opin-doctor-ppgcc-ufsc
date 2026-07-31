@@ -26,10 +26,12 @@ Comparative report across the six WAN-latency scenarios (0/14/30/140/225/320ms, 
 
 ## Bytes by participant
 
+**Client** is the Conformance Suite itself (the OPIN client in this test harness) -- it is one of the two parties on every logged call, so its row always equals that scenario's total bytes exchanged (see the first table) by construction, not a measurement of a separate category. AS/RS/Directory/PKI-CRL are the actual breakdown of who the client was talking to on each call, and they sum to that same total.
+
 | Participant | 0ms | 14ms | 30ms | 140ms | 225ms | 320ms |
 |---|---|---|---|---|---|---|
 | AS | 29696 | 29696 | 29696 | 29700 | 29698 | 29698 |
-| Client | 71628 | 71764 | 70638 | 71037 | 72886 | 72890 |
+| Client (test tool, total traffic) | 71628 | 71764 | 70638 | 71037 | 72886 | 72890 |
 | Directory | 1640 | 1776 | 650 | 1776 | 2902 | 2902 |
 | PKI/CRL | 20614 | 20614 | 20614 | 20610 | 20608 | 20612 |
 | RS | 19678 | 19678 | 19678 | 18951 | 19678 | 19678 |

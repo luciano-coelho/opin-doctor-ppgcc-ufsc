@@ -104,12 +104,23 @@ def write_report(scenarios: dict, path: Path):
 
     lines.append("## Bytes by participant")
     lines.append("")
+    lines.append(
+        "**Client** is the Conformance Suite itself (the OPIN client in "
+        "this test harness) -- it is one of the two parties on every "
+        "logged call, so its row always equals that scenario's total bytes "
+        "exchanged (see the first table) by construction, not a measurement "
+        "of a separate category. AS/RS/Directory/PKI-CRL are the actual "
+        "breakdown of who the client was talking to on each call, and they "
+        "sum to that same total."
+    )
+    lines.append("")
     participants = sorted({p for m in scenarios.values() for p in m["bytes_by_participant"]})
     header = "| Participant | " + " | ".join(f"{ms}ms" for ms in SCENARIOS_MS) + " |"
     lines.append(header)
     lines.append("|---|" + "---|" * len(SCENARIOS_MS))
     for participant in participants:
-        row = [participant]
+        label = "Client (test tool, total traffic)" if participant == "Client" else participant
+        row = [label]
         for ms in SCENARIOS_MS:
             b = scenarios[ms]["bytes_by_participant"].get(participant)
             total = (b["sent_bytes"] + b["received_bytes"]) if b else 0

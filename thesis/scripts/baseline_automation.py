@@ -633,17 +633,28 @@ def write_report_md(metrics, module_results, path: Path):
     )
     lines.append(
         f"{gw.get('handshake_outliers_dropped', 0)} handshake sample(s) "
-        "discarded as outliers (> 3x this scenario's P99; see "
+        "discarded as outliers (> 3x this scenario's median; see "
         "filter_handshake_outliers)."
     )
     lines.append("")
 
     lines.append("## Bytes by participant")
     lines.append("")
+    lines.append(
+        "**Client** is the Conformance Suite itself (the OPIN client in "
+        "this test harness) -- it is one of the two parties on every call "
+        "this table is built from, so its sent+received always equals the "
+        "scenario's total bytes exchanged by construction, not a "
+        "measurement of a separate category. AS/RS/Directory/PKI-CRL are "
+        "the actual breakdown: who specifically the client was talking to "
+        "on each call, and they sum to the same total."
+    )
+    lines.append("")
     lines.append("| Participant | Sent (bytes) | Received (bytes) | Total (bytes) |")
     lines.append("|---|---|---|---|")
     for participant, b in sorted(metrics["bytes_by_participant"].items()):
-        lines.append(f"| {participant} | {b['sent_bytes']} | {b['received_bytes']} | {b['sent_bytes'] + b['received_bytes']} |")
+        label = "Client (test tool, total traffic)" if participant == "Client" else participant
+        lines.append(f"| {label} | {b['sent_bytes']} | {b['received_bytes']} | {b['sent_bytes'] + b['received_bytes']} |")
     lines.append("")
 
     lines.append("## JWK sizes found (isolated public key material)")
