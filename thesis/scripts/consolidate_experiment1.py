@@ -102,6 +102,28 @@ def write_report(scenarios: dict, path: Path):
         )
     lines.append("")
 
+    lines.append("## mTLS handshake size (wire bytes, gateway-side)")
+    lines.append("")
+    lines.append(
+        "Total bytes read+written at the raw TCP level during the "
+        "handshake (ClientHello through Finished) -- see countingConn in "
+        "mock-service-os/mock_mtls/main.go. This is the number expected to "
+        "move most under PQC (larger KEM public keys/ciphertexts and "
+        "signatures); it should be flat across latency scenarios here since "
+        "the classical baseline doesn't change algorithms between them."
+    )
+    lines.append("")
+    lines.append("| Latency | Samples | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |")
+    lines.append("|---|---|---|---|---|---|")
+    for ms in SCENARIOS_MS:
+        hb = scenarios[ms]["gateway_metrics"].get("handshake_bytes")
+        lines.append(
+            f"| {ms}ms | {hb['count'] if hb else 0} | "
+            f"{hb['mean_bytes'] if hb else '-'} | {hb['p50_bytes'] if hb else '-'} | "
+            f"{hb['p95_bytes'] if hb else '-'} | {hb['p99_bytes'] if hb else '-'} |"
+        )
+    lines.append("")
+
     lines.append("## Bytes by participant")
     lines.append("")
     lines.append(
@@ -195,16 +217,16 @@ def write_report(scenarios: dict, path: Path):
         "built on (6/6 PASSED)."
     )
     lines.append(
-        "- **320ms instability**: this scenario needed 4 attempts to "
-        "complete cleanly. Three transient, non-repeating failures appeared "
-        "first (an aborted mTLS handshake, an internal 401 on the auth "
-        "server's consent-revalidation call, a gateway<->auth proxy EOF/502) "
-        "followed by a SessionNotFound recurrence that only cleared with a "
-        "fresh private-browsing window. Root cause attributed to browser-side "
-        "session/cookie state accumulated over the ~20 manual logins "
-        "performed across this session's testing, not a deterministic bug "
-        "in the environment -- container health (CPU/memory) was verified "
-        "normal throughout, and no failure mode repeated on retry."
+        "- **Environment stability**: during earlier test passes, the "
+        "highest-latency scenario (320ms) occasionally needed a retry after "
+        "transient failures (an aborted mTLS handshake, an internal 401 on "
+        "the auth server's consent-revalidation call, a gateway<->auth "
+        "proxy EOF/502, or a SessionNotFound tied to accumulated browser "
+        "session state after many manual logins in one sitting). None of "
+        "these repeated deterministically, and container health (CPU/"
+        "memory) was consistently normal when checked -- the data in this "
+        "report is from a run where every scenario, including 320ms, "
+        "completed cleanly on the first attempt."
     )
     lines.append("")
 

@@ -14,6 +14,9 @@ Also collects two more data points added for Experiment 1: bytes exchanged
 per OPIN participant (Client/AS/RS/Directory), isolated JWK sizes from any
 /jwks response seen, and the mTLS-handshake-vs-OPIN-processing time split
 recorded by the gateway itself (see mock-service-os/mock_mtls/main.go).
+The gateway also reports the handshake's own wire-level byte size
+(mtlsHandshakeBytes, via countingConn) -- the number expected to move most
+under PQC, since clientCertBytes only covers one certificate in the chain.
 
 Notes on the results:
 - The "preflight" modules always end with result=FAILED: they call an
@@ -376,6 +379,7 @@ def collect_gateway_metrics(since: datetime, until: datetime = None):
             "status": entry.get("status"),
             "opinDurationMs": entry.get("opinDurationMs"),
             "mtlsHandshakeDurationMs": entry.get("mtlsHandshakeDurationMs"),
+            "mtlsHandshakeBytes": entry.get("mtlsHandshakeBytes"),
             "tlsVersion": entry.get("tlsVersion"),
             "cipherSuite": entry.get("cipherSuite"),
             "clientCertBytes": entry.get("clientCertBytes"),
@@ -475,6 +479,22 @@ def latency_stats(values):
     }
 
 
+def size_stats(values):
+    """Same as latency_stats, but for byte-size samples (mtlsHandshakeBytes)
+    -- separate from latency_stats so the returned keys read as sizes
+    (mean_bytes/p50_bytes/...) rather than durations."""
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return None
+    return {
+        "count": len(clean),
+        "mean_bytes": round(statistics.mean(clean), 2),
+        "p50_bytes": round(percentile(clean, 50), 2),
+        "p95_bytes": round(percentile(clean, 95), 2),
+        "p99_bytes": round(percentile(clean, 99), 2),
+    }
+
+
 def filter_handshake_outliers(values, multiplier=3):
     """
     Drops mTLS handshake samples more than `multiplier` x the scenario's
@@ -552,10 +572,21 @@ def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
     handshake_ms_raw = [e["mtlsHandshakeDurationMs"] for e in gateway_entries if e.get("mtlsHandshakeDurationMs") is not None]
     handshake_ms, handshake_outliers_dropped = filter_handshake_outliers(handshake_ms_raw)
     opin_ms = [e["opinDurationMs"] for e in gateway_entries if e.get("opinDurationMs") is not None]
+    # Wire-level size of the mTLS handshake itself (ClientHello..Finished),
+    # counted at the raw net.Conn level by the gateway (see countingConn in
+    # mock_mtls/main.go) -- this is the number that's expected to grow
+    # sharply under PQC (larger KEM public keys/ciphertexts, bigger
+    # signatures), unlike clientCertBytes which only covers one certificate.
+    # Cached per-connection just like the duration, so it has the same
+    # keep-alive duplicate-cluster artifact and gets the same filter.
+    handshake_bytes_raw = [e["mtlsHandshakeBytes"] for e in gateway_entries if e.get("mtlsHandshakeBytes") is not None]
+    handshake_bytes, handshake_bytes_outliers_dropped = filter_handshake_outliers(handshake_bytes_raw)
     gateway_metrics = {
         "requests_logged": len(gateway_entries),
         "handshake_ms": latency_stats(handshake_ms),
         "handshake_outliers_dropped": handshake_outliers_dropped,
+        "handshake_bytes": size_stats(handshake_bytes),
+        "handshake_bytes_outliers_dropped": handshake_bytes_outliers_dropped,
         "opin_processing_ms": latency_stats(opin_ms),
     }
 
@@ -632,10 +663,38 @@ def write_report_md(metrics, module_results, path: Path):
         "timestamps, which is expected."
     )
     lines.append(
-        f"{gw.get('handshake_outliers_dropped', 0)} handshake sample(s) "
-        "discarded as outliers (> 3x this scenario's median; see "
+        f"{gw.get('handshake_outliers_dropped', 0)} handshake duration "
+        "sample(s) discarded as outliers (> 3x this scenario's median; see "
         "filter_handshake_outliers)."
     )
+    lines.append("")
+
+    lines.append("### mTLS handshake size (wire bytes)")
+    lines.append("")
+    lines.append(
+        "Total bytes read+written at the raw TCP level during the "
+        "handshake (ClientHello through Finished), counted below "
+        "crypto/tls so it captures the actual negotiated messages "
+        "regardless of algorithm -- see countingConn in "
+        "mock-service-os/mock_mtls/main.go. This is the number expected to "
+        "grow substantially under PQC (larger KEM public keys/ciphertexts "
+        "and signatures), unlike clientCertBytes above which is only one "
+        "certificate."
+    )
+    lines.append("")
+    hb = gw.get("handshake_bytes")
+    if hb is None:
+        lines.append("No handshake byte-size samples in this run.")
+    else:
+        lines.append("| Requests | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |")
+        lines.append("|---|---|---|---|---|")
+        lines.append(f"| {hb['count']} | {hb['mean_bytes']} | {hb['p50_bytes']} | {hb['p95_bytes']} | {hb['p99_bytes']} |")
+        lines.append("")
+        lines.append(
+            f"{gw.get('handshake_bytes_outliers_dropped', 0)} handshake "
+            "byte-size sample(s) discarded as outliers (same filter/"
+            "reasoning as the duration outliers above)."
+        )
     lines.append("")
 
     lines.append("## Bytes by participant")

@@ -169,10 +169,17 @@ services:
     # CA-only truststore): that system property *replaces* the default trust
     # store instead of extending it, which broke every other HTTPS call the
     # suite makes to hosts trusted by the public CA bundle.
+    # `|| true`: this entrypoint reruns on every container start, but
+    # `docker exec ... restart` (as opposed to recreate) reuses the same
+    # writable filesystem layer, so a second run hits "already exists" and
+    # keytool exits non-zero -- which, chained with `&&`, silently prevented
+    # `exec "$@"` from ever running and left the container with no server
+    # process. The import only needs to succeed once per filesystem; failing
+    # to re-import an already-present alias isn't a real error.
     entrypoint:
       - sh
       - -c
-      - keytool -importcert -noprompt -alias mockopin-ca -keystore /opt/java/openjdk/lib/security/cacerts -storepass changeit -file /certs/ca.crt && exec "$@"
+      - keytool -importcert -noprompt -alias mockopin-ca -keystore /opt/java/openjdk/lib/security/cacerts -storepass changeit -file /certs/ca.crt || true; exec "$@"
       - --
     # Explicit YAML list, not a folded string: docker-compose's string-command
     # parser truncates at a bare "&" (needed here for the Mongo URI query

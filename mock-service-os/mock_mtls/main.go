@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
@@ -50,6 +51,7 @@ type handshakeInfo struct {
 	tlsVersion      string
 	cipherSuite     string
 	clientCertBytes int
+	handshakeBytes  int
 }
 
 var (
@@ -60,7 +62,52 @@ var (
 	// handshakeCache: remoteAddr -> handshakeInfo, recorded once the
 	// handshake has completed (detected via http.Server's ConnState hook).
 	handshakeCache sync.Map
+	// connByteCounters: remoteAddr -> *countingConn, populated in
+	// countingListener.Accept() for every raw connection so the wire-level
+	// byte count for that connection's handshake can be read back once it
+	// completes (see connStateHandshakeLogger).
+	connByteCounters sync.Map
 )
+
+// countingConn wraps a raw net.Conn (the one returned by the TCP listener,
+// *before* tls.NewListener wraps it) and tallies bytes crossing the wire in
+// each direction. Since it sits below crypto/tls, every Read/Write the TLS
+// handshake itself performs -- ClientHello, ServerHello, certificate
+// exchange, key exchange, Finished -- is counted, with no awareness of TLS
+// record boundaries needed.
+type countingConn struct {
+	net.Conn
+	bytesRead    atomic.Int64
+	bytesWritten atomic.Int64
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.bytesRead.Add(int64(n))
+	return n, err
+}
+
+func (c *countingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	c.bytesWritten.Add(int64(n))
+	return n, err
+}
+
+// countingListener wraps the raw TCP listener so every accepted connection
+// is instrumented with a countingConn before tls.NewListener takes over.
+type countingListener struct {
+	net.Listener
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	cc := &countingConn{Conn: c}
+	connByteCounters.Store(c.RemoteAddr().String(), cc)
+	return cc, nil
+}
 
 func main() {
 	l := logger()
@@ -102,8 +149,12 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+	// Wrap the raw listener so every connection's wire bytes are counted
+	// (see countingListener) before tls.NewListener performs the handshake
+	// on top of it.
+	countingLn := &countingListener{Listener: ln}
 	slog.Info("Listening on port 443")
-	slog.Error("server error", slog.String("err", server.Serve(tls.NewListener(ln, tlsConfig)).Error()))
+	slog.Error("server error", slog.String("err", server.Serve(tls.NewListener(countingLn, tlsConfig)).Error()))
 }
 
 func loadSsaKey() (jwk.Key, error) {
@@ -345,6 +396,19 @@ func connStateHandshakeLogger(c net.Conn, state http.ConnState) {
 				info.clientCertBytes = len(cs.PeerCertificates[0].Raw)
 			}
 		}
+		// StateActive fires as soon as the server starts reading the first
+		// request off this connection, i.e. right after the handshake's
+		// Finished messages are processed -- the earliest point at which the
+		// byte count read here is guaranteed to include the complete
+		// handshake. It may also include a few early application-data bytes
+		// if the client pipelined its first request into the same TCP
+		// read/TLS record as the handshake's tail end; for the sizes
+		// involved here (hundreds of bytes classical, kilobytes with PQC
+		// certs/KEM material) that's noise, not a meaningful skew.
+		if v, ok := connByteCounters.Load(remote); ok {
+			cc := v.(*countingConn)
+			info.handshakeBytes = int(cc.bytesRead.Load() + cc.bytesWritten.Load())
+		}
 		handshakeCache.Store(remote, info)
 
 		slog.Info("mTLS handshake complete",
@@ -355,11 +419,13 @@ func connStateHandshakeLogger(c net.Conn, state http.ConnState) {
 			slog.String("tlsVersion", info.tlsVersion),
 			slog.String("cipherSuite", info.cipherSuite),
 			slog.Int("clientCertBytes", info.clientCertBytes),
+			slog.Int("mtlsHandshakeBytes", info.handshakeBytes),
 		)
 
 	case http.StateClosed, http.StateHijacked:
 		handshakeStartTimes.Delete(remote)
 		handshakeCache.Delete(remote)
+		connByteCounters.Delete(remote)
 	}
 }
 
@@ -437,6 +503,7 @@ func loggingMiddleware(h http.Handler) http.Handler {
 				slog.String("tlsVersion", hs.tlsVersion),
 				slog.String("cipherSuite", hs.cipherSuite),
 				slog.Int("clientCertBytes", hs.clientCertBytes),
+				slog.Int("mtlsHandshakeBytes", hs.handshakeBytes),
 			)
 		}
 		if _, ok := h.(*httputil.ReverseProxy); ok {

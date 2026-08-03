@@ -1,53 +1,63 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-07-31T14:23:46.065898+00:00
+Generated at: 2026-08-03T19:36:02.602864+00:00
 Latency scenario: **225ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
 
-- Total bytes exchanged across the full flow (classical OPINsize): **72886 bytes**
-- Total HTTP requests: **38**
-- JWTs found: **14**
-- Average JWT size: **1144.57 bytes** (max: 1810 bytes)
+- Total bytes exchanged across the full flow (classical OPINsize): **71475 bytes**
+- Total HTTP requests: **37**
+- JWTs found: **13**
+- Average JWT size: **1159.54 bytes** (max: 1810 bytes)
 
 ## Modules run
 
 | Plan | Module | Status | Result | Log |
 |---|---|---|---|---|
-| consents_v3 | opin-consent-api-status-test-v3 | FINISHED | PASSED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\consents_v3__opin-consent-api-status-test-v3_20260730T235938Z.json` |
-| consents_v3 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\consents_v3__opin-consents_api_preflight_test-module_v3_20260730T235837Z.json` |
-| person_v2 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\person_v2__opin-consents_api_preflight_test-module_v3_20260730T235949Z.json` |
-| person_v2 | person_api_core_test-module_v2.0.0 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\person_v2__person_api_core_test-module_v2.0.0_20260731T000348Z.json` |
+| consents_v3 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\consents_v3__opin-consents_api_preflight_test-module_v3_20260803T193415Z.json` |
+| consents_v3 | opin-consent-api-status-test-v3 | FINISHED | PASSED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\consents_v3__opin-consent-api-status-test-v3_20260803T193501Z.json` |
+| person_v2 | opin-consents_api_preflight_test-module_v3 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\person_v2__opin-consents_api_preflight_test-module_v3_20260803T193506Z.json` |
+| person_v2 | person_api_core_test-module_v2.0.0 | FINISHED | FAILED | `C:\Users\lucia_csx8nlz\MockOPIN\thesis\results\experiment1\225ms\person_v2__person_api_core_test-module_v2.0.0_20260803T193602Z.json` |
 
 ## Latency per endpoint (client-side, Conformance Suite)
 
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| `/issuer-ca.pem` | 4 | 2504.5 | 1740.0 | 4953.75 | 5406.75 |
-| `/jwks` | 2 | 1384 | 1384.0 | 1387.6 | 1387.92 |
-| `/open-insurance/consents/v3/consents` | 2 | 1590.5 | 1590.5 | 1703.45 | 1713.49 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:14aa7129-0c3a-4dcd-831a-1fe074a5e855` | 1 | 1424 | 1424 | 1424 | 1424 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:376bf9eb-7539-4694-8b4c-643dd5933bf2` | 5 | 1422.4 | 1419.0 | 1449.2 | 1453.84 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 1650.5 | 1650.5 | 1651.85 | 1651.97 |
-| `/open-insurance/insurance-person/v2/insurance-person/03e0a33f-c731-48d5-b284-a0c4478ea411/claim` | 2 | 1674.5 | 1674.5 | 1694.75 | 1696.55 |
-| `/open-insurance/insurance-person/v2/insurance-person/03e0a33f-c731-48d5-b284-a0c4478ea411/policy-info` | 2 | 1685 | 1685.0 | 1695.8 | 1696.76 |
-| `/open-insurance/insurance-person/v2/insurance-person/03e0a33f-c731-48d5-b284-a0c4478ea411/premium` | 2 | 1658.5 | 1658.5 | 1664.35 | 1664.87 |
-| `/organisations/76b370e3-def5-4798-8b6a-915cb5d6dd74/softwarestatements/c5eb976f-8a98-4eda-a773-a8a0fa286322/assertion` | 2 | 958 | 958.0 | 961.6 | 961.92 |
-| `/request` | 2 | 1177 | 1177.0 | 1181.5 | 1181.9 |
-| `/root-ca.pem` | 4 | 1774.5 | 1776.0 | 2235.9 | 2266.38 |
-| `/token` | 8 | 1596.75 | 1313.5 | 2891.75 | 3024.75 |
+| `/issuer-ca.pem` | 4 | 1331.25 | 302.0 | 4007.0 | 4506.2 |
+| `/jwks` | 2 | 1139 | 1139.0 | 1139.9 | 1139.98 |
+| `/open-insurance/consents/v3/consents` | 2 | 1392 | 1392.0 | 1392.9 | 1392.98 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:d3d5d1c1-469e-4463-b589-d76c85c775ab` | 5 | 1382.8 | 1382.0 | 1387.2 | 1387.84 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:f01748e3-1e0e-46da-a54b-43328f4ee66c` | 1 | 1383 | 1383 | 1383 | 1383 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 1632.5 | 1632.5 | 1642.85 | 1643.77 |
+| `/open-insurance/insurance-person/v2/insurance-person/3b723160-654c-4554-9342-30c6c40f1d4c/claim` | 2 | 1628 | 1628.0 | 1636.1 | 1636.82 |
+| `/open-insurance/insurance-person/v2/insurance-person/3b723160-654c-4554-9342-30c6c40f1d4c/policy-info` | 2 | 1617 | 1617.0 | 1619.7 | 1619.94 |
+| `/open-insurance/insurance-person/v2/insurance-person/3b723160-654c-4554-9342-30c6c40f1d4c/premium` | 2 | 1608.5 | 1608.5 | 1611.65 | 1611.93 |
+| `/organisations/76b370e3-def5-4798-8b6a-915cb5d6dd74/softwarestatements/c5eb976f-8a98-4eda-a773-a8a0fa286322/assertion` | 1 | 927 | 927 | 927 | 927 |
+| `/request` | 2 | 1152 | 1152.0 | 1152.0 | 1152.0 |
+| `/root-ca.pem` | 4 | 469.75 | 497.0 | 778.95 | 784.59 |
+| `/token` | 6 | 1694.5 | 1381.5 | 2554.0 | 2554.0 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 
-Requests logged by the gateway in this run: **60**
+Requests logged by the gateway in this run: **63**
 
 | Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| mTLS handshake | 59 | 446.83 | 473.0 | 515.0 | 515.84 |
-| OPIN processing | 60 | 461.68 | 254.5 | 1699.75 | 2594.01 |
+| mTLS handshake | 63 | 304.14 | 456.0 | 469.8 | 475.9 |
+| OPIN processing | 63 | 470.25 | 239.0 | 1629.0 | 2355.88 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
-0 handshake sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
+0 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
+
+### mTLS handshake size (wire bytes)
+
+Total bytes read+written at the raw TCP level during the handshake (ClientHello through Finished), counted below crypto/tls so it captures the actual negotiated messages regardless of algorithm -- see countingConn in mock-service-os/mock_mtls/main.go. This is the number expected to grow substantially under PQC (larger KEM public keys/ciphertexts and signatures), unlike clientCertBytes above which is only one certificate.
+
+| Requests | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |
+|---|---|---|---|---|
+| 63 | 11464.27 | 11003.0 | 13976.0 | 14702.48 |
+
+0 handshake byte-size sample(s) discarded as outliers (same filter/reasoning as the duration outliers above).
 
 ## Bytes by participant
 
@@ -55,11 +65,11 @@ Note: for keep-alive connections, only the first request on a given connection p
 
 | Participant | Sent (bytes) | Received (bytes) | Total (bytes) |
 |---|---|---|---|
-| AS | 16350 | 13348 | 29698 |
-| Client (test tool, total traffic) | 19572 | 53314 | 72886 |
-| Directory | 2350 | 552 | 2902 |
-| PKI/CRL | 19808 | 800 | 20608 |
-| RS | 14806 | 4872 | 19678 |
+| AS | 16350 | 13346 | 29696 |
+| Client (test tool, total traffic) | 19483 | 51992 | 71475 |
+| Directory | 1039 | 465 | 1504 |
+| PKI/CRL | 19813 | 800 | 20613 |
+| RS | 14790 | 4872 | 19662 |
 
 ## JWK sizes found (isolated public key material)
 
@@ -75,16 +85,15 @@ Note: for keep-alive connections, only the first request on a given connection p
 | # | Size (bytes) |
 |---|---|
 | 1 | 953 |
-| 2 | 1549 |
-| 3 | 937 |
-| 4 | 953 |
-| 5 | 1810 |
-| 6 | 953 |
-| 7 | 950 |
-| 8 | 953 |
-| 9 | 950 |
-| 10 | 953 |
-| 11 | 1363 |
-| 12 | 937 |
-| 13 | 953 |
-| 14 | 1810 |
+| 2 | 953 |
+| 3 | 1549 |
+| 4 | 937 |
+| 5 | 953 |
+| 6 | 1810 |
+| 7 | 953 |
+| 8 | 950 |
+| 9 | 953 |
+| 10 | 1363 |
+| 11 | 937 |
+| 12 | 953 |
+| 13 | 1810 |
