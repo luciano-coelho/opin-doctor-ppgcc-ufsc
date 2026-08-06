@@ -4,37 +4,55 @@ Tooling and data collected for the doctoral thesis on migrating from classical t
 
 ## Structure
 
+Each experiment (classical baseline, PQC, hybrid, ...) owns a self-contained
+folder under `results/`, with its own results, run logs, and any
+experiment-specific script. Tooling that isn't tied to a particular
+cryptography (running the Conformance Suite plans, injecting WAN latency,
+patching the suite itself) stays shared at the top level so later
+experiments reuse it as-is instead of duplicating it.
+
 ```
 thesis/
 ├── README.md                     this file
 ├── scripts/
 │   ├── baseline_automation.py    main automation: creates plans, runs the
 │   │                              "happy path" modules, exports logs, and
-│   │                              computes the baseline metrics
-│   └── check_plan_modules.py     quick diagnostic script — creates a plan
-│                                  and prints the exact module names the
-│                                  Conformance Suite recognizes (useful
-│                                  before adding a new plan to PLANS)
+│   │                              computes the metrics -- reused by every
+│   │                              experiment (output folder driven by the
+│   │                              latency-scenario CLI arg)
+│   ├── check_plan_modules.py     quick diagnostic script — creates a plan
+│   │                              and prints the exact module names the
+│   │                              Conformance Suite recognizes (useful
+│   │                              before adding a new plan to PLANS)
+│   └── set_latency.sh            injects/removes tc/netem WAN latency on
+│                                   the mTLS gateway container, crypto-agnostic
 ├── config/
 │   ├── config_template_consents_v3.json   validated config for the
 │   │                                        "Insurance consents api test V3.0.0" plan
 │   └── config_template_person_v2.json     validated config for the
 │                                            "person_test-plan_v2.0.0" plan
-├── results/
-│   └── baseline/
-│       ├── BASELINE_REPORT.md             final tabulated report
-│       ├── baseline_metrics.json          aggregated metrics (bytes, per-endpoint
-│       │                                    latency, JWT sizes)
-│       └── <plan>__<module>_<timestamp>.json   raw logs exported from the
-│                                                 Conformance Suite, unmodified
-├── logs/
-│   └── execution_log_20260720.txt         full stdout of the run that produced
-│                                            the current results
-└── patches/
-    └── ...                                 patched versions of Conformance Suite
-                                             source files (see patches/README.md —
-                                             needed because that folder is cloned
-                                             on demand and gitignored)
+├── patches/
+│   └── ...                                 patched versions of Conformance Suite
+│                                            source files (see patches/README.md —
+│                                            needed because that folder is cloned
+│                                            on demand and gitignored)
+└── results/
+    └── experiment1 - Classic/    Experiment 1: classical-cryptography baseline
+        ├── baseline/                       first exploratory single run (2026-07-20,
+        │                                     no injected latency) -- superseded by
+        │                                     the 0ms scenario below, kept for history
+        ├── 0ms/ 14ms/ 30ms/ 140ms/ 225ms/ 320ms/   the six WAN-latency scenarios
+        │                                             (baseline_metrics.json + raw
+        │                                             Conformance Suite logs per scenario)
+        ├── consolidated.json      the six scenarios' summary metrics side by side
+        ├── EXPERIMENT1_REPORT.md  human-readable comparative report
+        ├── Relatorio_Experimento1_Final.pdf   thesis report section for this experiment
+        ├── logs/
+        │   ├── execution_log_20260720.txt     full stdout of the baseline/ run
+        │   └── run_*.log, redo_*.log          stdout of each scenario run/retry
+        └── scripts/
+            └── consolidate_experiment1.py     builds consolidated.json/EXPERIMENT1_REPORT.md
+                                                 from the six scenarios above
 ```
 
 ## Infrastructure prerequisites

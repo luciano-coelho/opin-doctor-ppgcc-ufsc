@@ -6,7 +6,7 @@ Runs the "happy path" modules (preflight + core/status) of the plans:
   - Insurance consents api test V3.0.0
   - person_test-plan_v2.0.0
 
-Saves raw logs + aggregated metrics under thesis/results/experiment1/{latency_ms}ms/
+Saves raw logs + aggregated metrics under thesis/results/experiment1 - Classic/{latency_ms}ms/
 (latency_ms comes from the first CLI arg, matching thesis/scripts/set_latency.sh;
 defaults to 0 for ad-hoc local runs). Reads config templates from thesis/config/.
 
@@ -61,7 +61,7 @@ CONFIG_DIR = BASE_DIR / "config"
 # Set for real in main() from the latency-scenario CLI arg; the module-level
 # default here only matters for ad-hoc manual runs / imports (e.g. the
 # report-regeneration snippet used once during the English translation pass).
-OUTPUT_DIR = BASE_DIR / "results" / "experiment1" / "0ms"
+OUTPUT_DIR = BASE_DIR / "results" / "experiment1 - Classic" / "0ms"
 
 BASE_URL = "https://localhost:8443"
 GATEWAY_CONTAINER = "insurance-server-lambdas-mtls-1"
@@ -744,7 +744,7 @@ def parse_latency_arg():
     """
     First CLI arg is the latency scenario in ms (matches thesis/scripts/set_latency.sh);
     defaults to 0 for ad-hoc local runs. Determines where results are saved
-    (thesis/results/experiment1/{ms}ms/) -- it does NOT itself apply the tc
+    (thesis/results/experiment1 - Classic/{ms}ms/) -- it does NOT itself apply the tc
     delay, that's set_latency.sh's job (run separately, see Experiment 1
     step 5).
     """
@@ -760,7 +760,7 @@ def parse_latency_arg():
 def main():
     global OUTPUT_DIR
     latency_ms = parse_latency_arg()
-    OUTPUT_DIR = BASE_DIR / "results" / "experiment1" / f"{latency_ms}ms"
+    OUTPUT_DIR = BASE_DIR / "results" / "experiment1 - Classic" / f"{latency_ms}ms"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Latency scenario: {latency_ms}ms -> results go to {OUTPUT_DIR}")
 

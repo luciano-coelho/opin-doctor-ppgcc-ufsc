@@ -1,11 +1,11 @@
 """
 Experiment 1 (classical baseline) consolidation -- step 5.2/5.3.
 
-Reads the six per-scenario thesis/results/experiment1/{ms}ms/baseline_metrics.json
+Reads the six per-scenario thesis/results/experiment1 - Classic/{ms}ms/baseline_metrics.json
 files produced by baseline_automation.py and combines them into:
-  - thesis/results/experiment1/consolidated.json: the six scenarios' summary
-    metrics side by side, for programmatic reuse (e.g. plotting later).
-  - thesis/results/experiment1/EXPERIMENT1_REPORT.md: the human-readable
+  - thesis/results/experiment1 - Classic/consolidated.json: the six scenarios'
+    summary metrics side by side, for programmatic reuse (e.g. plotting later).
+  - thesis/results/experiment1 - Classic/EXPERIMENT1_REPORT.md: the human-readable
     comparative report requested in step 5.3 (total OPINsize, TLS-handshake
     vs. OPIN-processing split, per-endpoint P50/P95/P99, bytes per
     participant -- all six scenarios side by side).
@@ -20,8 +20,9 @@ import json
 import re
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-RESULTS_DIR = BASE_DIR / "results" / "experiment1"
+# This script lives in .../experiment1 - Classic/scripts/, so parent.parent
+# is the "experiment1 - Classic" results folder itself.
+RESULTS_DIR = Path(__file__).resolve().parent.parent
 SCENARIOS_MS = [0, 14, 30, 140, 225, 320]
 
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
