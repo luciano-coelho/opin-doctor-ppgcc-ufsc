@@ -96,6 +96,11 @@ services:
       - AWS_LOCAL=true
       - DEBUG=raidiam:server:*,oidc-provider:*
       - TRUSTFRAMEWORK_SSA_KEYSET=http://localstack:4566/keystore/jwks.json
+      # classic (PS256/RSA, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
+      # see mock-service-os/mock_as/crypto-profiles/ and
+      # thesis/results/experiment2 - PQC/DECISIONS.md. Override per run, e.g.
+      # CRYPTO_PROFILE=pqc docker-compose up -d --build auth
+      - CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic}
     ports:
       - 3000:3000
     command: ["node", "lambda.js"]
@@ -104,6 +109,8 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+      mongodb:
+        condition: service_started
 
   localstack:
     profiles:

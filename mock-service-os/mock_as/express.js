@@ -5,8 +5,6 @@ import * as url from 'node:url';
 import { dirname } from 'desm';
 import express from 'express'; // eslint-disable-line import/no-unresolved
 import helmet from 'helmet';
-import josePkg from 'jose';
-const { JWKS } = josePkg;
 import got from 'got';
 import Provider from 'oidc-provider';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -93,7 +91,11 @@ async function loadOidcConfiguration(brand, mtlsIssuer) {
 
   log(`Load Directory Key Set: ${TRUSTFRAMEWORK_SSA_KEYSET}`);
   const ssaJwksResponse = await got(TRUSTFRAMEWORK_SSA_KEYSET);
-  const ssaJwks = JWKS.asKeyStore(JSON.parse(ssaJwksResponse.body));
+  // Passed through as plain JWKS JSON, not a jose KeyStore: its only consumer
+  // (verifySsaJwt in utils/opin/configuration.js) verifies synchronously with
+  // node:crypto, since oidc-provider's validator hook can't await jose's
+  // Promise-based jwtVerify. See thesis/results/experiment2 - PQC/DECISIONS.md.
+  const ssaJwks = JSON.parse(ssaJwksResponse.body);
 
   let configuration = configFunc.default(mtlsIssuer, ssaJwks);
   // Add the findAccount property

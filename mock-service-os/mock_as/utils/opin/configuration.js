@@ -2,12 +2,87 @@ import { insurerAdapter } from './adapter.js';
 import { getConsentId } from './helpers.js';
 
 import { errors } from 'oidc-provider';
-import pkg from 'jose';
-const { JWT } = pkg;
+import { createPublicKey, verify as cryptoVerify, constants } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 import Debug from 'debug';
 const log = Debug('raidiam:server:info');
 const err = Debug('raidiam:server:error');
+
+// CRYPTO_PROFILE picks which mock_as/crypto-profiles/<name>.json to load --
+// classic (PS256/RSA, Experiment 1) or pqc (ML-DSA-65, Experiment 2). One
+// switch, read once at boot, instead of branching classic/PQC logic through
+// the file. Defaults to classic so an unset env var reproduces Experiment 1.
+// See thesis/results/experiment2 - PQC/DECISIONS.md.
+const CRYPTO_PROFILE = process.env.CRYPTO_PROFILE || 'classic';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const cryptoProfile = JSON.parse(
+  readFileSync(path.join(__dirname, '..', '..', 'crypto-profiles', `${CRYPTO_PROFILE}.json`), 'utf8'),
+);
+log(`Crypto profile: ${CRYPTO_PROFILE} (signingAlgs: ${cryptoProfile.signingAlgs.join(', ')})`);
+
+// extraClientMetadata.validator (see below) must be synchronous -- confirmed
+// in oidc-provider's own docs ("async validators or functions returning
+// Promise shall be rejected during runtime"). jose v6's verification API
+// (jwtVerify and everything built on it) is Promise-based with no sync
+// escape hatch, so it can't be used inside that hook. This verifies the
+// software_statement JWS by hand with node:crypto instead, which does have
+// a synchronous verify(). Kept at PS256: the SSA is signed by the Trust
+// Framework/Directory (TRUSTFRAMEWORK_SSA_KEYSET), a different actor from
+// the AS's own signing key below -- migrating it to ML-DSA-65 is a separate,
+// not-yet-scoped change to the Directory/localstack keystore fixture.
+function verifySsaJwt(jws, jwks, { issuer, maxTokenAgeSeconds }) {
+  const [headerB64, payloadB64, signatureB64] = jws.split('.');
+  if (!headerB64 || !payloadB64 || !signatureB64) {
+    throw new errors.InvalidSoftwareStatement('malformed software_statement JWT');
+  }
+
+  const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+  if (header.typ && header.typ.toLowerCase() !== 'jwt') {
+    throw new errors.InvalidSoftwareStatement(`unexpected software_statement typ: ${header.typ}`);
+  }
+  if (header.alg !== 'PS256') {
+    throw new errors.InvalidSoftwareStatement(`unexpected software_statement alg: ${header.alg}`);
+  }
+
+  const jwk = jwks.keys.find((key) => key.kid === header.kid && key.use !== 'enc');
+  if (!jwk) {
+    throw new errors.InvalidSoftwareStatement(`no matching software_statement signing key for kid ${header.kid}`);
+  }
+
+  const verified = cryptoVerify(
+    'sha256',
+    Buffer.from(`${headerB64}.${payloadB64}`),
+    {
+      key: createPublicKey({ key: jwk, format: 'jwk' }),
+      padding: constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+    },
+    Buffer.from(signatureB64, 'base64url'),
+  );
+  if (!verified) {
+    throw new errors.InvalidSoftwareStatement('software_statement signature verification failed');
+  }
+
+  const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.iss !== issuer) {
+    throw new errors.InvalidSoftwareStatement(`unexpected software_statement issuer: ${payload.iss}`);
+  }
+  if (typeof payload.iat !== 'number' || now - payload.iat > maxTokenAgeSeconds) {
+    throw new errors.InvalidSoftwareStatement('software_statement is too old');
+  }
+  if (typeof payload.exp === 'number' && payload.exp < now) {
+    throw new errors.InvalidSoftwareStatement('software_statement has expired');
+  }
+  if (typeof payload.nbf === 'number' && payload.nbf > now) {
+    throw new errors.InvalidSoftwareStatement('software_statement is not yet valid');
+  }
+
+  return payload;
+}
 
 // Validate that the consent ID sent in the token request is authorized before
 // issuing an access token.
@@ -114,12 +189,16 @@ export default function (mtlsIssuer, ssaJwks) {
     },
     acrValues: ['urn:brasil:openbanking:loa2', 'urn:brasil:openbanking:loa3'],
     enabledJWA: {
-      authorizationSigningAlgValues: ['PS256'],
-      introspectionSigningAlgValues: ['PS256'],
-      requestObjectSigningAlgValues: ['PS256'],
-      clientAuthSigningAlgValues: ['PS256'],
-      userinfoSigningAlgValues: ['PS256'],
-      idTokenSigningAlgValues: ['PS256'],
+      authorizationSigningAlgValues: cryptoProfile.signingAlgs,
+      introspectionSigningAlgValues: cryptoProfile.signingAlgs,
+      requestObjectSigningAlgValues: cryptoProfile.signingAlgs,
+      clientAuthSigningAlgValues: cryptoProfile.signingAlgs,
+      userinfoSigningAlgValues: cryptoProfile.signingAlgs,
+      idTokenSigningAlgValues: cryptoProfile.signingAlgs,
+      // Encryption stays classical regardless of profile: jose has no
+      // ML-KEM support (no active JOSE/COSE draft for it either -- withdrawn
+      // from the JOSE WG at IETF 126), and ML-KEM-768 migration for the AS
+      // is not in scope (only the RS's JWE is, per Etapa 2.3).
       requestObjectEncryptionAlgValues: ['RSA-OAEP'],
       requestObjectEncryptionEncValues: ['A256GCM'],
       idTokenEncryptionAlgValues: ['RSA-OAEP'],
@@ -127,10 +206,10 @@ export default function (mtlsIssuer, ssaJwks) {
     },
     clientDefaults: {
       grant_types: ['authorization_code', 'client_credentials', 'refresh_token', 'implicit'],
-      id_token_signed_response_alg: 'PS256',
-      request_object_signed_response_alg: 'PS256',
-      request_object_signing_alg: 'PS256',
-      authorization_signed_response_alg: 'PS256',
+      id_token_signed_response_alg: cryptoProfile.signingAlgs[0],
+      request_object_signed_response_alg: cryptoProfile.signingAlgs[0],
+      request_object_signing_alg: cryptoProfile.signingAlgs[0],
+      authorization_signed_response_alg: cryptoProfile.signingAlgs[0],
       response_types: ['code', 'code id_token'],
       tls_client_certificate_bound_access_tokens: true,
     },
@@ -263,19 +342,13 @@ export default function (mtlsIssuer, ssaJwks) {
     },
     jwks: {
       keys: [
-        {
-          p: '5BKxIVlA8DKoAbXnyNr-M_nAAi63lUCrCki7ADrsifHgTspQydfdQVA8DcqS0JxaHGlWr-mCjrMSSd8x1WOWW8TNqf0NF9O3XZGuCG35xbLG8V72pIMPM5HWr91RTQ0w6FqYkRJsot2ZYK53rtsDSwqQPK7LbRZTaSs-MCB-6SE',
-          kty: 'RSA',
-          q: 'u1_MSt9DNMqgL1N24S5VHXYmNH8p1ZP70KqH4WmJuYQfbgqQ7sU0L7nkR_H_IHHZqL3bruYVNPcKaE7tmHH5sRkix_R_MudjynV2la03UCKoSvnUgb0dguW9xDHKaXyVhzi24OPjolhhu0RYOqzF2GSJ2yZ0Z1zjPNLksEhxC2c',
-          d: 'lWi6shKVV8-nggjqc8PmpWOmMIDvfOiYUWVinjwyDEueljRBFUqrc8Z_lNQraEfM9dQ-GfNycEM9wN581H6M80hoVepTROMSYPZfDE_mX6aE48OReo6hJQvB3tUAuSkdjQj9_Tc_TLQEott-L89IJsAqP7AQSS0WvzfJL4O-YtIiyYNqbgbRfVTfaGAMIUKlO_dEf8jsbigBAbGVT7LIcAf9UokUBKc7Kudl_xCMzbDdM03xJeC5Ml0peOmnnTGc2NdBHSyXITnkrOJlnQWz5ZzyiJ3Os9Zm34gWcdXDz8emS9AHftqv6c9FbmBq9jMNU4_tiIMdAo6-p-xizlJawQ',
-          e: 'AQAB',
-          use: 'sig',
-          qi: 'TsQgLFpb6TozodDm_zoUcoPY6sWlijhvHgFFKAjnB2ssCJ6lO7X3bnep_cUt-dtkV7eZnh5A0cUNVtNnP3ni9EkpxWwsSTrG_TZHmbHxaHXnF-G4s6lrYGWBXbgucALegEFpmuJUThxpLEbpPOUzsWTxI66nOd6T5Quwx7qGv30',
-          dp: '0FrfJMckEwtD_qQOxqiBeDweFCBXqGs2liORaolqFC86quAa4_pnb8Z7xmGctCVSEQiOoBAkLHcdKw1Suk3LS7TD6hp6Pp00s69lnN_TQa-sHU-S5QGx_nup9GmsX0bAulQhcs6xHixxdSiNv9jm7kQNNtK8lsDBnJ9bpZ3aMuE',
-          alg: 'PS256',
-          dq: 'Z7QtrYLD_4PmBEt9kEPEd_ncS1HWJY8x39uCOQ_gWfz2KEFQ1dXvfDq2TdtyCNL6VJo_7B0Lv7S63eBRP_5U49-1kFWR0OqgIH3ClDS6WG_WFSkQpH22x6u_y8aC8L8zQxPwo6d9ZWzlKnA5JMBa_9klM1WlN1ABtLhEOgzeBCE',
-          n: 'pu8AVLEIfYppnbU0r2M1PNhCvYpGnVXbSXj-OxRX72e_us-pYg2KnkTOPTIm3vQ53GsVYb8ajktGxvjWNzBeI2-OPXhwhvBKG14m_EON8t3_6fiB6PKsoFU474LLHilOr4TwOUh_oYjv_-5Ej5x1Je6XMHnsKkDCCmO1tzKoGZnoFgXxov12dZ84U374q5zwLzngPk7BC2Q0G7wIFbwf1Xm5ECSHXFHT_17iaRhu2s5eQ6B1dgx9RJBXjN-cgqZQIeNptbqXH67I3LaM_JcbKfrpx7KbDWivvKrfeWTyBJuJ9t8WD7k_4lfbbb4HUMKM761MgiIMv7GAZ8sItqU3Rw',
-        },
+        // AS's own signing key -- comes from crypto-profiles/<CRYPTO_PROFILE>.json
+        // (PS256/RSA for classic, ML-DSA-65/AKP for pqc). No `kid` set on
+        // purpose in either profile: oidc-provider computes one via the JWK
+        // thumbprint (jose's calculateJwkThumbprint supports AKP JWKs since
+        // v6.1.0, same code path as RSA). See thesis/results/experiment2 -
+        // PQC/DECISIONS.md.
+        cryptoProfile.signingKey,
         {
           p: '_aSA0u5saMEl1hc9-Sglp9LDOeZcgs_Gw7Olxefs77bIjMQpFwrFsIWR4HH6K9nscTIAKNM9AVq30Y1TTB0idebzPbjECB90KgYa3hm2g4A6pHkaOuHs0RGTWbWavDUkQka-CSB8hE7sTNSrmDpG8FbLihuSzDFWCdLGsDqXeuk',
           kty: 'RSA',
@@ -311,12 +384,10 @@ export default function (mtlsIssuer, ssaJwks) {
           }
           let payload;
           try {
-            // extraClientMetadata.validator must be sync :sadface:
-            payload = JWT.verify(value, ssaJwks, {
-              algorithms: ['PS256'],
+            // extraClientMetadata.validator must be sync -- see verifySsaJwt above.
+            payload = verifySsaJwt(value, ssaJwks, {
               issuer: process.env.TRUSTFRAMEWORK_SSA_ISS,
-              maxTokenAge: '5 days',
-              typ: 'JWT',
+              maxTokenAgeSeconds: 5 * 24 * 60 * 60,
             });
 
             // This has the double benefit of also ensuring that the DCR is presented over a mtls link
@@ -463,9 +534,9 @@ export default function (mtlsIssuer, ssaJwks) {
               jwks_uri: software_jwks_uri,
               application_type: 'web',
               client_name: software_client_name,
-              id_token_signed_response_alg: 'PS256',
-              request_object_signing_alg: 'PS256',
-              authorization_signed_response_alg: 'PS256',
+              id_token_signed_response_alg: cryptoProfile.signingAlgs[0],
+              request_object_signing_alg: cryptoProfile.signingAlgs[0],
+              authorization_signed_response_alg: cryptoProfile.signingAlgs[0],
               tos_uri: software_tos_uri,
               logo_uri: software_logo_uri,
               request_object_encryption_alg: 'RSA-OAEP',
@@ -486,10 +557,7 @@ export default function (mtlsIssuer, ssaJwks) {
             delete metadata.software_statement;
           } catch (error) {
             err(`${error.message}: ${JSON.stringify(metadata)}`);
-            if (error.code === 'ERR_JWT_EXPIRED' || error.code === 'ERR_JWS_VERIFICATION_FAILED') {
-              console.log(error);
-              throw new errors.InvalidSoftwareStatement(`could not verify software_statement: ${error.message}`, error);
-            } else if (error instanceof errors.InvalidClientMetadata) {
+            if (error instanceof errors.InvalidClientMetadata) {
               throw error;
             } else if (error instanceof errors.InvalidSoftwareStatement) {
               throw error;
