@@ -100,7 +100,7 @@ async function loadOidcConfiguration(brand, mtlsIssuer) {
   let configuration = configFunc.default(mtlsIssuer, ssaJwks);
   // Add the findAccount property
   configuration.findAccount = Account.findAccount;
-  return configuration;
+  return { configuration, publishedJwksOverride: configFunc.publishedJwksOverride };
 }
 
 async function main() {
@@ -140,7 +140,7 @@ async function main() {
   apiUrl = apiUrl.toString().replace(/\/$/, ''); // Remove trailing slash.
   log(`Issuer: ${issuer}, mTLS Issuer: ${mtlsIssuer}, API Host: ${apiUrl}`);
 
-  let oidcConfig = await loadOidcConfiguration(config.brand, mtlsIssuer);
+  let { configuration: oidcConfig, publishedJwksOverride } = await loadOidcConfiguration(config.brand, mtlsIssuer);
 
   let adapter;
   if (process.env.MONGODB_URI) {
@@ -199,6 +199,18 @@ async function main() {
 
   // Serve static files
   app.use('/assets', express.static(path.join(__dirname, 'assets')));
+
+  // pqc mode only: shadow oidc-provider's own /jwks with a decoy (classic
+  // RSA sig key + the real enc key) so the Conformance Suite's Nimbus-based
+  // ValidateServerJWKs can parse it -- the real signing keystore (ML-DSA-65)
+  // is untouched, this route just wins over provider.callback()'s own /jwks
+  // because Express matches the specific route registered first. See
+  // utils/opin/configuration.js and thesis/results/experiment2 -
+  // PQC/DECISIONS.md (Decision 7).
+  if (publishedJwksOverride) {
+    app.get('/jwks', (req, res) => res.json(publishedJwksOverride));
+  }
+
   app.use(provider.callback());
 
   return {

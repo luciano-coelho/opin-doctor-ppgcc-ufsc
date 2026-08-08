@@ -6,6 +6,7 @@ import { createPublicKey, verify as cryptoVerify, constants } from 'node:crypto'
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { calculateJwkThumbprint } from 'jose';
 
 import Debug from 'debug';
 const log = Debug('raidiam:server:info');
@@ -22,6 +23,59 @@ const cryptoProfile = JSON.parse(
   readFileSync(path.join(__dirname, '..', '..', 'crypto-profiles', `${CRYPTO_PROFILE}.json`), 'utf8'),
 );
 log(`Crypto profile: ${CRYPTO_PROFILE} (signingAlgs: ${cryptoProfile.signingAlgs.join(', ')})`);
+
+// The AS's encryption key -- unaffected by CRYPTO_PROFILE (see enabledJWA
+// below: encryption stays classical regardless of profile).
+const AS_ENC_JWK = {
+  p: '_aSA0u5saMEl1hc9-Sglp9LDOeZcgs_Gw7Olxefs77bIjMQpFwrFsIWR4HH6K9nscTIAKNM9AVq30Y1TTB0idebzPbjECB90KgYa3hm2g4A6pHkaOuHs0RGTWbWavDUkQka-CSB8hE7sTNSrmDpG8FbLihuSzDFWCdLGsDqXeuk',
+  kty: 'RSA',
+  q: 'gvBSWfBZtjHBqhwxXdO5k9J0nNqPta-sBuKc7PNhODbr0UWNkHcailKWs3f0ViXaSRAEW-EB9Ty4plgMBjy-ycc4va1Rfg-6Pn_tnVYbB5-4nmHO8vAFZR4EP4MHipyizJfNPuSlawLNc71Eo5lAUWzPRpTBZ1XvQ9AZgx-wA2M',
+  d: 'et4yFr71HRMW2epVzYPNcNfqGJqTU7NsbVMCSH-ZDJ_ysPn5CgTmAK-NZh2hJvra4RCBgpOQiEYqEqX5jc3xPZyTUtCTJwRpgVNLnhylk031hy22qA2QqWRsWGLBxRvgP8gb9intIs6MkrIiPkO2t5o3J9OYpF7aO40mXH5CM2EJm-FxqGuKMVb_zWVqImmh3mqC2GlPBsiZLcHeFIbtGopsel07nngBBSmCOf7XAmtqYvZAGiJQkd1poI7p_c5n7x3aj1jPGShVLzfLBWqNipoZk0GfbY7qTlkY6dT2x098V_MSpSip9tkQ__whdHOlR5GE_HT0vlmhfwixZKaTEQ',
+  e: 'AQAB',
+  use: 'enc',
+  qi: 'eiD4hKfSwXUVN8q14yL2JK4rUt0heIZ93CHVtkonsA8VasPOI1E6D51WaFRHaJxgvn7CiY16h2qg9xjP1uMBNcuscSKRnyqAeGJuyPh576-FWxJlZSqh9PoSxj4eHQMCWmBBi7TL820hrgA2mhc0KLekCRT36-89-Va7G74N5A8',
+  dp: 'n1NJNLZd1MOXD8-Tt0HXvX6v8VvZurXnhiD_vbw84isv-PRzVy0GFycgBhuyaP8__a7J2NswE_y3QOOEcmhOsD79hkTcprmTT558HA2MzzeqHoyPxHMMPhvLMmvYIedDunoTf0ovzTCCUJS6oSniS7BJtJwzbx6CjDMhaau0YZk',
+  alg: 'RSA-OAEP',
+  dq: 'G1DXXTvu-ztWE47eHZzV0ijNewt9f4GueaE865G6bmfGulmwNrsiJkkkdzxHFNHAwA0_W4uNRQPt4YXsvEBf7OhKxgcqQQo26GL3xyL3cJe5hBETg0rfVUD10eob4Kbcr6Hbh4tblv92rPaHIzoNWO9CLo9J6azbxWHccKZjqdE',
+  n: 'gbulO7BqCAKwVy3ZqrR033OM1Mp-SqOViwD1manyHjhDSB5dPLL8AG9zdl8hoQwQO8TVR4Ske2oYLkr9zxtWROTYKvF6Ssp0W5Df-sE6lEnMRqPr0GNrIubA0i2I0-uuK26N-x2_KJZbrMviH8qAdQGKopJ1-9DTvgXbOZmzQDuP3s0V8BB7pSroOaBpE7wtKAr5akPElbw_XR7m5ocmbd2TIHu8kdLU4W60Aha7x427KaYhetbtVkkS3h6j7FP9Wm2iMSkneo2ZA0WP4N4jqv3wqA2c7d_IeQNWmUxFrIoApmhy4MoMMDXjmWM_7JwH1UK6RsaknAfT7C0YJjVDGw',
+};
+
+// pqc mode only: the AS signs tokens with ML-DSA-65 (cryptoProfile.signingKey,
+// kty AKP), but the Conformance Suite's ValidateServerJWKs condition uses
+// Nimbus JOSE+JWT, which throws on ANY kty: AKP key in a JWKS regardless of
+// what else is present (confirmed empirically -- see thesis/results/
+// experiment2 - PQC/DECISIONS.md, Decision 6). To keep the same CS/config
+// driving all three experiments, /jwks publishes the classic RSA signing key
+// instead (public-only projection -- it never signs anything in this mode)
+// alongside the real encryption key. This is a published decoy, not a lie
+// about what's used to sign: real token signatures still use the AKP key,
+// unaffected by this (see express.js, where this is served by a route that
+// shadows oidc-provider's own /jwks -- the internal signing keystore below
+// is untouched). See Decision 7 for the exact limitation this accepts.
+let publishedJwksOverride = null;
+if (CRYPTO_PROFILE === 'pqc') {
+  const classicProfile = JSON.parse(
+    readFileSync(path.join(__dirname, '..', '..', 'crypto-profiles', 'classic.json'), 'utf8'),
+  );
+  const decoySigJwk = {
+    kty: classicProfile.signingKey.kty,
+    use: classicProfile.signingKey.use,
+    alg: classicProfile.signingKey.alg,
+    n: classicProfile.signingKey.n,
+    e: classicProfile.signingKey.e,
+  };
+  decoySigJwk.kid = await calculateJwkThumbprint(decoySigJwk);
+  const encJwkPublic = {
+    kty: AS_ENC_JWK.kty,
+    use: AS_ENC_JWK.use,
+    alg: AS_ENC_JWK.alg,
+    n: AS_ENC_JWK.n,
+    e: AS_ENC_JWK.e,
+  };
+  encJwkPublic.kid = await calculateJwkThumbprint(encJwkPublic);
+  publishedJwksOverride = { keys: [decoySigJwk, encJwkPublic] };
+  log(`Published /jwks override active (pqc mode): publishing classic RSA sig key (kid ${decoySigJwk.kid}) instead of the real ML-DSA-65 signing key`);
+}
 
 // extraClientMetadata.validator (see below) must be synchronous -- confirmed
 // in oidc-provider's own docs ("async validators or functions returning
@@ -102,6 +156,8 @@ async function validateConsent(token) {
 
   console.log('consent is authorised');
 }
+
+export { publishedJwksOverride };
 
 export default function (mtlsIssuer, ssaJwks) {
   return {
@@ -349,19 +405,7 @@ export default function (mtlsIssuer, ssaJwks) {
         // v6.1.0, same code path as RSA). See thesis/results/experiment2 -
         // PQC/DECISIONS.md.
         cryptoProfile.signingKey,
-        {
-          p: '_aSA0u5saMEl1hc9-Sglp9LDOeZcgs_Gw7Olxefs77bIjMQpFwrFsIWR4HH6K9nscTIAKNM9AVq30Y1TTB0idebzPbjECB90KgYa3hm2g4A6pHkaOuHs0RGTWbWavDUkQka-CSB8hE7sTNSrmDpG8FbLihuSzDFWCdLGsDqXeuk',
-          kty: 'RSA',
-          q: 'gvBSWfBZtjHBqhwxXdO5k9J0nNqPta-sBuKc7PNhODbr0UWNkHcailKWs3f0ViXaSRAEW-EB9Ty4plgMBjy-ycc4va1Rfg-6Pn_tnVYbB5-4nmHO8vAFZR4EP4MHipyizJfNPuSlawLNc71Eo5lAUWzPRpTBZ1XvQ9AZgx-wA2M',
-          d: 'et4yFr71HRMW2epVzYPNcNfqGJqTU7NsbVMCSH-ZDJ_ysPn5CgTmAK-NZh2hJvra4RCBgpOQiEYqEqX5jc3xPZyTUtCTJwRpgVNLnhylk031hy22qA2QqWRsWGLBxRvgP8gb9intIs6MkrIiPkO2t5o3J9OYpF7aO40mXH5CM2EJm-FxqGuKMVb_zWVqImmh3mqC2GlPBsiZLcHeFIbtGopsel07nngBBSmCOf7XAmtqYvZAGiJQkd1poI7p_c5n7x3aj1jPGShVLzfLBWqNipoZk0GfbY7qTlkY6dT2x098V_MSpSip9tkQ__whdHOlR5GE_HT0vlmhfwixZKaTEQ',
-          e: 'AQAB',
-          use: 'enc',
-          qi: 'eiD4hKfSwXUVN8q14yL2JK4rUt0heIZ93CHVtkonsA8VasPOI1E6D51WaFRHaJxgvn7CiY16h2qg9xjP1uMBNcuscSKRnyqAeGJuyPh576-FWxJlZSqh9PoSxj4eHQMCWmBBi7TL820hrgA2mhc0KLekCRT36-89-Va7G74N5A8',
-          dp: 'n1NJNLZd1MOXD8-Tt0HXvX6v8VvZurXnhiD_vbw84isv-PRzVy0GFycgBhuyaP8__a7J2NswE_y3QOOEcmhOsD79hkTcprmTT558HA2MzzeqHoyPxHMMPhvLMmvYIedDunoTf0ovzTCCUJS6oSniS7BJtJwzbx6CjDMhaau0YZk',
-          alg: 'RSA-OAEP',
-          dq: 'G1DXXTvu-ztWE47eHZzV0ijNewt9f4GueaE865G6bmfGulmwNrsiJkkkdzxHFNHAwA0_W4uNRQPt4YXsvEBf7OhKxgcqQQo26GL3xyL3cJe5hBETg0rfVUD10eob4Kbcr6Hbh4tblv92rPaHIzoNWO9CLo9J6azbxWHccKZjqdE',
-          n: 'gbulO7BqCAKwVy3ZqrR033OM1Mp-SqOViwD1manyHjhDSB5dPLL8AG9zdl8hoQwQO8TVR4Ske2oYLkr9zxtWROTYKvF6Ssp0W5Df-sE6lEnMRqPr0GNrIubA0i2I0-uuK26N-x2_KJZbrMviH8qAdQGKopJ1-9DTvgXbOZmzQDuP3s0V8BB7pSroOaBpE7wtKAr5akPElbw_XR7m5ocmbd2TIHu8kdLU4W60Aha7x427KaYhetbtVkkS3h6j7FP9Wm2iMSkneo2ZA0WP4N4jqv3wqA2c7d_IeQNWmUxFrIoApmhy4MoMMDXjmWM_7JwH1UK6RsaknAfT7C0YJjVDGw',
-        },
+        AS_ENC_JWK,
       ],
     },
     extraClientMetadata: {

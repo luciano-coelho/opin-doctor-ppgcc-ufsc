@@ -172,6 +172,16 @@ services:
     volumes:
       - ./conformance-suite/target/:/server/
       - ../mock-service-os/certs/ca.crt:/certs/ca.crt:ro
+      # Registers BouncyCastle as an additional java.security.Provider (not
+      # the full BCJSSE TLS provider) -- fixes ValidateMTLSCertificatesAsX509's
+      # NPE on an ML-DSA-65 client cert's null PublicKey, without touching
+      # the suite's own jar. Gets the CS as far as Layer 3 (a hardcoded RSA
+      # assumption in its own compiled code) before hitting a wall no
+      # provider registration can clear. Sourced from thesis/patches/, not
+      # conformance-suite/, since that whole directory is gitignored
+      # (cloned on demand) -- see thesis/results/experiment2 -
+      # PQC/DECISIONS.md, Decision 7, and thesis/patches/README.md.
+      - ../thesis/patches/conformance-suite/extra-libs/:/extra-libs/:ro
     # The Mongo driver bundled in this jar (4.6.1) predates the tlsCAFile
     # connection-string option, so it falls back to the JVM's default cacerts
     # truststore -- which doesn't know our local CA and fails with a PKIX
@@ -201,8 +211,22 @@ services:
       - -Xdebug
       - -Xrunjdwp:transport=dt_socket,address=*:9999,server=y,suspend=n
       - -Dspring.data.mongodb.uri=mongodb://mongodb:27017/test_suite?tls=true&tlsCAFile=/certs/ca.crt
-      - -jar
-      - /server/fapi-test-suite.jar
+      # Additive (no leading "="): appends to, doesn't replace, the JVM's
+      # default provider list. Must come before -cp/the class name -- like
+      # -jar, everything after the class name is a program arg to Spring
+      # Boot, not a JVM option, so it'd silently do nothing placed later
+      # (as -Djdk.tls.maxHandshakeMessageSize and the other -D flags below
+      # already are, pre-existing, unchanged from before this experiment).
+      - -Djava.security.properties=/extra-libs/bc.security
+      # -cp + JarLauncher instead of -jar: -jar ignores any classpath
+      # addition (manifest Class-Path only), so this is needed to put the
+      # BouncyCastle jars anywhere the JVM's provider loader can see them.
+      # JarLauncher is fapi-test-suite.jar's own Main-Class (a Spring Boot
+      # fat jar) -- using it directly here reproduces exactly what -jar did,
+      # plus the classpath addition.
+      - -cp
+      - /server/fapi-test-suite.jar:/extra-libs/bcprov-jdk18on-1.79.jar:/extra-libs/bcutil-jdk18on-1.79.jar
+      - org.springframework.boot.loader.JarLauncher
       - -Djdk.tls.maxHandshakeMessageSize=65536
       - -Dcom.sun.net.ssl.checkRevocation=false
       - -Dcom.sun.net.ssl.trustStoreType=JKS

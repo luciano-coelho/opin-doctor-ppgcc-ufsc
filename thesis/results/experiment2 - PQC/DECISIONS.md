@@ -314,3 +314,114 @@ latencies -- without depending on the CS's JWKS validation at all. (Etapas
 3.1-3.4's gateway/certificate work stays valid and independently verified --
 see Decision 5 -- this only rules out the CS as the *driver* for Experiment
 2 traffic.)
+
+## 7. Two workarounds attempted and pushed as far as they'd go -- three-layer investigation, definitive result
+
+**Context:** before accepting Decision 6, tried two further, deeper
+workarounds to see whether the Conformance Suite could be made to drive
+Experiment 2 (pqc) end-to-end after all, each tested empirically against the
+real `opin-consent-api-status-test-v3` module (via the same
+`/api/plan`+`/api/runner` pattern `baseline_automation.py` uses) rather than
+reasoned about abstractly. Both are **kept in the codebase, not reverted** --
+they're real, working infrastructure that got the CS measurably further, and
+document exactly where the wall is.
+
+### Layer 1 -- Nimbus can't parse `kty: AKP` (Decision 6's finding)
+
+`net.openid.conformance.condition.client.ValidateServerJWKs` uses Nimbus
+JOSE+JWT to parse every key in the AS's `/jwks`, unconditionally, for every
+test module, before anything mTLS-related happens.
+
+**Workaround implemented:** `mock_as/utils/opin/configuration.js` (pqc mode
+only) now builds `publishedJwksOverride` -- the *classic* RSA signing key's
+public projection (borrowed from `crypto-profiles/classic.json`, no private
+fields) plus the real RSA-OAEP encryption key -- and `express.js` registers
+`app.get('/jwks', ...)` serving it, positioned *before*
+`app.use(provider.callback())` so Express's route matching shadows
+oidc-provider's own `/jwks` handler. The AS's real signing keystore
+(`cryptoProfile.signingKey`, the ML-DSA-65 key, used via `enabledJWA`) is
+completely untouched -- tokens are still actually signed with ML-DSA-65; only
+the published discovery document is a decoy. Verified: `/jwks` publishes
+`kid: xQLs45xYyJr1omHs4qnB2rhes9qNFHIHQ5YPQKVJliM` (the exact same kid as
+Experiment 1's real classical AS key -- same key, same JWK thumbprint), while
+`/.well-known/openid-configuration` still correctly advertises
+`id_token_signing_alg_values_supported: ["ML-DSA-65"]`.
+
+**Result:** `ValidateServerJWKs` now passes, and the test advances through
+~20 further conditions (server JWKS validity/kid/key-length checks, client
+JWKS validity, mTLS certificate header parsing) before hitting Layer 2.
+
+### Layer 2 -- `java.security.cert` can't decode the ML-DSA-65 SubjectPublicKeyInfo
+
+With Layer 1 fixed, the test reached
+`net.openid.conformance.condition.client.ValidateMTLSCertificatesAsX509.validateMTLSKey`,
+which threw `NullPointerException: Cannot invoke
+"java.security.PublicKey.getAlgorithm()" because "publicKey" is null`. Root
+cause: Java 17's default `java.security.cert.CertificateFactory` doesn't
+recognize ML-DSA's SubjectPublicKeyInfo AlgorithmIdentifier OID
+(`2.16.840.1.101.3.4.3.18`) and silently returns a null `PublicKey` instead
+of throwing -- and the CS's own condition code has no null check before
+calling `.getAlgorithm()` on it. A latent bug in the CS's own code, exposed
+by an algorithm its JVM doesn't recognize -- not something fixable from our
+side by configuration.
+
+**Workaround implemented (experimental, kept as-is):**
+`insurance-server-lambdas/conformance-suite/extra-libs/` now holds
+`bcprov-jdk18on-1.79.jar`, `bcutil-jdk18on-1.79.jar`, and `bc.security` (one
+line: `security.provider.20=org.bouncycastle.jce.provider.BouncyCastleProvider`).
+`docker-compose.yml`'s `cs-server` service mounts that directory and its
+`command` was changed from `-jar /server/fapi-test-suite.jar` to `-cp
+/server/fapi-test-suite.jar:/extra-libs/bcprov-jdk18on-1.79.jar:/extra-libs/bcutil-jdk18on-1.79.jar
+org.springframework.boot.loader.JarLauncher` (the jar's own `Main-Class`,
+extracted from its manifest -- `-jar` ignores any `-cp` addition, using only
+the jar's internal manifest Class-Path, so reaching a addable classpath
+required launching the Spring Boot loader class directly instead) plus
+`-Djava.security.properties=/extra-libs/bc.security` (no leading `=`:
+additive to the JVM's default provider list, not a replacement -- placed
+*before* `-cp`/the class name, since like `-jar`, anything after the class
+name is a program arg to Spring Boot, not a JVM option, and would silently
+do nothing there). No jar was modified or rebuilt.
+
+**Result:** the NPE is gone -- BouncyCastle's registered ML-DSA algorithm
+support lets `CertificateFactory` correctly decode the public key this time.
+The test advances to Layer 3.
+
+### Layer 3 -- hardcoded RSA assumption in the CS's own compiled code, not fixable by provider registration
+
+```
+ValidateMTLSCertificatesAsX509: "The private key format does not support. You need to provide a private key which is RSA or EC"
+OpinInsertMtlsCa: Error creating HTTP client
+  at sun.security.rsa.RSAPrivateCrtKeyImpl.parseKeyBits
+  at sun.security.rsa.RSAKeyFactory.generatePrivate
+  at net.openid.conformance.condition.util.AbstractMtlsStrategy.generatePrivateKeyFromDER
+  at net.openid.conformance.condition.util.DefaultMtlsStrategy.process
+  at net.openid.conformance.condition.util.MtlsKeystoreBuilder.configureMtls
+```
+
+`AbstractMtlsStrategy.generatePrivateKeyFromDER` calls
+`sun.security.rsa.RSAKeyFactory`/`RSAPrivateCrtKeyImpl` **by name**, directly
+-- it never goes through the algorithm-agnostic `KeyFactory.getInstance(alg,
+provider)` lookup that would let a registered provider (BouncyCastle or
+otherwise, BCJSSE included) intervene. The code has already decided the key
+is RSA before any provider gets a chance to be asked. This is a hardcoded
+assumption baked into the CS's compiled logic, not a configuration or
+provider-availability gap -- no JVM flag or registered `Provider` can change
+which class a hardcoded call site invokes.
+
+**Conclusion (user, 2026-08-08):** the Conformance Suite cannot act as an
+mTLS client with an ML-DSA-65 certificate, full stop -- a structural
+limitation in its compiled source, not our configuration, our JVM setup, or
+missing algorithm support in the crypto libraries available to it (BC 1.79
+has ML-DSA; the CS's own code just never asks it). Fixing this would require
+patching and recompiling the CS from source, which was already ruled out in
+Decision 6 as disproportionate to this thesis's scope. Layers 1 and 2's
+workarounds are kept in the repository (not reverted) as working,
+documented infrastructure -- they're each individually correct and useful
+evidence of exactly where the real wall is, even though the combination
+doesn't clear Layer 3.
+
+**Experiment 2 measurement strategy (final):** a Python script that
+simulates the flow directly against the AS and RS (bypassing the
+Conformance Suite as the traffic driver entirely), reproducing the same
+call sequence the CS's test modules make, to preserve methodological
+equivalence with Experiment 1's data collection.
