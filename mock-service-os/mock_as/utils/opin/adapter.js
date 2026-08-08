@@ -9,6 +9,27 @@ import Debug from 'debug';
 const log = Debug('raidiam:server:info');
 const nodeCash = new NodeCache();
 
+// Since Etapa 2 (RS response signing, see thesis/results/experiment2 -
+// PQC/DECISIONS.md, Decision 4), every RS response body is a JWS Compact
+// Serialization (Content-Type: application/jwt) in both classic and pqc
+// CRYPTO_PROFILE, not plain JSON -- axios's default transformResponse only
+// parses a string as JSON when JSON.parse succeeds, so a JWT body silently
+// falls through as a raw string instead. Mirrors
+// thesis/scripts/opin_flow.py's parse_rs_body(): the signature isn't
+// verified here either (the RS may be signing with ML-DSA-65, which this
+// runtime has no verifier for -- same Nimbus gap that motivated the RS's
+// own BouncyCastle workaround), this just needs the claims to keep the
+// interaction flow moving, not a security proof.
+function parseRsBody(response) {
+  const body = response.data;
+  const contentType = response.headers?.['content-type'] || '';
+  if (typeof body === 'string' && (contentType.startsWith('application/jwt') || body.split('.').length === 3)) {
+    const payload = body.split('.')[1];
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+  }
+  return body;
+}
+
 export class InsurerAdapter {
   oidcProvider;
   httpClient;
@@ -31,7 +52,7 @@ export class InsurerAdapter {
       log(`error fetching the consent ${consentId} - ${error} - ${error.response?.data}`);
       throw new errors.InvalidGrant(`consent ${consentId} not found`);
     }
-    return response.data;
+    return parseRsBody(response);
   }
 
   async updateConsent(consentId, data) {
@@ -44,7 +65,7 @@ export class InsurerAdapter {
       log(`error updating the consent ${consentId} - ${error}`);
       throw new errors.InvalidGrant(`consent ${consentId} not updated`);
     }
-    return response.data;
+    return parseRsBody(response);
   }
 
   async getUserInformation(userId, consentRecord) {
@@ -59,7 +80,7 @@ export class InsurerAdapter {
     var hasPermission = consentRecord.permissions.some((i) => capitalizationTilePermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserCapitalizationTitlePlansInformation(userId);
-      result.push({ scope: 'capitalization-title', accounts: userAccounts.data.data });
+      result.push({ scope: 'capitalization-title', accounts: parseRsBody(userAccounts).data });
     }
 
     var financialRiskPermissions = [
@@ -71,7 +92,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => financialRiskPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserFinancialRiskPoliciesInformation(userId);
-      result.push({ scope: 'financial-risk', accounts: userAccounts.data.data });
+      result.push({ scope: 'financial-risk', accounts: parseRsBody(userAccounts).data });
     }
 
     var housingPermissions = [
@@ -83,7 +104,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => housingPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserHousingPoliciesInformation(userId);
-      result.push({ scope: 'housing', accounts: userAccounts.data.data });
+      result.push({ scope: 'housing', accounts: parseRsBody(userAccounts).data });
     }
 
     var responsibilityPermissions = [
@@ -95,7 +116,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => responsibilityPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserResponsibilityPoliciesInformation(userId);
-      result.push({ scope: 'responsibility', accounts: userAccounts.data.data });
+      result.push({ scope: 'responsibility', accounts: parseRsBody(userAccounts).data });
     }
 
     var personPermissions = [
@@ -107,7 +128,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => personPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserPersonPoliciesInformation(userId);
-      result.push({ scope: 'person', accounts: userAccounts.data.data });
+      result.push({ scope: 'person', accounts: parseRsBody(userAccounts).data });
     }
 
     var lifePensionPermissions = [
@@ -121,7 +142,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => lifePensionPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserLifePensionContractsInformation(userId);
-      result.push({ scope: 'life-pension', accounts: userAccounts.data.data });
+      result.push({ scope: 'life-pension', accounts: parseRsBody(userAccounts).data });
     }
 
     var pensionPlanPermissions = [
@@ -135,7 +156,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => pensionPlanPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserPensionPlanContractsInformation(userId);
-      result.push({ scope: 'pension-plan', accounts: userAccounts.data.data });
+      result.push({ scope: 'pension-plan', accounts: parseRsBody(userAccounts).data });
     }
 
     var acceptanceAndBranchesAbroadPermissions = [
@@ -147,7 +168,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => acceptanceAndBranchesAbroadPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserAcceptanceAndBranchesAbroadPoliciesInformation(userId);
-      result.push({ scope: 'insurance-acceptance-and-branches-abroad', accounts: userAccounts.data.data });
+      result.push({ scope: 'insurance-acceptance-and-branches-abroad', accounts: parseRsBody(userAccounts).data });
     }
 
     var financialAssistancePermissions = [
@@ -158,7 +179,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => financialAssistancePermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserFinancialAssistanceContractsInformation(userId);
-      result.push({ scope: 'financial-assistance', accounts: userAccounts.data.data });
+      result.push({ scope: 'financial-assistance', accounts: parseRsBody(userAccounts).data });
     }
 
     var patrimonialPermissions = [
@@ -170,7 +191,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => patrimonialPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserPatrimonialPoliciesInformation(userId);
-      result.push({ scope: 'patrimonial', accounts: userAccounts.data.data });
+      result.push({ scope: 'patrimonial', accounts: parseRsBody(userAccounts).data });
     }
 
     var ruralPermissions = [
@@ -182,7 +203,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => ruralPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserRuralPoliciesInformation(userId);
-      result.push({ scope: 'rural', accounts: userAccounts.data.data });
+      result.push({ scope: 'rural', accounts: parseRsBody(userAccounts).data });
     }
 
     var autoPermissions = [
@@ -194,7 +215,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => autoPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserAutoPoliciesInformation(userId);
-      result.push({ scope: 'auto', accounts: userAccounts.data.data });
+      result.push({ scope: 'auto', accounts: parseRsBody(userAccounts).data });
     }
 
     var transportPermissions = [
@@ -206,7 +227,7 @@ export class InsurerAdapter {
     hasPermission = consentRecord.permissions.some((i) => transportPermissions.includes(i));
     if (hasPermission) {
       const userAccounts = await this.getUserTransportPoliciesInformation(userId);
-      result.push({ scope: 'transport', accounts: userAccounts.data.data });
+      result.push({ scope: 'transport', accounts: parseRsBody(userAccounts).data });
     }
 
     return result;

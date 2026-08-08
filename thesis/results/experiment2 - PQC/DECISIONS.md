@@ -425,3 +425,32 @@ simulates the flow directly against the AS and RS (bypassing the
 Conformance Suite as the traffic driver entirely), reproducing the same
 call sequence the CS's test modules make, to preserve methodological
 equivalence with Experiment 1's data collection.
+
+## 8. opin_flow.py scope: excludes both plans' preflight modules
+
+**Context:** `thesis/scripts/opin_flow.py` (Decision 7's replacement
+measurement strategy) replicates the real HTTP call sequences from
+Experiment 1's raw logs. Each of the two plans Experiment 1 ran
+(`baseline_automation.py`'s `PLANS`) has two modules: a preflight module and
+the module that actually drives a consent (`opin-consent-api-status-test-v3`
+for the Insurance consents plan, `person_api_core_test-module_v2.0.0` for
+the person plan). `opin_flow.py` replicates only the latter two.
+
+**What was excluded:** the `opin-consents_api_preflight_test-module_v3`
+modules from both plans.
+
+**Reason:** they depend on Raidiam's real Directory, unavailable in a local
+environment. They ended with a `FAILED` result in every scenario of
+Experiment 1 for that reason (confirmed via `baseline_automation.py`'s own
+module_results and its docstring, which already documented this as
+expected/known, not a bug).
+
+**Why they don't contribute to the results:** since they always failed
+before completing, the data they generate doesn't represent a real
+consent flow and isn't comparable across algorithms. Including them would
+contaminate the metrics with error traffic.
+
+**Consequence for `opin_flow.py`'s per-scenario totals:** 28 HTTP calls
+(12 from the insurance-consents flow + 16 from the person flow), instead
+of the 37 raw log entries a full Experiment-1-style run produces across
+both plans' preflight+main modules combined.
