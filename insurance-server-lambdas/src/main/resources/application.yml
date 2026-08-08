@@ -52,6 +52,10 @@ aws:
 mockinsurance:
   mockinsuranceUrl: ${MOCKSERVICE_URL:matls-api.mockinsurance.poc.raidiam.io}
   max-page-size: 25
+  # classic (PS256/RSA, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
+  # see crypto-profiles/ resources and ResponseSigningService, and
+  # thesis/results/experiment2 - PQC/DECISIONS.md.
+  crypto-profile: ${CRYPTO_PROFILE:classic}
 
 trustframework:
   issuer: 74e929d9-33b6-4d85-8ba7-c146c867a817

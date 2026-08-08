@@ -44,6 +44,10 @@ services:
       MOCKSERVICE_URL: api.local
       AWS_XRAY_CONTEXT_MISSING: IGNORE_ERROR
       MICRONAUT_ENVIRONMENTS: dev
+      # classic (PS256/RSA, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
+      # see mock-service-os/mock_as/crypto-profiles/ for the same switch on
+      # the AS, and thesis/results/experiment2 - PQC/DECISIONS.md.
+      CRYPTO_PROFILE: ${CRYPTO_PROFILE:-classic}
     ports:
       - "8081:8080"
 

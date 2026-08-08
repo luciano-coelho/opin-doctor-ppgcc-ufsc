@@ -3,6 +3,7 @@ package com.raidiam.trustframework.mockinsurance.controllers;
 import com.raidiam.trustframework.mockinsurance.auth.AuthenticationGrant;
 import com.raidiam.trustframework.mockinsurance.auth.RequiredAuthenticationGrant;
 import com.raidiam.trustframework.mockinsurance.fapi.ResponseErrorWithRequestDateTime;
+import com.raidiam.trustframework.mockinsurance.fapi.SignedResponse;
 import com.raidiam.trustframework.mockinsurance.fapi.XFapiInteractionIdRequired;
 import com.raidiam.trustframework.mockinsurance.models.generated.ResponseInsurancePerson;
 import com.raidiam.trustframework.mockinsurance.models.generated.ResponseInsurancePersonClaims;
@@ -42,6 +43,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v1/insurance-person")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePerson getPolicies(Pageable pageable, @NotNull HttpRequest<?> request) {
         var adjustedPageable = InsuranceLambdaUtils.adjustPageable(pageable, request, maxPageSize);
@@ -57,6 +59,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v2/insurance-person")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonV2 getPoliciesV2(Pageable pageable, @NotNull HttpRequest<?> request) {
         var adjustedPageable = InsuranceLambdaUtils.adjustPageable(pageable, request, maxPageSize);
@@ -72,6 +75,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v1/insurance-person/{policyId}/policy-info")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonPolicyInfo getPersonalQualifications(@NotNull HttpRequest<?> request,
                                                                               @PathVariable UUID policyId) {
@@ -87,6 +91,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v2/insurance-person/{policyId}/policy-info")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonPolicyInfoV2 getPersonalQualificationsV2(@NotNull HttpRequest<?> request,
                                                                               @PathVariable UUID policyId) {
@@ -102,6 +107,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v{version}/insurance-person/{policyId}/premium")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonPremium getPremium(@PathVariable("version") @Min(1) @Max(2) int version, @NotNull HttpRequest<?> request, @PathVariable UUID policyId) {
         String consentId = InsuranceLambdaUtils.getConsentIdFromRequest(request);
@@ -116,6 +122,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v1/insurance-person/{policyId}/claim")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonClaims getClaims(Pageable pageable, @NotNull HttpRequest<?> request,
                                                                  @PathVariable UUID policyId) {
@@ -132,6 +139,7 @@ public class PersonController extends BaseInsuranceController {
     @Get("/v2/insurance-person/{policyId}/claim")
     @XFapiInteractionIdRequired
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.AUTHORISATION_CODE)
     public ResponseInsurancePersonClaimsV2 getClaimsV2(Pageable pageable, @NotNull HttpRequest<?> request,
                                                                  @PathVariable UUID policyId) {

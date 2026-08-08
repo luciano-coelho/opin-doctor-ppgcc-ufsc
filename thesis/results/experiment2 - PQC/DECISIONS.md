@@ -99,3 +99,72 @@ Experiment 2's Etapa 1 result (`id_token_signing_alg_values_supported:
 profile-driven — it always expects PS256, regardless of `CRYPTO_PROFILE` — since
 it verifies a document signed by a different actor (the Trust
 Framework/Directory), not the AS's own key. See Decision 1.
+
+## 4. RS response signing (Etapa 2): built from scratch, both modes sign for real
+
+**Context:** initial Etapa 2 investigation found the RS (`insurance-server-lambdas`)
+never actually signed Consents/Person API responses or did any JWE encryption --
+`nimbus-jose-jwt` was only used for an unrelated `Pair` utility class, and
+incoming access tokens were parsed via Nimbus's `PlainObject` (`alg: none`,
+no signature check at all). This contradicted the Etapa 2 brief's premise
+("RS assina respostas com PS256"). The user confirmed (2026-08-07, citing the
+Open Finance Brasil FAPI Security Profile, which requires JWS response
+signing on sensitive APIs) that MockOPIN's RS was simply missing a real
+requirement, and to build it -- not just "migrate" something that never
+existed.
+
+**Decision:** both `CRYPTO_PROFILE` values sign for real (`classic` -> PS256
+via Nimbus, `pqc` -> ML-DSA-65 hand-rolled over BouncyCastle 1.79's JCA
+provider, since Nimbus has no ML-DSA support in any release through 11.0
+[2026-06-18] -- same gap as Decision 1). Rationale (user, 2026-08-07): with
+`classic` a no-op, an Experiment 1 -> 2 byte/latency comparison would
+conflate "gained a signature" with "the signature is PQC" -- signing both
+ways isolates the algorithm as the only variable.
+
+**User's explicit methodological note (2026-08-07):** Experiment 1 will be
+*rerun* after this change, so the classical baseline captures RS response
+signing (PS256) from the start. There are not two baselines to reconcile --
+the pre-Etapa-2 unsigned RS responses were never a "baseline," just the
+pre-existing gap this decision closes.
+
+**Implementation:** `ResponseSigningService` (new `crypto` package) loads
+`classic.json` (a real RSA-2048/PS256 JWK, parsed via Nimbus's own
+`RSAKey.parse`) or `pqc.json` (`kty: AKP`, PKCS8/X.509 DER blobs -- BC's own
+native encodings, not the raw AKP `pub`/`priv` fields `mock_as`'s Node side
+uses, since the RS's key never needs to leave the JVM) at boot, same
+env-var/`@Value` pattern as `mock_as`. `ResponseSigningFilter` (new
+`HttpServerFilter`, mirrors the existing `IdempotencyFilter`'s
+response-interception idiom) wraps any `@SignedResponse`-annotated
+controller method's 2xx JSON body as a compact JWS. `JwksController`
+publishes the active key at `GET /jwks` (the RS never had one before either).
+Applied to all non-204 Consents + Person endpoints.
+
+**Empirically verified end-to-end** through the real `mockapi` Netty HTTP
+server (the actual runtime path `docker-compose`/the thesis experiments use --
+see the Lambda-adapter caveat below): `GET /open-insurance/consents/v3/consents/{id}`
+against a real seeded consent returned `200`, `Content-Type: application/jwt`,
+with a well-formed JWS in both profiles. For `pqc`, independently verified
+the signature with Node's native `crypto.verify()` against the published
+`/jwks` key -- valid, and the raw signature was exactly 3309 bytes (FIPS 204),
+cross-confirming BouncyCastle's and Node/OpenSSL's ML-DSA-65 implementations
+agree, the same figure Decision 1's AS work already established. Also
+confirmed `crypto/x509`-style DER round-tripping (BC `KeyPairGenerator` ->
+PKCS8/X.509 `getEncoded()` -> `KeyFactory.generatePrivate/generatePublic` ->
+sign/verify) works before wiring it into the service, via a standalone
+`docker run eclipse-temurin:17-jdk` + bcprov/bcutil-jdk18on:1.79 harness.
+
+**Known limitation, not fixed:** the 16 pre-existing `PersonControllerSpec`/
+`ConsentControllerSpec` Gradle tests now fail. Root cause isolated: every
+test in both specs drives requests through
+`io.micronaut.function.aws.proxy.payload1.ApiGatewayProxyRequestEventFunction`
+(the AWS Lambda deployment emulation path), whose response-body encoding
+step unconditionally tries to JSON-encode the body regardless of the
+filter-set `Content-Type` or runtime body type (`String` and `byte[]` both
+fail identically with `Error encoding object [...] to JSON`) -- it resolves
+its writer some other way than the real embedded-Netty-server path does, and
+that path was never exercised by this discovery. This only affects the AWS
+Lambda deployment target, which MockOPIN's docker-compose thesis environment
+doesn't use (`mainClassName` is a plain `Micronaut.run` `Application`, not a
+Lambda handler) -- not fixed because it's out of scope for the environment
+this thesis actually runs against, and because signing responses at all was
+already a from-scratch addition the Lambda path was never designed around.

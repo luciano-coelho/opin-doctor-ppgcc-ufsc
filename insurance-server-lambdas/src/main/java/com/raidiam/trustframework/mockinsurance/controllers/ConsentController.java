@@ -4,6 +4,7 @@ import com.raidiam.trustframework.mockinsurance.auth.AuthenticationGrant;
 import com.raidiam.trustframework.mockinsurance.auth.RequiredAuthenticationGrant;
 import com.raidiam.trustframework.mockinsurance.fapi.Idempotent;
 import com.raidiam.trustframework.mockinsurance.fapi.ResponseErrorWithRequestDateTime;
+import com.raidiam.trustframework.mockinsurance.fapi.SignedResponse;
 import com.raidiam.trustframework.mockinsurance.models.generated.CreateConsent;
 import com.raidiam.trustframework.mockinsurance.models.generated.CreateConsentV3;
 import com.raidiam.trustframework.mockinsurance.models.generated.ResponseConsent;
@@ -40,6 +41,7 @@ public class ConsentController extends BaseInsuranceController {
     @Post("/v2/consents")
     @Status(HttpStatus.CREATED)
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @Idempotent
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsent createConsent(@Body CreateConsent body, HttpRequest<?> request) {
@@ -55,6 +57,7 @@ public class ConsentController extends BaseInsuranceController {
     @Post("/v3/consents")
     @Status(HttpStatus.CREATED)
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @Idempotent
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsentV3 createConsentV3(@Body CreateConsentV3 body, HttpRequest<?> request) {
@@ -71,6 +74,7 @@ public class ConsentController extends BaseInsuranceController {
     @Put("/v2/consents/{consentId}")
     @Secured({"CONSENTS_FULL_MANAGE"})
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsent putConsentV2(@PathVariable("consentId") String consentId, @Body UpdateConsent request) {
         LOG.info("Updating consent {} v2", consentId);
@@ -83,6 +87,7 @@ public class ConsentController extends BaseInsuranceController {
     @Put("/v3/consents/{consentId}")
     @Secured({"CONSENTS_FULL_MANAGE"})
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsentV3 putConsentV3(@PathVariable("consentId") String consentId, @Body UpdateConsent request) {
         LOG.info("Updating consent {} v3", consentId);
@@ -94,6 +99,7 @@ public class ConsentController extends BaseInsuranceController {
 
     @Get("/v2/consents/{consentId}")
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsent getConsent(@PathVariable("consentId") String consentId, HttpRequest<?> request) {
         LOG.info("Looking up consent {} v2", consentId);
@@ -116,6 +122,7 @@ public class ConsentController extends BaseInsuranceController {
 
     @Get("/v3/consents/{consentId}")
     @ResponseErrorWithRequestDateTime
+    @SignedResponse
     @RequiredAuthenticationGrant(AuthenticationGrant.CLIENT_CREDENTIALS)
     public ResponseConsentV3 getConsentV3(@PathVariable("consentId") String consentId, HttpRequest<?> request) {
         LOG.info("Looking up consent {} v3", consentId);
