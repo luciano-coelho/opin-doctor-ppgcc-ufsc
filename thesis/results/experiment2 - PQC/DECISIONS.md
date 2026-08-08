@@ -168,3 +168,149 @@ doesn't use (`mainClassName` is a plain `Micronaut.run` `Application`, not a
 Lambda handler) -- not fixed because it's out of scope for the environment
 this thesis actually runs against, and because signing responses at all was
 already a from-scratch addition the Lambda path was never designed around.
+
+## 5. mTLS certificates (Etapa 3): Go 1.27rc2 confirmed sufficient, no gateway code changes needed
+
+**Context:** Decision 2 accepted Go 1.27 pre-release for the gateway on the
+premise that native ML-DSA support would land in `crypto/x509`/`crypto/tls`.
+That premise is now verified against the real RC, not just the draft release
+notes.
+
+**Toolchain used:** `go1.27rc2`, via the official `golang:1.27-rc-alpine` /
+`golang:1.27-rc` Docker Hub images (pushed 2026-08-05). `go.mod` for both
+`mock-service-os/certs` (the cert-generation tool) and `mock-service-os/mock_mtls`
+(the gateway) now declare `go 1.27rc2`.
+
+**3.1 -- client_one_pqc.crt/.key:** added a `-pqc-client-only` flag to
+`mock-service-os/certs/main.go` that *loads* the existing `ca.crt`/`ca.key`
+from disk (via a new `loadCACert`) instead of the tool's normal behavior of
+generating a fresh CA + all certs from scratch -- regenerating the CA would
+have invalidated every other cert in the environment (mongo, postgres, op,
+mtls, client_one/two), all signed by the same CA. Verified before and after
+via MD5 that `ca.crt`/`ca.key`/`client_one.crt`/`client_one.key` are
+byte-identical to what they were before this ran. The new
+`generateClientCertPQC` generates an ML-DSA-65 keypair
+(`mldsa.GenerateKey(mldsa.MLDSA65())`) and signs it with the *existing* RSA
+CA key -- a classical issuer signature over a post-quantum subject public key
+is ordinary, valid X.509 (the two fields are independent), and matches the
+Etapa 3.1 brief: only the client's own key moves to PQC, not the CA.
+Independently re-verified with a standalone Go 1.27 program: the generated
+cert chains to `ca.crt` (`Verify` succeeds), and the key parses back as
+`*mldsa.PrivateKey` via `x509.ParsePKCS8PrivateKey`.
+
+**3.2 -- gateway:** turned out to need *zero* functional code changes beyond
+the Go version bump. `tlsConfiguration()` never restricted TLS 1.3 signature
+schemes explicitly, so Go 1.27's newly-added `tls.MLDSA65` scheme and
+`crypto/mldsa`-aware `crypto/x509` chain verification are just part of the
+stdlib defaults `ClientAuth: tls.VerifyClientCertIfGiven` already used. Since
+`client_one_pqc.crt` is signed by the same CA already in `ClientCAs`
+(`caCertPool()`), no config change was needed there either.
+
+**3.4 -- validated with a real handshake**, not just unit-level primitives:
+a standalone Go 1.27 client (loading `client_one_pqc.crt`/`.key`, run on the
+`insurance-server-lambdas_default` docker network so it resolves `api.local`
+the same way a real client would) completed a full TLS 1.3 handshake against
+the rebuilt gateway and received an HTTP response (401, correct -- no access
+token was sent; unrelated to the certificate). The gateway's own
+`countingConn`/handshake-logging instrumentation (built for Experiment 1)
+picked it up with zero changes needed: `"tlsVersion":"TLS 1.3"`,
+`"clientCertBytes":2953`, `"mtlsHandshakeBytes":10880` -- meaning Experiment
+2's mTLS handshake-size data collection is already wired up for free once a
+real PQC-capable client drives traffic through it.
+
+*Aside, unrelated to PQC:* the gateway's own server certificate
+(`mtls.crt`) has no `ExtKeyUsageServerAuth`, only `ExtKeyUsageClientAuth`
+(true of every cert `certs/main.go` issues, including its own). A strict Go
+`http.Client` verifying the server cert rejects this
+(`x509: certificate specifies an incompatible key usage`); had to set
+`InsecureSkipVerify` on the *test client's* server-side verification to
+isolate and test the client-certificate path in question. Pre-existing, not
+something Experiment 2 touched, and apparently never hit by the Conformance
+Suite's own client (or that path also isn't strict about it) -- noted here
+so it isn't mistaken for a PQC-related regression if someone else hits it.
+
+**3.3 -- Conformance Suite config templates:** `thesis/config/config_template_consents_v3.json`
+and `config_template_person_v2.json`'s `mtls.cert`/`mtls.key` now hold
+`client_one_pqc.crt`/`.key` (read and written by a small Node script directly
+from the source files -- after a near-miss manually retyping the base64 by
+hand and garbling it, verified byte-for-byte identical to the source files
+before treating this as done). `mtls.ca` and `client.jwks` (the client's own
+request/assertion-signing key, unrelated to the transport cert) are
+untouched.
+
+**Still open, not resolved here -- same item flagged in Decision 2:**
+whether the Conformance Suite can actually *drive* this end-to-end. Confirmed
+`cs-server` runs on plain `eclipse-temurin:17-jdk` (stock OpenJDK 17, no
+PQC-capable TLS provider) -- consistent with every other maturity signal
+found in this migration (Nimbus: roadmap-only; Go: RC2, days-old Docker
+tags). Did not attempt forcing BouncyCastle's `BCJSSE` as the JVM-wide
+default provider or a full CS rebuild (~15-20 min/cycle per
+`thesis/patches/README.md`, against a pre-built external jar with no
+available source) -- this is a distinct, potentially substantial piece of
+work from the gateway/cert work above (which is complete and independently
+verified without needing the CS at all), not a quick add-on. Deferred as an
+explicit follow-up decision rather than absorbed into this session's Etapa 3
+scope.
+
+## 6. Conformance Suite cannot drive Experiment 2 (pqc) end-to-end -- definitive, not worked around
+
+**Context:** resolving Decision 5's "still open" item. With `CRYPTO_PROFILE=pqc`
+on `auth`+`mockapi` and `client_one_pqc.crt`/`.key` wired into
+`config_template_consents_v3.json` (Decision 5, Etapa 3.3), ran
+`opin-consent-api-status-test-v3` against the real `cs-server` (via its
+`/api/plan` + `/api/runner` HTTP API, same pattern as
+`thesis/scripts/baseline_automation.py`). Test reached `INTERRUPTED`/`FAILED`
+in 5 seconds -- before ever reaching the `WAITING` (manual browser login)
+state, i.e. before attempting any call that would need the client's mTLS
+certificate at all.
+
+**Root cause, exact:** not a TLS/mTLS problem. The gateway logs show the
+handshake to `auth.local` for `/.well-known/openid-configuration` and
+`/jwks` completed fine (TLS 1.3, no client cert needed -- those are public
+discovery endpoints). The failure is in the CS's own
+`net.openid.conformance.condition.client.ValidateServerJWKs` condition,
+which runs unconditionally early (right after fetching discovery + JWKS,
+for every test module, regardless of what happens later in the flow) and
+uses **Nimbus JOSE+JWT** -- the same library confirmed PQC-blind in Decision
+1 and Decision 4 -- to parse each key the AS's `/jwks` returns:
+
+```
+java.text.ParseException: Unsupported key type "kty" parameter: AKP
+  at com.nimbusds.jose.jwk.JWK.parse
+  at net.openid.conformance.condition.client.AbstractValidateJWKs.parseJWKWithNimbus
+  at net.openid.conformance.condition.client.AbstractValidateJWKs.checkJWKs (forEach over jwksObject's "keys" array)
+  at net.openid.conformance.condition.client.ValidateServerJWKs.evaluate
+```
+
+**Considered and ruled out: publishing both PS256 and ML-DSA-65 keys in the
+AS's JWKS**, so the CS would validate the RSA key and the AS would still
+sign with ML-DSA-65. Not viable, confirmed two ways:
+- *Source (public, `openid-certification/conformance-suite` on GitHub,
+  mirroring `gitlab.com/openid/conformance-suite`):* `checkJWKs` iterates
+  `jwksObject.getAsJsonArray("keys").forEach(...)` and calls
+  `parseJWKWithNimbus` with no per-key try/catch -- the first unparseable
+  key in the array throws and aborts the whole check, regardless of
+  position or of any other valid key present.
+- *Empirically, today:* the AS's `pqc`-profile JWKS **already** has two keys
+  -- the ML-DSA-65 signing key (`kty: AKP`) and the (never-migrated,
+  Decision 4) RSA-OAEP encryption key (`kty: RSA`, perfectly Nimbus-parseable)
+  -- and `ValidateServerJWKs` still fails outright. A mixed JWKS is not a
+  hypothetical -- it's the current state, and it already doesn't help.
+
+**Decision (user, 2026-08-08):** accept this as a **definitive** limitation,
+not to be worked around via config or partial JWKS. The Conformance Suite
+cannot be used to drive or collect metrics for Experiment 2 in pure-PQC mode
+-- its own core validation logic depends on a library (Nimbus) with no
+ML-DSA support, in code we don't control (the vendored
+`fapi.conformance.version` jar, no available source, per
+`thesis/patches/README.md`). Patching/rebuilding the CS's own Nimbus
+dependency was considered and explicitly rejected as disproportionate to
+this thesis's scope.
+
+**Consequence:** Experiment 2's measurement strategy changes. Instead of the
+Conformance Suite, a direct Python script will call the AS's and RS's APIs
+with ML-DSA-65 directly, measuring the JWTs/JWS returned, payload sizes, and
+latencies -- without depending on the CS's JWKS validation at all. (Etapas
+3.1-3.4's gateway/certificate work stays valid and independently verified --
+see Decision 5 -- this only rules out the CS as the *driver* for Experiment
+2 traffic.)

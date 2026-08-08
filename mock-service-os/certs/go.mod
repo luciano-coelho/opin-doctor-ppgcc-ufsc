@@ -1,6 +1,6 @@
 module mockin
 
-go 1.22.4
+go 1.27rc2
 
 require (
 	github.com/google/uuid v1.6.0

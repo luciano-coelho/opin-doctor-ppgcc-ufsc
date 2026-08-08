@@ -1,4 +1,7 @@
-FROM golang:1.23
+FROM golang:1.27-rc
+# ML-DSA-65 mTLS client cert support (Etapa 3) needs crypto/mldsa +
+# crypto/x509/crypto/tls ML-DSA wiring, only in Go 1.27, unreleased as of
+# 2026-08 -- see thesis/results/experiment2 - PQC/DECISIONS.md (Decision 2).
 # iproute2 (tc/netem) + iputils-ping: used by thesis/scripts/set_latency.sh
 # to inject and verify artificial WAN latency for Experiment 1. Not needed
 # for normal gateway operation.

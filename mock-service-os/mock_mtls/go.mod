@@ -1,8 +1,6 @@
 module mock_mtls
 
-go 1.23.0
-
-toolchain go1.23.7
+go 1.27rc2
 
 require github.com/lestrrat-go/jwx/v3 v3.0.0-beta1
 
