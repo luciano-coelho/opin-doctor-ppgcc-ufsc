@@ -658,8 +658,17 @@ def main():
 
     crypto_profile = os.environ.get("CRYPTO_PROFILE", "classic")
     experiment_number = os.environ.get("EXPERIMENT_NUMBER", "2")
+    # thesis/results was reorganized into versioned top-level folders
+    # (v1 = archived Experiment 1/CS-driven runs, v2 = early Experiment 2
+    # docs-only, v3 = current -- both experiment1/experiment2 result trees
+    # live under it now). Overridable via env var since another reorg is
+    # plausible later and this is the one thing that would need to change.
+    results_version = os.environ.get("RESULTS_VERSION", "v3")
 
-    print(f"CRYPTO_PROFILE={crypto_profile}  EXPERIMENT_NUMBER={experiment_number}  latency={args.latency_ms}ms")
+    print(
+        f"CRYPTO_PROFILE={crypto_profile}  EXPERIMENT_NUMBER={experiment_number}  "
+        f"RESULTS_VERSION={results_version}  latency={args.latency_ms}ms"
+    )
 
     set_latency(args.latency_ms)
 
@@ -677,14 +686,15 @@ def main():
     gateway_entries = ba.collect_gateway_metrics(run_start, run_end)
     metrics = ba.compute_metrics(calls, gateway_entries, latency_scenario_ms=args.latency_ms)
 
+    results_root = BASE_DIR / "thesis" / "results" / results_version
     experiment_dir = None
-    for candidate in (BASE_DIR / "thesis" / "results").glob(f"experiment{experiment_number}*"):
+    for candidate in results_root.glob(f"experiment{experiment_number}*"):
         experiment_dir = candidate
         break
     if experiment_dir is None:
         raise SystemExit(
-            f"No thesis/results/experiment{experiment_number}* folder found -- create it first "
-            f"(see thesis/results/experiment1 - Classic and experiment2 - PQC for the naming convention)."
+            f"No {results_root}/experiment{experiment_number}* folder found -- create it first "
+            f"(see {results_root}/experiment1 - classic and .../experiment2 - PQC for the naming convention)."
         )
 
     output_dir = experiment_dir / f"{args.latency_ms}ms"
