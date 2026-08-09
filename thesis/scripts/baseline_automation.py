@@ -573,8 +573,46 @@ def dedupe_handshake_samples_by_connection(gateway_entries, field):
     return values
 
 
-def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
+def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None, client_cert_bytes=None):
+    """
+    client_cert_bytes, when given, restricts gateway_entries (and therefore
+    every gateway_metrics figure below -- requests_logged, handshake_ms,
+    handshake_bytes, opin_processing_ms) to connections whose
+    clientCertBytes exactly matches it, before any stats are computed.
+
+    Opt-in and None by default: collect_gateway_metrics() captures every
+    request the gateway sees, not just the ones the measuring client
+    itself made -- e.g. the AS's own InsurerAdapter calls the RS
+    server-side (to render the consent screen) using a separate
+    "transport_certificate" loaded from SSM, unrelated to CRYPTO_PROFILE
+    and always classical, over the same gateway, polluting handshake
+    percentiles with the wrong population -- exactly the thesis's most
+    latency/algorithm-sensitive metric.
+
+    This used to filter by remoteIP prefix (the host-gateway address) on
+    the theory that "connections from the host" == "connections this
+    script made". That's wrong: Docker Desktop's NAT rewrites the source
+    address of *every* host-to-container connection to the same internal
+    gateway IP, regardless of which process on the host initiated it --
+    confirmed empirically when a stray classical-cert connection (from an
+    unrelated command run on the same host during the same investigation)
+    showed up under the "filtered" IP in a pqc run, blending clusters again
+    (10-12KB classical mixed with 15-18KB pqc, this time within the
+    "filtered" set). clientCertBytes identifies the actual key material
+    presented -- 1494 bytes for the classical client_one.crt, 2953 for
+    client_one_pqc.crt (both confirmed via each cert's own DER length) --
+    which is what the measurement actually needs to isolate, independent of
+    network topology. Left unfiltered (None) by default since it's
+    opin_flow.py-specific; a Conformance-Suite-driven run (v1,
+    baseline_automation.py's own CS-driving path) has no equivalent
+    single-client-cert assumption to make.
+    """
     gateway_entries = gateway_entries or []
+    if client_cert_bytes is not None:
+        gateway_entries = [
+            e for e in gateway_entries
+            if e.get("clientCertBytes") == client_cert_bytes
+        ]
 
     total_bytes = sum(c["total_bytes"] for c in all_calls)
     total_requests = len(all_calls)

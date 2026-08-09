@@ -102,9 +102,14 @@ services:
       - TRUSTFRAMEWORK_SSA_KEYSET=http://localstack:4566/keystore/jwks.json
       # classic (PS256/RSA, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
       # see mock-service-os/mock_as/crypto-profiles/ and
-      # thesis/results/experiment2 - PQC/DECISIONS.md. Override per run, e.g.
+      # thesis/results/v2/experiment2 - PQC/DECISIONS.md. Override per run, e.g.
       # CRYPTO_PROFILE=pqc docker-compose up -d --build auth
       - CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic}
+      # Conformance Suite diagnostic only (Decision 6/7) -- publishes a decoy
+      # classical JWKS instead of the real ML-DSA-65 one. Off by default:
+      # opin_flow.py, which actually drives Experiment 2, needs the real key
+      # published. Set JWKS_SHADOW=1 only if re-running CS diagnostics.
+      - JWKS_SHADOW=${JWKS_SHADOW:-0}
     ports:
       - 3000:3000
     command: ["node", "lambda.js"]
@@ -275,6 +280,13 @@ services:
     build:
       context: ../mock-service-os/mock_as/mongo-seed
     command: ["/start.sh", "mongodb:27017"]
+    environment:
+      # Must match whatever auth/mockapi are running with -- start.sh uses
+      # this to set client_one/client_two's id_token_signed_response_alg,
+      # which oidc-provider validates on every authentication regardless
+      # of grant type. Rerun this service (docker-compose --profile main
+      # run --rm --build mongo_seed) after switching CRYPTO_PROFILE.
+      - CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic}
     volumes:
       - ../mock-service-os/certs/:/certs/
     depends_on:

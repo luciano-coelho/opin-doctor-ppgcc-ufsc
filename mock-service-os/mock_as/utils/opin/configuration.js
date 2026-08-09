@@ -40,20 +40,29 @@ const AS_ENC_JWK = {
   n: 'gbulO7BqCAKwVy3ZqrR033OM1Mp-SqOViwD1manyHjhDSB5dPLL8AG9zdl8hoQwQO8TVR4Ske2oYLkr9zxtWROTYKvF6Ssp0W5Df-sE6lEnMRqPr0GNrIubA0i2I0-uuK26N-x2_KJZbrMviH8qAdQGKopJ1-9DTvgXbOZmzQDuP3s0V8BB7pSroOaBpE7wtKAr5akPElbw_XR7m5ocmbd2TIHu8kdLU4W60Aha7x427KaYhetbtVkkS3h6j7FP9Wm2iMSkneo2ZA0WP4N4jqv3wqA2c7d_IeQNWmUxFrIoApmhy4MoMMDXjmWM_7JwH1UK6RsaknAfT7C0YJjVDGw',
 };
 
-// pqc mode only: the AS signs tokens with ML-DSA-65 (cryptoProfile.signingKey,
-// kty AKP), but the Conformance Suite's ValidateServerJWKs condition uses
-// Nimbus JOSE+JWT, which throws on ANY kty: AKP key in a JWKS regardless of
-// what else is present (confirmed empirically -- see thesis/results/
-// experiment2 - PQC/DECISIONS.md, Decision 6). To keep the same CS/config
-// driving all three experiments, /jwks publishes the classic RSA signing key
-// instead (public-only projection -- it never signs anything in this mode)
-// alongside the real encryption key. This is a published decoy, not a lie
-// about what's used to sign: real token signatures still use the AKP key,
-// unaffected by this (see express.js, where this is served by a route that
-// shadows oidc-provider's own /jwks -- the internal signing keystore below
-// is untouched). See Decision 7 for the exact limitation this accepts.
+// pqc mode, JWKS_SHADOW=1 only: the AS signs tokens with ML-DSA-65
+// (cryptoProfile.signingKey, kty AKP), but the Conformance Suite's
+// ValidateServerJWKs condition uses Nimbus JOSE+JWT, which throws on ANY
+// kty: AKP key in a JWKS regardless of what else is present (confirmed
+// empirically -- see thesis/results/v2/experiment2 - PQC/DECISIONS.md,
+// Decision 6). To get the suite past that check for diagnostic purposes,
+// /jwks can publish the classic RSA signing key instead (public-only
+// projection -- it never signs anything in this mode) alongside the real
+// encryption key. This is a published decoy, not a lie about what's used
+// to sign: real token signatures still use the AKP key, unaffected by this
+// (see express.js, where this is served by a route that shadows
+// oidc-provider's own /jwks -- the internal signing keystore below is
+// untouched). See Decision 7 for the exact limitation this accepts.
+//
+// Gated behind JWKS_SHADOW=1, off by default: this was purely a Conformance
+// Suite diagnostic (Decision 6/7 concluded the suite can't drive Experiment
+// 2 regardless -- Layer 3 is unfixable from our side), and opin_flow.py
+// (the tool that actually drives Experiment 2 now) doesn't hit the Nimbus
+// wall this decoy exists for. Left always-on, it would silently corrupt
+// opin_flow.py's own JWK-size measurements -- reporting the classical RSA
+// key's size instead of the real ML-DSA-65 key actually signing tokens.
 let publishedJwksOverride = null;
-if (CRYPTO_PROFILE === 'pqc') {
+if (CRYPTO_PROFILE === 'pqc' && process.env.JWKS_SHADOW === '1') {
   const classicProfile = JSON.parse(
     readFileSync(path.join(__dirname, '..', '..', 'crypto-profiles', 'classic.json'), 'utf8'),
   );

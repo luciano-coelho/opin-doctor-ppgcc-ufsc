@@ -10,6 +10,41 @@ Decisions 6–7). Nothing here is tied to one specific experiment's crypto
 profile — that's the point of keeping it at this shared level instead of
 inside a `results/vN/` folder.
 
+## Virtual environment
+
+`opin_flow.py`'s `pqc` runs need a dependency the machine's global Python
+doesn't have reliable support for otherwise, so a dedicated venv lives at
+`thesis/scripts/.venv/` (gitignored — recreate it with the commands below,
+don't commit it).
+
+**Why:** presenting the ML-DSA-65 client certificate (`client_one_pqc.crt`)
+requires an OpenSSL build with ML-DSA support (3.5+). The system/Python-
+bundled OpenSSL this was developed against is 3.0.x, which doesn't have it
+— `requests` fails with `SSL: EE_KEY_TOO_SMALL` trying to load that
+certificate through Python's stdlib `ssl` module. The `cryptography`
+package bundles its own, newer OpenSSL independently of the system one;
+`pyOpenSSL` + urllib3's `pyopenssl` contrib module route `requests`' TLS
+through that bundled copy instead. `opin_flow.py` activates this itself at
+import time (see the top of the file) — it only needs `pyOpenSSL` to
+actually be installed in whichever `python` runs it. `classic` runs work
+fine without any of this; it only matters once `CRYPTO_PROFILE=pqc`.
+
+**This is a project-local venv, not a global install**, specifically so it
+doesn't touch (or get affected by) whatever else is installed on the
+machine's global Python — installing `pyOpenSSL` globally once pulled in a
+`cryptography` upgrade that broke an unrelated tool (`mlflow`) on the
+machine this was developed on.
+
+```
+cd thesis/scripts
+python -m venv .venv
+.venv\Scripts\activate          # Windows; source .venv/bin/activate on Linux/macOS
+pip install -r requirements.txt
+```
+
+Every command below assumes this venv is active (`python` resolving to
+`thesis/scripts/.venv/Scripts/python.exe`, not the system Python).
+
 ## Scripts
 
 ### `opin_flow.py` — the current traffic generator (v2/v3-onward)

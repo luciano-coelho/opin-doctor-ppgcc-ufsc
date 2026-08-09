@@ -3,9 +3,35 @@ echo "Starting import"
 sleep 15
 
 echo "Update the JWKS of client one and two"
-jq --argjson jwks1 "$(jq . < $2/certs/client_one_pub.jwks)" \
+# client_one's own sig key follows CRYPTO_PROFILE too (ML-DSA-65 in pqc
+# mode, see thesis/scripts/pqc-signer/) -- client_two is never driven by
+# opin_flow.py, so it stays on its original classical JWKS regardless.
+CLIENT_ONE_JWKS="$2/certs/client_one_pub.jwks"
+if [ "${CRYPTO_PROFILE:-classic}" = "pqc" ]; then
+  CLIENT_ONE_JWKS="$2/certs/client_one_pqc_pub.jwks"
+fi
+jq --argjson jwks1 "$(jq . < $CLIENT_ONE_JWKS)" \
    --argjson jwks2 "$(jq . < $2/certs/client_two_pub.jwks)" \
    '.[0].payload.jwks = $jwks1 | .[1].payload.jwks = $jwks2' \
+   $2/init_clients.json > $2/init_clients.json.tmp && mv $2/init_clients.json.tmp $2/init_clients.json
+
+# oidc-provider validates a client's full registered metadata on every
+# authentication (confirmed empirically -- e.g. redirect_uris and this
+# field both get checked even on a client_credentials grant, which touches
+# neither). id_token_signed_response_alg has to match whichever algorithm
+# the AS is actually signing with (cryptoProfile.signingAlgs[0] in
+# mock_as/utils/opin/configuration.js), or every authentication for
+# client_one/client_two fails with "id_token_signed_response_alg must be
+# '<profile's algorithm>'" -- this file is a static seed, so it can't
+# derive that itself; CRYPTO_PROFILE must be passed to this container the
+# same way it already is to auth/mockapi.
+ID_TOKEN_ALG="PS256"
+if [ "${CRYPTO_PROFILE:-classic}" = "pqc" ]; then
+  ID_TOKEN_ALG="ML-DSA-65"
+fi
+echo "Setting id_token_signed_response_alg=$ID_TOKEN_ALG for client_one/client_two (CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic})"
+jq --arg alg "$ID_TOKEN_ALG" \
+   '.[0].payload.id_token_signed_response_alg = $alg | .[1].payload.id_token_signed_response_alg = $alg' \
    $2/init_clients.json > $2/init_clients.json.tmp && mv $2/init_clients.json.tmp $2/init_clients.json
 
 # mongosh and the mongoimport/database-tools binaries use different flag

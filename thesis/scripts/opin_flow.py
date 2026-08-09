@@ -106,6 +106,23 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+# The system/Python-bundled OpenSSL on the machine this was developed on is
+# 3.0.x, which predates ML-DSA support (added in OpenSSL 3.5) -- presenting
+# client_one_pqc.crt/.key through Python's stdlib `ssl` module fails with
+# "SSL: EE_KEY_TOO_SMALL" (confirmed empirically: it loads and uses the
+# `cryptography` package's own bundled OpenSSL instead, which is newer,
+# fine). `pyOpenSSL` + urllib3's pyopenssl contrib module route requests'
+# TLS through that bundled OpenSSL instead of the stdlib one -- needed for
+# any pqc-profile run, harmless for classic. See thesis/scripts/README.md
+# for the venv this dependency is meant to be installed into (it is NOT
+# assumed to be present in whatever `python` is on PATH globally).
+try:
+    import urllib3.contrib.pyopenssl
+
+    urllib3.contrib.pyopenssl.inject_into_urllib3()
+except ImportError:
+    pass  # classic-only runs work fine without it; pqc runs will fail loudly at cert-load time if missing
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -132,8 +149,25 @@ CERTS_DIR = BASE_DIR / "mock-service-os" / "certs"
 GATEWAY_CONTAINER = ba.GATEWAY_CONTAINER
 ALLOWED_LATENCY_MS = (0, 14, 30, 140, 225, 320)
 
+def client_cert_der_bytes(crypto_profile: str) -> int:
+    """
+    The exact wire size of the client certificate this run authenticates
+    with -- passed to compute_metrics() so its gateway-side handshake
+    stats aren't polluted by other clientCertBytes populations sharing the
+    same gateway (the AS's own internal, always-classical calls to the RS;
+    confirmed the naive fix of filtering by remoteIP doesn't work either,
+    since Docker Desktop's NAT collapses every host-to-container connection
+    onto the same source address regardless of which host process made it
+    -- see compute_metrics()'s client_cert_bytes docstring in
+    baseline_automation.py for the full story). Computed from the actual
+    cert file rather than hardcoded so it can't drift if the certs are ever
+    regenerated.
+    """
+    crt_path, _key_path = get_client_cert_paths(crypto_profile)
+    cert = x509.load_pem_x509_certificate(Path(crt_path).read_bytes())
+    return len(cert.public_bytes(encoding=serialization.Encoding.DER))
+
 CLIENT_ID = "client_one"
-CLIENT_JWKS_PATH = CERTS_DIR / "client_one.jwks"
 
 # auth.local/api.local/directory are already in the host's hosts file
 # (127.0.0.1); matls-auth.local is not, and adding it requires editing the
@@ -195,14 +229,44 @@ def get_client_cert_paths(crypto_profile: str):
     return str(crt), str(key)
 
 
-def load_client_signing_key():
-    jwks = json.loads(CLIENT_JWKS_PATH.read_text(encoding="utf-8"))
+PQC_SIGNER_IMAGE = "mockopin-pqc-signer"
+
+
+def load_client_signing_key(crypto_profile: str):
+    """
+    Returns (signing_key, kid, alg). classic: signing_key is a pyjwt-usable
+    RSA key object, alg "PS256" -- client_one's original key, unchanged.
+    pqc: signing_key is the raw private AKP JWK dict itself (needed as-is
+    by sign_jwt()'s docker signer, not something pyjwt can consume), alg
+    "ML-DSA-65" -- see thesis/scripts/pqc-signer/ for why client-side
+    ML-DSA-65 signing can't go through pyjwt/cryptography directly.
+    """
+    path = CERTS_DIR / ("client_one_pqc.jwks" if crypto_profile == "pqc" else "client_one.jwks")
+    jwks = json.loads(path.read_text(encoding="utf-8"))
     jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
+    if crypto_profile == "pqc":
+        return jwk, jwk["kid"], "ML-DSA-65"
     key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
-    return key, jwk["kid"]
+    return key, jwk["kid"], "PS256"
 
 
-def make_client_assertion(signing_key, kid, audience: str) -> str:
+def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
+    if alg == "PS256":
+        return pyjwt.encode(claims, signing_key, algorithm="PS256", headers=headers)
+    if alg == "ML-DSA-65":
+        # signing_key is the raw private JWK here (see load_client_signing_key).
+        payload = json.dumps({"jwk": signing_key, "headers": headers, "claims": claims})
+        result = subprocess.run(
+            ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
+            input=payload, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"pqc-signer failed: {result.stderr}")
+        return result.stdout.strip()
+    raise ValueError(f"unsupported signing alg: {alg}")
+
+
+def make_client_assertion(signing_key, kid, alg, audience: str) -> str:
     now = int(time.time())
     claims = {
         "sub": CLIENT_ID,
@@ -212,7 +276,7 @@ def make_client_assertion(signing_key, kid, audience: str) -> str:
         "iat": now,
         "jti": secrets.token_urlsafe(18),
     }
-    return pyjwt.encode(claims, signing_key, algorithm="PS256", headers={"kid": kid})
+    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg)
 
 
 def make_pkce_pair():
@@ -221,7 +285,7 @@ def make_pkce_pair():
     return verifier, challenge
 
 
-def make_request_object(signing_key, kid, *, scope: str, state: str, nonce: str, code_challenge: str) -> str:
+def make_request_object(signing_key, kid, alg, *, scope: str, state: str, nonce: str, code_challenge: str) -> str:
     now = int(time.time())
     claims = {
         "iss": CLIENT_ID,
@@ -247,7 +311,7 @@ def make_request_object(signing_key, kid, *, scope: str, state: str, nonce: str,
         "nbf": now,
         "exp": now + 300,
     }
-    return pyjwt.encode(claims, signing_key, algorithm="PS256", headers={"kid": kid})
+    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg)
 
 
 def _generate_callback_tls_cert():
@@ -457,7 +521,7 @@ def fetch_server_keys_and_ca(calls, session, cert):
         calls.append(call)
 
 
-def create_and_authorize_consent(calls, session, cert, signing_key, kid, *, permissions, scope, poll_count):
+def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *, permissions, scope, poll_count):
     """
     Shared AS handshake used by both flows (insurance consents and person):
     client_credentials token, create consent, poll its status, PAR + manual
@@ -469,7 +533,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, *, perm
     thesis/results/experiment1 - Classic/0ms/.
     """
     # POST /token (client_credentials)
-    assertion = make_client_assertion(signing_key, kid, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
+    assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
     body = {
         "grant_type": "client_credentials",
         "scope": "consents",
@@ -523,10 +587,10 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, *, perm
     nonce = secrets.token_urlsafe(9)
     verifier, challenge = make_pkce_pair()
     request_object = make_request_object(
-        signing_key, kid, scope=f"{scope} consent:urn:raidiaminsurance:{consent_uid}",
+        signing_key, kid, alg, scope=f"{scope} consent:urn:raidiaminsurance:{consent_uid}",
         state=state, nonce=nonce, code_challenge=challenge,
     )
-    par_assertion = make_client_assertion(signing_key, kid, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request")
+    par_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request")
     par_body = {
         "request": request_object,
         "client_id": CLIENT_ID,
@@ -546,7 +610,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, *, perm
     code = wait_for_authorization_code(auth_url)
 
     # POST /token (authorization_code)
-    ac_assertion = make_client_assertion(signing_key, kid, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
+    ac_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
     token_body = {
         "grant_type": "authorization_code",
         "code": code,
@@ -572,13 +636,13 @@ def run_insurance_flow(crypto_profile: str):
     plan): 13 HTTP calls -- see the module docstring for the full sequence.
     """
     cert = get_client_cert_paths(crypto_profile)
-    signing_key, kid = load_client_signing_key()
+    signing_key, kid, alg = load_client_signing_key(crypto_profile)
     calls = []
     session = requests.Session()
 
     fetch_server_keys_and_ca(calls, session, cert)
     consent_id, consent_url, cc_access_token, ac_access_token = create_and_authorize_consent(
-        calls, session, cert, signing_key, kid,
+        calls, session, cert, signing_key, kid, alg,
         permissions=INSURANCE_CONSENT_PERMISSIONS, scope=INSURANCE_AUTHORIZATION_SCOPES, poll_count=3,
     )
 
@@ -616,13 +680,13 @@ def run_person_flow(crypto_profile: str):
     reading as a single lookup.
     """
     cert = get_client_cert_paths(crypto_profile)
-    signing_key, kid = load_client_signing_key()
+    signing_key, kid, alg = load_client_signing_key(crypto_profile)
     calls = []
     session = requests.Session()
 
     fetch_server_keys_and_ca(calls, session, cert)
     consent_id, _consent_url, _cc_access_token, ac_access_token = create_and_authorize_consent(
-        calls, session, cert, signing_key, kid,
+        calls, session, cert, signing_key, kid, alg,
         permissions=PERSON_CONSENT_PERMISSIONS, scope=PERSON_AUTHORIZATION_SCOPES, poll_count=1,
     )
 
@@ -708,7 +772,10 @@ def main():
     calls = insurance_calls + person_calls
 
     gateway_entries = ba.collect_gateway_metrics(run_start, run_end)
-    metrics = ba.compute_metrics(calls, gateway_entries, latency_scenario_ms=args.latency_ms)
+    metrics = ba.compute_metrics(
+        calls, gateway_entries, latency_scenario_ms=args.latency_ms,
+        client_cert_bytes=client_cert_der_bytes(crypto_profile),
+    )
 
     results_root = BASE_DIR / "thesis" / "results" / results_version
     experiment_dir = None
