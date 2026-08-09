@@ -1,6 +1,6 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-08-09T04:36:37.051447+00:00
+Generated at: 2026-08-09T14:30:33.615031+00:00
 Latency scenario: **14ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
@@ -21,30 +21,30 @@ Latency scenario: **14ms** (see thesis/scripts/set_latency.sh)
 
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| `/issuer-ca.pem` | 2 | 304.85 | 304.85 | 556.37 | 578.73 |
-| `/jwks` | 2 | 120.59 | 120.59 | 142.7 | 144.67 |
-| `/open-insurance/consents/v3/consents` | 2 | 162.07 | 162.07 | 185.15 | 187.21 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:540af6d7-666e-4b44-85c6-87f0c1caeac0` | 5 | 67.91 | 68.86 | 73.06 | 73.8 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:8dd63c4a-56d3-405f-9801-f23b35863be6` | 1 | 63.27 | 63.27 | 63.27 | 63.27 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 97.69 | 97.69 | 101.76 | 102.12 |
-| `/open-insurance/insurance-person/v2/insurance-person/18bb0b70-0974-4c89-8948-40edcac85baa/claim` | 2 | 88.63 | 88.63 | 90.25 | 90.39 |
-| `/open-insurance/insurance-person/v2/insurance-person/18bb0b70-0974-4c89-8948-40edcac85baa/policy-info` | 2 | 102.95 | 102.95 | 104.33 | 104.46 |
-| `/open-insurance/insurance-person/v2/insurance-person/18bb0b70-0974-4c89-8948-40edcac85baa/premium` | 2 | 112.63 | 112.63 | 119.88 | 120.53 |
-| `/request` | 2 | 39.06 | 39.06 | 39.42 | 39.45 |
-| `/root-ca.pem` | 2 | 459.72 | 459.72 | 773.23 | 801.1 |
-| `/token` | 4 | 109.43 | 106.91 | 184.13 | 185.61 |
+| `/issuer-ca.pem` | 2 | 301.93 | 301.93 | 551.26 | 573.42 |
+| `/jwks` | 2 | 122.92 | 122.92 | 133.92 | 134.9 |
+| `/open-insurance/consents/v3/consents` | 2 | 182.56 | 182.56 | 199.98 | 201.52 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:005ffce0-e629-460b-899c-c31439fabc73` | 5 | 93.05 | 84.06 | 113.43 | 115.67 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:eea3d5dd-ecaa-4945-bcc5-4c1b7b96d0fb` | 1 | 86.84 | 86.84 | 86.84 | 86.84 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 109.39 | 109.39 | 109.75 | 109.78 |
+| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/claim` | 2 | 101.18 | 101.18 | 105.14 | 105.49 |
+| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/policy-info` | 2 | 118.86 | 118.86 | 134.45 | 135.84 |
+| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/premium` | 2 | 96.97 | 96.97 | 103.07 | 103.61 |
+| `/request` | 2 | 49.15 | 49.15 | 56.84 | 57.53 |
+| `/root-ca.pem` | 2 | 449.51 | 449.51 | 749.82 | 776.51 |
+| `/token` | 4 | 120.05 | 115.4 | 203.94 | 206.28 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 
-Requests logged by the gateway in this run: **58**
+Requests logged by the gateway in this run: **56**
 
 | Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| mTLS handshake | 9 | 51.56 | 54.0 | 60.6 | 62.52 |
-| OPIN processing | 58 | 56.41 | 30.0 | 167.0 | 258.3 |
+| mTLS handshake | 7 | 51.57 | 54.0 | 69.2 | 73.04 |
+| OPIN processing | 56 | 63.59 | 37.0 | 226.5 | 279.95 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
-1 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
+3 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
 
 ### mTLS handshake size (wire bytes)
 
@@ -52,7 +52,7 @@ Total bytes read+written at the raw TCP level during the handshake (ClientHello 
 
 | Requests | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |
 |---|---|---|---|---|
-| 10 | 10225.8 | 10398.5 | 10723.45 | 10823.89 |
+| 10 | 10256.2 | 10398.5 | 10751.75 | 10825.55 |
 
 0 handshake byte-size sample(s) discarded as outliers (same filter/reasoning as the duration outliers above).
 
