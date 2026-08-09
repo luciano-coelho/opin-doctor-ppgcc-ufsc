@@ -378,12 +378,24 @@ def parse_rs_body(response: requests.Response) -> dict:
     return response.json()
 
 
-def do_call(method: str, url: str, *, cert, headers=None, data=None, host_header=None, src="") -> tuple[dict, requests.Response]:
+def do_call(session: requests.Session, method: str, url: str, *, cert, headers=None, data=None, host_header=None, src="") -> tuple[dict, requests.Response]:
     """
     Makes one HTTP call and returns (call_dict, response) -- call_dict is in
     the exact shape baseline_automation.compute_metrics()/parse_calls()
     already expects, so the rest of the metrics/report pipeline is reused
     unmodified.
+
+    Takes a shared `session` rather than calling `requests.request()`
+    directly: the latter creates and tears down a brand-new Session (hence a
+    brand-new TCP+TLS connection) on every single call, which is not how a
+    real client (browser or the Conformance Suite's own HTTP client) behaves
+    -- and at higher injected latencies it compounds badly enough that the
+    320ms scenario's PAR request_uri (oidc-provider's default 60s TTL,
+    thesis/results -- see create_and_authorize_consent) expired before the
+    flow could finish. A shared, connection-reusing Session per flow doesn't
+    change the byte-level metrics (those come from the gateway's own
+    countingConn instrumentation, not from this client), only the latency
+    this script itself pays -- and more accurately reflects a real client.
     """
     headers = dict(headers or {})
     headers.setdefault("x-fapi-interaction-id", str(uuid.uuid4()))
@@ -391,7 +403,7 @@ def do_call(method: str, url: str, *, cert, headers=None, data=None, host_header
         headers["Host"] = host_header
 
     start = time.time()
-    response = requests.request(
+    response = session.request(
         method, url, cert=cert, verify=False, headers=headers, data=data, timeout=60
     )
     end = time.time()
@@ -430,9 +442,9 @@ def do_call(method: str, url: str, *, cert, headers=None, data=None, host_header
     return call, response
 
 
-def fetch_server_keys_and_ca(calls, cert):
+def fetch_server_keys_and_ca(calls, session, cert):
     # 1. GET /jwks
-    call, resp = do_call("GET", f"https://{AUTH_HOST}/jwks", cert=cert, src="FetchServerKeys")
+    call, resp = do_call(session, "GET", f"https://{AUTH_HOST}/jwks", cert=cert, src="FetchServerKeys")
     calls.append(call)
 
     # 2-3. GET root-ca.pem / issuer-ca.pem -- real public sandbox host, no
@@ -440,12 +452,12 @@ def fetch_server_keys_and_ca(calls, cert):
     # local mock stack at all).
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
-            "GET", f"https://crl.sandbox.pki.opinbrasil.com.br/{path}", cert=None, src="OpinInsertMtlsCa"
+            session, "GET", f"https://crl.sandbox.pki.opinbrasil.com.br/{path}", cert=None, src="OpinInsertMtlsCa"
         )
         calls.append(call)
 
 
-def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, scope, poll_count):
+def create_and_authorize_consent(calls, session, cert, signing_key, kid, *, permissions, scope, poll_count):
     """
     Shared AS handshake used by both flows (insurance consents and person):
     client_credentials token, create consent, poll its status, PAR + manual
@@ -465,7 +477,7 @@ def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, 
         "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
     }
     call, resp = do_call(
-        "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+        session, "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, data=body, src="CallTokenEndpoint",
     )
     calls.append(call)
@@ -483,7 +495,7 @@ def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, 
         }
     })
     call, resp = do_call(
-        "POST", f"https://{API_HOST}/open-insurance/consents/v3/consents", cert=cert,
+        session, "POST", f"https://{API_HOST}/open-insurance/consents/v3/consents", cert=cert,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {cc_access_token}",
@@ -501,7 +513,7 @@ def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, 
     # GET consent x poll_count (AWAITING_AUTHORIZATION)
     for _ in range(poll_count):
         call, resp = do_call(
-            "GET", consent_url, cert=cert,
+            session, "GET", consent_url, cert=cert,
             headers={"Authorization": f"Bearer {cc_access_token}"}, src="CallProtectedResource",
         )
         calls.append(call)
@@ -522,7 +534,7 @@ def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, 
         "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
     }
     call, resp = do_call(
-        "POST", f"https://{AUTH_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+        session, "POST", f"https://{AUTH_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, data=par_body, src="CallPAREndpoint",
     )
     calls.append(call)
@@ -544,14 +556,14 @@ def create_and_authorize_consent(calls, cert, signing_key, kid, *, permissions, 
         "code_verifier": verifier,
     }
     call, resp = do_call(
-        "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+        session, "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, data=token_body, src="CallTokenEndpoint",
     )
     calls.append(call)
     resp.raise_for_status()
     ac_access_token = resp.json()["access_token"]
 
-    return consent_id, consent_url, ac_access_token
+    return consent_id, consent_url, cc_access_token, ac_access_token
 
 
 def run_insurance_flow(crypto_profile: str):
@@ -562,19 +574,30 @@ def run_insurance_flow(crypto_profile: str):
     cert = get_client_cert_paths(crypto_profile)
     signing_key, kid = load_client_signing_key()
     calls = []
+    session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, cert)
-    consent_id, consent_url, ac_access_token = create_and_authorize_consent(
-        calls, cert, signing_key, kid,
+    fetch_server_keys_and_ca(calls, session, cert)
+    consent_id, consent_url, cc_access_token, ac_access_token = create_and_authorize_consent(
+        calls, session, cert, signing_key, kid,
         permissions=INSURANCE_CONSENT_PERMISSIONS, scope=INSURANCE_AUTHORIZATION_SCOPES, poll_count=3,
     )
 
     # GET consent x2 (AUTHORISED) -- this plan re-checks status after login,
-    # the person plan below does not (confirmed against both raw logs).
+    # the person plan below does not (confirmed against both raw logs). Uses
+    # cc_access_token, NOT ac_access_token: confirmed against the real CS
+    # log (thesis/results/v1/experiment1 - Classic/0ms/consents_v3__...json)
+    # that these post-login consent-status checks reuse the SAME
+    # client_credentials token as the pre-login checks (identical bearer
+    # token value across calls 6-8 and 11-12) -- the authorization_code
+    # token is for actual protected-resource APIs, not the consent-status
+    # endpoint. Using ac_access_token here was a bug: the RS rejected it
+    # with 401 on every scenario, silently (no raise_for_status() on this
+    # loop), which also explains part of the earlier v1-vs-v3 byte/JWT-count
+    # mismatch.
     for _ in range(2):
         call, resp = do_call(
-            "GET", consent_url, cert=cert,
-            headers={"Authorization": f"Bearer {ac_access_token}"}, src="CallProtectedResource",
+            session, "GET", consent_url, cert=cert,
+            headers={"Authorization": f"Bearer {cc_access_token}"}, src="CallProtectedResource",
         )
         calls.append(call)
 
@@ -595,10 +618,11 @@ def run_person_flow(crypto_profile: str):
     cert = get_client_cert_paths(crypto_profile)
     signing_key, kid = load_client_signing_key()
     calls = []
+    session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, cert)
-    consent_id, _consent_url, ac_access_token = create_and_authorize_consent(
-        calls, cert, signing_key, kid,
+    fetch_server_keys_and_ca(calls, session, cert)
+    consent_id, _consent_url, _cc_access_token, ac_access_token = create_and_authorize_consent(
+        calls, session, cert, signing_key, kid,
         permissions=PERSON_CONSENT_PERMISSIONS, scope=PERSON_AUTHORIZATION_SCOPES, poll_count=1,
     )
 
@@ -607,7 +631,7 @@ def run_person_flow(crypto_profile: str):
 
     last_resp = None
     for _ in range(2):
-        call, resp = do_call("GET", person_url, cert=cert, headers=auth_header, src="CallProtectedResource")
+        call, resp = do_call(session, "GET", person_url, cert=cert, headers=auth_header, src="CallProtectedResource")
         calls.append(call)
         last_resp = resp
     last_resp.raise_for_status()
@@ -616,7 +640,7 @@ def run_person_flow(crypto_profile: str):
     for sub_resource in ("claim", "policy-info", "premium"):
         for _ in range(2):
             call, resp = do_call(
-                "GET", f"{person_url}/{policy_id}/{sub_resource}", cert=cert,
+                session, "GET", f"{person_url}/{policy_id}/{sub_resource}", cert=cert,
                 headers=auth_header, src="CallProtectedResource",
             )
             calls.append(call)

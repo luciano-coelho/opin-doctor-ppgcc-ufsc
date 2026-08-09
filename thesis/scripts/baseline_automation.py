@@ -383,6 +383,10 @@ def collect_gateway_metrics(since: datetime, until: datetime = None):
             "tlsVersion": entry.get("tlsVersion"),
             "cipherSuite": entry.get("cipherSuite"),
             "clientCertBytes": entry.get("clientCertBytes"),
+            # remoteIP:port identifies the physical TCP connection -- see
+            # compute_metrics()'s handshake dedup, which needs this to avoid
+            # counting one connection's handshake once per request it served.
+            "remoteIP": entry.get("remoteIP"),
         })
     return entries
 
@@ -528,6 +532,47 @@ def filter_handshake_outliers(values, multiplier=3):
     return clean, total_dropped
 
 
+def dedupe_handshake_samples_by_connection(gateway_entries, field):
+    """
+    One handshake sample per physical TCP connection (remoteIP:port), not
+    one per HTTP request. mock_mtls/main.go's connStateHandshakeLogger
+    records mtlsHandshakeDurationMs/mtlsHandshakeBytes exactly once per
+    connection (cached at handshake completion) and every subsequent
+    request that reuses that connection's keep-alive reports the identical
+    cached value -- so a naive "one sample per access-log line" list isn't
+    a fair per-handshake distribution, it's request-count-weighted: a
+    connection that happened to carry many requests dominates the
+    percentiles, a connection that carried one request barely counts.
+
+    This was harmless when the client rarely reused connections (true of
+    Experiment 1's Conformance Suite runs, where per-request and
+    per-connection counts were close), but opin_flow.py's shared-Session
+    fix (see thesis/scripts/opin_flow.py, do_call()) makes connection reuse
+    the norm, not the exception -- confirmed empirically on a live 0ms run:
+    64 access-log entries over only 19 distinct connections, naive
+    per-request P50 9529 bytes vs. true per-connection P50 11455 bytes.
+
+    Entries missing remoteIP (older logs predating that field) fall back to
+    being counted individually rather than silently dropped, matching the
+    pre-dedup behavior for just that entry.
+    """
+    seen_connections = set()
+    values = []
+    for entry in gateway_entries:
+        value = entry.get(field)
+        if value is None:
+            continue
+        remote = entry.get("remoteIP")
+        if remote is None:
+            values.append(value)
+            continue
+        if remote in seen_connections:
+            continue
+        seen_connections.add(remote)
+        values.append(value)
+    return values
+
+
 def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
     gateway_entries = gateway_entries or []
 
@@ -567,9 +612,11 @@ def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
     # 4.3: handshake vs. OPIN-processing time, as measured at the gateway
     # itself (see collect_gateway_metrics) -- an independent vantage point
     # from the client-side latency_per_endpoint above. Handshake samples are
-    # outlier-filtered (see filter_handshake_outliers); OPIN processing time
-    # isn't, since it didn't show the same reused-connection artifact.
-    handshake_ms_raw = [e["mtlsHandshakeDurationMs"] for e in gateway_entries if e.get("mtlsHandshakeDurationMs") is not None]
+    # deduplicated per physical connection (see dedupe_handshake_samples_by_connection)
+    # and then outlier-filtered (see filter_handshake_outliers); OPIN
+    # processing time is neither, since it's a genuine per-request measure
+    # with no reused-connection artifact.
+    handshake_ms_raw = dedupe_handshake_samples_by_connection(gateway_entries, "mtlsHandshakeDurationMs")
     handshake_ms, handshake_outliers_dropped = filter_handshake_outliers(handshake_ms_raw)
     opin_ms = [e["opinDurationMs"] for e in gateway_entries if e.get("opinDurationMs") is not None]
     # Wire-level size of the mTLS handshake itself (ClientHello..Finished),
@@ -577,9 +624,8 @@ def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None):
     # mock_mtls/main.go) -- this is the number that's expected to grow
     # sharply under PQC (larger KEM public keys/ciphertexts, bigger
     # signatures), unlike clientCertBytes which only covers one certificate.
-    # Cached per-connection just like the duration, so it has the same
-    # keep-alive duplicate-cluster artifact and gets the same filter.
-    handshake_bytes_raw = [e["mtlsHandshakeBytes"] for e in gateway_entries if e.get("mtlsHandshakeBytes") is not None]
+    # Cached per-connection just like the duration, so it gets the same dedup.
+    handshake_bytes_raw = dedupe_handshake_samples_by_connection(gateway_entries, "mtlsHandshakeBytes")
     handshake_bytes, handshake_bytes_outliers_dropped = filter_handshake_outliers(handshake_bytes_raw)
     gateway_metrics = {
         "requests_logged": len(gateway_entries),
