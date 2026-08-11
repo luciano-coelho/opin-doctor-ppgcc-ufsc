@@ -1,14 +1,14 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-08-09T14:38:40.718487+00:00
+Generated at: 2026-08-11T01:59:06.840616+00:00
 Latency scenario: **140ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
 
-- Total bytes exchanged across the full flow (classical OPINsize): **112793 bytes**
+- Total bytes exchanged across the full flow (classical OPINsize): **178027 bytes**
 - Total HTTP requests: **28**
 - JWTs found: **26**
-- Average JWT size: **2950.5 bytes** (max: 7246 bytes)
+- Average JWT size: **5458.81 bytes** (max: 7246 bytes)
 
 ## Modules run
 
@@ -21,18 +21,18 @@ Latency scenario: **140ms** (see thesis/scripts/set_latency.sh)
 
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| `/issuer-ca.pem` | 2 | 305.31 | 305.31 | 556.1 | 578.39 |
-| `/jwks` | 2 | 844.98 | 844.98 | 923.78 | 930.78 |
-| `/open-insurance/consents/v3/consents` | 2 | 925.73 | 925.73 | 935.69 | 936.57 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:60f273a0-1487-4936-8257-aec36fec4280` | 1 | 454.99 | 454.99 | 454.99 | 454.99 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:e8f7f229-7240-414b-a8d1-7ff3069d9662` | 5 | 457.36 | 458.89 | 465.17 | 465.43 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 652.84 | 652.84 | 668.51 | 669.9 |
-| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/claim` | 2 | 644.45 | 644.45 | 653.81 | 654.64 |
-| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/policy-info` | 2 | 605.58 | 605.58 | 608.16 | 608.39 |
-| `/open-insurance/insurance-person/v2/insurance-person/b4a094be-878d-4e06-8074-d7a8152e2837/premium` | 2 | 598.29 | 598.29 | 599.82 | 599.96 |
-| `/request` | 2 | 448.44 | 448.44 | 451.97 | 452.28 |
-| `/root-ca.pem` | 2 | 631.39 | 631.39 | 868.6 | 889.69 |
-| `/token` | 4 | 756.24 | 753.95 | 1212.0 | 1215.21 |
+| `/issuer-ca.pem` | 2 | 347.52 | 347.52 | 570.64 | 590.47 |
+| `/jwks` | 2 | 809.1 | 809.1 | 883.59 | 890.21 |
+| `/open-insurance/consents/v3/consents` | 2 | 908.03 | 908.03 | 910.03 | 910.21 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:7b7b2a97-896e-4a64-85e0-0a585bcd4ef5` | 5 | 446.88 | 440.34 | 468.14 | 472.87 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:c5e61977-1556-4b62-9509-e52c17cd326f` | 1 | 437.73 | 437.73 | 437.73 | 437.73 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 589.48 | 589.48 | 598.88 | 599.71 |
+| `/open-insurance/insurance-person/v2/insurance-person/0089a23e-23ec-49c0-aa0b-42861b9b43b5/claim` | 2 | 592.26 | 592.26 | 592.67 | 592.71 |
+| `/open-insurance/insurance-person/v2/insurance-person/0089a23e-23ec-49c0-aa0b-42861b9b43b5/policy-info` | 2 | 586.95 | 586.95 | 589.54 | 589.77 |
+| `/open-insurance/insurance-person/v2/insurance-person/0089a23e-23ec-49c0-aa0b-42861b9b43b5/premium` | 2 | 585.35 | 585.35 | 587.64 | 587.85 |
+| `/request` | 2 | 438.14 | 438.14 | 440.63 | 440.85 |
+| `/root-ca.pem` | 2 | 1194.99 | 1194.99 | 1435.24 | 1456.59 |
+| `/token` | 4 | 740.21 | 742.46 | 1184.41 | 1184.81 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 
@@ -40,8 +40,8 @@ Requests logged by the gateway in this run: **38**
 
 | Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| mTLS handshake | 6 | 313.5 | 311.0 | 336.5 | 340.1 |
-| OPIN processing | 38 | 346.71 | 163.5 | 1086.6 | 1730.02 |
+| mTLS handshake | 6 | 297 | 292.5 | 314.0 | 318.0 |
+| OPIN processing | 38 | 333.89 | 155.0 | 1040.05 | 1609.85 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
 0 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
@@ -63,9 +63,9 @@ Total bytes read+written at the raw TCP level during the handshake (ClientHello 
 | Participant | Sent (bytes) | Received (bytes) | Total (bytes) |
 |---|---|---|---|
 | AS | 29570 | 41700 | 71270 |
-| Client (test tool, total traffic) | 47203 | 65590 | 112793 |
+| Client (test tool, total traffic) | 47203 | 130824 | 178027 |
 | PKI/CRL | 10002 | 664 | 10666 |
-| RS | 26018 | 4839 | 30857 |
+| RS | 91252 | 4839 | 96091 |
 
 ## JWK sizes found (isolated public key material)
 
@@ -79,28 +79,28 @@ Total bytes read+written at the raw TCP level during the handshake (ClientHello 
 | # | Size (bytes) |
 |---|---|
 | 1 | 4703 |
-| 2 | 1208 |
-| 3 | 1208 |
-| 4 | 1208 |
-| 5 | 1208 |
+| 2 | 5284 |
+| 3 | 5284 |
+| 4 | 5284 |
+| 5 | 5284 |
 | 6 | 5283 |
 | 7 | 4705 |
 | 8 | 4703 |
 | 9 | 7246 |
-| 10 | 1192 |
-| 11 | 1192 |
+| 10 | 5268 |
+| 11 | 5268 |
 | 12 | 4703 |
-| 13 | 1254 |
-| 14 | 1254 |
+| 13 | 5330 |
+| 14 | 5330 |
 | 15 | 5096 |
 | 16 | 4705 |
 | 17 | 4703 |
 | 18 | 7246 |
-| 19 | 916 |
-| 20 | 916 |
-| 21 | 1403 |
-| 22 | 1403 |
-| 23 | 3146 |
-| 24 | 3146 |
-| 25 | 1483 |
-| 26 | 1483 |
+| 19 | 4992 |
+| 20 | 4992 |
+| 21 | 5479 |
+| 22 | 5479 |
+| 23 | 7222 |
+| 24 | 7222 |
+| 25 | 5559 |
+| 26 | 5559 |
