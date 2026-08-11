@@ -454,3 +454,67 @@ contaminate the metrics with error traffic.
 (12 from the insurance-consents flow + 16 from the person flow), instead
 of the 37 raw log entries a full Experiment-1-style run produces across
 both plans' preflight+main modules combined.
+
+## 9. mockapi (RS) must be recreated on every CRYPTO_PROFILE switch, not just auth/mtls/mongo_seed
+
+**Context:** `ResponseSigningService`
+(`insurance-server-lambdas/src/main/java/com/raidiam/trustframework/mockinsurance/crypto/ResponseSigningService.java`)
+signs every Consents/Person API response body as a compact JWS (PS256 or
+ML-DSA-65, chosen by `mockinsurance.crypto-profile`, itself mapped from the
+`CRYPTO_PROFILE` env var in `application.yml`). This mirrors the same
+externalized-profile switch already used on the AS (Decision 3).
+
+**The bug:** unlike the AS's `configuration.js`, which re-reads
+`CRYPTO_PROFILE` per request via `cryptoProfile.signingAlgs`,
+`ResponseSigningService.init()` is a Micronaut `@PostConstruct` -- it picks
+the signer **once, at JVM boot**, and never again. Throughout this
+session's data collection, switching `CRYPTO_PROFILE` between scenarios was
+done with `docker-compose --profile main up -d --force-recreate auth mtls
+mongo_seed` -- a list assembled before `mockapi`'s own dependency on
+`CRYPTO_PROFILE` was noticed, since the docker-compose service definition
+looks identical in shape to `psql`/`mongodb`'s static config. `mockapi` was
+never included, so it kept running -- and kept signing -- with whatever
+profile was active the last time it happened to be created (a bare
+`docker-compose up -d` with no explicit service list, which recreates
+every service whose resolved config changed).
+
+**Symptom that surfaced it:** a `thesis/scripts/opin_flow.py` Experiment 2
+(pqc) run's total bytes exchanged and JWT sizes for the RS-facing calls
+(`/insurance-person`, `/claim`, `/policy-info`, `/premium`) varied by
+scenario in a way uncorrelated with latency -- e.g. one 14ms run measured
+~178KB/scenario with ~5-7KB JWTs, while 0/30/140/225/320ms measured
+~113KB/scenario with ~1-3KB JWTs, collected under the same nominal
+`CRYPTO_PROFILE=pqc`. Root-caused by dumping raw response bodies
+(`Content-Type: application/jwt`) for both patterns: both are a single,
+well-formed 3-part compact JWS, no wrapper/array/nesting -- the only
+difference is the `alg`/`kid` in the header and, consequently, the
+signature length (ML-DSA-65's 3309-byte raw signature -> 4412 base64url
+chars, vs. PS256's 256-byte RSA signature -> 342 chars; the ~4076-byte
+gap observed between the two patterns matches this difference almost
+exactly, plus a few bytes for the `alg` string itself). Confirmed
+definitively via `mockapi`'s own boot log line (`Response signing
+profile: <profile> (alg: ..., kid: ...)`), which is emitted once per
+container lifetime and doesn't change afterward regardless of what
+`auth`/`mtls`/the client are doing.
+
+**Consequence:** any already-collected scenario file where `mockapi` had
+silently drifted from the experiment's intended `CRYPTO_PROFILE` has
+RS-attributed bytes/JWT sizes reflecting the wrong algorithm -- not a
+one-off, not tied to any particular latency value, and not auditable after
+the fact (container recreation discards the old instance's logs, so which
+scenarios were actually affected can't be reconstructed retroactively).
+This is why all 12 scenarios (both experiments) were re-collected after
+this decision, rather than only the scenario(s) where the symptom had been
+directly observed.
+
+**Fix:** `mockapi` is now included in the `--force-recreate` list on every
+profile switch, alongside `auth mtls mongo_seed`:
+
+```
+CRYPTO_PROFILE=<classic|pqc> docker-compose --profile main up -d --force-recreate auth mtls mongo_seed mockapi
+```
+
+Both `docker-compose.yml` environment blocks (`mockapi`'s and `auth`'s)
+now carry a comment to this effect. The procedure additionally confirms
+`mockapi`'s own "Response signing profile: ..." boot log line before
+starting a scenario, rather than trusting the env var alone.
