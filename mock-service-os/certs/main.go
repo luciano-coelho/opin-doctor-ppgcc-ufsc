@@ -43,6 +43,7 @@ func main() {
 
 	orgID := flag.String("org_id", uuid.NewString(), "Organization ID")
 	pqcClientOnly := flag.Bool("pqc-client-only", false, "Only generate client_one_pqc.crt/.key (ML-DSA-65), signed by the existing ca.crt/ca.key on disk. Does not touch the CA or any other cert -- see thesis/results/experiment2 - PQC/DECISIONS.md.")
+	pqcName := flag.String("pqc-name", "", "Only generate <name>.crt/.key (ML-DSA-65), signed by the existing ca.crt/ca.key on disk -- same mechanism as -pqc-client-only, generalized to any cert (e.g. op_pqc, mtls_pqc). Does not touch the CA or any other cert.")
 	flag.Parse()
 
 	if *pqcClientOnly {
@@ -52,6 +53,12 @@ func main() {
 		// not when running this tool directly against the committed certs.
 		caCert, caKey := loadCACert(sourceDir)
 		generateClientCertPQC("client_one_pqc", *orgID, caCert, caKey, sourceDir)
+		return
+	}
+
+	if *pqcName != "" {
+		caCert, caKey := loadCACert(sourceDir)
+		generateClientCertPQC(*pqcName, *orgID, caCert, caKey, sourceDir)
 		return
 	}
 

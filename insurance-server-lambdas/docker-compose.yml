@@ -27,6 +27,11 @@ services:
           - directory
     environment:
       - SSA_JWK_URL=http://localstack:4566/keystore/private_jwk.json
+      # classic (RSA-4096) or pqc (ML-DSA-65) -- picks which server
+      # certificate (mtls.crt/.key vs mtls_pqc.crt/.key) the gateway
+      # presents during the TLS handshake. See
+      # thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 10.
+      - CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic}
     depends_on:
       localstack:
         condition: service_healthy
@@ -144,11 +149,18 @@ services:
       - AWS_SECRET_ACCESS_KEY="test"
       - DEBUG=1
       - DOCKER_HOST=unix:///var/run/docker.sock
+      # Picks which of the two cert pairs below setup_ssm.sh pushes to SSM
+      # as the AS's own transport_certificate/transport_key (used by
+      # mock_as's InsurerAdapter for its own AS->RS backend calls -- see
+      # thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 10).
+      - CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic}
     volumes:
       - ../mock-service-os/setup_ssm.sh:/etc/localstack/init/ready.d/init-aws.sh
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../mock-service-os/certs/op.key:/init/certs/client.key
-      - ../mock-service-os/certs/op.crt:/init/certs/client.crt
+      - ../mock-service-os/certs/op.key:/init/certs/client_classic.key
+      - ../mock-service-os/certs/op.crt:/init/certs/client_classic.crt
+      - ../mock-service-os/certs/op_pqc.key:/init/certs/client_pqc.key
+      - ../mock-service-os/certs/op_pqc.crt:/init/certs/client_pqc.crt
       - ../mock-service-os/ssa/jwks.json:/init/ssa/jwks.json
       - ../mock-service-os/ssa/private_jwk.json:/init/ssa/private_jwk.json
       - config:/init/config

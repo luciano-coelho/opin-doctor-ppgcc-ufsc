@@ -28,8 +28,6 @@ import (
 
 const (
 	caCertFilePath            = "certs/ca.crt"
-	serverCertFilePath        = "certs/mtls.crt"
-	serverKeyFilePath         = "certs/mtls.key"
 	clientOnePublicJWKSPath   = "certs/client_one_pub.jwks"
 	authURI                   = "http://auth:3000"
 	participantsFilePath      = "mocks/participants.json"
@@ -40,7 +38,21 @@ var (
 	apiURI    = os.Getenv("API_GATEWAY_URI")
 	ssaJwkURL = os.Getenv("SSA_JWK_URL")
 	ssaJWK    jwk.Key
+
+	// classic (RSA-4096, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
+	// picks which server certificate the gateway itself presents during the
+	// TLS handshake. See thesis/results/v2/experiment2 - PQC/DECISIONS.md,
+	// Decision 10.
+	serverCertFilePath = "certs/mtls.crt"
+	serverKeyFilePath  = "certs/mtls.key"
 )
+
+func init() {
+	if os.Getenv("CRYPTO_PROFILE") == "pqc" {
+		serverCertFilePath = "certs/mtls_pqc.crt"
+		serverKeyFilePath = "certs/mtls_pqc.key"
+	}
+}
 
 // handshakeInfo holds the per-connection mTLS handshake metrics, captured
 // once when a connection's handshake completes and reused for every

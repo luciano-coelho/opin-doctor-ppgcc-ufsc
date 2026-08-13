@@ -15,15 +15,25 @@ awslocal ssm put-parameter \
     --type "SecureString" \
     --overwrite \
     --region "${REGION}"
+# classic (RSA-4096, Experiment 1) or pqc (ML-DSA-65, Experiment 2) --
+# picks which cert pair mock_as's InsurerAdapter presents for its own
+# AS->RS backend calls (rendering the consent screen, updating consent
+# status). Previously always classical regardless of CRYPTO_PROFILE -- see
+# thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 10.
+TRANSPORT_CERT_DIR="/init/certs/client_classic"
+if [ "${CRYPTO_PROFILE:-classic}" = "pqc" ]; then
+  TRANSPORT_CERT_DIR="/init/certs/client_pqc"
+fi
+echo "Setting AS transport_certificate/transport_key from ${TRANSPORT_CERT_DIR}.* (CRYPTO_PROFILE=${CRYPTO_PROFILE:-classic})"
 awslocal ssm put-parameter \
     --name "/local/op_fapi_client_config/transport_certificate" \
-    --value "$(cat /init/certs/client.crt)" \
+    --value "$(cat ${TRANSPORT_CERT_DIR}.crt)" \
     --type "SecureString" \
     --overwrite \
     --region "${REGION}"
 awslocal ssm put-parameter \
     --name "/local/op_fapi_client_config/transport_key" \
-    --value "$(cat /init/certs/client.key)" \
+    --value "$(cat ${TRANSPORT_CERT_DIR}.key)" \
     --type "SecureString" \
     --overwrite \
     --region "${REGION}"
