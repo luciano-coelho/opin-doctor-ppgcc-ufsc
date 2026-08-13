@@ -14,6 +14,14 @@ Os três blocos abaixo organizam as métricas por dimensão de análise: custo d
 
 As métricas de tráfego medem o tamanho dos dados que circulam no fluxo de consentimento completo. São os parâmetros que entram diretamente na Equação OPINsize e que determinam o impacto da migração no custo de infraestrutura de nuvem dos participantes do ecossistema.
 
+Este documento apresenta dois números diferentes chamados de "OPINsize", e é importante não confundi-los: o OPINsize analítico (151.120 bytes clássico / 238.838 bytes PQC, crescimento 1,58x, Bloco C) e o OPINsize empírico por participante (~67.604 bytes clássico / ~178.029 bytes PQC, crescimento 2,63x, tabela abaixo). Os dois coexistem porque respondem perguntas diferentes e complementares, não porque um deles esteja errado.
+
+O OPINsize analítico inclui o custo do handshake mTLS, calculado via equação (Equação 3.1 de Schardong et al., 2022). É o número comparável com a literatura e responde à pergunta central da tese: quanto custa um consentimento OPIN completo de ponta a ponta?
+
+O OPINsize empírico por participante mede apenas os bytes que trafegam na camada de aplicação HTTP — depois que o túnel TLS já está estabelecido. É a soma do que cada participante (AS, RS, PKI/CRL, Directory) efetivamente movimentou. Responde à pergunta operacional do orientador: quanto vai para a conta de nuvem de cada participante do ecossistema?
+
+A soma dos participantes fecha com o valor empírico, não com o analítico, porque os participantes só enxergam a camada de aplicação — o handshake mTLS acontece numa camada abaixo, invisível para eles.
+
 3. Bloco B — Custo de Latência
 
 O Bloco A mostrou que o fluxo fica 2,63 vezes mais pesado em bytes com PQC. Mas bytes maiores não significam necessariamente uma aplicação mais lenta — isso depende de quanto tempo o servidor gasta processando cada operação criptográfica.
