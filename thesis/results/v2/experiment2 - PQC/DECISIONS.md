@@ -599,3 +599,63 @@ ML-DSA-65 now), perfectly constant across all 6 latency scenarios.
 `total_bytes_exchanged`, `JWT_size`, and the AS/RS participant byte totals
 are unchanged, as expected: the migrated certificates operate at the TLS
 layer, not the HTTP application layer these figures measure.
+
+## 11. Infrastructure certificate migration complete for Experiment 2 -- larger handshake, faster handshake, and why that's not a contradiction
+
+**What was done:** Decision 10's two remaining classical-only components
+-- the AS's internal transport certificate (`op.crt` -> `op_pqc.crt`) and
+the mTLS gateway's own server certificate (`mtls.crt` -> `mtls_pqc.crt`)
+-- were migrated to ML-DSA-65, both gated behind `CRYPTO_PROFILE` the
+same way `client_one`'s certificate already was. This completes the PQC
+migration for every certificate under this thesis's control.
+`root-ca.pem`/`issuer-ca.pem` remain classical: they are Raidiam's real
+public sandbox PKI (`crl.sandbox.pki.opinbrasil.com.br`), not generated
+by this project's local CA, and migrating them is outside this thesis's
+control -- documented in Decision 10 as a methodological limitation, not
+revisited here.
+
+**Why:** to complete the PQC migration across the whole certificate chain
+this thesis controls, matching the scope of what Schardong et al. (2022)
+measured against the full TLS certificate chain, not just the client leaf
+certificate.
+
+**Unexpected finding: the handshake got bigger in bytes but faster in
+time.** `mTLS_handshake_bytes` P50 grew from 15500 to 19756 bytes (+27%,
+Decision 10), exactly as expected from adding a second ML-DSA-65
+certificate to the handshake. What was not expected: `handshake_ms` P50
+*dropped*, from the classical baseline's ~18-25ms range down to ~7-9ms.
+
+**Root cause, confirmed by direct benchmark:** signature *size* and
+signing *computational cost* are independent properties of an algorithm.
+RSA-4096 (the classical `mtls.crt`'s key size) is expensive to sign with
+-- large-modulus modular exponentiation -- while ML-DSA-65's
+lattice-based signing is comparatively cheap, despite producing a much
+larger signature. Benchmarked the exact private-key operation TLS's
+`CertificateVerify` step performs (RSA-PSS/SHA-256 vs `mldsa.Sign()`,
+same Go 1.27rc2 environment):
+
+| Algorithm | Time per sign operation |
+|---|---|
+| RSA-4096 PSS | 6.624 ms |
+| ML-DSA-65 | 0.713 ms |
+| **Ratio** | **RSA-4096 is 9.29x slower** |
+
+Replacing the gateway's RSA-4096 server certificate with an ML-DSA-65 one
+removes a ~6.6ms-per-handshake cost and replaces it with a ~0.7ms one --
+more than accounting for the observed ~10-15ms drop in `handshake_ms`,
+even though the handshake now carries ~4.3KB more data on the wire.
+
+**Validation:** three consecutive runs of the 0ms scenario, no container
+restarts between them (to rule out warm-up effects as a variable).
+`handshake_ms` P50 across the three runs: 9.0ms / 8.0ms / 7.0ms -- a
+2ms spread, within the ±3ms tolerance set before running the test.
+`handshake_bytes` P50 was identical (19756 bytes) in all three runs,
+confirming the effect is isolated to timing, not size.
+
+**Impact on the OPINsize equation (Section 4, Decision 9's `N_mTLS`
+methodology):** with `mTLS_handshake_bytes` updated to 19756 (from
+15500), OPINsize PQC = 6 x 19756 + 26 x 5459 + 2 x 1952 = 118536 +
+141934 + 3904 = **264374 bytes** (was 238838). The classical side is
+unaffected (its own certificates were already fully classical and are
+untouched by this decision) at 151120 bytes. Analytical growth:
+264374 / 151120 = **1.75x** (was 1.58x).
