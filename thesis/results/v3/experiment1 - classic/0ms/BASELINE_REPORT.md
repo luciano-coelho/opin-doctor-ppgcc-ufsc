@@ -22,8 +22,8 @@ Latency scenario: **0ms** (see thesis/scripts/set_latency.sh)
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
 | `/issuer-ca.pem` | 2 | 302.23 | 302.23 | 554.28 | 576.68 |
-| `/jwks` | 2 | 58.18 | 58.18 | 76.05 | 77.63 |
-| `/open-insurance/consents/v3/consents` | 2 | 202.07 | 202.07 | 276.0 | 282.58 |
+| `/jwks` | 2 | 45.09 | 45.09 | 45.09 | 45.09 |
+| `/open-insurance/consents/v3/consents` | 2 | 72.49 | 72.49 | 72.49 | 72.49 |
 | `/open-insurance/consents/v3/consents/urn:raidiaminsurance:465b1a3c-9653-4255-b964-d667eb0c2406` | 5 | 50.02 | 58.63 | 65.41 | 66.47 |
 | `/open-insurance/consents/v3/consents/urn:raidiaminsurance:c3c0de03-1ffb-4d59-9943-4a0d53676a15` | 1 | 77.37 | 77.37 | 77.37 | 77.37 |
 | `/open-insurance/insurance-person/v2/insurance-person` | 2 | 60.64 | 60.64 | 73.5 | 74.64 |
@@ -32,7 +32,7 @@ Latency scenario: **0ms** (see thesis/scripts/set_latency.sh)
 | `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/premium` | 2 | 79.43 | 79.43 | 94.98 | 96.36 |
 | `/request` | 2 | 36.48 | 36.48 | 38.11 | 38.26 |
 | `/root-ca.pem` | 2 | 1021.97 | 1021.97 | 1316.4 | 1342.58 |
-| `/token` | 4 | 84.49 | 92.59 | 131.91 | 134.27 |
+| `/token` | 4 | 26.54 | 26.54 | 26.54 | 26.54 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 

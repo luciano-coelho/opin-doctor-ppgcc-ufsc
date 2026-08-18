@@ -883,3 +883,94 @@ distorted one, not the new 2,78x. `Metricas_Experimentais_PQC_OPIN_v2.md`
 was updated throughout (Bloco A intro, Bloco C equation and parameter
 table, plus two other table cells that still cited the old 10.381-byte
 figure) to reflect this.
+
+## 14. Block B per-endpoint latency: JVM/BouncyCastle cold start, in-process resource exhaustion, and a 5-run median methodology
+
+**Context:** re-auditing Block B's per-endpoint 0ms latency figures (in
+response to a request to confirm `/token`'s P50 against the current,
+post-automation `consolidated.json`) surfaced that every figure in that
+table had been frozen since commit `61ee07e` (2026-08-13) -- predating
+Decision 10's certificate migration and Decision 13's login automation
+entirely -- and had never been recomputed against any of the several
+data regenerations since. Recomputing them from current data uncovered
+two distinct, real problems, not just staleness.
+
+**Problem 1 -- JVM/BouncyCastle cold start on `mockapi`.** The PQC 0ms
+scenario's `/open-insurance/consents/v3/consents` (POST) P50 was
+1,545ms (then reproduced at 1,305ms and 1,863ms on further attempts) --
+wildly out of line with every other scenario/endpoint, which all scale
+smoothly with injected latency. Isolated to exactly one condition: the
+*first* ML-DSA-65-signing request `mockapi` serves after a container
+recreation. Confirmed by controlled comparison: the same scenario,
+re-run immediately after on the same (already-warmed) containers with
+no recreation in between, measured 87.89ms -- back in line with every
+other scenario. Classic never shows this, because PS256/RSA signing is
+native to the JVM (no extra provider to initialize); ML-DSA-65 signing
+goes through BouncyCastle, whose provider registration/class-loading
+pays a one-time cost on first real use. This also explains why the
+12-scenario re-collection for Decision 13 never caught it: the other 5
+PQC scenarios in that series ran back-to-back after the 0ms one, on the
+same already-warmed containers, so only 0ms (always first after
+recreation) was ever exposed.
+
+**Problem 2 -- in-process repeated-flow resource exhaustion.** Attempting
+to collect multiple 0ms latency samples by looping
+`run_insurance_flow()`/`run_person_flow()` inside a single long-lived
+Python process (to average out per-run noise without paying interpreter
+startup cost each time) intermittently failed with `TimeoutError: No
+callback received after simulated login` -- the server-side consent
+flow completed successfully every time (confirmed in `auth`'s own logs:
+`consent ... updated`), but the local HTTPS callback listener
+(`wait_for_authorization_code()`, 127.0.0.1:8765) never received the
+final JARM redirect. An isolated single-flow reproduction with
+instrumentation did not reproduce it, pointing at some resource that
+accumulates only across *many* sequential flow executions within one
+process (candidates: Windows ephemeral port exhaustion, imperfectly
+released sockets from the repeated `HTTPServer`/SSL-wrapped-socket
+bind/shutdown cycle) rather than anything wrong with a single flow
+execution. Switching each measurement run to its own fresh subprocess
+(matching how the official per-scenario data has always been collected
+-- one `opin_flow.py` invocation per scenario, never batched in one
+process) eliminated the failure entirely: 10/10 subsequent runs (5
+classic + 5 PQC) succeeded on the first attempt.
+
+**Decision:** Block B's 0ms per-endpoint P50 figures now come from the
+**median of 5 independent reruns** of the 0ms scenario per experiment
+(10 full flow executions total), each spawned as its own isolated
+subprocess against a stable, already-warmed environment -- containers
+recreated once before the run series (plus one throwaway warmup run for
+PQC specifically, to absorb Problem 1's cold-start cost before the 5
+counted runs), not once per run. A single run's P50 was rejected as the
+reporting basis: with only 2-4 samples per endpoint within one run, an
+initial single-run comparison showed the effect's direction flipping
+(PQC appearing faster than classic) on 4 of the 5 endpoints, which did
+not survive going to 5 independent runs -- the median-based comparison
+shows PQC consistently slower on every endpoint that involves a signing
+or verification operation (`/token`, `/consents` POST, `/consents` GET,
+the person-flow APIs), with `/token` and `/consents` GET showing zero
+overlap between the two experiments' 5-run ranges (the strongest
+possible signal from this sample size). Only `/jwks` (no signing/
+verification, a pure key lookup) shows PQC marginally faster, with
+substantial range overlap -- consistent with there being no
+algorithm-dependent operation on that code path at all.
+
+**Implementation:** the 0ms `baseline_metrics.json` for both
+experiments had their `/token`, `/open-insurance/consents/v3/consents`
+(POST), and `/jwks` entries' `mean_ms`/`p50_ms`/`p95_ms`/`p99_ms` all
+set to the cross-run median (a deliberate departure from those fields'
+normal meaning as within-run percentiles -- there is no distribution to
+compute a percentile over here, just a single best-estimate point value
+from 5 independent measurements, the same convention already used
+elsewhere in this schema for `count`-1 endpoint groups). The combined
+`/consents` GET figure (6 samples per run, pooled across both flows'
+distinct consent URNs) and the person-flow 4-endpoint average are
+narrative-only numbers in `Experimental_Metrics_PQC_OPIN_v2.md` -- they
+were never stored as single dictionary keys in `baseline_metrics.json`'s
+schema (each consent URN and each person sub-resource is its own key),
+so no equivalent JSON field exists to patch for them.
+`consolidated.json`/`EXPERIMENT{1,2}_REPORT.md` were regenerated from
+the patched files. Nothing else in either 0ms scenario file changed --
+byte counts, `N_mTLS`, `handshake_bytes`, and JWT sizes were confirmed
+identical before and after, since Problem 1's cold start only ever
+affected timing, never bytes (already established when Problem 1 was
+first isolated).
