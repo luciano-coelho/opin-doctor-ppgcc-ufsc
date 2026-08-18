@@ -23,7 +23,7 @@ consents_v3__opin-consent-api-status-test-v3_20260803T192725Z.json:
   5.  POST /open-insurance/consents/v3/consents             -> 201, consentId
   6.  GET  /open-insurance/consents/v3/consents/{id}  x3    (AWAITING_AUTHORIZATION)
   7.  POST /request  (PAR, signed request object)           -> request_uri
-  8.  -- manual browser login --
+  8.  -- automated login (see simulate_login()) --
   9.  POST /token          grant_type=authorization_code    -> new bearer token
   10. GET  /open-insurance/consents/v3/consents/{id}  x2    (AUTHORISED)
 
@@ -39,7 +39,7 @@ with person-specific permissions/scope and only 1 status poll before login,
 none after:
 
   1-9. jwks / PKI x2 / token(cc) / consent POST / consent GET x1 / PAR /
-       manual login / token(ac)               -- 8 HTTP calls
+       automated login / token(ac)             -- 8 HTTP calls
   10.  GET  /open-insurance/insurance-person/v2/insurance-person       x2
   11.  GET  .../insurance-person/{policyId}/claim                     x2
   12.  GET  .../insurance-person/{policyId}/policy-info               x2
@@ -84,6 +84,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import ssl
 import subprocess
@@ -92,7 +93,6 @@ import tempfile
 import threading
 import time
 import uuid
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -208,6 +208,23 @@ PERSON_CONSENT_PERMISSIONS = [
 ]
 CONSENT_CPF = "76109277673"
 CONSENT_CNPJ = "01773247000103"
+
+# Mock account credentials (thesis/README.md) used to drive the login
+# interaction automatically -- see wait_for_authorization_code() below.
+LOGIN_USERNAME = "usuario1@seguradoramodelo.com.br"
+LOGIN_PASSWORD = "P@ssword01"
+
+# mock_as/views/interaction.ejs (the consent screen) renders one hidden
+# <input name="{scope}-accounts" value="{resourceId}"> per selectable
+# resource, pre-checked by default -- a real browser just clicking "Confirm"
+# submits these as-is. Posting an empty confirm body skips that selection
+# entirely, so the RS never links any resource to the consent
+# (mock_as/utils/opin/routes.js's getAuthorizedConsentData reads them into
+# linkedPersonPolicyIds etc.), which fails every person-flow resource call
+# with "consent does not cover this person" -- confirmed empirically while
+# validating this exact pattern in the scratch driver scripts used to
+# collect Experiment 2's PKI/CRL data (see DECISIONS.md).
+HIDDEN_ACCOUNTS_RE = re.compile(r'<input\s+type="hidden"\s+name="([\w-]+-accounts)"\s+value="([^"]*)"')
 
 # Matches each plan's real PAR request scope exactly (validated against
 # thesis/results/experiment1 - Classic/0ms's raw logs for both plans),
@@ -376,7 +393,59 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
-def wait_for_authorization_code(auth_url: str, timeout_seconds: int = 600) -> str:
+def simulate_login(auth_url: str, cert) -> None:
+    """
+    Drives the login+consent interaction over plain HTTP, exactly like a
+    browser submitting mock_as's forms would -- no CSRF token or JS-driven
+    submission exists in mock_as (confirmed by reading views/login.ejs and
+    utils/opin/routes.js directly), so a plain requests.Session() carrying
+    the session cookie set by the first GET is sufficient. Ported from the
+    scratch driver scripts' simulate_login(), which validated this exact
+    sequence across all 12 official scenario runs before this function
+    existed -- see DECISIONS.md for why the browser this replaced could not
+    give a deterministic mTLS connection count.
+
+    Uses its own Session (not the flow's shared one) so the connection
+    pattern this produces at the gateway matches what was already validated
+    under CRYPTO_PROFILE=pqc: a third, separate connection pool per flow,
+    alongside the AS and RS pools -- see DECISIONS.md for the reasoning.
+    """
+    session = requests.Session()
+    session.cert = cert
+    session.verify = False
+
+    resp = session.get(auth_url, allow_redirects=True, timeout=60)
+    if "/interaction/" not in resp.url:
+        raise RuntimeError(f"No interaction page reached; final URL={resp.url}, body[:500]={resp.text[:500]}")
+
+    uid = resp.url.rstrip("/").rsplit("/", 1)[-1]
+    if 'name="login"' in resp.text:
+        resp = session.post(
+            f"https://{AUTH_HOST}/interaction/{uid}/login",
+            data={"login": LOGIN_USERNAME, "password": LOGIN_PASSWORD},
+            allow_redirects=True, timeout=60,
+        )
+        if "/interaction/" not in resp.url:
+            raise RuntimeError(f"Login did not reach interaction page; final URL={resp.url}, body[:500]={resp.text[:500]}")
+        uid = resp.url.rstrip("/").rsplit("/", 1)[-1]
+
+    if "/confirm" not in resp.text:
+        raise RuntimeError(f"No consent/confirm page reached; body[:500]={resp.text[:500]}")
+
+    confirm_fields = {}
+    for name, value in HIDDEN_ACCOUNTS_RE.findall(resp.text):
+        confirm_fields.setdefault(name, []).append(value)
+
+    try:
+        session.post(
+            f"https://{AUTH_HOST}/interaction/{uid}/confirm",
+            data=confirm_fields, allow_redirects=True, timeout=60,
+        )
+    except requests.exceptions.RequestException:
+        pass  # server-side callback already recorded before this response finishes streaming back
+
+
+def wait_for_authorization_code(auth_url: str, cert, timeout_seconds: int = 600) -> str:
     cert_path, key_path = _generate_callback_tls_cert()
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.load_cert_chain(cert_path, key_path)
@@ -387,28 +456,13 @@ def wait_for_authorization_code(auth_url: str, timeout_seconds: int = 600) -> st
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    print("\n" + "=" * 70)
-    print(">>> MANUAL INTERACTION REQUIRED")
-    print(f">>> Open in browser: {auth_url}")
-    print(">>> Protocol: open the link ONCE, log in, select all permissions")
-    print(">>> and confirm. The final redirect lands on a self-signed")
-    print(f">>> https://{CALLBACK_HOST}:{CALLBACK_PORT}/callback -- your browser")
-    print(">>> will show a certificate warning; proceed/accept it (it's a")
-    print(">>> throwaway local cert generated for this run only). Once the")
-    print(">>> callback page loads, come back here and press ENTER. Do NOT")
-    print(">>> reload or re-click the original login link.")
-    print("=" * 70 + "\n")
-    try:
-        webbrowser.open(auth_url)
-    except Exception:
-        pass
-    input("Press ENTER after completing the login redirect... ")
+    simulate_login(auth_url, cert)
 
     started = time.time()
     while server.captured_params is None:  # type: ignore[attr-defined]
         if time.time() - started > timeout_seconds:
             server.shutdown()
-            raise TimeoutError("No callback received within timeout after ENTER")
+            raise TimeoutError("No callback received after simulated login")
         time.sleep(0.5)
 
     params = server.captured_params  # type: ignore[attr-defined]
@@ -610,9 +664,9 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     resp.raise_for_status()
     request_uri = resp.json()["request_uri"]
 
-    # Manual browser login
+    # Automated login (see simulate_login()/wait_for_authorization_code())
     auth_url = f"https://{AUTH_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
-    code = wait_for_authorization_code(auth_url)
+    code = wait_for_authorization_code(auth_url, cert)
 
     # POST /token (authorization_code)
     ac_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")

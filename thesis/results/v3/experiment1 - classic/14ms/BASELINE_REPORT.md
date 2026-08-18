@@ -1,6 +1,6 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-08-11T01:51:35.773343+00:00
+Generated at: 2026-08-18T03:29:56.309231+00:00
 Latency scenario: **14ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
@@ -21,27 +21,27 @@ Latency scenario: **14ms** (see thesis/scripts/set_latency.sh)
 
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| `/issuer-ca.pem` | 2 | 54.31 | 54.31 | 76.16 | 78.1 |
-| `/jwks` | 2 | 102.83 | 102.83 | 109.29 | 109.86 |
-| `/open-insurance/consents/v3/consents` | 2 | 147.37 | 147.37 | 152.09 | 152.51 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:762486ff-a733-4de0-81fc-92a2e8152efb` | 5 | 61.02 | 59.0 | 68.91 | 70.74 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:875da183-7004-468c-879d-c5efd46bbe37` | 1 | 59.79 | 59.79 | 59.79 | 59.79 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 80.04 | 80.04 | 81.3 | 81.41 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/claim` | 2 | 84.8 | 84.8 | 85.79 | 85.87 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/policy-info` | 2 | 80.27 | 80.27 | 81.21 | 81.29 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/premium` | 2 | 82.52 | 82.52 | 83.53 | 83.62 |
-| `/request` | 2 | 37.56 | 37.56 | 38.38 | 38.46 |
-| `/root-ca.pem` | 2 | 205.21 | 205.21 | 248.62 | 252.48 |
-| `/token` | 4 | 100.12 | 96.35 | 169.18 | 171.12 |
+| `/issuer-ca.pem` | 2 | 24.38 | 24.38 | 25.09 | 25.15 |
+| `/jwks` | 2 | 125.25 | 125.25 | 134.58 | 135.41 |
+| `/open-insurance/consents/v3/consents` | 2 | 314.41 | 314.41 | 411.18 | 419.78 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:3691ba30-0c8a-4769-a7de-77b31acc0c89` | 5 | 92.34 | 96.32 | 102.16 | 103.22 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:623c4513-33fe-4ad0-9802-444783b14711` | 1 | 81.46 | 81.46 | 81.46 | 81.46 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 112.9 | 112.9 | 114.09 | 114.2 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/claim` | 2 | 123.24 | 123.24 | 124.46 | 124.57 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/policy-info` | 2 | 105.97 | 105.97 | 113.86 | 114.56 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/premium` | 2 | 167.59 | 167.59 | 200.63 | 203.57 |
+| `/request` | 2 | 53.27 | 53.27 | 63.04 | 63.91 |
+| `/root-ca.pem` | 2 | 93.17 | 93.17 | 106.78 | 107.99 |
+| `/token` | 4 | 141.13 | 153.12 | 208.42 | 209.58 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 
-Requests logged by the gateway in this run: **58**
+Requests logged by the gateway in this run: **38**
 
 | Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| mTLS handshake | 8 | 43 | 43.0 | 57.8 | 61.16 |
-| OPIN processing | 58 | 54.22 | 27.5 | 172.15 | 275.66 |
+| mTLS handshake | 5 | 61 | 62.0 | 63.8 | 63.96 |
+| OPIN processing | 38 | 64.18 | 39.0 | 191.05 | 246.14 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
 1 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
@@ -52,7 +52,7 @@ Total bytes read+written at the raw TCP level during the handshake (ClientHello 
 
 | Requests | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |
 |---|---|---|---|---|
-| 9 | 10229.67 | 10381.0 | 10827.0 | 10895.8 |
+| 6 | 9969.5 | 9785.0 | 10407.25 | 10414.25 |
 
 0 handshake byte-size sample(s) discarded as outliers (same filter/reasoning as the duration outliers above).
 

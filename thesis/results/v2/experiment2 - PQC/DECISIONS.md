@@ -748,3 +748,137 @@ itself was ever coupled to these two files.
   real Raidiam hostname on the same machine. Redirecting the URL inside
   `opin_flow.py` achieves the identical measured outcome without any of
   that risk, and is fully reversible with a code diff.
+
+## 13. Login interaction fully automated -- removes the real browser, makes N_mTLS deterministic in both experiments
+
+**Context:** `opin_flow.py`'s `wait_for_authorization_code()` used to call
+`webbrowser.open(auth_url)` and then block on `input()`, waiting for a
+human to complete the login/consent screens in a real system browser
+(Edge) before pressing ENTER. A separate investigation into why
+`N_mTLS` (the gateway's `handshake_bytes.count`) was perfectly constant
+at 6 across all 6 PQC latency scenarios, but varied between 9 and 16
+across the 6 classic scenarios, traced the entire discrepancy to this
+real browser: every `webbrowser.open()` call made Edge attempt its own,
+independent mTLS connection(s) to `auth.local`, entirely outside
+`opin_flow.py`'s own `requests.Session()` traffic. In PQC, every one of
+these attempts failed identically at the TLS layer -- gateway logs
+showed `"http: TLS handshake error ...: tls: peer doesn't support any
+of the certificate's signature algorithms"` on every attempt, because
+Windows' native TLS stack (Schannel, which Edge uses) has no ML-DSA-65
+support -- so the real browser could never contribute a connection,
+making `N_mTLS` deterministic by hard incompatibility. In classic, Edge
+could negotiate the classical certificate's signature algorithm fine,
+so some of its several parallel/speculative connection attempts
+occasionally won a race and completed a full handshake (contributing
+extra `favicon.ico`/`styles.css`/`scripts.js`/image requests visible in
+the gateway's raw access log under the same client certificate), while
+others failed (`"remote error: tls: unknown certificate"`/`EOF`) --
+producing the observed 9-16 variability from genuine, timing-dependent
+browser networking non-determinism, not from anything `opin_flow.py`
+itself does.
+
+**Decision:** remove the real browser and the manual `input()` entirely.
+`wait_for_authorization_code()` no longer opens anything or blocks on
+stdin -- it drives the login/consent forms directly over HTTP via a new
+`simulate_login()` function, ported unchanged in logic from the scratch
+driver scripts' `simulate_login()` (which had already been validated
+across all 12 of this thesis's official scenario runs to date, driving
+the exact same forms from outside the process). This was verified safe
+before making the change, not assumed: `mock_as`'s login
+(`views/login.ejs`, `utils/opin/routes.js`'s
+`POST /interaction/:uid/login`) and consent-confirm
+(`POST /interaction/:uid/confirm`) routes are plain HTML `<form>` POSTs
+read via `req.body.login`/`req.body.password`, with no CSRF token field
+anywhere in the templates and no CSRF middleware anywhere in `mock_as/`
+(confirmed by grepping the whole tree for `csrf`/`xsrf`: zero matches).
+The only state that needs to carry across requests is the `oidc-provider`
+session cookie set on the first `GET /auth`, which a plain
+`requests.Session()` already handles automatically.
+
+**Implementation:**
+- `simulate_login(auth_url, cert)` (new function, `opin_flow.py`): opens
+  its own `requests.Session()` (deliberately separate from the flow's
+  shared session, preserving the same connection-pool shape already
+  validated under PQC -- see below), follows the `GET /auth?...`
+  redirect chain to the interaction page, `POST`s
+  `{login, password}` (fixed mock credentials,
+  `usuario1@seguradoramodelo.com.br` / `P@ssword01`) to
+  `/interaction/{uid}/login`, extracts every hidden
+  `<input name="{scope}-accounts" value="{resourceId}">` field from the
+  consent page via the same `HIDDEN_ACCOUNTS_RE` regex already validated
+  in the driver scripts (an empty confirm body skips resource selection
+  entirely, which silently breaks every person-flow resource call
+  downstream), and `POST`s them to `/interaction/{uid}/confirm`.
+- `wait_for_authorization_code()` starts the same local HTTPS callback
+  listener as before (still needed to capture the JARM `response` JWT),
+  calls `simulate_login()` instead of `webbrowser.open()`/`input()`, then
+  polls `server.captured_params` exactly as before.
+- `import webbrowser` removed; `import re` added for the regex.
+- These login/confirm HTTP calls are deliberately **not** added to
+  `calls`/`do_call()` -- matching how the real browser's requests were
+  never part of `total_requests` either. This keeps `total_requests=28`
+  and every `calls`-derived metric (`bytes_by_participant`,
+  `total_bytes_exchanged`, `jwt_*`) numerically comparable to every
+  previously-collected scenario; only the gateway-side metrics
+  (`gateway_metrics.*`, sourced from the gateway's own raw access log,
+  not from `calls`) change, because they were the ones polluted by the
+  browser in the first place.
+- `simulate_login()` uses its own `Session`, not the flow's shared one --
+  this reproduces, deliberately, the same "AS pool / RS pool / login-pool"
+  three-connections-per-flow structure already established (and already
+  the source of PQC's stable `N_mTLS=6`) rather than introducing a new
+  connection-pooling shape only in classic.
+
+**Effect on the data -- re-ran all 12 scenarios (6 classic + 6 PQC) from
+scratch, fully automated, zero manual interaction:**
+
+| Scenario | Classic `N_mTLS` (old, browser-driven) | Classic `N_mTLS` (new, automated) | PQC `N_mTLS` (old) | PQC `N_mTLS` (new) |
+|---|---|---|---|---|
+| 0ms | 10 | **6** | 6 | **6** |
+| 14ms | 9 | **6** | 6 | **6** |
+| 30ms | 10 | **6** | 6 | **6** |
+| 140ms | 16 | **6** | 6 | **6** |
+| 225ms | 10 | **6** | 6 | **6** |
+| 320ms | 10 | **6** | 6 | **6** |
+
+`N_mTLS` is now perfectly constant at 6 in *both* experiments, across
+all 12 scenarios -- fully comparable between classic and PQC for the
+first time, with the confounding real-browser variable eliminated
+rather than merely explained. `total_requests` stayed at 28 in every
+scenario, `requests_logged` (gateway-side, includes the login/consent
+sub-requests) settled at 38 in every scenario in both experiments (was
+38 already in PQC; was up to 58 in classic when the browser occasionally
+won its connection race). Confirmed unaffected, spot-checked against
+the pre-automation committed data for the 0ms scenario of both
+experiments: `jwt_count`, `jwt_size_avg_bytes`, `jwt_size_max_bytes`,
+and `bytes_by_participant` are identical in PQC, and identical in
+classic except for a 6-byte difference in `PKI/CRL` bytes (10000 vs
+10006) -- expected run-to-run jitter from Raidiam's real external
+sandbox endpoint (`crl.sandbox.pki.opinbrasil.com.br`, hit unchanged by
+classic per Decision 12), not a regression. `total_bytes_exchanged` is
+byte-for-byte identical across all 6 PQC scenarios (184637, matching
+the already-committed value) and within a handful of bytes across all 6
+classic scenarios (67600-67606), consistent with that same external-PKI
+jitter.
+
+**Follow-up -- consolidation and OPINsize equation recomputed:**
+`consolidated.json`/`EXPERIMENT{1,2}_REPORT.md` were regenerated against
+these 12 new scenario files. With N_mTLS now deterministic on both
+sides, the classical `mTLS_handshake_bytes` P50 also turned out to be
+perfectly stable across all 6 scenarios (9785 bytes, was 10.381-10.511
+before, no longer needing the old methodology's "average, excluding
+0ms" workaround). Recomputing the OPINsize equation with the classical
+side's actual N_mTLS=6 (instead of the old scenario-average ~11) drops
+OPINsize classical from 151.120 to 95.232 bytes -- 6 x 9785 + 26 x 1385
++ 2 x 256 = 58.710 + 36.010 + 512 = 95.232. OPINsize PQC is unchanged
+(264.374 bytes, since PQC's N_mTLS was already 6). Analytical growth
+moves from 1,75x to **2,78x**, which now closely matches the empirical
+growth already measured in Bloco A (2,73x, ~67.604 -> ~184.637 bytes)
+-- two independent measurement methods (the analytical equation,
+which includes mTLS handshake cost, and the empirical per-participant
+sum, which only covers the HTTP application layer) converging is strong
+internal-consistency evidence that the old 1,75x figure was the
+distorted one, not the new 2,78x. `Metricas_Experimentais_PQC_OPIN_v2.md`
+was updated throughout (Bloco A intro, Bloco C equation and parameter
+table, plus two other table cells that still cited the old 10.381-byte
+figure) to reflect this.

@@ -1,6 +1,6 @@
 # Baseline Report (Classical Cryptography)
 
-Generated at: 2026-08-11T01:55:16.611131+00:00
+Generated at: 2026-08-18T03:32:41.352648+00:00
 Latency scenario: **320ms** (see thesis/scripts/set_latency.sh)
 
 ## Overview
@@ -21,27 +21,27 @@ Latency scenario: **320ms** (see thesis/scripts/set_latency.sh)
 
 | Endpoint | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| `/issuer-ca.pem` | 2 | 363.09 | 363.09 | 608.95 | 630.8 |
-| `/jwks` | 2 | 1795.81 | 1795.81 | 1937.94 | 1950.57 |
-| `/open-insurance/consents/v3/consents` | 2 | 1967.87 | 1967.87 | 1970.51 | 1970.74 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:29923cac-26ea-487a-b16f-511cf80c40e9` | 5 | 977.61 | 978.12 | 979.71 | 979.92 |
-| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:e5bee10b-d12b-4305-9ed6-b85724feefc2` | 1 | 981.36 | 981.36 | 981.36 | 981.36 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 1302.88 | 1302.88 | 1303.15 | 1303.17 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/claim` | 2 | 1306.55 | 1306.55 | 1307.51 | 1307.59 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/policy-info` | 2 | 1302.25 | 1302.25 | 1304.98 | 1305.22 |
-| `/open-insurance/insurance-person/v2/insurance-person/30741b50-febb-400b-b78d-3e31adc0dd47/premium` | 2 | 1304.17 | 1304.17 | 1304.77 | 1304.82 |
-| `/request` | 2 | 653.03 | 653.03 | 653.84 | 653.91 |
-| `/root-ca.pem` | 2 | 1066.08 | 1066.08 | 1819.56 | 1886.54 |
-| `/token` | 4 | 1711.07 | 1631.5 | 2884.95 | 2923.71 |
+| `/issuer-ca.pem` | 2 | 312.48 | 312.48 | 572.11 | 595.19 |
+| `/jwks` | 2 | 1857.77 | 1857.77 | 2039.45 | 2055.6 |
+| `/open-insurance/consents/v3/consents` | 2 | 2041.27 | 2041.27 | 2057.31 | 2058.73 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:6774348d-b2f9-4050-acdb-7ad45940bb30` | 1 | 993.84 | 993.84 | 993.84 | 993.84 |
+| `/open-insurance/consents/v3/consents/urn:raidiaminsurance:88690a29-11e3-4d34-9c63-6feb204a1531` | 5 | 1002.4 | 997.2 | 1018.44 | 1020.44 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 2 | 1344.4 | 1344.4 | 1347.84 | 1348.15 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/claim` | 2 | 1353.1 | 1353.1 | 1362.01 | 1362.8 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/policy-info` | 2 | 1323.52 | 1323.52 | 1327.02 | 1327.33 |
+| `/open-insurance/insurance-person/v2/insurance-person/949ceb2c-6c00-4bb2-b0b6-69c972c3f075/premium` | 2 | 1383.38 | 1383.38 | 1430.95 | 1435.18 |
+| `/request` | 2 | 660.1 | 660.1 | 663.82 | 664.15 |
+| `/root-ca.pem` | 2 | 520.5 | 520.5 | 886.34 | 918.86 |
+| `/token` | 4 | 1660.04 | 1658.57 | 2660.92 | 2662.27 |
 
 ## mTLS handshake vs. OPIN processing time (gateway-side)
 
-Requests logged by the gateway in this run: **58**
+Requests logged by the gateway in this run: **38**
 
 | Phase | Requests | Mean (ms) | P50 (ms) | P95 (ms) | P99 (ms) |
 |---|---|---|---|---|---|
-| mTLS handshake | 10 | 660.8 | 659.5 | 666.55 | 666.91 |
-| OPIN processing | 58 | 850.98 | 332.0 | 2637.75 | 4343.75 |
+| mTLS handshake | 6 | 758.17 | 675.5 | 1005.75 | 1070.75 |
+| OPIN processing | 38 | 733.55 | 344.5 | 2393.55 | 3872.62 |
 
 Note: for keep-alive connections, only the first request on a given connection pays the handshake cost -- every subsequent request on that same connection reports the same (already-past) handshake timestamps, which is expected.
 0 handshake duration sample(s) discarded as outliers (> 3x this scenario's median; see filter_handshake_outliers).
@@ -52,7 +52,7 @@ Total bytes read+written at the raw TCP level during the handshake (ClientHello 
 
 | Requests | Mean (bytes) | P50 (bytes) | P95 (bytes) | P99 (bytes) |
 |---|---|---|---|---|
-| 10 | 10225.8 | 10398.5 | 10725.7 | 10824.34 |
+| 6 | 9969.5 | 9785.0 | 10407.25 | 10414.25 |
 
 0 handshake byte-size sample(s) discarded as outliers (same filter/reasoning as the duration outliers above).
 
