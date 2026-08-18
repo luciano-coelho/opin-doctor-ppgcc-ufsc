@@ -879,6 +879,7 @@ which includes mTLS handshake cost, and the empirical per-participant
 sum, which only covers the HTTP application layer) converging is strong
 internal-consistency evidence that the old 1,75x figure was the
 distorted one, not the new 2,78x. `Metricas_Experimentais_PQC_OPIN_v2.md`
+(later translated to English and renamed `Experimental_Metrics_PQC_OPIN_v2.md`)
 was updated throughout (Bloco A intro, Bloco C equation and parameter
 table, plus two other table cells that still cited the old 10.381-byte
 figure) to reflect this.
