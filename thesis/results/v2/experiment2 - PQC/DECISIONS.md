@@ -659,3 +659,92 @@ methodology):** with `mTLS_handshake_bytes` updated to 19756 (from
 unaffected (its own certificates were already fully classical and are
 untouched by this decision) at 151120 bytes. Analytical growth:
 264374 / 151120 = **1.75x** (was 1.58x).
+
+## 12. root-ca.pem/issuer-ca.pem given local ML-DSA-65 stand-ins for Experiment 2 -- a simulation, not a migration of Raidiam's PKI
+
+**Context:** Decision 10 left `root-ca.pem`/`issuer-ca.pem` classical,
+reasoning that they're Raidiam's real external sandbox PKI
+(`crl.sandbox.pki.opinbrasil.com.br`), not this project's own
+infrastructure, and that faking them locally would turn a genuine
+ecosystem dependency into a simulation of our own making. Before
+revisiting that, re-verified by reading the current source directly (not
+from this document): `mock_mtls/main.go`'s `caCertPool()` builds the
+gateway's mTLS trust store from exactly one file, the local
+`certs/ca.crt` -- `root-ca.pem`/`issuer-ca.pem` never appear anywhere in
+the gateway's Go code. In `opin_flow.py`'s
+`fetch_server_keys_and_ca()`, the HTTP response for both files is bound
+to `resp` and never read again -- `do_call()` only measures byte counts,
+scans for JWT-shaped substrings, and (only for paths ending `jwks`)
+parses JWK sizes; none of that touches these two calls' content as an
+X.509 structure. Contrast with every other call in the same flow
+(`/token`, `POST /consents`, `/request`, ...), which all call
+`resp.raise_for_status()` and extract real data from the response on the
+very next line. Confirmed empirically too: removing the two calls would
+drop `total_requests` from 28 to 26 and remove the `PKI/CRL` participant
+category, nothing else in the flow (mTLS handshake, authentication,
+token issuance, resource calls) depends on their content in any way.
+
+**Decision:** given (a)-(c) above are unambiguous from the code itself,
+`root-ca.pem`/`issuer-ca.pem` are now given local ML-DSA-65 stand-ins for
+`CRYPTO_PROFILE=pqc`, completing the certificate chain measurement for
+Experiment 2. This reverses Decision 10's scope call for these two files
+specifically -- deliberately, not by oversight -- on the basis that the
+earlier code-reading confirmed there's no functional risk to doing so.
+
+**(a) This is a local simulation for cost-measurement purposes, not a
+real migration of Raidiam's PKI.** `root_ca_pqc.crt`/`issuer_ca_pqc.crt`
+(`mock-service-os/certs/`) are ML-DSA-65 leaf certificates signed by this
+project's own local CA (same `-pqc-name` mechanism as `op_pqc`/`mtls_pqc`,
+Decision 10) -- they carry no cryptographic relationship to Raidiam's
+actual root/issuer CAs. They exist purely so `opin_flow.py`'s PKI/CRL
+byte measurement reflects PQC-sized certificate downloads when
+`CRYPTO_PROFILE=pqc`, matching the rest of Experiment 2's "what would the
+whole flow cost under full PQC" framing.
+
+**(b) In production, this migration would depend on Raidiam updating
+their real sandbox infrastructure.** Nothing here changes that. This
+decision does not claim the simulated files are interchangeable with a
+real PQC-migrated Raidiam PKI in any deployment sense -- it only asserts
+that, for this thesis's cost-measurement purposes, serving
+locally-generated files with the same byte-size characteristics as a
+real PQC-migrated PKI would have is sufficient, because (per the code
+reading above) nothing in the measured flow inspects their cryptographic
+validity.
+
+**(c) The decision was made only after confirming, from the code, that
+no other part of the flow depends on these files' real content** -- see
+the `caCertPool()`/`fetch_server_keys_and_ca()` reading above. This is
+what makes the simulation safe: it cannot silently invalidate any
+already-collected metric, because nothing besides the PKI/CRL byte count
+itself was ever coupled to these two files.
+
+**Implementation:**
+- `mock-service-os/certs/root_ca_pqc.{crt,key}` /
+  `issuer_ca_pqc.{crt,key}` generated via `main.go -pqc-name
+  root_ca_pqc` / `-pqc-name issuer_ca_pqc` (Decision 10's mechanism,
+  unchanged).
+- `mock_mtls/main.go`'s `directoryHandler()` (the same mux that already
+  mocks the OPIN Directory participant locally) gained two new routes,
+  `/root-ca.pem` and `/issuer-ca.pem`, serving these files' raw bytes
+  with `Content-Type: application/x-pem-file`. Reachable at
+  `https://directory/root-ca.pem` (the `directory` hostname is already
+  in the local hosts file and already served by this same gateway
+  process on port 443) -- no new container, no new port, no DNS/hosts-file
+  changes.
+- `opin_flow.py`'s `fetch_server_keys_and_ca()` now takes `crypto_profile`
+  and picks the host per call: `directory` when `pqc`, the real
+  `crl.sandbox.pki.opinbrasil.com.br` when `classic` -- Experiment 1 is
+  completely unaffected, byte-for-byte, by this decision.
+- Deliberately **not** done: no Windows-hosts-file editing, no Docker
+  network alias for the real hostname. An early draft of this decision
+  proposed intercepting `crl.sandbox.pki.opinbrasil.com.br` itself via
+  the OS hosts file, gated on `CRYPTO_PROFILE`, but `opin_flow.py` runs
+  on the Windows host (confirmed: `auth.local`/`api.local`/`directory`
+  already resolve through `C:\Windows\System32\drivers\etc\hosts` to the
+  gateway's published port, not through Docker-internal network
+  aliases) -- editing the *system* hosts file would need admin
+  privileges and leaves state outside the repository that persists
+  across reboots and could silently affect unrelated future use of the
+  real Raidiam hostname on the same machine. Redirecting the URL inside
+  `opin_flow.py` achieves the identical measured outcome without any of
+  that risk, and is fully reversible with a code diff.

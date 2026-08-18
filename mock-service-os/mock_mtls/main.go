@@ -32,6 +32,14 @@ const (
 	authURI                   = "http://auth:3000"
 	participantsFilePath      = "mocks/participants.json"
 	softwareStatementFilePath = "mocks/software_statement.json"
+
+	// Local ML-DSA-65 stand-ins for Raidiam's real, external sandbox PKI
+	// (crl.sandbox.pki.opinbrasil.com.br). Only ever served/requested when
+	// CRYPTO_PROFILE=pqc -- opin_flow.py decides which URL to call, this
+	// gateway just serves the content unconditionally if asked. See
+	// thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 11.
+	rootCaPqcFilePath   = "certs/root_ca_pqc.crt"
+	issuerCaPqcFilePath = "certs/issuer_ca_pqc.crt"
 )
 
 var (
@@ -258,6 +266,18 @@ func directoryHandler() http.Handler {
 		clientJWKSBytes = []byte(`{}`)
 	}
 
+	rootCaPqcBytes, err := os.ReadFile(rootCaPqcFilePath)
+	if err != nil {
+		slog.Info("unable to read root_ca_pqc.crt", slog.String("err", err.Error()))
+		rootCaPqcBytes = []byte{}
+	}
+
+	issuerCaPqcBytes, err := os.ReadFile(issuerCaPqcFilePath)
+	if err != nil {
+		slog.Info("unable to read issuer_ca_pqc.crt", slog.String("err", err.Error()))
+		issuerCaPqcBytes = []byte{}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +318,24 @@ func directoryHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write(clientJWKSBytes); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
+	})
+
+	// Local ML-DSA-65 stand-ins for Raidiam's real sandbox PKI -- see the
+	// rootCaPqcFilePath/issuerCaPqcFilePath comment above.
+	mux.HandleFunc("/root-ca.pem", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(rootCaPqcBytes); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
+	})
+
+	mux.HandleFunc("/issuer-ca.pem", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(issuerCaPqcBytes); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
 	})

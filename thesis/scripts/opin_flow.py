@@ -506,17 +506,22 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
     return call, response
 
 
-def fetch_server_keys_and_ca(calls, session, cert):
+def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
     # 1. GET /jwks
     call, resp = do_call(session, "GET", f"https://{AUTH_HOST}/jwks", cert=cert, src="FetchServerKeys")
     calls.append(call)
 
-    # 2-3. GET root-ca.pem / issuer-ca.pem -- real public sandbox host, no
-    # mTLS cert needed (see module docstring: this traffic never touches our
-    # local mock stack at all).
+    # 2-3. GET root-ca.pem / issuer-ca.pem. classic: real public sandbox
+    # host, no mTLS cert needed (see module docstring: this traffic never
+    # touches our local mock stack at all). pqc: local ML-DSA-65 stand-ins
+    # served by the gateway's "directory" host (mock_mtls's directoryHandler,
+    # already used for the OPIN Directory mock) -- see
+    # thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 11, for why
+    # this simulates rather than migrates Raidiam's real sandbox PKI.
+    ca_host = "directory" if crypto_profile == "pqc" else "crl.sandbox.pki.opinbrasil.com.br"
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
-            session, "GET", f"https://crl.sandbox.pki.opinbrasil.com.br/{path}", cert=None, src="OpinInsertMtlsCa"
+            session, "GET", f"https://{ca_host}/{path}", cert=None, src="OpinInsertMtlsCa"
         )
         calls.append(call)
 
@@ -640,7 +645,7 @@ def run_insurance_flow(crypto_profile: str):
     calls = []
     session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, session, cert)
+    fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
     consent_id, consent_url, cc_access_token, ac_access_token = create_and_authorize_consent(
         calls, session, cert, signing_key, kid, alg,
         permissions=INSURANCE_CONSENT_PERMISSIONS, scope=INSURANCE_AUTHORIZATION_SCOPES, poll_count=3,
@@ -684,7 +689,7 @@ def run_person_flow(crypto_profile: str):
     calls = []
     session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, session, cert)
+    fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
     consent_id, _consent_url, _cc_access_token, ac_access_token = create_and_authorize_consent(
         calls, session, cert, signing_key, kid, alg,
         permissions=PERSON_CONSENT_PERMISSIONS, scope=PERSON_AUTHORIZATION_SCOPES, poll_count=1,

@@ -281,6 +281,17 @@ def extract_jwts(*texts):
 
 def classify_participant(uri: str) -> str:
     """Maps a request URI to the OPIN participant it targets (AS/RS/Directory/...)."""
+    path = urlparse(uri).path
+    # root-ca.pem/issuer-ca.pem are PKI/CRL traffic by what they represent,
+    # not by which host happens to serve them -- classic hits Raidiam's real
+    # sandbox.pki.opinbrasil.com.br directly, but pqc's local ML-DSA-65
+    # stand-ins are served from the "directory" host for convenience (no
+    # new container/DNS entry needed, see thesis/results/v2/experiment2 -
+    # PQC/DECISIONS.md, Decision 12). Classifying by host alone would bucket
+    # pqc's copies under "Directory" instead, breaking cross-experiment
+    # comparability of the PKI/CRL participant total.
+    if path.endswith(("root-ca.pem", "issuer-ca.pem")):
+        return "PKI/CRL"
     host = urlparse(uri).netloc or uri
     for hostnames, participant in PARTICIPANT_HOSTS:
         if any(h in host for h in hostnames):
