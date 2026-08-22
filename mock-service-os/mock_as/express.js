@@ -15,6 +15,7 @@ import bodyParser from 'body-parser';
 import Account from './utils/account.js';
 import BRAND_NAME from './utils/brandHelper.js';
 import { supportDynamicScopes, ensureTokenEndpointAsAudience } from './utils/oidc.js';
+import { rehybridizeJwt, rehybridizeInPlace, COMPACT_JWS_RE } from './utils/opin/hybridSigning.js';
 
 const log = Debug('raidiam:server:info');
 
@@ -100,7 +101,11 @@ async function loadOidcConfiguration(brand, mtlsIssuer) {
   let configuration = configFunc.default(mtlsIssuer, ssaJwks);
   // Add the findAccount property
   configuration.findAccount = Account.findAccount;
-  return { configuration, publishedJwksOverride: configFunc.publishedJwksOverride };
+  return {
+    configuration,
+    publishedJwksOverride: configFunc.publishedJwksOverride,
+    isHybridProfile: configFunc.isHybridProfile,
+  };
 }
 
 async function main() {
@@ -140,7 +145,11 @@ async function main() {
   apiUrl = apiUrl.toString().replace(/\/$/, ''); // Remove trailing slash.
   log(`Issuer: ${issuer}, mTLS Issuer: ${mtlsIssuer}, API Host: ${apiUrl}`);
 
-  let { configuration: oidcConfig, publishedJwksOverride } = await loadOidcConfiguration(config.brand, mtlsIssuer);
+  let {
+    configuration: oidcConfig,
+    publishedJwksOverride,
+    isHybridProfile,
+  } = await loadOidcConfiguration(config.brand, mtlsIssuer);
 
   let adapter;
   if (process.env.MONGODB_URI) {
@@ -170,6 +179,44 @@ async function main() {
       ctx.set('x-fapi-interaction-id', ctx.get('x-fapi-interaction-id'));
     }
   });
+
+  // hybrid mode only: oidc-provider just produced a completely normal,
+  // valid PS256 response (it has no idea hybrid mode exists -- see
+  // utils/opin/configuration.js). Find every PS256 JWT in the response --
+  // whether embedded in a JSON body field (id_token inside /token's
+  // response) or in a redirect's query string (the JARM `response` JWT on
+  // /auth's 303) -- and replace it with the real Strong Nesting composite
+  // before it leaves the process.
+  if (isHybridProfile) {
+    provider.use(async (ctx, next) => {
+      await next();
+
+      if (ctx.body && typeof ctx.body === 'object' && !Buffer.isBuffer(ctx.body)) {
+        await rehybridizeInPlace(ctx.body);
+      } else if (typeof ctx.body === 'string' && COMPACT_JWS_RE.test(ctx.body)) {
+        ctx.body = await rehybridizeJwt(ctx.body);
+      }
+
+      const location = ctx.response.get('location');
+      // Most redirects here are relative (e.g. the initial /interaction/{uid}
+      // hop before any login/consent has happened) and never carry a JWT --
+      // `new URL()` throws on those, so only inspect ones that are already
+      // absolute (the JARM `response=` redirect back to REDIRECT_URI is).
+      if (location && /^[a-z][a-z0-9+.-]*:\/\//i.test(location)) {
+        const url = new URL(location);
+        let changed = false;
+        for (const [key, value] of url.searchParams.entries()) {
+          if (COMPACT_JWS_RE.test(value)) {
+            url.searchParams.set(key, await rehybridizeJwt(value));
+            changed = true;
+          }
+        }
+        if (changed) {
+          ctx.response.set('location', url.toString());
+        }
+      }
+    });
+  }
 
   // Trust the proxy
   app.enable('trust proxy');

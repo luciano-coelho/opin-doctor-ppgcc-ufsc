@@ -24,6 +24,23 @@ const cryptoProfile = JSON.parse(
 );
 log(`Crypto profile: ${CRYPTO_PROFILE} (signingAlgs: ${cryptoProfile.signingAlgs.join(', ')})`);
 
+// hybrid mode: oidc-provider/jose cannot be configured to produce or
+// validate "MLDSA65-RSA2048-PSS-SHA256" -- it isn't a real JOSE algorithm,
+// so it's absent from every library's algorithm dispatch table (see
+// DECISIONS.md for the full reasoning). oidc-provider is therefore kept
+// completely unaware of hybrid mode and configured exactly like classic
+// internally (PS256, hybrid.json's classic-half key) -- it produces a
+// normal, fully valid PS256 token. The hybrid re-signing middleware
+// (express.js, using utils/opin/hybridSigning.js) then discards that
+// signature and replaces it with the real Strong Nesting composite before
+// the response leaves the process. `internalSigningAlgs`/`internalSigningKey`
+// are what oidc-provider itself is configured with; `cryptoProfile.signingAlgs`
+// (the composite alg string) is only ever used for the boot log above and
+// is never handed to oidc-provider/jose.
+const isHybrid = CRYPTO_PROFILE === 'hybrid';
+const internalSigningAlgs = isHybrid ? ['PS256'] : cryptoProfile.signingAlgs;
+const internalSigningKey = isHybrid ? cryptoProfile.classicSigningKey : cryptoProfile.signingKey;
+
 // The AS's encryption key -- unaffected by CRYPTO_PROFILE (see enabledJWA
 // below: encryption stays classical regardless of profile).
 const AS_ENC_JWK = {
@@ -167,6 +184,7 @@ async function validateConsent(token) {
 }
 
 export { publishedJwksOverride };
+export const isHybridProfile = isHybrid;
 
 export default function (mtlsIssuer, ssaJwks) {
   return {
@@ -254,12 +272,12 @@ export default function (mtlsIssuer, ssaJwks) {
     },
     acrValues: ['urn:brasil:openbanking:loa2', 'urn:brasil:openbanking:loa3'],
     enabledJWA: {
-      authorizationSigningAlgValues: cryptoProfile.signingAlgs,
-      introspectionSigningAlgValues: cryptoProfile.signingAlgs,
-      requestObjectSigningAlgValues: cryptoProfile.signingAlgs,
-      clientAuthSigningAlgValues: cryptoProfile.signingAlgs,
-      userinfoSigningAlgValues: cryptoProfile.signingAlgs,
-      idTokenSigningAlgValues: cryptoProfile.signingAlgs,
+      authorizationSigningAlgValues: internalSigningAlgs,
+      introspectionSigningAlgValues: internalSigningAlgs,
+      requestObjectSigningAlgValues: internalSigningAlgs,
+      clientAuthSigningAlgValues: internalSigningAlgs,
+      userinfoSigningAlgValues: internalSigningAlgs,
+      idTokenSigningAlgValues: internalSigningAlgs,
       // Encryption stays classical regardless of profile: jose has no
       // ML-KEM support (no active JOSE/COSE draft for it either -- withdrawn
       // from the JOSE WG at IETF 126), and ML-KEM-768 migration for the AS
@@ -271,10 +289,10 @@ export default function (mtlsIssuer, ssaJwks) {
     },
     clientDefaults: {
       grant_types: ['authorization_code', 'client_credentials', 'refresh_token', 'implicit'],
-      id_token_signed_response_alg: cryptoProfile.signingAlgs[0],
-      request_object_signed_response_alg: cryptoProfile.signingAlgs[0],
-      request_object_signing_alg: cryptoProfile.signingAlgs[0],
-      authorization_signed_response_alg: cryptoProfile.signingAlgs[0],
+      id_token_signed_response_alg: internalSigningAlgs[0],
+      request_object_signed_response_alg: internalSigningAlgs[0],
+      request_object_signing_alg: internalSigningAlgs[0],
+      authorization_signed_response_alg: internalSigningAlgs[0],
       response_types: ['code', 'code id_token'],
       tls_client_certificate_bound_access_tokens: true,
     },
@@ -413,7 +431,7 @@ export default function (mtlsIssuer, ssaJwks) {
         // thumbprint (jose's calculateJwkThumbprint supports AKP JWKs since
         // v6.1.0, same code path as RSA). See thesis/results/experiment2 -
         // PQC/DECISIONS.md.
-        cryptoProfile.signingKey,
+        internalSigningKey,
         AS_ENC_JWK,
       ],
     },
@@ -587,9 +605,9 @@ export default function (mtlsIssuer, ssaJwks) {
               jwks_uri: software_jwks_uri,
               application_type: 'web',
               client_name: software_client_name,
-              id_token_signed_response_alg: cryptoProfile.signingAlgs[0],
-              request_object_signing_alg: cryptoProfile.signingAlgs[0],
-              authorization_signed_response_alg: cryptoProfile.signingAlgs[0],
+              id_token_signed_response_alg: internalSigningAlgs[0],
+              request_object_signing_alg: internalSigningAlgs[0],
+              authorization_signed_response_alg: internalSigningAlgs[0],
               tos_uri: software_tos_uri,
               logo_uri: software_logo_uri,
               request_object_encryption_alg: 'RSA-OAEP',
