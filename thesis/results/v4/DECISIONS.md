@@ -2,8 +2,10 @@
 
 Log of non-obvious technical decisions made while implementing the
 hybrid (PS256 + ML-DSA-65 via Strong Nesting) signature scheme described
-in `Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx` (this same
-directory), with the reasoning behind each. Follows the same format as
+in `ARCHITECTURE.md` (this same directory -- translated to English/
+Markdown from the original `Arquitetura_Tecnica_Experimento3_Strong_
+Nesting.docx`, which has been removed), with the reasoning behind each.
+Follows the same format as
 `thesis/results/v2/experiment2 - PQC/DECISIONS.md` (Experiments 1/2's
 decisions log) — cross-references to decisions in that file are given by
 number and full path, since the two logs are chronologically continuous
@@ -77,7 +79,7 @@ clean in `classic`, `pqc`, and `hybrid` afterward.
 ## 2. Etapas 1-2: hybrid crypto-profile files, and Strong Nesting signing via response interception (oidc-provider can't produce the composite alg natively)
 
 **Context:** implementing the hybrid (PS256 + ML-DSA-65 Strong Nesting)
-signature scheme per `Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx`.
+signature scheme per `ARCHITECTURE.md`.
 
 **Etapa 1 -- `crypto-profiles/hybrid.json`, both AS and RS.** Neither
 `classic.json` nor `pqc.json` was designed to carry two keys at once, so
@@ -543,11 +545,13 @@ verification of the GATEWAY's own hybrid server certificate is likewise
 deferred to Etapa 7, mirroring how Etapa 4 scoped JWT verification to
 standalone functions before any live wiring.
 
-**Documentation fix applied as requested:** Section 7 of
-`Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx` originally
-described the literal (incorrect) signing order; its text has been
-corrected in place (via `python-docx`, editing the existing paragraphs'
-runs directly to preserve formatting) to describe the real order and the
+**Documentation fix applied as requested:** Section 7 of the
+architecture document (`Arquitetura_Tecnica_Experimento3_Strong_
+Nesting.docx` at the time -- since translated to English and converted
+to `ARCHITECTURE.md`, see Decision 8) originally described the literal
+(incorrect) signing order; its text has been corrected in place (via
+`python-docx`, editing the existing paragraphs' runs directly to
+preserve formatting) to describe the real order and the
 security reason for it, matching what was actually implemented.
 
 ## 7. Etapa 7: opin_flow.py hybrid mode -- two real infrastructure bugs found and fixed, plus one pre-existing bug found that is NOT specific to hybrid
@@ -737,3 +741,33 @@ already-published Experiment 1/2 results was performed or is planned as
 part of this etapa. Going forward, `main()`'s existing
 two-flows-per-process structure is more resilient to it regardless of
 `CRYPTO_PROFILE`.
+
+## 8. Architecture document converted from .docx to Markdown/English, matching the rest of the project's documentation
+
+`Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx` -- the original
+architecture document this whole log has referenced throughout -- was a
+Word file in Portuguese, unlike every other document in this project
+(`DECISIONS.md`, `README.md`, `BASELINE_REPORT.md`,
+`EXPERIMENT{N}_REPORT.md`), all plain Markdown in English. Translated
+faithfully, section by section, into `ARCHITECTURE.md` in this same
+directory; the two embedded diagrams (Figure 1 -- the Strong Nesting
+signing/verification activity diagram; Figure 2 -- the hybrid JWKS
+composition/publication/discovery diagram) were extracted from the
+`.docx`'s media parts as PNGs (`figure-1-strong-nesting-diagram.png`,
+`figure-2-hybrid-jwks-diagram.png`) and embedded via ordinary Markdown
+image syntax, rather than dropped -- both were inspected after
+extraction and confirmed to match their surrounding "how to read this
+figure" prose exactly.
+
+Section 7's text in `ARCHITECTURE.md` reflects the corrected signing
+order from Decision 6 (ML-DSA-65 first over the incomplete
+preTBSCertificate, RSA last over the complete one), not the original,
+incorrect literal order the `.docx` shipped with before that fix -- i.e.
+this translation captures the document's already-corrected state, not a
+second independent correction.
+
+The original `.docx` has been deleted (`git rm`) once the Markdown
+version was confirmed complete and accurate; every other reference to it
+elsewhere in this log and in code comments (`ResponseSigningService.java`,
+`hybridSigning.js`, `hybridVerification.js`, `hybrid_verify.py`) was
+updated to point to `ARCHITECTURE.md` instead.

@@ -1,5 +1,5 @@
 // Strong Nesting hybrid signature (PS256 + ML-DSA-65), per
-// thesis/results/v4/Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx:
+// thesis/results/v4/ARCHITECTURE.md:
 //   sigma1 = PS256_sign(message)
 //   sigma2 = ML-DSA-65_sign(message || sigma1)     -- raw byte concatenation,
 //                                                       not base64

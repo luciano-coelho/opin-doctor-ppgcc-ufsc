@@ -166,7 +166,7 @@ public class ResponseSigningService {
     }
 
     // Strong Nesting (PS256 + ML-DSA-65), per thesis/results/v4/
-    // Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx:
+    // ARCHITECTURE.md:
     //   sigma1 = PS256_sign(message)
     //   sigma2 = ML-DSA-65_sign(message || sigma1)   -- raw byte
     //            concatenation, not base64 (same convention as the AS's

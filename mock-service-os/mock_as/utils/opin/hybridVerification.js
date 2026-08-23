@@ -1,6 +1,6 @@
 // Strong Nesting verification (PS256 + ML-DSA-65), the inverse of
 // hybridSigning.js's rehybridizeJwt(), per thesis/results/v4/
-// Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx:
+// ARCHITECTURE.md:
 //   decompose signature -> sigma1 (first 256 bytes, PS256/RSA-2048) and
 //     sigma2 (remaining 3309 bytes, ML-DSA-65)
 //   verify sigma1 against the original message with the classic public key

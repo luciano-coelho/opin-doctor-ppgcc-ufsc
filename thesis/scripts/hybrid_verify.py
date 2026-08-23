@@ -1,6 +1,6 @@
 """
 Strong Nesting hybrid signature verification (PS256 + ML-DSA-65), per
-thesis/results/v4/Arquitetura_Tecnica_Experimento3_Strong_Nesting.docx.
+thesis/results/v4/ARCHITECTURE.md.
 
 A pure, standalone function -- NOT wired into opin_flow.py's flow control.
 opin_flow.py does not cryptographically verify any profile's signatures
