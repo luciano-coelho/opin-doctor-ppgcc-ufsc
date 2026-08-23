@@ -56,9 +56,18 @@ var (
 )
 
 func init() {
-	if os.Getenv("CRYPTO_PROFILE") == "pqc" {
+	switch os.Getenv("CRYPTO_PROFILE") {
+	case "pqc":
 		serverCertFilePath = "certs/mtls_pqc.crt"
 		serverKeyFilePath = "certs/mtls_pqc.key"
+	case "hybrid":
+		// mtls_hybrid.crt/.key: an ordinary RSA cert/key pair as far as
+		// crypto/tls itself is concerned -- the ML-DSA-65 material rides
+		// along inertly as three non-critical X.509 extensions the TLS
+		// handshake itself never looks at. See hybridExtensions.go and
+		// thesis/results/v4/DECISIONS.md, Etapa 6.
+		serverCertFilePath = "certs/mtls_hybrid.crt"
+		serverKeyFilePath = "certs/mtls_hybrid.key"
 	}
 }
 
@@ -381,12 +390,13 @@ func tlsConfiguration() *tls.Config {
 			},
 			PrivateKey: serverKey,
 		}},
-		InsecureSkipVerify: true,
-		ClientCAs:          caCerts,
-		ClientAuth:         tls.VerifyClientCertIfGiven,
-		MinVersion:         tls.VersionTLS12,
-		MaxVersion:         tls.VersionTLS13,
-		CurvePreferences:   []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+		InsecureSkipVerify:    true,
+		ClientCAs:             caCerts,
+		ClientAuth:            tls.VerifyClientCertIfGiven,
+		MinVersion:            tls.VersionTLS12,
+		MaxVersion:            tls.VersionTLS13,
+		CurvePreferences:      []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+		VerifyPeerCertificate: hybridVerifyPeerCertificateFunc(),
 
 		CipherSuites: []uint16{
 			//TLS 1.2

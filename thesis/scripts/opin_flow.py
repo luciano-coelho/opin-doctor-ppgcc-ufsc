@@ -70,13 +70,17 @@ rather than silently baked in:
     fetch does appear in the excluded preflight modules, which this script
     doesn't replicate.)
 
-CRYPTO_PROFILE (classic|pqc) picks client_one's mTLS certificate, mirroring
-the same switch already used by mock_as and the RS -- see
+CRYPTO_PROFILE (classic|pqc|hybrid) picks client_one's mTLS certificate,
+mirroring the same switch already used by mock_as and the RS -- see
 mock-service-os/mock_as/crypto-profiles/ and
-insurance-server-lambdas/src/main/resources/crypto-profiles/.
+insurance-server-lambdas/src/main/resources/crypto-profiles/. Under hybrid,
+the mTLS transport identity is the real dual-signed certificate
+(client_one_hybrid.crt, Etapa 6), but client assertions/request objects are
+still signed with plain PS256 -- see load_client_signing_key's docstring for
+why that's the correct scope, not a shortcut.
 
 Usage:
-  CRYPTO_PROFILE=classic|pqc EXPERIMENT_NUMBER=1|2|3 python opin_flow.py <latency_ms>
+  CRYPTO_PROFILE=classic|pqc|hybrid EXPERIMENT_NUMBER=1|2|3 python opin_flow.py <latency_ms>
 """
 import argparse
 import base64
@@ -241,6 +245,15 @@ PERSON_AUTHORIZATION_SCOPES = "openid insurance-person"
 def get_client_cert_paths(crypto_profile: str):
     if crypto_profile == "pqc":
         crt, key = CERTS_DIR / "client_one_pqc.crt", CERTS_DIR / "client_one_pqc.key"
+    elif crypto_profile == "hybrid":
+        # client_one_hybrid.crt/.key (Etapa 6): an ordinary RSA cert/key pair
+        # as far as this script's TLS stack is concerned -- the ML-DSA-65
+        # material rides along as three inert X.509 extensions the gateway's
+        # own VerifyPeerCertificate AND-gates, but that's transparent here.
+        # No urllib3/pyopenssl special-casing needed for this profile (that
+        # workaround exists only for presenting a *native* ML-DSA-65 leaf
+        # key, which this cert's own TLS-facing key never is).
+        crt, key = CERTS_DIR / "client_one_hybrid.crt", CERTS_DIR / "client_one_hybrid.key"
     else:
         crt, key = CERTS_DIR / "client_one.crt", CERTS_DIR / "client_one.key"
     return str(crt), str(key)
@@ -257,12 +270,28 @@ def load_client_signing_key(crypto_profile: str):
     by sign_jwt()'s docker signer, not something pyjwt can consume), alg
     "ML-DSA-65" -- see thesis/scripts/pqc-signer/ for why client-side
     ML-DSA-65 signing can't go through pyjwt/cryptography directly.
+
+    hybrid: client assertions/request objects are signed with plain PS256,
+    the SAME client_one.jwks key as classic mode -- NOT hybrid-signed. This
+    mirrors a deliberate, already-documented limitation from Etapa 2
+    (mock_as/utils/opin/configuration.js keeps requestObjectSigningAlgValues/
+    clientAuthSigningAlgValues at PS256-only in hybrid mode; the AS does not
+    accept a hybrid-signed client assertion). It's also the architecturally
+    correct scope, not just a workaround: Section 8 of the architecture doc
+    only requires the AS/RS's own issued artifacts (tokens, id_token, JARM,
+    RS responses) to carry the hybrid signature -- what the client sends
+    isn't part of OPINsize's measured quantities. The client's mTLS
+    *transport* identity is still the real hybrid certificate (see
+    get_client_cert_paths) -- only this JWS signing layer stays classical.
     """
-    path = CERTS_DIR / ("client_one_pqc.jwks" if crypto_profile == "pqc" else "client_one.jwks")
+    if crypto_profile == "pqc":
+        path = CERTS_DIR / "client_one_pqc.jwks"
+        jwks = json.loads(path.read_text(encoding="utf-8"))
+        jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
+        return jwk, jwk["kid"], "ML-DSA-65"
+    path = CERTS_DIR / "client_one.jwks"
     jwks = json.loads(path.read_text(encoding="utf-8"))
     jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
-    if crypto_profile == "pqc":
-        return jwk, jwk["kid"], "ML-DSA-65"
     key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
     return key, jwk["kid"], "PS256"
 
@@ -445,29 +474,71 @@ def simulate_login(auth_url: str, cert) -> None:
         pass  # server-side callback already recorded before this response finishes streaming back
 
 
-def wait_for_authorization_code(auth_url: str, cert, timeout_seconds: int = 600) -> str:
+def wait_for_authorization_code(
+    auth_url: str, cert, timeout_seconds: int = 600, attempt_timeout_seconds: int = 20, max_attempts: int = 3,
+) -> str:
+    """
+    Runs simulate_login() up to max_attempts times against the SAME local
+    callback server, each attempt getting attempt_timeout_seconds to
+    produce a callback before the whole thing is retried from scratch (a
+    fresh session.get(auth_url) onward -- simulate_login always starts a
+    brand new interaction, so a retry is a genuinely independent login
+    attempt, not a resume of a half-finished one).
+
+    This retry loop exists because of a real, confirmed intermittent race:
+    session.post(.../confirm, allow_redirects=True) is supposed to follow
+    the redirect chain all the way to this local HTTPS server, but
+    occasionally the chain doesn't complete that far (the broad
+    `except requests.exceptions.RequestException: pass` in simulate_login
+    can't distinguish "reached the local server, then errored while
+    streaming the response back" -- the expected, harmless case the
+    comment there describes -- from "never reached the local server at
+    all"). Confirmed via tracing do_GET() and a classic-mode control run
+    with the identical two-flows-one-process pattern: reproduces
+    identically regardless of CRYPTO_PROFILE, so it is not specific to
+    hybrid mode or this etapa's own changes. See thesis/results/v4/
+    DECISIONS.md, Etapa 7, for the full investigation.
+    """
     cert_path, key_path = _generate_callback_tls_cert()
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain(cert_path, key_path)
+    try:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(cert_path, key_path)
 
-    server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), _CallbackHandler)
-    server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
-    server.captured_params = None  # type: ignore[attr-defined]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+        server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), _CallbackHandler)
+        server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
+        server.captured_params = None  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
 
-    simulate_login(auth_url, cert)
+        try:
+            overall_started = time.time()
+            for attempt in range(1, max_attempts + 1):
+                simulate_login(auth_url, cert)
 
-    started = time.time()
-    while server.captured_params is None:  # type: ignore[attr-defined]
-        if time.time() - started > timeout_seconds:
+                attempt_started = time.time()
+                while server.captured_params is None:  # type: ignore[attr-defined]
+                    elapsed_total = time.time() - overall_started
+                    if elapsed_total > timeout_seconds:
+                        raise TimeoutError(
+                            f"No callback received after {attempt} simulated login attempt(s) "
+                            f"({elapsed_total:.0f}s total)"
+                        )
+                    if time.time() - attempt_started > attempt_timeout_seconds:
+                        break  # give up this attempt, retry simulate_login() from scratch
+                    time.sleep(0.5)
+                else:
+                    break  # captured_params was set -- success, stop retrying
+            else:
+                raise TimeoutError(f"No callback received after {max_attempts} simulated login attempts")
+
+            params = server.captured_params  # type: ignore[attr-defined]
+        finally:
             server.shutdown()
-            raise TimeoutError("No callback received after simulated login")
-        time.sleep(0.5)
-
-    params = server.captured_params  # type: ignore[attr-defined]
-    server.shutdown()
-    thread.join(timeout=5)
+            thread.join(timeout=5)
+            server.server_close()
+    finally:
+        os.unlink(cert_path)
+        os.unlink(key_path)
 
     if "error" in params:
         raise RuntimeError(f"Authorization error: {params}")

@@ -74,13 +74,29 @@ def write_report(scenarios: dict, experiment_number: str, path: Path):
     lines = []
     lines.append(f"# Experiment {experiment_number} Report -- opin_flow.py vs. Latency")
     lines.append("")
-    lines.append(
-        "Comparative report across the six WAN-latency scenarios "
-        "(0/14/30/140/225/320ms, see thesis/scripts/set_latency.sh) run "
-        "with thesis/scripts/opin_flow.py (direct AS/RS traffic, no "
-        "Conformance Suite -- see thesis/results/experiment2 - PQC/DECISIONS.md, "
-        "Decisions 6-8, for why)."
-    )
+    if experiment_number == "3":
+        methodology_note = (
+            "Comparative report across the six WAN-latency scenarios "
+            "(0/14/30/140/225/320ms, see thesis/scripts/set_latency.sh) run "
+            "with thesis/scripts/opin_flow.py in hybrid mode (direct AS/RS "
+            "traffic, no Conformance Suite -- CRYPTO_PROFILE=classic|pqc "
+            "originally justified in thesis/results/experiment2 - PQC/"
+            "DECISIONS.md, Decisions 6-8; the hybrid profile and everything "
+            "specific to it -- Strong Nesting response signing, hybrid "
+            "JWKS, hybrid mTLS certificates -- is documented in "
+            "thesis/results/v4/DECISIONS.md, see in particular Decision 2 "
+            "(Strong Nesting signing architecture) and Decision 6 (hybrid "
+            "mTLS certificates, the dual nested combiner))."
+        )
+    else:
+        methodology_note = (
+            "Comparative report across the six WAN-latency scenarios "
+            "(0/14/30/140/225/320ms, see thesis/scripts/set_latency.sh) run "
+            "with thesis/scripts/opin_flow.py (direct AS/RS traffic, no "
+            "Conformance Suite -- see thesis/results/experiment2 - PQC/DECISIONS.md, "
+            "Decisions 6-8, for why)."
+        )
+    lines.append(methodology_note)
     lines.append("")
 
     lines.append("## Total OPINsize and request count")

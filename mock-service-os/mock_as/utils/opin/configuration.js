@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { calculateJwkThumbprint } from 'jose';
+import { HYBRID_ALG, HYBRID_KID, HYBRID_PK_BYTES } from './hybridSigning.js';
 
 import Debug from 'debug';
 const log = Debug('raidiam:server:info');
@@ -101,6 +102,38 @@ if (CRYPTO_PROFILE === 'pqc' && process.env.JWKS_SHADOW === '1') {
   encJwkPublic.kid = await calculateJwkThumbprint(encJwkPublic);
   publishedJwksOverride = { keys: [decoySigJwk, encJwkPublic] };
   log(`Published /jwks override active (pqc mode): publishing classic RSA sig key (kid ${decoySigJwk.kid}) instead of the real ML-DSA-65 signing key`);
+}
+
+// hybrid mode: oidc-provider is kept entirely unaware of hybrid mode (see
+// internalSigningKey above) and would therefore publish only the classic
+// RSA half of hybrid.json on its own /jwks -- not what Etapa 5 requires.
+// The real requirement is that /jwks publish the *composed* key,
+// pk_hybrid = classicPk || pqcPk, under the single kid (HYBRID_KID) that
+// hybridSigning.js actually signs under, so a relying party can decompose
+// it back into its two fixed-size halves (256 bytes RSA-2048, 1952 bytes
+// ML-DSA-65) to verify a Strong Nesting signature. Unlike the pqc-mode
+// override above (an opt-in Conformance Suite diagnostic decoy that
+// publishes a key nothing actually signs with), this one is unconditional
+// and truthful -- it's the correct publication of what hybrid mode signs
+// with, not a workaround.
+if (isHybrid) {
+  const hybridSigJwk = {
+    kty: 'HYBRID',
+    use: 'sig',
+    alg: HYBRID_ALG,
+    kid: HYBRID_KID,
+    pk_hybrid: Buffer.from(HYBRID_PK_BYTES).toString('base64url'),
+  };
+  const encJwkPublic = {
+    kty: AS_ENC_JWK.kty,
+    use: AS_ENC_JWK.use,
+    alg: AS_ENC_JWK.alg,
+    n: AS_ENC_JWK.n,
+    e: AS_ENC_JWK.e,
+  };
+  encJwkPublic.kid = await calculateJwkThumbprint(encJwkPublic);
+  publishedJwksOverride = { keys: [hybridSigJwk, encJwkPublic] };
+  log(`Published /jwks override active (hybrid mode): publishing composed pk_hybrid (kid ${HYBRID_KID})`);
 }
 
 // extraClientMetadata.validator (see below) must be synchronous -- confirmed

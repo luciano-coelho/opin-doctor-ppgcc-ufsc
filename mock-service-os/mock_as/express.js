@@ -247,13 +247,15 @@ async function main() {
   // Serve static files
   app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
-  // pqc mode only: shadow oidc-provider's own /jwks with a decoy (classic
-  // RSA sig key + the real enc key) so the Conformance Suite's Nimbus-based
-  // ValidateServerJWKs can parse it -- the real signing keystore (ML-DSA-65)
-  // is untouched, this route just wins over provider.callback()'s own /jwks
-  // because Express matches the specific route registered first. See
-  // utils/opin/configuration.js and thesis/results/experiment2 -
-  // PQC/DECISIONS.md (Decision 7).
+  // Shadows oidc-provider's own /jwks when utils/opin/configuration.js sets
+  // publishedJwksOverride -- wins over provider.callback()'s own /jwks
+  // because Express matches the specific route registered first. Two
+  // independent cases set this: pqc mode (JWKS_SHADOW=1, a Conformance
+  // Suite diagnostic decoy -- real signing keystore is ML-DSA-65 and stays
+  // untouched, see thesis/results/experiment2 - PQC/DECISIONS.md Decision 7)
+  // and hybrid mode (always on -- publishes the real composed pk_hybrid,
+  // since oidc-provider's own keystore only knows about the classic half;
+  // see thesis/results/v4/DECISIONS.md, Etapa 5).
   if (publishedJwksOverride) {
     app.get('/jwks', (req, res) => res.json(publishedJwksOverride));
   }

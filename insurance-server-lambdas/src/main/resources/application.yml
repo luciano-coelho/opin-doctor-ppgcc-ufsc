@@ -3,6 +3,18 @@ micronaut:
     name: lambdas
   security:
     enabled: true
+  server:
+    netty:
+      # Netty's own default is 8192 (8KB) per HTTP header. The gateway
+      # (mock_mtls) forwards the client's full mTLS certificate PEM as the
+      # BANK-TLS-Certificate header (Open Finance Brasil parity) -- fine at
+      # classic's ~2KB and pqc's ~4KB, but hybrid's certificate (Etapa 6:
+      # RSA cert plus an embedded ML-DSA-65 public key and alt signature,
+      # ~1952 + ~3309 raw bytes) PEM-encodes to ~9.3KB, already over the
+      # default on its own. Raised well past that so headroom isn't
+      # re-exhausted by routine growth. See thesis/results/v4/DECISIONS.md,
+      # Etapa 7.
+      max-header-size: 32768
   data:
     pageable:
       max-page-size: 50000
