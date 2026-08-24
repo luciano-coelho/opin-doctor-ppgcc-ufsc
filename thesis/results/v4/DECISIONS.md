@@ -931,3 +931,194 @@ scenarios** (was 4123.88 before this etapa) -- now consistently *above*
 pqc's 5458.81, the 24/26 hybridized proportion the user asked to match.
 `consolidated.json` and `EXPERIMENT3_REPORT.md` regenerated from the new
 per-scenario data.
+
+## 10. Closing the last gap: hybridizing the id_token itself, via oidc-provider's `ExternalSigningKey` hook
+
+**Motivation.** A user-driven investigation into a different anomaly (the
+"AS bytes" participant total being lower in hybrid than pqc, despite
+hybrid winning on every other metric) traced entirely to the `id_token`:
+in both profiles it's the one artifact the outbound rehybridization
+middleware (Decision 2) never reaches, because it's built and signed
+entirely inside oidc-provider's own internal code, then immediately
+JWE-encrypted, before the HTTP response the middleware inspects even
+exists. In pqc mode this doesn't matter -- oidc-provider is configured to
+sign it with real ML-DSA-65 natively. In hybrid mode it stayed plain
+PS256, the one remaining non-hybridized AS-issued artifact. The user
+asked to resolve this properly rather than accept it as permanent,
+explicitly ruling nothing out until both a native-hook path and a
+decrypt/re-sign/re-encrypt path were investigated.
+
+**Path B (decrypt existing JWE, re-sign inner JWT, re-encrypt) --
+investigated and confirmed structurally impossible, not merely
+expensive.** Captured a live id_token and tried decrypting it with the
+AS's own registered encryption key (`AS_ENC_JWK`) -- failed. Traced the
+JWE header's `kid` to `client_one`'s *own* registered encryption key
+(`client_one_pub.jwks`'s `use: enc` entry, matching kid exactly) and
+confirmed decryption succeeds only with that key -- standard OIDC
+behavior (id_token encryption always targets the RP's own public key so
+only the RP can decrypt it), which this mock correctly implements.
+`client_one`'s private half of that key exists only in
+`client_one.jwks`, held by the Python/client side (`thesis/scripts/`),
+never mounted into the `auth` container. For the AS to decrypt what it
+just encrypted, it would need the client's private key -- which is not
+an engineering inconvenience to work around, it's the exact thing id_token
+encryption exists to prevent. No party legitimately holds both halves
+needed (the AS's own signing keys AND the client's decryption key)
+without breaking the security model. Path B was correctly ruled out.
+
+**Path A (native hook) -- researched, verified, and implemented.**
+Researched oidc-provider 9.5.1's actual source (downloaded the exact
+pinned tarball from the npm registry, matching `package-lock.json`'s
+integrity hash) rather than relying on documentation alone. Confirmed in
+`lib/models/id_token.js`: signing (`JWT.sign()`) and encryption
+(`JWT.encrypt()`) are two sequential calls in the same method with
+nothing application-controlled between them -- no event, no hook. But
+oidc-provider does expose a first-class, non-experimental-in-spirit
+(though technically flagged `experimental-01` for acknowledgement)
+mechanism for exactly this: `features.externalSigningSupport` +
+`ExternalSigningKey`, both genuine public exports of the `oidc-provider`
+package's own entry point (`lib/index.js`). A `jwks.keys` entry that's an
+`ExternalSigningKey` instance causes oidc-provider to hand its own real
+JWS signing input (`base64url(header) + "." + base64url(payload)`,
+byte-for-byte) to that instance's `sign(data)` method and use whatever
+bytes come back as the signature, unvalidated -- exactly the primitive
+needed to substitute Strong Nesting's `sigma1||sigma2` in place of a
+single PS256 signature, before oidc-provider proceeds to encrypt
+whatever `sign()` returned.
+
+**Confirmed constraint (expected, not a surprise):** the id_token's
+header `alg` still has to say `"PS256"` -- oidc-provider validates the
+client's `id_token_signed_response_alg` against its own kty/alg table
+*before* ever calling into `ExternalSigningKey`, and doesn't recognize
+the combined alg string. Same asymmetry already accepted for
+client_assertion/the PAR request object (Decision 9), now extended to a
+third artifact: header looks ordinary, only the signature's decoded
+length (3565 bytes) reveals Strong Nesting is in use. Documented as an
+addendum to Section 5 of `ARCHITECTURE.md` when Decision 9 was written;
+no further doc change needed since it's the same rule, not a new one.
+
+**Verified collision risk, per the user's explicit request, before
+writing any implementation code.** Confirmed in `id_token.js`:
+`keystore.selectForSign({ alg, use: 'sig' })` is called with no `kid` for
+*both* `use: 'idtoken'` and `use: 'authorization'` (JARM) -- and both
+resolve to the identical alg string in hybrid mode
+(`idTokenSigningAlgValues`/`authorizationSigningAlgValues` are both
+`internalSigningAlgs`). There is no documented way to scope a second
+PS256-capable signing key to only one of them. Rather than relying on
+undocumented array-order/stable-sort tie-breaking, the fix **replaces**
+`internalSigningKey`'s plain-JWK entry in `jwks.keys` with the new
+`HybridIdTokenSigningKey` (an `ExternalSigningKey` subclass) entirely in
+hybrid mode, leaving exactly one PS256-capable signing key candidate --
+nothing left to disambiguate. Also confirmed this is safe even in the
+worst case: if it *were* also selected for JARM, the existing outbound
+middleware (Decision 2) unconditionally rebuilds JARM's header and
+signature from scratch regardless of what arrives, discarding whatever
+came before -- so JARM would still end up correctly hybrid-signed under
+the combined alg header either way, just with one redundant (thrown-away)
+signing pass. Not a correctness risk in either branch.
+
+**Implementation:** `hybridSigning.js` gained `signStrongNesting(message)`
+(the shared sigma1||sigma2 primitive, extracted out of `rehybridizeJwt()`
+so there's exactly one implementation instead of two) and
+`CLASSIC_PUBLIC_JWK`/`CLASSIC_KID` (a real RFC 7638 JWK thumbprint via
+jose's `calculateJwkThumbprint`, not an ad-hoc hash, even though nothing
+external depends on this exact value now that there's only one signing
+key). New `idTokenExternalSigningKey.js` defines
+`HybridIdTokenSigningKey extends ExternalSigningKey`: `keyObject()`
+returns the classic RSA public key (so oidc-provider can still export a
+normal-looking public JWK for it if ever asked), `sign(data)` calls
+`signStrongNesting(Buffer.from(data))`. `configuration.js` enables
+`features.externalSigningSupport` (gated to hybrid mode, `ack:
+'experimental-01'` to cleanly acknowledge the flag) and swaps
+`internalSigningKey` for `new HybridIdTokenSigningKey()` in `jwks.keys`,
+hybrid mode only.
+
+**Tested against the real, running environment**, capturing both the
+`id_token` and the JARM from the same live flow to check for the
+collision in both directions at once: JARM's header is still
+`{alg: "MLDSA65-RSA2048-PSS-SHA256", kid: HYBRID_KID}` with a 3565-byte
+signature -- unchanged, no regression. The id_token, decrypted with
+`client_one`'s own real private encryption key (confirming Path B's
+finding empirically from the other side: this key genuinely works, it
+just can never live on the AS), has header `{alg: "PS256", kid:
+CLASSIC_KID}` and a **3565-byte decoded signature** -- and, going beyond
+a length check (Etapa 2's `CompactSign` bug is exactly why length alone
+was never trusted again in this project), `hybridVerification.js`'s
+`verifyHybrid()` cryptographically confirms **both sigma1 and sigma2
+independently verify** against the AS's real classic and PQC public
+keys: `{valid: true, reason: 'both sigma1 and sigma2 verified'}`.
+
+This closes the last remaining non-hybridized AS-issued artifact.
+
+**All 6 latency scenarios re-run** (`thesis/results/v4/experiment3 -
+Hybrid/`, environment fully recreated before each run): 28/28 calls,
+26/26 JWTs at every scenario. The 26 raw JWT sizes are byte-for-byte
+identical across all six scenarios. **The two 1812-byte JWE entries
+(the id_token, previously the only non-hybridized artifact) are gone,
+replaced by two 7695-byte entries** -- confirmed via a live labeled
+capture that all 24 visibly-3-segment JWTs are hybrid-signed (16
+AS/RS-issued at 3565 bytes, 8 client-signed at 3821 bytes, Decision 9)
+and, via decrypt + `verifyHybrid()`, that the 2 JWE-wrapped id_tokens are
+now hybrid-signed internally too -- **26/26, not 24/26**. Average JWT
+size: **5933.96 bytes at every one of the 6 scenarios** (up from 5481.42
+before this decision). `N_mTLS` (6) and `mTLS_handshake_bytes` P50
+(24991.0) are unchanged from before this decision, exactly as
+expected -- id_token signing doesn't touch the mTLS transport layer at
+all. `client_cert_bytes` isolation (6859 vs. `op_hybrid`'s 6842)
+reconfirmed intact across the cumulative gateway logs from all these
+runs. `/jwks` reconfirmed still correctly publishing the 2208-byte
+`pk_hybrid` (Decision 5, untouched by this change -- separate mechanism
+from the internal signing keystore this decision modifies).
+
+**OPINsize recomputed**: 6×24991.0 + 26×5933.96 + 2×2208 = 149946 +
+154282.96 + 4416 = **308644.96 bytes** -- up from 296878.92 before this
+decision, a delta of 11766.04 bytes. That delta reconciles exactly: the
+id_token's own size grew by 7695−1812 = 5883 bytes, and it's issued
+twice per full run (once per flow) -- 5883×2 = 11766, matching the
+OPINsize delta almost exactly (the few remaining cents are the id_token
+now also being 2 of the 26 entries feeding the `jwt_size_avg_bytes`
+term, not a separate effect). Final growth: **+16.75% over pqc**
+(264374 bytes), **3.24x over classic** (95232 bytes) --
+`consolidated.json`/`EXPERIMENT3_REPORT.md` regenerated from this final
+data, confirmed no stale values remain (grepped for the two prior
+average figures, 4123.88 and 5481.42 -- neither appears anywhere in the
+final files).
+
+**Regression check, all prior etapas**: JARM re-verified from a live
+capture in the same test run that captured the id_token -- still
+`{alg: "MLDSA65-RSA2048-PSS-SHA256", kid: HYBRID_KID}` with a 3565-byte
+signature, unchanged (confirms the collision risk investigated above
+never actually manifests as a problem in practice, whether or not it
+technically occurs). Etapa 5 (`/jwks`) reconfirmed live. Etapa 6 (mTLS
+certificates) is a separate Go implementation never touched by this
+change. Decision 9 (client-side hybrid signing) reconfirmed working --
+every one of the 6 scenario runs required the AS to accept a hybrid
+client_assertion/PAR request object to complete at all.
+
+**A separate, real finding surfaced during these re-runs, investigated
+but not fixed (out of scope for this decision, pre-existing and
+unrelated to id_token signing).** The very first 30ms attempt failed
+with `InvalidGrant` from `InsurerAdapter.getConsent()`, traced (via the
+AS's own debug log, not the swallowed generic error) to an actual `401
+Unauthorized` from the RS -- not a TLS/certificate problem this time
+(ruled out: no SSL alert in the log, unlike Decision 7's earlier
+op_hybrid finding). A clean retry of the identical scenario succeeded
+immediately, so it's intermittent, not systematic -- confirmed by all 6
+scenarios (including a second attempt at 30ms) completing cleanly
+afterward. While investigating, found what looks like a real, pre-existing,
+unrelated bug in `InsurerAdapter.getToken()`
+(`mock-service-os/mock_as/utils/opin/adapter.js`): `this.nodeCash.set(hash,
+this.token, 2000)` caches `this.token` (a property that is never set
+anywhere in the class) instead of the local `token` variable the
+function just obtained -- meaning the internal AS-to-RS token cache
+silently never has a hit, and every `getConsent`/`updateConsent` call
+does a full fresh internal OAuth exchange instead of reusing one for up
+to 2 seconds as the code clearly intends. This bug predates every etapa
+in this document (no session in this log ever touched `adapter.js`) and
+is not proven to be the 401's root cause -- id_token signing, the actual
+subject of this decision, plays no role in this specific call path
+either (`getConsent` happens during consent-status polling, before
+login, and never touches an id_token). Recorded here as a disclosed,
+unresolved observation rather than investigated further or silently
+patched, per the standing instruction to report before fixing anything
+not explicitly asked for.
