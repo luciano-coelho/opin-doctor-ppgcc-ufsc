@@ -698,12 +698,16 @@ def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
 
     # 2-3. GET root-ca.pem / issuer-ca.pem. classic: real public sandbox
     # host, no mTLS cert needed (see module docstring: this traffic never
-    # touches our local mock stack at all). pqc: local ML-DSA-65 stand-ins
-    # served by the gateway's "directory" host (mock_mtls's directoryHandler,
-    # already used for the OPIN Directory mock) -- see
+    # touches our local mock stack at all). pqc/hybrid: local stand-ins
+    # (ML-DSA-65-only for pqc, RSA+ML-DSA-65 dual nested combiner for
+    # hybrid) served by the gateway's "directory" host (mock_mtls's
+    # directoryHandler, already used for the OPIN Directory mock) -- see
     # thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 11, for why
-    # this simulates rather than migrates Raidiam's real sandbox PKI.
-    ca_host = "directory" if crypto_profile == "pqc" else "crl.sandbox.pki.opinbrasil.com.br"
+    # this simulates rather than migrates Raidiam's real sandbox PKI, and
+    # thesis/results/v4/DECISIONS.md for hybrid's own stand-ins (closing a
+    # symmetry gap: hybrid used to silently fall through to this real,
+    # external, classical host instead of getting its own local stand-in).
+    ca_host = "directory" if crypto_profile in ("pqc", "hybrid") else "crl.sandbox.pki.opinbrasil.com.br"
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
             session, "GET", f"https://{ca_host}/{path}", cert=None, src="OpinInsertMtlsCa"

@@ -38,8 +38,26 @@ const (
 	// CRYPTO_PROFILE=pqc -- opin_flow.py decides which URL to call, this
 	// gateway just serves the content unconditionally if asked. See
 	// thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 11.
+	//
+	// issuerCaPqcFilePath has a SECOND, unrelated use: hybridVerification.go
+	// reads it to get the CA's own ML-DSA-65 public key for the client
+	// certificate AND gate -- that must always stay this pure-ML-DSA-65 cert,
+	// in every profile, regardless of what /issuer-ca.pem itself serves.
+	// Deliberately kept a `const`, not folded into the CRYPTO_PROFILE-keyed
+	// serving vars below, so the two uses can never accidentally couple.
 	rootCaPqcFilePath   = "certs/root_ca_pqc.crt"
 	issuerCaPqcFilePath = "certs/issuer_ca_pqc.crt"
+)
+
+// What /root-ca.pem and /issuer-ca.pem actually serve -- profile-keyed like
+// serverCertFilePath below, defaulting to the pqc stand-ins and gaining a
+// hybrid case in init(). Kept separate from rootCaPqcFilePath/
+// issuerCaPqcFilePath above (which name one fixed file each, PQC-only) so
+// this can vary by profile without touching the AND gate's own CA key
+// source. See thesis/results/v4/DECISIONS.md.
+var (
+	rootCaServeFilePath   = rootCaPqcFilePath
+	issuerCaServeFilePath = issuerCaPqcFilePath
 )
 
 var (
@@ -68,6 +86,17 @@ func init() {
 		// thesis/results/v4/DECISIONS.md, Etapa 6.
 		serverCertFilePath = "certs/mtls_hybrid.crt"
 		serverKeyFilePath = "certs/mtls_hybrid.key"
+		// root_ca_hybrid.crt/issuer_ca_hybrid.crt: the same dual nested
+		// combiner (RSA + ML-DSA-65, three non-critical extensions) as
+		// mtls_hybrid.crt above, generated via certs/main.go -hybrid-name
+		// root_ca / -hybrid-name issuer_ca, reusing root_ca_pqc.key/
+		// issuer_ca_pqc.key as each subject's own ML-DSA-65 identity. Closes
+		// the symmetry gap left by Decision 12 (PQC-only stand-ins) --
+		// hybrid mode was silently falling through to the real, external,
+		// classical Raidiam sandbox host before this. See
+		// thesis/results/v4/DECISIONS.md.
+		rootCaServeFilePath = "certs/root_ca_hybrid.crt"
+		issuerCaServeFilePath = "certs/issuer_ca_hybrid.crt"
 	}
 }
 
@@ -275,16 +304,16 @@ func directoryHandler() http.Handler {
 		clientJWKSBytes = []byte(`{}`)
 	}
 
-	rootCaPqcBytes, err := os.ReadFile(rootCaPqcFilePath)
+	rootCaServeBytes, err := os.ReadFile(rootCaServeFilePath)
 	if err != nil {
-		slog.Info("unable to read root_ca_pqc.crt", slog.String("err", err.Error()))
-		rootCaPqcBytes = []byte{}
+		slog.Info("unable to read "+rootCaServeFilePath, slog.String("err", err.Error()))
+		rootCaServeBytes = []byte{}
 	}
 
-	issuerCaPqcBytes, err := os.ReadFile(issuerCaPqcFilePath)
+	issuerCaServeBytes, err := os.ReadFile(issuerCaServeFilePath)
 	if err != nil {
-		slog.Info("unable to read issuer_ca_pqc.crt", slog.String("err", err.Error()))
-		issuerCaPqcBytes = []byte{}
+		slog.Info("unable to read "+issuerCaServeFilePath, slog.String("err", err.Error()))
+		issuerCaServeBytes = []byte{}
 	}
 
 	mux := http.NewServeMux()
@@ -331,12 +360,13 @@ func directoryHandler() http.Handler {
 		}
 	})
 
-	// Local ML-DSA-65 stand-ins for Raidiam's real sandbox PKI -- see the
-	// rootCaPqcFilePath/issuerCaPqcFilePath comment above.
+	// Local stand-ins for Raidiam's real sandbox PKI -- ML-DSA-65-only for
+	// pqc, RSA+ML-DSA-65 dual nested combiner for hybrid -- see
+	// rootCaServeFilePath/issuerCaServeFilePath's comment above.
 	mux.HandleFunc("/root-ca.pem", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(rootCaPqcBytes); err != nil {
+		if _, err := w.Write(rootCaServeBytes); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
 	})
@@ -344,7 +374,7 @@ func directoryHandler() http.Handler {
 	mux.HandleFunc("/issuer-ca.pem", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(issuerCaPqcBytes); err != nil {
+		if _, err := w.Write(issuerCaServeBytes); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
 	})
