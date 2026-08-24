@@ -14,7 +14,7 @@
 // ourselves. oidc-provider's own PS256 signature is discarded -- it was
 // computed over the old header, which is a different byte string.
 import { createPrivateKey, createHash, sign as cryptoSign, constants, webcrypto } from 'node:crypto';
-import { importJWK } from 'jose';
+import { importJWK, calculateJwkThumbprint } from 'jose';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -50,6 +50,18 @@ if (pqcPkBytes.length !== 1952) {
 export const HYBRID_PK_BYTES = Buffer.concat([classicPkBytes, pqcPkBytes]);
 export const HYBRID_KID = createHash('sha256').update(HYBRID_PK_BYTES).digest('base64url');
 
+// The classic half's own public JWK (n/e only) and kid -- exported for
+// idTokenExternalSigningKey.js (Decision 10), which needs to present a
+// normal-looking RSA public key under a normal-looking kid to oidc-provider
+// (the id_token's header alg has to stay "PS256", so its kid has to resolve
+// to a real, standalone-valid classical public key too -- see DECISIONS.md).
+// A real RFC 7638 JWK thumbprint (via jose, same function configuration.js's
+// pqc-mode decoy key already uses), not an ad-hoc hash -- nothing else
+// depends on this exact value, but there's no reason for it not to be a
+// genuine thumbprint like every other kid in this codebase.
+export const CLASSIC_PUBLIC_JWK = { kty: 'RSA', n: classicJwk.n, e: classicJwk.e };
+export const CLASSIC_KID = await calculateJwkThumbprint(CLASSIC_PUBLIC_JWK);
+
 function base64url(buf) {
   return Buffer.from(buf).toString('base64url');
 }
@@ -81,6 +93,18 @@ async function signMlDsaRaw(message) {
   return Buffer.from(sig);
 }
 
+// sigma1 = PS256_sign(message); sigma2 = ML-DSA-65_sign(message || sigma1);
+// returns sigma1||sigma2 as raw bytes (not base64) -- the one Strong Nesting
+// primitive every signing path in this project (AS response interception,
+// RS's own Java implementation, and now idTokenExternalSigningKey.js) uses
+// under the hood. Extracted out of rehybridizeJwt() below so it has exactly
+// one implementation, reused rather than duplicated.
+export async function signStrongNesting(message) {
+  const sigma1 = signPs256Raw(message);
+  const sigma2 = await signMlDsaRaw(Buffer.concat([message, sigma1]));
+  return Buffer.concat([sigma1, sigma2]);
+}
+
 // Takes a compact JWS this process already produced with PS256 (oidc-
 // provider's own internal signing pass) and re-signs it via Strong Nesting.
 // Returns the new compact JWS string. Only touches tokens whose header
@@ -104,9 +128,7 @@ export async function rehybridizeJwt(compactJwt) {
   const newHeaderB64 = base64url(Buffer.from(JSON.stringify(newHeader), 'utf8'));
 
   const message = Buffer.from(`${newHeaderB64}.${payloadB64}`, 'ascii');
-  const sigma1 = signPs256Raw(message);
-  const sigma2 = await signMlDsaRaw(Buffer.concat([message, sigma1]));
-  const finalSig = base64url(Buffer.concat([sigma1, sigma2]));
+  const finalSig = base64url(await signStrongNesting(message));
 
   return `${newHeaderB64}.${payloadB64}.${finalSig}`;
 }

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { calculateJwkThumbprint } from 'jose';
 import { HYBRID_ALG, HYBRID_KID, HYBRID_PK_BYTES } from './hybridSigning.js';
+import { HybridIdTokenSigningKey } from './idTokenExternalSigningKey.js';
 
 import Debug from 'debug';
 const log = Debug('raidiam:server:info');
@@ -384,6 +385,16 @@ export default function (mtlsIssuer, ssaJwks) {
       },
       introspection: { enabled: true }, // defaults to false
       jwtResponseModes: { enabled: true },
+      // hybrid mode only (Decision 10): lets the id_token's own signing
+      // step be handed off to HybridIdTokenSigningKey (see jwks.keys
+      // below) instead of oidc-provider's own jose-based signer -- the
+      // only way to hybrid-sign the id_token before it gets JWE-encrypted,
+      // since no event/hook exists between those two steps. `ack` matches
+      // this feature's own experiments.js entry (version 'experimental-01')
+      // to suppress the unacknowledged-experimental-feature notice.
+      externalSigningSupport: isHybrid
+        ? { enabled: true, ack: 'experimental-01' }
+        : { enabled: false },
       clientCredentials: { enabled: true },
       requestObjects: {
         enabled: true,
@@ -464,7 +475,18 @@ export default function (mtlsIssuer, ssaJwks) {
         // thumbprint (jose's calculateJwkThumbprint supports AKP JWKs since
         // v6.1.0, same code path as RSA). See thesis/results/experiment2 -
         // PQC/DECISIONS.md.
-        internalSigningKey,
+        //
+        // hybrid mode (Decision 10): replaced with a HybridIdTokenSigningKey
+        // instance instead of the plain internalSigningKey JWK -- not added
+        // alongside it. oidc-provider's own selectForSign({alg, use:'sig'})
+        // call (id_token.js) never passes a kid for either id_token or JARM
+        // signing, so with two PS256-capable keys present there would be no
+        // documented way to guarantee which one gets picked for which; with
+        // exactly one, there's nothing to disambiguate. See
+        // idTokenExternalSigningKey.js for why this is safe even for JARM
+        // (still correctly re-signed under the combined alg header by the
+        // existing outbound middleware regardless of what arrives here).
+        isHybrid ? new HybridIdTokenSigningKey() : internalSigningKey,
         AS_ENC_JWK,
       ],
     },
