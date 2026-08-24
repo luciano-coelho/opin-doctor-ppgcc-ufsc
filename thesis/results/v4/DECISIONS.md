@@ -1122,3 +1122,113 @@ login, and never touches an id_token). Recorded here as a disclosed,
 unresolved observation rather than investigated further or silently
 patched, per the standing instruction to report before fixing anything
 not explicitly asked for.
+
+## 11. Closing the last symmetry gap: `root-ca.pem`/`issuer-ca.pem` given hybrid stand-ins too
+
+**Context.** Decision 12 in `thesis/results/v2/experiment2 - PQC/DECISIONS.md`
+gave `root-ca.pem`/`issuer-ca.pem` local ML-DSA-65 stand-ins for
+`CRYPTO_PROFILE=pqc` (`root_ca_pqc.crt`/`issuer_ca_pqc.crt`, pure
+ML-DSA-65 leaf certs, no RSA counterpart), served by
+`mock_mtls`'s `directoryHandler()` at `https://directory/root-ca.pem`/
+`/issuer-ca.pem`. Hybrid mode was never given an equivalent -- `opin_flow.py`'s
+`ca_host` selector only branched on `crypto_profile == "pqc"`, so hybrid
+silently fell into the `else` branch and hit the real, external, classical
+Raidiam sandbox (`crl.sandbox.pki.opinbrasil.com.br`), breaking the
+symmetry every other artifact in this experiment already has.
+
+**Investigation, before implementing anything:**
+1. **How the PQC stand-ins were built**: complete replacement, not
+   coexistence -- confirmed by reading Decision 12 directly.
+   `root_ca_pqc`/`issuer_ca_pqc` are pure ML-DSA-65 leaf certs (`certs/main.go
+   -pqc-name`), signed by the classical local CA, with no RSA key of their
+   own. There was nothing classical to reuse for hybrid; two brand-new RSA-4096
+   keys had to be generated first (`root_ca.key`/`issuer_ca.key`, PKCS8, via
+   `openssl genpkey` -- run only after the user explicitly authorized local
+   key generation).
+2. **Confirmed the silent-classical-fallback exactly as suspected**:
+   `opin_flow.py:706`, `ca_host = "directory" if crypto_profile == "pqc" else
+   "crl.sandbox.pki.opinbrasil.com.br"` -- hybrid fell through to the real
+   external host with no warning.
+
+**Implementation**, mirroring Section 7's dual nested combiner exactly (same
+mechanism as `client_one_hybrid`/`mtls_hybrid`/`op_hybrid`):
+- `certs/main.go -hybrid-name root_ca` / `-hybrid-name issuer_ca` (via
+  `docker run golang:1.27-rc-alpine`, same cached image already used for
+  every other hybrid cert): reuses the newly-generated `root_ca.key`/
+  `issuer_ca.key` (RSA-4096) as each subject's classical identity and the
+  already-existing `root_ca_pqc.key`/`issuer_ca_pqc.key` (ML-DSA-65) as each
+  subject's alt identity, signed by the local CA's RSA key (`ca.key`) plus
+  its ML-DSA-65 alt key (`issuer_ca_pqc.key`, the same reuse convention every
+  other hybrid cert already uses). Output: `root_ca_hybrid.crt`/`.key`,
+  `issuer_ca_hybrid.crt`/`.key`.
+- Standalone cryptographic proof before wiring anything in (same "reconstruct
+  preTBS, verify both halves, corrupt-signature negative control" method
+  Decision 6 used) -- reused `mock_mtls/hybridVerification.go`'s own
+  `reconstructPreTBS`/AND-gate logic verbatim in a throwaway Go program
+  rather than re-deriving it, since that's the actual, already-proven
+  production verifier. Both certs: RSA chain verified via
+  `CheckSignatureFrom(ca.crt)`, ML-DSA-65 alt signature verified against the
+  reconstructed preTBS, corrupted-signature negative control correctly
+  rejected.
+- `mock_mtls/main.go`: `rootCaPqcFilePath`/`issuerCaPqcFilePath` stayed a
+  `const`, unchanged -- `issuerCaPqcFilePath` has a second, unrelated use
+  (`hybridVerification.go` reads it for the CA's own ML-DSA-65 public key,
+  the client-certificate AND gate's verification key, which must stay the
+  pure-ML-DSA-65 cert in every profile regardless of what `/issuer-ca.pem`
+  itself serves). New `rootCaServeFilePath`/`issuerCaServeFilePath` vars,
+  profile-keyed in `init()` exactly like `serverCertFilePath` already is,
+  govern only what the two HTTP routes serve. Deliberately kept as two
+  separate variable sets so the AND gate's key source and the served content
+  could never accidentally couple.
+- `opin_flow.py`: `ca_host` now checks `crypto_profile in ("pqc", "hybrid")`.
+
+**Validated end-to-end**: `/root-ca.pem`/`/issuer-ca.pem` fetched live,
+byte-for-byte identical to the on-disk `root_ca_hybrid.crt`/
+`issuer_ca_hybrid.crt`. A full live flow (both `run_insurance_flow`/
+`run_person_flow`) completed with no errors. The client-certificate AND
+gate (unrelated to this fix, but on the same code path) reconfirmed
+unaffected via a fresh JARM capture and a fresh 26/26 cryptographic
+re-verification of every JWT (see the sabatina below).
+
+**PKI/CRL result**: 19216 bytes per flow fetch (9606 root-ca.pem + 9610
+issuer-ca.pem) x 2 flows = **38432 bytes per scenario**, stable across all 6
+re-run latency scenarios. Isolated via an A/B test (rerunning the identical
+flow with `ca_host` monkeypatched back to the old real-external value,
+live, in the same container): only the `PKI/CRL` participant total changed
+(38432 -> 10664, matching classic's own range almost exactly, as expected
+since both now fetch the real external files) -- `AS`/`RS` totals were
+**identical in both configurations**, proving they are NOT caused by this
+change (see the sabatina below for what they actually are). Hierarchy now
+matches every other metric in this experiment: classic (10664-10670) < pqc
+(17276) < **hybrid (38432)**.
+
+**Sabatina finding, disclosed and isolated, not silently absorbed: `AS`/`RS`
+bytes-by-participant and `mTLS_handshake_bytes` P50 shifted from their
+previously-committed values, for a reason unrelated to this decision.**
+Re-running the 6 scenarios in the freshly rebuilt environment gave `AS
+=78231` (was 78311, -80), `RS=102075` (was 102235, -160), and
+`mTLS_handshake_bytes` P50 `=25880.0` (was 24991.0). The A/B test above
+proves the `AS`/`RS` shift is independent of this decision's own change
+(both configurations gave the identical 78231/102075). Raw gateway log
+inspection traced the handshake-bytes shift to the same, already-documented
+measurement caveat `connStateHandshakeLogger`'s own comment names directly:
+`mtlsHandshakeBytes` "may also include a few early application-data bytes
+if the client pipelined its first request into the same TCP read/TLS
+record as the handshake's tail end" -- confirmed empirically, the raw
+per-connection samples for `client_one_hybrid` (clientCertBytes=6859) show
+several distinct values within a single run (25820/26075/25880), not one
+constant, so which one lands on the P50 is sensitive to exactly this kind
+of pipelining variance. This project's own environment-recreation protocol
+fully rebuilds the container on every re-run round; nothing in `git diff`
+touches TLS handshake logic, `go.sum` is unchanged (no dependency drift),
+and the `golang:1.27-rc-alpine` image used for cert generation is the same
+cached digest as every prior round -- ruling out a code or toolchain
+regression. This is the same class of run-to-run noise already documented
+for `total_bytes_exchanged` (a handful of bytes across scenarios) and
+`PKI/CRL` pre-fix, just larger in this instance. Recomputed OPINsize with
+the new P50: `6x25880.0 + 26x5933.96 + 2x2208 = 313978.96` bytes -- note the
+OPINsize equation itself has no `PKI/CRL`/`AS`/`RS`/`Client` term, so this
+decision's own fix has **zero direct effect on OPINsize**; the entire
++5334.0 byte delta from the previously-committed 308644.96 traces to the
+unrelated handshake-bytes noise above, not to anything this decision
+touched.
