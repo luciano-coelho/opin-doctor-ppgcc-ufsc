@@ -130,6 +130,13 @@ services:
     command: ["node", "lambda.js"]
     volumes:
       - ../mock-service-os/certs/ca.crt:/certs/ca.crt:ro
+      # Always mounted, regardless of CRYPTO_PROFILE -- utils/opin/
+      # clientHybridAuth.js reads these unconditionally at module load
+      # (same pattern as hybridSigning.js's hybrid.json), needed only in
+      # hybrid mode but harmless static files to have present otherwise.
+      # See thesis/results/v4/DECISIONS.md, Decision 9.
+      - ../mock-service-os/certs/client_one_pub.jwks:/certs/client_one_pub.jwks:ro
+      - ../mock-service-os/certs/client_one_pqc_pub.jwks:/certs/client_one_pqc_pub.jwks:ro
     depends_on:
       localstack:
         condition: service_healthy

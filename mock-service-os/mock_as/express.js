@@ -16,6 +16,7 @@ import Account from './utils/account.js';
 import BRAND_NAME from './utils/brandHelper.js';
 import { supportDynamicScopes, ensureTokenEndpointAsAudience } from './utils/oidc.js';
 import { rehybridizeJwt, rehybridizeInPlace, COMPACT_JWS_RE } from './utils/opin/hybridSigning.js';
+import { inboundHybridClientAuthMiddleware } from './utils/opin/clientHybridAuth.js';
 
 const log = Debug('raidiam:server:info');
 
@@ -179,6 +180,20 @@ async function main() {
       ctx.set('x-fapi-interaction-id', ctx.get('x-fapi-interaction-id'));
     }
   });
+
+  // hybrid mode only, inbound direction (Decision 9): the client signs
+  // client_assertion/the PAR request object with an ordinary PS256-shaped
+  // header (see clientHybridAuth.js for why this direction can't use the
+  // combined alg header the outbound side below uses), so oidc-provider
+  // itself never needs to know anything unusual is going on -- this
+  // middleware verifies the real sigma1||sigma2 signature itself and
+  // truncates it back to a plain, independently-valid sigma1 BEFORE
+  // oidc-provider's own body-parsing/client-auth logic ever sees it.
+  // Registered before the outbound middleware below since it must act
+  // before await next(), not after.
+  if (isHybridProfile) {
+    provider.use(inboundHybridClientAuthMiddleware);
+  }
 
   // hybrid mode only: oidc-provider just produced a completely normal,
   // valid PS256 response (it has no idea hybrid mode exists -- see

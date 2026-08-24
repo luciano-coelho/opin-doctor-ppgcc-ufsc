@@ -12,11 +12,23 @@
 // signatures (client_assertion, PAR request object) in pqc mode, and for
 // verifying the RS's hybrid-signed responses in hybrid mode (Etapa 4).
 //
-// Two input shapes on stdin, dispatched on which fields are present:
+// Three input shapes on stdin, dispatched on which fields are present:
 //   - {"jwk": {...private AKP JWK, incl. "priv"...}, "headers": {...},
 //      "claims": {...}}                    -> sign a full JWT (unchanged
 //                                              behavior, existing callers).
 //      stdout: the compact JWS string.
+//   - {"jwk": {...private AKP JWK, incl. "priv"...}, "message_b64": "..."}
+//      (no "signature_b64")                -> sign raw, arbitrary bytes
+//                                              directly (NOT a JWS payload
+//                                              -- same raw-WebCrypto
+//                                              reasoning as the verify
+//                                              mode below, needed here so
+//                                              opin_flow.py can produce
+//                                              sigma2 = ML-DSA-65_sign(
+//                                              message||sigma1) for Decision
+//                                              9's client-side hybrid
+//                                              signing).
+//      stdout: base64 (not base64url) raw signature bytes.
 //   - {"jwk": {...public AKP JWK, "pub" only...}, "message_b64": "...",
 //      "signature_b64": "..."}              -> verify a raw ML-DSA-65
 //                                              signature over base64-
@@ -37,7 +49,12 @@ const input = JSON.parse(await new Promise((resolve, reject) => {
   process.stdin.on('error', reject);
 }));
 
-if (input.message_b64 !== undefined) {
+if (input.message_b64 !== undefined && input.signature_b64 === undefined) {
+  const key = await importJWK(input.jwk, input.jwk.alg || 'ML-DSA-65');
+  const message = Buffer.from(input.message_b64, 'base64');
+  const signature = await webcrypto.subtle.sign({ name: 'ML-DSA-65' }, key, message);
+  process.stdout.write(Buffer.from(signature).toString('base64'));
+} else if (input.message_b64 !== undefined) {
   const key = await importJWK(input.jwk, input.jwk.alg || 'ML-DSA-65');
   const message = Buffer.from(input.message_b64, 'base64');
   const signature = Buffer.from(input.signature_b64, 'base64');

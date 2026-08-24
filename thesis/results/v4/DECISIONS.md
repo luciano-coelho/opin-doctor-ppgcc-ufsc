@@ -771,3 +771,163 @@ version was confirmed complete and accurate; every other reference to it
 elsewhere in this log and in code comments (`ResponseSigningService.java`,
 `hybridSigning.js`, `hybridVerification.js`, `hybrid_verify.py`) was
 updated to point to `ARCHITECTURE.md` instead.
+
+## 9. Closing the Decision 7 gap: hybridizing client-side signing (client assertion, PAR request object) -- a real header-format asymmetry found and confirmed before writing any code
+
+**Motivation.** The JWT-size investigation prompted by the user's own
+sanity check on the Experiment 2 vs. 3 comparison (average JWT size
+4123.88 bytes in hybrid vs. 5458.81 in pqc, counter-intuitive at first
+glance) traced the gap to composition, not a bug: in pqc mode the client
+signs its own client_assertion/PAR request object with ML-DSA-65 too (24
+of 26 captured JWTs are algorithm-signed), while in hybrid mode those
+same 8 client-originated artifacts stayed on plain PS256 (Decision 7's
+documented, deliberate scope limit -- the AS didn't accept a hybrid
+client assertion). The user asked to close that gap so hybrid reaches
+the same 24/26 hybridized proportion pqc already has, leaving only the
+JWE-wrapped id_token out (unavoidable on both profiles, see Decision 2).
+
+**A real, inherent header-format asymmetry, found via research and
+confirmed with the user before writing any code.** Every hybrid-signing
+path built so far (Etapa 2's AS output, Etapa 3's RS output) has one
+thing in common: the party constructing the hybrid artifact is also the
+party who holds the private key and therefore can freely choose the
+final header's bytes (including the combined `alg` string from Section
+5) before computing sigma1 over it. Client-to-AS artifacts break that
+assumption: the AS can only *verify* what the client already signed --
+it never holds the client's private key, so it can never re-sign
+anything. sigma1 is only a valid signature over the *exact* header bytes
+the client used to compute it; if the AS's own interception logic
+changed the header (e.g. to say the combined hybrid alg, or anything
+else) before handing it to oidc-provider for its own PS256 check, sigma1
+would no longer verify against that changed header, and the whole
+mechanism would collapse.
+
+The only workable construction, confirmed with the user: **the client
+signs client_assertion/the PAR request object with an ordinary-looking
+header from the start -- `alg: "PS256"`, `kid` set to the client's own
+already-registered classical key (the same kid oidc-provider already
+knows from `client_one.jwks`/`client_one_pub.jwks`) -- and sigma1 is
+computed over exactly that header and payload.** sigma2 chains on top of
+`header.payload.sigma1` as usual; the transmitted signature segment is
+`base64url(sigma1‖sigma2)`, 3565 raw bytes, same convention as
+everywhere else. At the header level this is indistinguishable from an
+ordinary classical PS256 assertion -- only the signature segment's
+*decoded byte length* (3565, not 256) reveals that it's actually hybrid.
+The AS's new inbound interception middleware (active unconditionally
+whenever `CRYPTO_PROFILE=hybrid`, mirroring how the outbound
+rehybridization middleware is gated) decomposes sigma1/sigma2, verifies
+both against the client's own classical and PQC public keys, AND-gates,
+and -- only if both pass -- rewrites the signature segment down to just
+sigma1 (256 bytes) before oidc-provider's own body-parsing/validation
+ever sees it. oidc-provider then performs its completely ordinary,
+unmodified PS256 verification of sigma1 against the (untouched) header
+and payload, and succeeds exactly as it always has for a classical
+client -- it is never told, and never needs to know, that anything
+hybrid happened.
+
+This means client-to-AS hybrid artifacts and AS/RS-to-client hybrid
+artifacts use the *header* differently on the wire (PS256-shaped vs. the
+combined `MLDSA65-RSA2048-PSS-SHA256` alg string) even though both use
+the exact same Strong Nesting byte convention underneath
+(`sigma1‖sigma2`, sigma1 first). This is a real, deliberate divergence
+from Section 5 of `ARCHITECTURE.md` ("the field that identifies the
+algorithm now declares the combination") -- noted there directly (see
+the addendum at the end of Section 5) rather than silently buried here
+only, per the user's explicit request. The asymmetry is inherent to the
+direction of trust (who holds the private key), not an implementation
+shortcut: there is no construction that lets the AS present a
+self-describing combined-alg header to oidc-provider for something only
+the client could have signed.
+
+**Implementation.** `thesis/scripts/pqc-signer/sign.mjs` gained a third
+input shape: `{jwk: private AKP JWK, message_b64}` (no `signature_b64`)
+signs raw bytes directly via `webcrypto.subtle.sign()`, returning
+base64 -- needed since opin_flow.py has no native ML-DSA-65 support and
+now has to produce sigma2 client-side, not just verify it (Etapa 4's
+scope). `opin_flow.py`'s `load_client_signing_key("hybrid")` now returns
+a `(classic_key, pqc_jwk)` tuple and the classic kid; a new
+`_sign_jwt_hybrid()` builds the PS256-shaped header, gets sigma1 from
+pyjwt (parsing its own compact output to recover the raw signature
+bytes, rather than reimplementing PS256 signing), and sigma2 from the
+new pqc-signer mode, over `header.payload.sigma1`. On the AS,
+`utils/opin/hybridVerification.js` gained `truncateIfHybrid()`
+(decompose/verify/AND-gate, matching `verifyHybrid()`; on success,
+returns the same header+payload with the signature truncated to sigma1
+alone) and a new `utils/opin/clientHybridAuth.js` supplies client_one's
+own classical and ML-DSA-65 public keys (read from
+`client_one_pub.jwks`/`client_one_pqc_pub.jwks`, mounted into the `auth`
+container unconditionally -- same always-mounted pattern as
+`hybrid.json` -- since oidc-provider's own client registry only ever
+holds the classical key, unchanged from classic/pqc mode) and the
+inbound `provider.use()` middleware itself: for POST `/token` and POST
+`/request`, it reads the raw request body by hand (a small inline
+stream-to-string reader, not a new `raw-body` package dependency),
+rewrites any hybrid-shaped `client_assertion`/`request` field, and
+assigns the result to `ctx.request.body` -- confirmed via research into
+oidc-provider 9.5.1's own source
+(`lib/shared/selective_body.js`) that consuming the raw stream this way
+is exactly the fallback path oidc-provider's own body-parsing already
+handles (logging a one-time "already parsed request body detected"
+warning, then using `ctx.req.body || ctx.request.body` instead of
+re-reading the now-exhausted stream) -- confirmed live in the auth
+container's own logs during testing below. Registered before the
+existing outbound rehybridization middleware (Decision 2), since it has
+to act before `await next()`, not after.
+
+**A real bug found and fixed during first live testing.**
+`hybridVerification.js`'s `verifyHybrid()`/`truncateIfHybrid()` had
+`CLASSIC_SIG_BYTES` hardcoded to 256 -- correct for every prior caller
+(the AS's own hybrid.json key, RSA-2048), but wrong for `client_one`,
+whose signing key is the same RSA-**4096** key already used for its mTLS
+certificate, not a fresh 2048-bit key minted for JWS. The bug surfaced
+immediately and unambiguously as `signature verification failed` at
+oidc-provider's own layer (not this project's code): a decoded combined
+signature of 3821 bytes (512 + 3309) was being split at byte 256 instead
+of 512, so sigma1 was reconstructed wrong and never verified --
+`truncateIfHybrid()` correctly refused to touch the field, and
+oidc-provider then rejected the still-3821-byte "PS256" signature it
+was never going to accept at that length. Diagnosed by running
+`verifyHybrid()` directly inside the running `auth` container against a
+captured real client assertion (same `docker cp` + `docker exec`
+diagnostic pattern used throughout this project) and comparing the
+observed combined length against what 256+3309 vs. 512+3309 would each
+predict. **Fixed** by deriving the classical signature length from the
+actual key's own RSA modulus (`Buffer.from(classicPublicJwk.n,
+'base64url').length`) instead of a hardcoded constant -- correct
+regardless of which RSA key size ends up calling this function.
+
+**Tested against the real, running environment**
+(`CRYPTO_PROFILE=hybrid`, all four services recreated together after the
+fix): a full `run_insurance_flow` + `run_person_flow` pass completed all
+28 calls successfully, including the client's own hybrid-signed
+`client_assertion` (sent to `/token`, both grants) and PAR `request`
+object being accepted by the AS on every occurrence. Of the 26 captured
+JWTs, **24 are now genuinely hybrid-signed** -- the 16 AS/RS-issued
+artifacts (unchanged from before this etapa, `MLDSA65-RSA2048-PSS-SHA256`
+header, 3565-byte signature) plus the **8 client-signed ones** (PS256
+header as designed, but a 3821-byte decoded signature -- 512 bytes of
+RSA-4096 sigma1 plus 3309 bytes of ML-DSA-65 sigma2 -- confirming Strong
+Nesting is genuinely in effect even though the header alone can't show
+it). Only the 2 JWE-wrapped `id_token`s remain outside hybrid signing,
+exactly as Decision 2 already documents and as Section 5's addendum
+above now states explicitly. Average JWT size at 0ms: **5481.42 bytes**,
+up from 4123.88 before this etapa and now *above* pqc's own 5458.81 --
+matching the proportion (24/26 hybridized, only the id_token held out)
+that pqc and classic already have, closing the composition gap the
+user's own sanity check on the Experiment 2/3 comparison had surfaced.
+This closes the Decision 7 gap: the AS now accepts a properly
+Strong-Nested hybrid client assertion.
+
+**All 6 latency scenarios re-run with this fix**
+(`thesis/results/v4/experiment3 - Hybrid/`, environment fully recreated
+before each run, same protocol as the original Etapa 9 pass): 28/28
+calls and 26/26 JWTs at every scenario, no PAR/request_uri retries
+needed even at 140/225/320ms. The 26 raw JWT sizes are byte-for-byte
+identical across all six scenarios (confirmed by direct list
+comparison, not just the rounded average) -- latency has no effect on
+artifact sizes, exactly as expected, and the fix is not scenario-
+dependent. Average JWT size: **5481.42 bytes at every one of the 6
+scenarios** (was 4123.88 before this etapa) -- now consistently *above*
+pqc's 5458.81, the 24/26 hybridized proportion the user asked to match.
+`consolidated.json` and `EXPERIMENT3_REPORT.md` regenerated from the new
+per-scenario data.
