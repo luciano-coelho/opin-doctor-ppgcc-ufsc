@@ -1232,3 +1232,107 @@ decision's own fix has **zero direct effect on OPINsize**; the entire
 +5334.0 byte delta from the previously-committed 308644.96 traces to the
 unrelated handshake-bytes noise above, not to anything this decision
 touched.
+
+## 12. Total flow latency across the 6 scenarios, all three experiments: single-run methodology replaced with a 5-run median, and a real (not noise) explanation for the 0ms direction reversal
+
+**Context.** A review of `thesis/results/v3/Experimental_Metrics_PQC_OPIN_v2.md`'s
+"Total flow latency across all 6 network scenarios" table (classic vs. pure
+PQC only -- Experiment 3/hybrid never had an equivalent) noticed the
+classic/PQC delta oscillating without a consistent direction across the
+6 latency scenarios (+14% at 0ms, -7% at 14ms, +1% at 30ms, -0.4% at 140ms,
++11% at 225ms, +6% at 320ms) -- not the pattern expected if PQC's larger
+byte volume (already established via the OPINsize equation) were the
+dominant driver of its cost.
+
+**Methodology, confirmed from the document itself, not assumed:**
+`Experimental_Metrics_PQC_OPIN_v2.md` line 101 states plainly that only the
+**0ms** scenario used a 5-independent-run median (matching Decision 14's own
+per-endpoint methodology in the same document); the other 5 scenarios
+(14/30/140/225/320ms) were each a **single run**, reconstructed from
+`consolidated.json`'s `mean_ms x count` per endpoint. The document's own
+prose (line 103) already flagged this as a limitation: with a single run per
+non-zero scenario, the observed deltas "are within the range of run-to-run
+noise... should not be read as a stable trend."
+
+**Re-measured all 3 experiments, all 6 scenarios, 5 independent runs each
+(90 total flow executions)**, following Decision 14's exact protocol: each
+run its own subprocess (never looped in one process -- Decision 14's
+"Problem 2", in-process resource exhaustion), containers recreated once per
+profile before its run series, one throwaway warmup run for pqc and hybrid
+specifically (both drive ML-DSA-65 signing through BouncyCastle on the RS
+side, both pay the same first-request JVM/provider cold-start cost Decision
+14 first isolated for pqc; hybrid was not separately confirmed to have this
+issue before, but the very first flow after every container recreation in
+this round showed the same signature -- an outlier roughly 3-5x every other
+run in that series -- so the same warmup treatment was applied). classic's
+0ms and 14ms series each had one first-run-after-recreation outlier too
+(4656.83ms and 6843.34ms respectively, against a otherwise-tight
+800-1100ms/2370-2730ms spread) -- not replaced, since in both cases the
+outlier landed at the max of its 5-run set and the median (which depends
+only on the middle value) is completely unaffected either way, the same
+reasoning already used in the existing 5-round table's own run-1
+substitution note. Two isolated failures (hybrid 320ms run 4, pqc 320ms
+run 5) hit the already-documented PAR `request_uri` 60s-TTL limit at high
+injected latency (`EXPERIMENT3_REPORT.md`'s own "Known limitations"
+section) -- retried once, succeeded, no impact on the reported median.
+
+**Median-of-5 total flow latency (ms), all three experiments:**
+
+| Scenario | Classic | PQC | Hybrid | Delta (PQC-Classic) |
+|---|---|---|---|---|
+| 0ms | 983.55 | 931.17 | 1074.60 | -52.38 (-5.3%) |
+| 14ms | 2660.92 | 3102.83 | 2255.06 | +441.91 (+16.6%) |
+| 30ms | 3965.06 | 4643.60 | 4022.77 | +678.54 (+17.1%) |
+| 140ms | 14443.27 | 15944.92 | 16347.11 | +1501.65 (+10.4%) |
+| 225ms | 23594.30 | 24993.51 | 26022.48 | +1399.21 (+5.9%) |
+| 320ms | 32729.39 | 35379.01 | 36662.44 | +2649.62 (+8.1%) |
+
+With the median in place of a single run, the classic/PQC delta stops
+oscillating: PQC is consistently slower from 14ms through 320ms (5 of 6
+scenarios), with the gap growing in absolute terms as the number of
+round trips (and therefore accumulated signing/verification calls) grows --
+exactly the pattern expected if cryptographic cost, not sampling noise,
+is the dominant driver at non-zero latency. Hybrid tracks the same
+direction as PQC at every non-zero scenario, consistently above both.
+
+**The 0ms reversal (PQC 5.3% *faster* than classic) is real and has a
+specific, identified cause -- not sampling noise, and not a reversal of
+which algorithm costs more to compute.** Per-call breakdown (3 confirmatory
+runs per profile, cold-start-affected first runs excluded from the
+decomposition below) isolates the two `root-ca.pem`/`issuer-ca.pem` calls
+from everything else:
+
+| Portion | Classic | PQC | Hybrid |
+|---|---|---|---|
+| PKI (`root-ca.pem`+`issuer-ca.pem`, both flows) | ~258ms | ~48ms | ~56ms |
+| Everything else (the signing/verification-bearing calls) | ~597ms | ~1104ms | ~1475ms |
+
+The "everything else" row is unambiguous and matches every prior
+per-endpoint finding in this thesis (Decision 14's own table): RSA-2048/
+4096 < ML-DSA-65 < RSA+ML-DSA-65 -- classic cheapest, hybrid most
+expensive, no reversal. The reversal comes entirely from the PKI row:
+classic's `root-ca.pem`/`issuer-ca.pem` calls still hit Raidiam's real,
+external sandbox (`crl.sandbox.pki.opinbrasil.com.br`, Decision 10/12's
+deliberate choice to treat this as genuine ecosystem infrastructure, not
+something to fake locally), while pqc's and (as of Decision 11) hybrid's
+own calls hit the local `directory` stand-in inside the same Docker
+network. A single `root-ca.pem` fetch was observed varying between 76ms
+and 680ms across otherwise-identical classic runs -- real, uncontrolled
+internet latency to an external host, entirely independent of the
+`tc/netem`-injected scenario latency (these two calls never traverse the
+gateway container that latency is injected on). At 0ms, this fixed,
+classic-only ~200ms-plus tax is large enough relative to the ~900-1100ms
+total to flip the net comparison; at every other scenario, the same fixed
+tax is a rounding error against totals in the 2,000-36,000ms range, so the
+real (and consistently-directioned) cryptographic cost delta dominates
+instead unopposed. This also means classic's own 0ms measurement carries
+an irreducible noise source no amount of additional runs removes: live
+internet conditions to a real external server, not present anywhere else
+in this local, fully-Dockerized experiment.
+
+**Not implemented, and not needed**: no code change resulted from this
+decision -- it is a measurement/reporting decision only. The existing
+`Experimental_Metrics_PQC_OPIN_v2.md` (Experiments 1/2, an earlier phase of
+this thesis) is left untouched per instruction; this decision's 3-column
+table (adding hybrid) is the one to cite going forward for total flow
+latency across all three experiments.
