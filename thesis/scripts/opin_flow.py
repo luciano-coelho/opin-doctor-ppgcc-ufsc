@@ -732,18 +732,19 @@ def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
     call, resp = do_call(session, "GET", f"https://{AUTH_HOST}/jwks", cert=cert, src="FetchServerKeys")
     calls.append(call)
 
-    # 2-3. GET root-ca.pem / issuer-ca.pem. classic: real public sandbox
-    # host, no mTLS cert needed (see module docstring: this traffic never
-    # touches our local mock stack at all). pqc/hybrid: local stand-ins
-    # (ML-DSA-65-only for pqc, RSA+ML-DSA-65 dual nested combiner for
-    # hybrid) served by the gateway's "directory" host (mock_mtls's
-    # directoryHandler, already used for the OPIN Directory mock) -- see
+    # 2-3. GET root-ca.pem / issuer-ca.pem. All three profiles now resolve
+    # to local stand-ins served by the gateway's "directory" host
+    # (mock_mtls's directoryHandler, already used for the OPIN Directory
+    # mock): ordinary RSA leaf certs for classic, ML-DSA-65-only for pqc,
+    # RSA+ML-DSA-65 dual nested combiner for hybrid -- see
     # thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 11, for why
-    # this simulates rather than migrates Raidiam's real sandbox PKI, and
+    # this simulates rather than migrates Raidiam's real sandbox PKI;
     # thesis/results/v4/DECISIONS.md for hybrid's own stand-ins (closing a
-    # symmetry gap: hybrid used to silently fall through to this real,
-    # external, classical host instead of getting its own local stand-in).
-    ca_host = "directory" if crypto_profile in ("pqc", "hybrid") else "crl.sandbox.pki.opinbrasil.com.br"
+    # symmetry gap where hybrid used to silently fall through to the real,
+    # external, classical host); and thesis/results/v5/DECISIONS.md for
+    # classic's own local stand-in (closing the same gap for the last
+    # remaining profile still hitting crl.sandbox.pki.opinbrasil.com.br).
+    ca_host = "directory"
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
             session, "GET", f"https://{ca_host}/{path}", cert=None, src="OpinInsertMtlsCa"

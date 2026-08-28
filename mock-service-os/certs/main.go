@@ -133,6 +133,7 @@ func main() {
 	pqcName := flag.String("pqc-name", "", "Only generate <name>.crt/.key (ML-DSA-65), signed by the existing ca.crt/ca.key on disk -- same mechanism as -pqc-client-only, generalized to any cert (e.g. op_pqc, mtls_pqc). Does not touch the CA or any other cert.")
 	resignAll := flag.Bool("resign-all", false, "Regenerate the CA (5-year validity, fresh key) and re-sign every existing RSA/ML-DSA-65 leaf cert this tool knows about with it, reusing each leaf's existing private key unchanged -- no new leaf key material, only new certificates. Fixes an expired CA without invalidating any already-measured cert/key size. mongo.pem and postgres.crt are NOT RSA/ML-DSA-65 leafs this tool originally generated (different SANs/key size) and are handled separately. See thesis/results/v4/DECISIONS.md.")
 	hybridName := flag.String("hybrid-name", "", "Generate <name>_hybrid.crt/.key: a classical RSA certificate carrying three additional X.509 extensions per Bindel et al. (2019), signed twice (RSA + ML-DSA-65) by the existing local CA (ca.crt/ca.key + issuer_ca_pqc.crt/.key). Reuses <name>.key (RSA) and <name>_pqc.key (ML-DSA-65) as the subject's existing key material -- both must already exist on disk. Does not touch the CA or any other cert. See thesis/results/v4/DECISIONS.md.")
+	classicName := flag.String("classic-name", "", "Generate <name>.crt (ordinary classical RSA leaf cert, no PQC material at all), signed by the existing local CA (ca.crt/ca.key) -- same mechanism as -pqc-name, but reusing an EXISTING RSA key (<name>.key, must already exist on disk) instead of generating a fresh one, since -hybrid-name already needed that same key for root_ca/issuer_ca. Does not touch the CA, the key, or any other cert. See thesis/results/v5/DECISIONS.md.")
 	flag.Parse()
 
 	if *resignAll {
@@ -146,6 +147,13 @@ func main() {
 		subjectRSAKey := loadRSAKeyPEM(filepath.Join(sourceDir, *hybridName+".key"))
 		subjectMLDSAKey := loadMLDSAKeyPEM(filepath.Join(sourceDir, *hybridName+"_pqc.key"))
 		generateHybridCert(*hybridName, *orgID, caCertRSA, caKeyRSA, caKeyMLDSA, subjectRSAKey, subjectMLDSAKey, sourceDir)
+		return
+	}
+
+	if *classicName != "" {
+		caCert, caKey := loadCACert(sourceDir)
+		subjectKey := loadRSAKeyPEM(filepath.Join(sourceDir, *classicName+".key"))
+		generateClassicCertReuse(*classicName, *orgID, caCert, caKey, subjectKey, sourceDir)
 		return
 	}
 
@@ -446,6 +454,61 @@ func generateSelfSignedCert(
 
 	fmt.Printf("Generated self signed certificate and key for %s\n", name)
 	return template, key
+}
+
+// Generates an ordinary classical leaf certificate -- no PQC material at
+// all, ideal for the classic-profile local root-ca.pem/issuer-ca.pem
+// stand-ins (thesis/results/v5, closing the last real-external-network
+// dependency: classic was the only profile still fetching these two files
+// from Raidiam's actual sandbox instead of a local stand-in, per
+// thesis/results/v2/experiment2 - PQC/DECISIONS.md, Decision 10's original
+// reasoning -- v5 revisits that call now that pqc/hybrid both already
+// have their own local stand-ins). Same template as generateCert(), but
+// reuses an EXISTING RSA key passed in (subjectKey) instead of generating
+// a fresh one -- root_ca.key/issuer_ca.key already exist on disk (Decision
+// 11 in thesis/results/v4/DECISIONS.md generated them as the classical
+// half of the hybrid stand-ins), and reusing them here keeps exactly one
+// RSA keypair per participant identity across profiles, the same
+// convention every other -pqc-name/-hybrid-name cert already follows. Only
+// the .crt is written -- the .key already exists and is untouched.
+func generateClassicCertReuse(
+	name, orgID string,
+	caCert *x509.Certificate,
+	caKey *rsa.PrivateKey,
+	subjectKey *rsa.PrivateKey,
+	dir string,
+) *x509.Certificate {
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: name,
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{Type: oidX500UID, Value: name},
+				{Type: oidLDAPUID, Value: uuid.NewString()},
+				{Type: oidOrganizationID, Value: orgID},
+			},
+		},
+		DNSNames: []string{
+			"auth.local", "matls-auth.local", "api.local", "matls-api.local",
+			"directory", "directory.local", "keystore",
+		},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(longLivedValidity),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, cert, caCert, &subjectKey.PublicKey, caKey)
+	if err != nil {
+		log.Fatalf("classic %s: failed to create certificate: %v", name, err)
+	}
+	cert.Raw = certBytes
+
+	savePEMFile(filepath.Join(dir, name+".crt"), "CERTIFICATE", certBytes)
+
+	fmt.Printf("Generated classic certificate for %s (existing RSA key reused, signed by existing CA)\n", name)
+	return cert
 }
 
 // Generates a certificate signed by the CA.

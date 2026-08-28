@@ -75,6 +75,18 @@ var (
 
 func init() {
 	switch os.Getenv("CRYPTO_PROFILE") {
+	case "classic":
+		// root_ca.crt/issuer_ca.crt: ordinary classical RSA leaf certs,
+		// signed by the project's own local CA (ca.crt/ca.key), reusing
+		// root_ca.key/issuer_ca.key -- the same RSA keypairs already used
+		// as the classical half of root_ca_hybrid.crt/issuer_ca_hybrid.crt
+		// above. Generated via certs/main.go -classic-name root_ca /
+		// -classic-name issuer_ca. Eliminates the Classic profile's last
+		// dependency on Raidiam's real, external sandbox host
+		// (crl.sandbox.pki.opinbrasil.com.br) for root-ca.pem/issuer-ca.pem.
+		// See thesis/results/v5/DECISIONS.md.
+		rootCaServeFilePath = "certs/root_ca.crt"
+		issuerCaServeFilePath = "certs/issuer_ca.crt"
 	case "pqc":
 		serverCertFilePath = "certs/mtls_pqc.crt"
 		serverKeyFilePath = "certs/mtls_pqc.key"
