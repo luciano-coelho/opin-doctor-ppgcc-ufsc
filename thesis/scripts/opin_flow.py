@@ -484,6 +484,29 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
+class RequestUriExpiredError(RuntimeError):
+    """
+    Raised specifically when the PAR request_uri's 60s TTL (oidc-provider's
+    default, not overridden in mock_as/utils/opin/configuration.js) has
+    expired by the time GET /auth is reached -- distinct from every other
+    way simulate_login() can fail. Detected from oidc-provider's own error
+    page, confirmed by deliberately reproducing the expiry live (sleeping
+    past 60s before the first GET /auth) rather than guessed: the body
+    contains the literal, fixed OAuth error code
+    `error: invalid_request_uri` plus `error_description: request_uri is
+    invalid, expired, or was already used`. See EXPERIMENT3_REPORT.md's
+    "Known limitations" section and DECISIONS.md for the original
+    (pre-fix) history of this failure mode -- until this exception existed,
+    this case was indistinguishable from any other simulate_login() failure
+    and required a manual re-invocation of the whole script. Retrying with
+    the SAME auth_url (and therefore the same, already-expired request_uri)
+    can never fix this -- only a fresh PAR call gets a new one, which is why
+    this propagates out of wait_for_authorization_code() instead of being
+    retried internally there; see create_and_authorize_consent()'s own
+    retry loop, the layer that actually can fix it.
+    """
+
+
 def simulate_login(auth_url: str, cert) -> None:
     """
     Drives the login+consent interaction over plain HTTP, exactly like a
@@ -507,6 +530,10 @@ def simulate_login(auth_url: str, cert) -> None:
 
     resp = session.get(auth_url, allow_redirects=True, timeout=60)
     if "/interaction/" not in resp.url:
+        if "invalid_request_uri" in resp.text:
+            raise RequestUriExpiredError(
+                f"PAR request_uri expired before GET /auth completed; final URL={resp.url}"
+            )
         raise RuntimeError(f"No interaction page reached; final URL={resp.url}, body[:500]={resp.text[:500]}")
 
     uid = resp.url.rstrip("/").rsplit("/", 1)[-1]
@@ -560,6 +587,13 @@ def wait_for_authorization_code(
     identically regardless of CRYPTO_PROFILE, so it is not specific to
     hybrid mode or this etapa's own changes. See thesis/results/v4/
     DECISIONS.md, Etapa 7, for the full investigation.
+
+    RequestUriExpiredError is deliberately NOT caught here -- unlike the
+    race above, retrying simulate_login() again with this same auth_url
+    can never help (the request_uri embedded in it is what expired; only a
+    fresh PAR call gets a new one), so it propagates straight out to
+    create_and_authorize_consent(), the layer that actually can fix it by
+    redoing PAR from scratch.
     """
     cert_path, key_path = _generate_callback_tls_cert()
     try:
@@ -778,32 +812,60 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
         )
         calls.append(call)
 
-    # POST /request (PAR)
-    state = secrets.token_urlsafe(9)
-    nonce = secrets.token_urlsafe(9)
-    verifier, challenge = make_pkce_pair()
-    request_object = make_request_object(
-        signing_key, kid, alg, scope=f"{scope} consent:urn:raidiaminsurance:{consent_uid}",
-        state=state, nonce=nonce, code_challenge=challenge,
-    )
-    par_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request")
-    par_body = {
-        "request": request_object,
-        "client_id": CLIENT_ID,
-        "client_assertion": par_assertion,
-        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-    }
-    call, resp = do_call(
-        session, "POST", f"https://{AUTH_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
-        headers={"Content-Type": "application/x-www-form-urlencoded"}, data=par_body, src="CallPAREndpoint",
-    )
-    calls.append(call)
-    resp.raise_for_status()
-    request_uri = resp.json()["request_uri"]
+    # POST /request (PAR) + automated login, retried as one unit if the
+    # request_uri's 60s TTL expires before login completes -- confirmed to
+    # actually happen at 225ms/320ms, where enough round trips compound
+    # between PAR and login completion (see RequestUriExpiredError). Unlike
+    # wait_for_authorization_code()'s own internal retry (a different,
+    # already-handled race -- see its docstring), retrying THIS layer means
+    # redoing PAR itself: reusing the same, already-expired request_uri can
+    # never succeed, so each attempt here generates a fresh
+    # state/nonce/PKCE pair and gets a brand new request_uri with a fresh
+    # 60s TTL. Before this fix, RequestUriExpiredError (then just a generic
+    # RuntimeError, indistinguishable from any other simulate_login()
+    # failure) propagated all the way out and killed the whole script --
+    # confirmed via a deliberate reproduction (sleeping past the TTL before
+    # the first GET /auth) that this was the exact, sole cause each time a
+    # 225ms/320ms run needed a manual re-invocation during data collection.
+    #
+    # Only the successful attempt's PAR call is added to `calls`: a
+    # discarded, expired-before-use PAR call is an artifact of this
+    # measurement environment's TTL, not part of the flow's real,
+    # steady-state cost -- the same principle already applied to
+    # simulate_login()'s own login/confirm HTTP calls, which were never
+    # added to `calls` either (see run_insurance_flow()'s docstring).
+    par_max_attempts = 3
+    par_call = None
+    for par_attempt in range(1, par_max_attempts + 1):
+        state = secrets.token_urlsafe(9)
+        nonce = secrets.token_urlsafe(9)
+        verifier, challenge = make_pkce_pair()
+        request_object = make_request_object(
+            signing_key, kid, alg, scope=f"{scope} consent:urn:raidiaminsurance:{consent_uid}",
+            state=state, nonce=nonce, code_challenge=challenge,
+        )
+        par_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request")
+        par_body = {
+            "request": request_object,
+            "client_id": CLIENT_ID,
+            "client_assertion": par_assertion,
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        }
+        par_call, resp = do_call(
+            session, "POST", f"https://{AUTH_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, data=par_body, src="CallPAREndpoint",
+        )
+        resp.raise_for_status()
+        request_uri = resp.json()["request_uri"]
 
-    # Automated login (see simulate_login()/wait_for_authorization_code())
-    auth_url = f"https://{AUTH_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
-    code = wait_for_authorization_code(auth_url, cert)
+        auth_url = f"https://{AUTH_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
+        try:
+            code = wait_for_authorization_code(auth_url, cert)
+            break
+        except RequestUriExpiredError:
+            if par_attempt == par_max_attempts:
+                raise
+    calls.append(par_call)
 
     # POST /token (authorization_code)
     ac_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
