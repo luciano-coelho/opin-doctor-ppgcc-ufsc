@@ -106,6 +106,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import jwt as pyjwt
+import rfc8785
 import requests
 import urllib3
 from cryptography import x509
@@ -330,46 +331,47 @@ def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
 
 def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
     """
-    Strong Nesting client-side signing (Decision 9 in
-    thesis/results/v4/DECISIONS.md). The header uses an ordinary
-    `alg: "PS256"` from the start -- unlike the AS/RS's own outbound
-    hybrid artifacts (which use the combined `MLDSA65-RSA2048-PSS-SHA256`
-    alg, since the issuer holds the private key and can pick any header it
-    likes), the AS here can only ever *verify* what the client already
-    signed, never re-sign it -- sigma1 is only valid over the exact header
-    bytes the client used, so that header has to already be one
-    oidc-provider's own unmodified PS256 path can accept once this gets
-    truncated back down to sigma1 alone on the AS side.
+    Payload-extension client-side signing (Decision 13 in
+    thesis/results/v4/DECISIONS.md) -- replaces Decision 9's Strong Nesting
+    for client_assertion/the PAR request object. Full RFC 8785 rationale in
+    DECISIONS.md; summary here:
 
-    sigma1 = PS256_sign(header || "." || payload) -- via pyjwt, same as
-    classic mode, over the classic_key half of signing_key.
-    sigma2 = ML-DSA-65_sign(header || "." || payload || sigma1) -- via the
-    pqc-signer docker helper (no native ML-DSA support in Python), over
-    the pqc_jwk half of signing_key. Final signature segment =
-    base64url(sigma1 || sigma2), 3565 raw bytes -- identical byte
-    convention to every other Strong Nesting artifact in this project.
+    1. ML-DSA-65 signs RFC 8785 (JCS) canonical bytes of `claims` alone
+       (no `pqc` field yet) -- via the pqc-signer docker helper's raw-sign
+       mode, over the pqc_jwk half of signing_key.
+    2. That signature is embedded as `claims["pqc"] = {"alg": "ML-DSA-65",
+       "signature": base64url(...)}`.
+    3. The classic_key half of signing_key signs the claims-with-pqc
+       normally via pyjwt, alg RS256 (not PS256 -- a deliberate part of
+       this scheme, chosen for maximal legacy-verifier compatibility, see
+       DECISIONS.md), header alg "RS256" from the start.
+
+    The result is an entirely ordinary RS256 JWT: no truncation is needed
+    on the AS side (unlike Decision 9), since nothing about this token's
+    shape is unusual to a standard verifier -- `pqc` is just an extra,
+    ignorable claim. clientHybridAuth.js additionally verifies it and
+    rejects the request if that verification fails, but no longer needs to
+    rewrite the token before handing it to oidc-provider.
     """
     classic_key, pqc_jwk = signing_key
-    ps256_headers = {**headers, "alg": "PS256"}
-    ps256_jwt = pyjwt.encode(claims, classic_key, algorithm="PS256", headers=ps256_headers)
-    header_b64, payload_b64, sig_b64 = ps256_jwt.split(".")
-    sigma1 = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
-    message = f"{header_b64}.{payload_b64}".encode("ascii")
+    canonical_claims = rfc8785.dumps(claims)
 
     sign_payload = json.dumps({
         "jwk": pqc_jwk,
-        "message_b64": base64.b64encode(message + sigma1).decode("ascii"),
+        "message_b64": base64.b64encode(canonical_claims).decode("ascii"),
     })
     result = subprocess.run(
         ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
         input=sign_payload, capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"pqc-signer (hybrid raw-sign) failed: {result.stderr}")
-    sigma2 = base64.b64decode(result.stdout.strip())
+        raise RuntimeError(f"pqc-signer (payload-extension raw-sign) failed: {result.stderr}")
+    pqc_sig_raw = base64.b64decode(result.stdout.strip())
+    pqc_sig_b64url = base64.urlsafe_b64encode(pqc_sig_raw).rstrip(b"=").decode("ascii")
 
-    combined_sig = base64.urlsafe_b64encode(sigma1 + sigma2).rstrip(b"=").decode("ascii")
-    return f"{header_b64}.{payload_b64}.{combined_sig}"
+    claims_with_pqc = {**claims, "pqc": {"alg": "ML-DSA-65", "signature": pqc_sig_b64url}}
+    rs256_headers = {**headers, "alg": "RS256"}
+    return pyjwt.encode(claims_with_pqc, classic_key, algorithm="RS256", headers=rs256_headers)
 
 
 def make_client_assertion(signing_key, kid, alg, audience: str) -> str:

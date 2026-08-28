@@ -7,7 +7,6 @@ import io.micronaut.security.annotation.Secured;
 import io.micronaut.security.rules.SecurityRule;
 import jakarta.inject.Inject;
 
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +23,6 @@ public class JwksController {
 
     @Get
     public Map<String, Object> jwks() {
-        return Map.of("keys", List.of(responseSigningService.getPublicJwk()));
+        return Map.of("keys", responseSigningService.getPublicJwks());
     }
 }

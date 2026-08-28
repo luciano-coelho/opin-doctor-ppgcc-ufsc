@@ -1,20 +1,34 @@
-// Decision 9 (thesis/results/v4/DECISIONS.md): accepts client-signed
-// hybrid client_assertion / PAR request objects (client -> AS direction),
-// closing the Decision 7 gap. Only client_one is handled -- the only
-// client opin_flow.py drives in hybrid mode.
+// Decision 9 (thesis/results/v4/DECISIONS.md) originally, now Decision 13:
+// accepts client-signed hybrid client_assertion / PAR request objects
+// (client -> AS direction). Only client_one is handled -- the only client
+// opin_flow.py drives in hybrid mode.
 //
-// The client signs these with an ordinary `alg: "PS256"` header from the
-// start (see hybridVerification.js's truncateIfHybrid() for why this
-// direction can't use the combined alg header the AS/RS's own outbound
-// artifacts use); this module supplies client_one's own classical and
-// ML-DSA-65 public keys -- read from static files, not oidc-provider's
-// client registry, since only the classical key is registered there
-// (unchanged from classic/pqc mode) and oidc-provider has no notion of a
-// second, PQC key for a client at all.
+// As of Decision 13, the client signs these via the payload-extension
+// scheme (RS256 last, over claims carrying a `pqc` extension -- see
+// payloadExtensionVerification.js), an entirely ordinary RS256 JWT that
+// oidc-provider's own native verification already accepts unmodified --
+// unlike Decision 9's Strong Nesting, there is nothing to truncate here
+// anymore. This middleware's only remaining job is the ADDITIONAL check
+// oidc-provider has no way to perform on its own: if `pqc` is present but
+// its ML-DSA-65 signature doesn't verify, reject the request outright
+// (oidc-provider's own RS256-only check would otherwise still accept it,
+// silently downgrading the AND gate to an OR gate). This module supplies
+// client_one's own classical and ML-DSA-65 public keys -- read from
+// static files, not oidc-provider's client registry, since only the
+// classical key is registered there (unchanged from classic/pqc mode) and
+// oidc-provider has no notion of a second, PQC key for a client at all.
 import { readFileSync } from 'node:fs';
-import { truncateIfHybrid } from './hybridVerification.js';
+import { verifyPayloadExtension } from './payloadExtensionVerification.js';
 
-const CLASSIC_JWKS_PATH = '/certs/client_one_pub.jwks';
+// client_one_hybrid_pub.jwks, not client_one_pub.jwks -- same RSA key/kid,
+// but "alg": "RS256" instead of "PS256" (see mongo-seed/start.sh's own
+// comment on this same file for why: a real JWKS consumer doing ordinary
+// kid+alg discovery needs the published alg to match what's actually in
+// the token header). Doesn't change what THIS module verifies with (only
+// n/e are used, alg is never inspected here), but keeps every place that
+// reads client_one's hybrid-mode public key pointed at the one file
+// that's actually correct to publish.
+const CLASSIC_JWKS_PATH = '/certs/client_one_hybrid_pub.jwks';
 const PQC_JWKS_PATH = '/certs/client_one_pqc_pub.jwks';
 
 const classicJwks = JSON.parse(readFileSync(CLASSIC_JWKS_PATH, 'utf8'));
@@ -65,15 +79,24 @@ export async function inboundHybridClientAuthMiddleware(ctx, next) {
     for (const field of ['client_assertion', 'request']) {
       const value = parsed[field];
       if (typeof value === 'string' && COMPACT_JWS_RE.test(value)) {
-        const result = await truncateIfHybrid(value, classicPublicJwk, pqcPublicJwk);
-        if (result.truncated) {
-          parsed[field] = result.truncated;
+        const result = await verifyPayloadExtension(value, classicPublicJwk, pqcPublicJwk);
+        // hybridShaped is only ever set once RS256 has already verified
+        // (see payloadExtensionVerification.js) -- so this specifically
+        // catches "RS256 is valid, a pqc claim is present, but it doesn't
+        // verify", the one case oidc-provider's own subsequent RS256-only
+        // check cannot catch on its own. No pqc claim at all, or RS256
+        // itself invalid, both fall through unchanged: oidc-provider's
+        // normal alg/signature check already does the right thing either
+        // way (accept a legitimately classical-only assertion, or reject
+        // an invalid one with its own standard error).
+        if (result.hybridShaped && !result.valid) {
+          ctx.status = 400;
+          ctx.body = {
+            error: 'invalid_request',
+            error_description: `hybrid AND-gate failed for ${field}: ${result.reason}`,
+          };
+          return;
         }
-        // Not hybrid-shaped, or hybrid verification failed: leave the
-        // field exactly as received. A genuinely invalid assertion still
-        // gets rejected -- just by oidc-provider's own normal alg-
-        // whitelist/signature check, with its own standard error, rather
-        // than by this middleware pre-emptively guessing at intent.
       }
     }
 

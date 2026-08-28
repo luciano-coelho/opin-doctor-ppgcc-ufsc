@@ -1,6 +1,5 @@
 package com.raidiam.trustframework.mockinsurance.fapi;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.util.Pair;
 import com.raidiam.trustframework.mockinsurance.crypto.ResponseSigningService;
 import com.raidiam.trustframework.mockinsurance.utils.AnnotationsUtil;
@@ -45,9 +44,6 @@ public class ResponseSigningFilter implements HttpServerFilter {
     private ResponseSigningService responseSigningService;
 
     @Inject
-    private ObjectMapper objectMapper;
-
-    @Inject
     public ResponseSigningFilter(ApplicationContext applicationContext) {
         this.applicationContext = applicationContext;
     }
@@ -90,8 +86,7 @@ public class ResponseSigningFilter implements HttpServerFilter {
         }
 
         try {
-            byte[] jsonBytes = objectMapper.writeValueAsBytes(body.get());
-            String jws = responseSigningService.sign(jsonBytes);
+            String jws = responseSigningService.sign(body.get());
             // A fresh response, not response.body(jws): Micronaut resolves the
             // message body writer from the original (POJO-typed) response, and
             // mutating that same instance's body in place makes it try to

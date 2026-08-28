@@ -43,6 +43,15 @@ const isHybrid = CRYPTO_PROFILE === 'hybrid';
 const internalSigningAlgs = isHybrid ? ['PS256'] : cryptoProfile.signingAlgs;
 const internalSigningKey = isHybrid ? cryptoProfile.classicSigningKey : cryptoProfile.signingKey;
 
+// Client-to-AS direction only (client_assertion, the PAR request object) --
+// Decision 13 moved these two off Strong Nesting onto the payload-extension
+// scheme (RS256 last, over claims carrying a `pqc` extension), which the
+// client signs under an ordinary `alg: "RS256"` header from the start (see
+// clientHybridAuth.js/payloadExtensionVerification.js). id_token/JARM stay
+// on internalSigningAlgs/PS256 above -- unaffected by Decision 13, still
+// Strong Nesting, still signed by the AS itself, not the client.
+const clientSigningAlgs = isHybrid ? ['RS256'] : cryptoProfile.signingAlgs;
+
 // The AS's encryption key -- unaffected by CRYPTO_PROFILE (see enabledJWA
 // below: encryption stays classical regardless of profile).
 const AS_ENC_JWK = {
@@ -308,8 +317,8 @@ export default function (mtlsIssuer, ssaJwks) {
     enabledJWA: {
       authorizationSigningAlgValues: internalSigningAlgs,
       introspectionSigningAlgValues: internalSigningAlgs,
-      requestObjectSigningAlgValues: internalSigningAlgs,
-      clientAuthSigningAlgValues: internalSigningAlgs,
+      requestObjectSigningAlgValues: clientSigningAlgs,
+      clientAuthSigningAlgValues: clientSigningAlgs,
       userinfoSigningAlgValues: internalSigningAlgs,
       idTokenSigningAlgValues: internalSigningAlgs,
       // Encryption stays classical regardless of profile: jose has no
@@ -324,8 +333,8 @@ export default function (mtlsIssuer, ssaJwks) {
     clientDefaults: {
       grant_types: ['authorization_code', 'client_credentials', 'refresh_token', 'implicit'],
       id_token_signed_response_alg: internalSigningAlgs[0],
-      request_object_signed_response_alg: internalSigningAlgs[0],
-      request_object_signing_alg: internalSigningAlgs[0],
+      request_object_signed_response_alg: clientSigningAlgs[0],
+      request_object_signing_alg: clientSigningAlgs[0],
       authorization_signed_response_alg: internalSigningAlgs[0],
       response_types: ['code', 'code id_token'],
       tls_client_certificate_bound_access_tokens: true,
@@ -661,7 +670,7 @@ export default function (mtlsIssuer, ssaJwks) {
               application_type: 'web',
               client_name: software_client_name,
               id_token_signed_response_alg: internalSigningAlgs[0],
-              request_object_signing_alg: internalSigningAlgs[0],
+              request_object_signing_alg: clientSigningAlgs[0],
               authorization_signed_response_alg: internalSigningAlgs[0],
               tos_uri: software_tos_uri,
               logo_uri: software_logo_uri,

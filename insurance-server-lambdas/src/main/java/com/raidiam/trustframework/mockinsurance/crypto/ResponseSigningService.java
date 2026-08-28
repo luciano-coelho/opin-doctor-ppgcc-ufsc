@@ -12,6 +12,7 @@ import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.erdtman.jcs.JsonCanonicalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +66,32 @@ public class ResponseSigningService {
         String signToBase64Url(byte[] signingInput) throws Exception;
 
         Map<String, Object> publicJwk();
+
+        // What /jwks actually publishes -- a list, not the single publicJwk()
+        // above, since the hybrid signer needs to publish TWO entries (see
+        // its own override): the composed HYBRID key as before, plus a
+        // plain RSA entry so a real, standards-compliant JWKS consumer
+        // doing ordinary kid+alg discovery can find a key that matches
+        // what a payload-extension-signed JWT's header actually says
+        // (Decision 13's follow-up fix -- confirmed empirically with
+        // jose.createLocalJWKSet that without this second entry, real
+        // discovery fails outright, `/jwks` only ever having published the
+        // composed key). classic/pqc signers only ever had one key to
+        // publish -- default wraps publicJwk() in a singleton list so
+        // neither needs to change.
+        default java.util.List<Map<String, Object>> publicJwks() {
+            return java.util.List.of(publicJwk());
+        }
+
+        // Payload-extension hook (Decision 13): called with the claims as a
+        // mutable map BEFORE they're serialized into the JWT payload, so a
+        // signer can inject an extra claim (the hybrid signer's `pqc`
+        // field) that then gets covered by signToBase64Url's own signature
+        // like any other claim. classic/pqc signers don't need this --
+        // default is a no-op, returning claims unchanged.
+        default Map<String, Object> preparePayload(Map<String, Object> claims) throws Exception {
+            return claims;
+        }
     }
 
     @PostConstruct
@@ -82,13 +109,17 @@ public class ResponseSigningService {
         LOG.info("Response signing profile: {} (alg: {}, kid: {})", cryptoProfile, signer.alg(), signer.kid());
     }
 
-    public String sign(byte[] jsonPayload) throws Exception {
+    public String sign(Object body) throws Exception {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> claims = objectMapper.convertValue(body, Map.class);
+        Map<String, Object> payloadClaims = signer.preparePayload(claims);
+
         Map<String, Object> header = new LinkedHashMap<>();
         header.put("alg", signer.alg());
         header.put("kid", signer.kid());
         header.put("typ", "JWT");
         String headerB64 = base64Url(objectMapper.writeValueAsBytes(header));
-        String payloadB64 = base64Url(jsonPayload);
+        String payloadB64 = base64Url(objectMapper.writeValueAsBytes(payloadClaims));
         byte[] signingInput = (headerB64 + "." + payloadB64).getBytes(StandardCharsets.US_ASCII);
         String sigB64 = signer.signToBase64Url(signingInput);
         return headerB64 + "." + payloadB64 + "." + sigB64;
@@ -96,6 +127,10 @@ public class ResponseSigningService {
 
     public Map<String, Object> getPublicJwk() {
         return signer.publicJwk();
+    }
+
+    public java.util.List<Map<String, Object>> getPublicJwks() {
+        return signer.publicJwks();
     }
 
     private static String base64Url(byte[] bytes) {
@@ -165,22 +200,15 @@ public class ResponseSigningService {
         };
     }
 
-    // Strong Nesting (PS256 + ML-DSA-65), per thesis/results/v4/
-    // ARCHITECTURE.md:
-    //   sigma1 = PS256_sign(message)
-    //   sigma2 = ML-DSA-65_sign(message || sigma1)   -- raw byte
-    //            concatenation, not base64 (same convention as the AS's
-    //            mock_as/utils/opin/hybridSigning.js, confirmed with the
-    //            user to be identical across Etapas 2/3/6)
-    //   signature = base64url(sigma1 || sigma2)
-    //
-    // Unlike the AS (oidc-provider/jose can't be told to produce this alg,
-    // forcing an intercept-and-replace approach after the fact -- see
-    // DECISIONS.md), this service already builds the JWS header/signing
-    // input itself (see sign() above) before calling out to a JwsSigner,
-    // so there's no library alg-name validation to work around here: the
-    // header this produces says "MLDSA65-RSA2048-PSS-SHA256" from the
-    // start, no replacement step needed.
+    // Payload extension (RS256 + a `pqc` claim), per thesis/results/v4/
+    // DECISIONS.md (Decision 13) -- replaces Strong Nesting for RS-issued
+    // responses. ML-DSA-65 signs first, over the RFC 8785 (JCS) canonical
+    // bytes of the claims WITHOUT the `pqc` extension (preparePayload,
+    // called by sign() before the header/signingInput are ever built);
+    // RS256 signs last, over the ordinary JWS signing input that already
+    // has `pqc` embedded in it (signToBase64Url below) -- an entirely
+    // standard RS256 JWS an unmodified verifier accepts without any
+    // special-casing, the `pqc` claim just along for the ride.
     private JwsSigner loadHybridSigner() throws Exception {
         Map<?, ?> hybridJson = objectMapper.readValue(readResource("hybrid.json"), Map.class);
         Map<?, ?> classicJwk = (Map<?, ?>) hybridJson.get("classicSigningKey");
@@ -188,7 +216,7 @@ public class ResponseSigningService {
 
         RSAKey rsaKey = RSAKey.parse(objectMapper.writeValueAsString(classicJwk));
         RSASSASigner rsaSigner = new RSASSASigner(rsaKey);
-        JWSHeader nimbusHeader = new JWSHeader.Builder(JWSAlgorithm.PS256).build();
+        JWSHeader nimbusHeader = new JWSHeader.Builder(JWSAlgorithm.RS256).build();
         // Decoded directly from the JWK's own "n" field (not
         // rsaKey.toRSAPublicKey().getModulus().toByteArray()) -- BigInteger's
         // two's-complement encoding adds a leading zero byte whenever the
@@ -227,29 +255,44 @@ public class ResponseSigningService {
 
         return new JwsSigner() {
             public String alg() {
-                return "MLDSA65-RSA2048-PSS-SHA256";
+                return "RS256";
             }
 
             public String kid() {
                 return hybridKid;
             }
 
-            public String signToBase64Url(byte[] signingInput) throws Exception {
-                byte[] sigma1 = rsaSigner.sign(nimbusHeader, signingInput).decode();
-
-                byte[] messagePlusSigma1 = new byte[signingInput.length + sigma1.length];
-                System.arraycopy(signingInput, 0, messagePlusSigma1, 0, signingInput.length);
-                System.arraycopy(sigma1, 0, messagePlusSigma1, signingInput.length, sigma1.length);
+            // Called before signToBase64Url, over the claims as received
+            // (no `pqc` yet). JsonCanonicalizer re-parses and re-emits
+            // whatever JSON string Jackson produces here per RFC 8785 --
+            // its own canonical form, not dependent on Jackson's specific
+            // key-ordering/number-formatting choices. This is the one
+            // step verification has to reproduce byte-for-byte (after
+            // deleting `pqc` from the received payload) to check the
+            // ML-DSA-65 signature -- see mock_as's
+            // payloadExtensionVerification.js for the matching Node
+            // implementation and DECISIONS.md for why JCS specifically.
+            public Map<String, Object> preparePayload(Map<String, Object> claims) throws Exception {
+                String claimsJson = objectMapper.writeValueAsString(claims);
+                byte[] canonicalBytes = new JsonCanonicalizer(claimsJson).getEncodedString()
+                        .getBytes(StandardCharsets.UTF_8);
 
                 Signature signature = Signature.getInstance("ML-DSA", "BC");
                 signature.initSign(pqcPrivateKey);
-                signature.update(messagePlusSigma1);
-                byte[] sigma2 = signature.sign();
+                signature.update(canonicalBytes);
+                byte[] pqcSig = signature.sign();
 
-                byte[] combined = new byte[sigma1.length + sigma2.length];
-                System.arraycopy(sigma1, 0, combined, 0, sigma1.length);
-                System.arraycopy(sigma2, 0, combined, sigma1.length, sigma2.length);
-                return base64Url(combined);
+                Map<String, Object> pqcClaim = new LinkedHashMap<>();
+                pqcClaim.put("alg", "ML-DSA-65");
+                pqcClaim.put("signature", base64Url(pqcSig));
+
+                Map<String, Object> withPqc = new LinkedHashMap<>(claims);
+                withPqc.put("pqc", pqcClaim);
+                return withPqc;
+            }
+
+            public String signToBase64Url(byte[] signingInput) throws Exception {
+                return rsaSigner.sign(nimbusHeader, signingInput).toString();
             }
 
             public Map<String, Object> publicJwk() {
@@ -260,6 +303,28 @@ public class ResponseSigningService {
                 jwk.put("kid", hybridKid);
                 jwk.put("pk_hybrid", base64Url(hybridPk));
                 return jwk;
+            }
+
+            // Decision 13 follow-up: a plain RSA entry alongside the
+            // composed HYBRID one above, same kid (matching what every
+            // payload-extension-signed token's header actually carries) so
+            // a real JWKS consumer's ordinary kid+kty+alg discovery finds
+            // it -- confirmed empirically (jose.createLocalJWKSet) that
+            // without this, discovery fails outright, since kty: "HYBRID"
+            // is not a type any standard JOSE library's RS256 path
+            // recognizes. classicJwk's own "n"/"e" (the same key
+            // signToBase64Url above actually signs with), not a
+            // re-derivation from hybridPk's first 256 bytes -- identical
+            // values either way, but this is the one already on hand.
+            public java.util.List<Map<String, Object>> publicJwks() {
+                Map<String, Object> plainRsaJwk = new LinkedHashMap<>();
+                plainRsaJwk.put("kty", "RSA");
+                plainRsaJwk.put("use", "sig");
+                plainRsaJwk.put("alg", "RS256");
+                plainRsaJwk.put("kid", hybridKid);
+                plainRsaJwk.put("n", classicJwk.get("n"));
+                plainRsaJwk.put("e", classicJwk.get("e"));
+                return java.util.List.of(publicJwk(), plainRsaJwk);
             }
         };
     }
