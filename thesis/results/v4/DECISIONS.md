@@ -1336,3 +1336,315 @@ decision -- it is a measurement/reporting decision only. The existing
 this thesis) is left untouched per instruction; this decision's 3-column
 table (adding hybrid) is the one to cite going forward for total flow
 latency across all three experiments.
+
+## 13. Migrating the JWT hybrid signature from Strong Nesting to a payload-extension scheme -- a deliberate security-property tradeoff, proposed by the advisor
+
+**Context and motivation.** Every hybrid JWT in this project has, since Etapa 2,
+used Strong Nesting (Bindel et al., 2017): sigma1 = classical_sign(message),
+sigma2 = ML-DSA-65_sign(message‖sigma1), signature = base64url(sigma1‖sigma2)
+-- ML-DSA-65 *last*, over a message that already includes the classical
+signature. This gives SUF-CMA (strong unforgeability): nobody can produce a
+second valid signature over the same message, even with the first signature
+in hand. The advisor proposed the opposite composition: extend the *payload*
+with a `pqc` claim carrying the ML-DSA-65 signature, computed FIRST over the
+claims alone, then let the classical algorithm sign LAST, over the whole
+JWS input (header + payload, the payload already carrying `pqc`) -- the same
+ordering principle Etapa 6's hybrid X.509 certificates already use (PQC
+first over a preTBS, RSA last over the complete TBS), now applied to JWTs.
+The header reverts to an ordinary `{"alg": "RS256", "typ": "JWT"}` (RS256,
+not PS256 -- a deliberate part of this scheme, chosen for maximal
+legacy-verifier compatibility) -- no custom alg string, no interception of
+oidc-provider's own signing step needed for artifacts using this scheme,
+since the token it produces is byte-for-byte an ordinary, valid RS256 JWT;
+`pqc` is just an extra, ignorable claim to a verifier that's never heard of
+it. This is a deliberate trade: **SUF-CMA gives way to EUF-CMA** (existential
+unforgeability -- nobody can forge a *new* message's signature, but a
+second signature over the *same already-signed* message is not excluded by
+the primitive alone). Accepted because none of this project's consents ever
+circulate with their classical and PQC signatures detached from one
+another for an attacker to recombine -- the practical recombination risk
+SUF-CMA defends against does not apply to how OPIN actually moves these
+artifacts. References backing this analysis: Bindel, Herath, McKague &
+Stebila (2017, PQCrypto, the Strong Nesting composition itself and its
+SUF-CMA proof); Bindel, Braun, Gladiator, Stebila & Wiggers (2019, JOSS,
+the X.509 hybrid-extension mechanism this JWT scheme mirrors); Brendel,
+Cremers, Jackson & Zhao (2021, IEEE S&P, "The Provable Security of
+Ed25519" -- SUF-CMA vs. EUF-CMA in practice, and why protocol-level context
+often makes the weaker property sufficient); Bhargavan et al. (formal
+protocol analyses that assume SUF-CMA as a base building block, the
+standard this project is deliberately relaxing); and the F1000Research
+review on strong-unforgeability signature schemes (survey grounding for
+why this distinction is a recognized, named tradeoff in the literature,
+not an ad hoc justification).
+
+**Investigation before writing any code -- two real technical obstacles
+found, reported, and resolved with the user before implementing anything:**
+
+1. **JSON has no canonical serialization.** Verifying `payload.pqc.signature`
+   requires removing `pqc` from the received payload and RE-SERIALIZING the
+   remainder to reproduce the exact bytes ML-DSA-65 signed -- unlike DER
+   (used for the X.509 case this mirrors), plain JSON has no single
+   canonical encoding, so Node's `JSON.stringify`, Java's Jackson, and
+   Python's `json.dumps` are not guaranteed to reproduce each other's
+   byte-for-byte output. **Resolved: adopt RFC 8785 (JSON Canonicalization
+   Scheme, JCS) formally**, implemented identically on all three sides via
+   established reference libraries (not hand-rolled, to avoid exactly the
+   kind of subtle cross-language divergence this problem is about):
+   `canonicalize` (npm, Node/AS), `io.github.erdtman:java-json-canonicalization`
+   (Maven, the JCS spec author's own reference implementation, Java/RS),
+   `rfc8785` (PyPI, Python/client). ML-DSA-65 signs the JCS-canonical bytes
+   of the claims WITHOUT `pqc`; the JWT payload segment itself does NOT
+   need to be JCS (it's transmitted verbatim and RS256 covers it exactly
+   as produced, no reconstruction needed there) -- JCS is only load-bearing
+   for the one step that has to be reproduced independently.
+
+2. **id_token and JARM have no public extension point to inject `pqc`
+   before oidc-provider's native signing pass.** Traced directly in
+   oidc-provider 9.5.1's own source (downloaded via `npm pack`, same
+   method as Decision 10's investigation): both id_token and JARM are
+   built through the exact same internal `IdToken` class
+   (`lib/models/id_token.js`; `lib/response_modes/jwt.js`'s JARM handler
+   literally does `new IdToken({}, {ctx}); token.extra = payload;
+   token.issue(...)`) via a `payload()` method and a `set()` method that
+   are never exposed through any documented configuration hook --
+   `extraTokenClaims` (already used elsewhere in this codebase) only
+   applies to opaque/JWT-formatted *access tokens*, a different code path
+   entirely. Decision 10's `ExternalSigningKey` mechanism does not help
+   here either: its `sign(data)` hook receives `data` already fully
+   serialized (`base64url(header) + "." + base64url(payload)`) -- there is
+   no way to modify the payload from inside it, only to supply alternate
+   signature bytes over what's already fixed. The only remaining path
+   would be monkey-patching `IdToken.prototype.payload` at boot --
+   depending on undocumented library internals rather than a supported
+   extension point. **Decided with the user: do not do this.** id_token
+   and JARM stay on Strong Nesting exactly as Decision 10 left them,
+   completely untouched by this decision -- an explicit, justified scope
+   exception, not a gap: the fragility a prototype-patch would introduce
+   (breaking silently on any future oidc-provider upgrade that
+   restructures this internal class) is disproportionate to the benefit
+   of migrating two artifacts whose current mechanism already works
+   correctly and needs nothing from this decision.
+
+**Implementation, on every artifact WITHOUT this blocker** (RS-issued
+Consents/Person responses, client_assertion, the PAR request object --
+`tokens do AS` beyond id_token/JARM turned out not to exist as a distinct
+category in this codebase: nothing else was ever routed through
+`hybridSigning.js`'s outbound `rehybridizeJwt`/`rehybridizeInPlace`
+middleware in practice, confirmed by tracing every caller):
+
+- **RS** (`ResponseSigningService.java`): `sign()`'s signature changed from
+  `sign(byte[] jsonPayload)` to `sign(Object body)` -- the RS needs the
+  claims as a mutable structure to inject `pqc` before final
+  serialization, not pre-serialized bytes. A new `JwsSigner.preparePayload`
+  hook (default no-op, so classic/pqc signers are untouched) lets the
+  hybrid signer do this; `signToBase64Url` for hybrid is now a single,
+  ordinary RS256 signature (`JWSAlgorithm.RS256`, not `PS256`) -- Strong
+  Nesting's sigma1/sigma2 combination logic is gone entirely from this
+  path. `alg()` now returns `"RS256"`.
+- **Client** (`opin_flow.py`'s `_sign_jwt_hybrid`): builds `claims`, signs
+  `rfc8785.dumps(claims)` with ML-DSA-65 via the pqc-signer docker helper's
+  raw-sign mode, embeds the result as `claims["pqc"]`, then
+  `pyjwt.encode(..., algorithm="RS256", ...)` as the final step.
+- **AS verification** (new `payloadExtensionVerification.js`, alongside --
+  not replacing -- `hybridSigning.js`/`hybridVerification.js`, which stay
+  exactly as they are for id_token/JARM): verifies RS256 first over the
+  received header+payload, then extracts `payload.pqc.signature`, removes
+  `pqc`, JCS-canonicalizes the remainder, and verifies ML-DSA-65 against
+  that. `clientHybridAuth.js` (Decision 9's inbound middleware) now calls
+  this instead of `truncateIfHybrid` -- and, unlike Decision 9, **no
+  longer needs to rewrite the request body at all**: a payload-extension
+  token is already an entirely ordinary, valid RS256 JWT the instant it
+  arrives, so oidc-provider's own native verification already accepts it
+  unmodified. The middleware's only remaining job is the one check
+  oidc-provider cannot perform on its own -- if `pqc` is present but its
+  ML-DSA-65 signature fails, reject the request outright (HTTP 400)
+  before oidc-provider ever sees it, since its own RS256-only check would
+  otherwise still accept a token whose PQC half was invalid or absent,
+  silently downgrading the AND gate to an OR gate. `truncateIfHybrid`/
+  `verifyHybrid` in `hybridVerification.js` have no remaining callers
+  anywhere in this codebase after this change -- left in place (not
+  deleted) since id_token verification conceptually still relies on the
+  same primitive being available/correct, but flagged here as dead code
+  from this decision's own perspective.
+
+**Two real, un-anticipated fixes found only by running a real flow, not
+by reading the code in isolation:**
+
+- `configuration.js`'s `internalSigningAlgs` (`['PS256']` for hybrid) fed
+  BOTH the id_token/JARM config keys (`idTokenSigningAlgValues`,
+  `authorizationSigningAlgValues`, correctly still PS256) AND the
+  client-auth config keys (`clientAuthSigningAlgValues`,
+  `requestObjectSigningAlgValues`, plus the `request_object_signing_alg`/
+  `request_object_signed_response_alg` client-metadata defaults) from the
+  same constant. Under the new scheme the client signs with RS256, not
+  PS256 -- reusing `internalSigningAlgs` there would have oidc-provider
+  reject every client_assertion/PAR object outright, before
+  `clientHybridAuth.js` even runs. Fixed by splitting off a new
+  `clientSigningAlgs` constant (`['RS256']` for hybrid) and repointing
+  exactly the client-facing config keys at it, leaving id_token/JARM's own
+  keys on the original `internalSigningAlgs`/PS256.
+- `client_one_pub.jwks`'s registered signing key still carries
+  `"alg": "PS256"` (this file is shared with classic mode, where that's
+  still correct -- `certs/main.go`'s `generateJWKS()` always sets it that
+  way regardless of profile, so patching the source file directly would
+  silently revert on the next regeneration). oidc-provider's own
+  `keystore.js` (`selectForDSA`, confirmed by reading the downloaded
+  source directly) only enforces an alg match when the candidate JWK
+  itself carries an `alg` field -- so the fix is to strip `alg` from
+  client_one's registered *signing* key specifically at MongoDB-seed time
+  (`mongo-seed/start.sh`, hybrid-mode-only `jq` transformation, right
+  after the existing profile-conditional JWKS-selection block), making the
+  same physical RSA key a valid candidate for either PS256 (classic) or
+  RS256 (hybrid) without weakening the match (`kid`+`kty`+`use` still
+  fully scope it) and without touching the shared source file at all.
+
+**Validated end-to-end, live, before any scenario re-run:** a full flow
+(both `run_insurance_flow`/`run_person_flow`) completed 28/28 calls with no
+errors on the first attempt after wiring everything together. Classifying
+all 26 captured JWTs by header alg and presence of a `pqc` claim: 2 JWE
+(id_token, unaffected), 16 RS-issued + 8 client-issued all `alg: "RS256"`
+with `pqc` present -- exactly the expected split, nothing left on the old
+combined-alg header outside id_token. Full independent cryptographic
+re-verification (fresh keys derived from each participant's own key
+material, not reusing any earlier session's trusted constants, same
+discipline as every prior sabatina in this document), reusing the actual
+production `payloadExtensionVerification.js` as a library: **26/26 valid**
+-- 16 against the RS's own key, 8 against client_one's, both via the new
+scheme; the 2 id_tokens still valid via the unchanged, original
+`verifyHybrid` (Strong Nesting). JARM re-verified from a fresh, independent
+live capture: still `{alg: "MLDSA65-RSA2048-PSS-SHA256", kid: HYBRID_KID}`,
+AND-gate valid, byte-for-byte the same shape as before this decision --
+confirming the id_token/JARM exception holds in practice, not just on
+paper. Negative-control coverage: the 3-identity verification loop
+(AS/RS/client_one) itself constitutes 52 implicit negative controls across
+the 26 tokens -- every token was rejected by the two non-matching
+identities and accepted only by the correct one, exercising the actual
+rejection path (not just the accept path) for both `RS256` and
+`ML-DSA-65` verification without needing a separately fabricated tampered
+token.
+
+**Regression check on the two mechanisms this decision's Java refactor
+could plausibly have disturbed even though neither is in its stated
+scope** (`ResponseSigningService.sign()`'s signature changed for every
+profile, not just hybrid): re-ran classic and pqc 0ms fresh, live, and
+diffed the resulting `jwt_sizes_bytes` list against the already-committed
+`thesis/results/v3` baselines for both -- **byte-for-byte identical in
+both profiles** (classic: avg 1385.42, 26/26 sizes match exactly; pqc: avg
+5458.81, 26/26 sizes match exactly). The `sign(Object body) ->
+objectMapper.convertValue(..., Map.class) -> preparePayload (no-op for
+classic/pqc) -> writeValueAsBytes` round trip is confirmed lossless for
+both untouched profiles.
+
+**Re-ran all 6 latency scenarios (hybrid)**, all completed cleanly with no
+retries needed this time (unlike Decision 11's round, which hit the
+already-documented PAR TTL issue twice). Every metric perfectly stable
+across all 6 scenarios (0/14/30/140/225/320ms):
+
+| Metric | Before (Strong Nesting) | After (payload extension) |
+|---|---|---|
+| JWT average | 5933.96 bytes | **7324.81 bytes** |
+| AS bytes | 78231 | 90433 |
+| RS bytes | 102075 | 126035 |
+| PKI/CRL | 38432 (unchanged, untouched by this decision) | 38432 |
+| mTLS handshake P50 | 25880.0 (unchanged, untouched) | 25880.0 |
+| `client_cert_bytes` isolation | 6859/6842/0 | 6859/6842/0, unchanged |
+
+**The JWT-size growth is expected and precisely explained, not a
+regression:** the ML-DSA-65 signature now gets base64url-encoded TWICE --
+once as the `pqc.signature` claim's own string value, then again as part
+of the whole payload's own base64url encoding for the JWS -- versus Strong
+Nesting's single base64url pass over the raw combined signature bytes.
+3309 raw ML-DSA-65 signature bytes -> 4412 base64url characters after one
+encoding pass -> ~5883 characters' worth of additional encoding overhead
+once that string is itself re-encoded as part of the payload. This is the
+literal, inherent cost of "retrocompatibility over efficiency" the advisor's
+scheme deliberately accepts, not an implementation inefficiency to fix.
+**OPINsize recomputed**: `6x25880.0 + 26x7324.81 + 2x2208 = 350141.06`
+bytes -- delta from the previous 313978.96 is +36162.10, which reconciles
+exactly with the per-JWT delta (7324.81-5933.96=1390.85) times 26 JWTs
+(36162.10) -- the entire OPINsize change traces to this one, fully
+explained mechanism, nothing else moved.
+
+**A claim in this decision's own first "validated end-to-end" pass turned
+out to be wrong -- caught by the user asking a pointed follow-up question,
+not by anything in the original testing.** The original legacy-verifier
+check imported each classical public key by hand
+(`importJWK({kty:'RSA', n, e, alg:'RS256'}, 'RS256')`), with `alg`
+hardcoded by the test itself -- it proved only that *if* a verifier already
+knows out-of-band that the token is RS256, `jose` accepts it; it never
+exercised real `kid`-based JWKS discovery, the thing an actual
+"legacy-compatible" claim depends on. Corrected the test to use
+`jose.createLocalJWKSet` against each JWKS exactly as published/registered,
+with no manual override, and got the opposite result:
+
+- `client_one_pub.jwks`'s registered signing key still had `"alg": "PS256"`
+  while the token header said `"RS256"` -- **REJECTED**,
+  `ERR_JWKS_NO_MATCHING_KEY`.
+- The RS's real, live `/jwks` only ever published the composed
+  `kty: "HYBRID"` entry -- no plain RSA key for a standard library's RS256
+  path to find at all -- **REJECTED**, `ERR_JWKS_NO_MATCHING_KEY`.
+
+So the scheme's central promise -- "an ordinary verifier accepts this
+without adaptation" -- held only for this project's *own* verification
+(`clientHybridAuth.js`/`payloadExtensionVerification.js`, which read key
+material directly from known files, never through `kid`+`alg` JWKS
+discovery), not for a real external relying party doing standard discovery.
+That gap is now closed, not deferred:
+
+- **RS `/jwks`**: `ResponseSigningService`'s `JwsSigner` interface gained a
+  `publicJwks()` method (defaulting to a singleton list wrapping the
+  existing `publicJwk()`, so classic/pqc are untouched) that the hybrid
+  signer overrides to publish TWO entries -- the original composed
+  `kty: "HYBRID"` key unchanged, plus a new plain `kty: "RSA"`,
+  `alg: "RS256"` entry under the *same* `kid` (the one every
+  payload-extension token's header actually carries), built from the exact
+  `n`/`e` `signToBase64Url` already signs with. `JwksController` now
+  returns `getPublicJwks()`.
+- **Client**: a new, committed file, `client_one_hybrid_pub.jwks` --
+  byte-identical to `client_one_pub.jwks` except `"alg": "PS256"` ->
+  `"alg": "RS256"` on the signing key -- mirrors the existing
+  `client_one_pqc_pub.jwks` pattern exactly (same `kid`/`n`/`e`, only the
+  published `alg` differs). `client_one_pub.jwks` itself is untouched
+  (still correct for classic mode, which still signs PS256).
+  `mongo-seed/start.sh`'s existing profile-conditional `CLIENT_ONE_JWKS`
+  selection gained an `elif hybrid` branch pointing at this file, replacing
+  the earlier, cruder fix (a `jq`-based `del(.alg)` at seed time, stripping
+  the field rather than correcting it) with a properly-labeled key.
+  `clientHybridAuth.js` now reads this same file too (functionally
+  identical either way, since it never inspected `alg`, but keeping every
+  reader pointed at the one file that's actually correct to publish).
+
+**Re-tested with the fix in place, same corrected methodology, both now
+pass:**
+
+- `client_one_hybrid_pub.jwks` (the file actually registered for hybrid
+  mode now): registered `alg: "RS256"` matches the token header ->
+  `jose.createLocalJWKSet` **ACCEPTED**.
+- The RS's live `/jwks`, fetched fresh: now `[{kty:"HYBRID",...},
+  {kty:"RSA", alg:"RS256", kid: <same>}]` -> `jose.createLocalJWKSet`
+  **ACCEPTED**.
+
+Confirmed this follow-up changes no measured byte content: a fresh 0ms
+run's `jwt_sizes_bytes` (avg 7324.81) matches the already-committed
+post-payload-extension baseline exactly, byte-for-byte -- neither the RS's
+extra JWKS entry nor the client's re-labeled one touches anything actually
+signed or transmitted in the measured flow, only what gets published/
+registered as metadata. The already-collected 6-scenario data from this
+decision's earlier pass therefore did not need re-collection. Full sabatina
+re-run regardless (client_cert_bytes isolation, JARM live re-verification,
+26/26 cryptographic re-verification, classic/pqc `/jwks` shape spot-check
+-- classic still publishes its original single `{kty:"RSA", alg:"PS256"}`
+entry, unaffected by the `publicJwks()` refactor) -- all clean.
+
+**Still deliberately deferred, genuinely not needed for the point above:**
+the AS's own `/jwks` still publishes only the single composed
+`kty: "HYBRID"` key, unchanged -- no fix applied there, because no
+AS-issued artifact currently uses the payload-extension scheme (id_token/
+JARM are the only AS-issued hybrid artifacts, and Decision 13 leaves both
+on Strong Nesting entirely). If a future decision ever adds a
+payload-extension AS-issued artifact, it would need the same
+`publicJwks()`-style fix `configuration.js`'s own `/jwks` override
+currently lacks. The broader question of whether the composed single-entry
+publication still makes sense at all, now that the two signatures verify
+independently of each other, remains open -- this decision only closed the
+concrete, demonstrated discovery failure, not the general design question.
