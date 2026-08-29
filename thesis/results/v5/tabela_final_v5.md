@@ -15,6 +15,51 @@ valem para qualquer um dos 6 cenários.
 
 ---
 
+## Metodologia de Agregação
+
+Cada valor deste documento passa por até duas camadas de agregação estatística, aplicadas
+por processos distintos do código (`baseline_automation.py` para a camada intra-execução,
+`median_automation.py` para a camada entre execuções) — nem sempre pelo mesmo processo nas
+duas camadas, e nem sempre por ambas. Esta seção documenta exatamente qual processo se aplica
+a cada métrica, em cada camada, para eliminar qualquer ambiguidade sobre "mediana de quê".
+
+**Camada 1 — intra-execução**: dentro de uma única execução do fluxo (28 chamadas HTTP),
+algumas métricas resultam de uma agregação sobre múltiplas amostras coletadas naquela mesma
+execução (ex.: ~6 conexões físicas mTLS, 26 JWTs). Outras não têm essa camada — são um total
+já fechado por execução, ou uma constante que nunca variou.
+
+**Camada 2 — entre execuções**: `median_automation.py` roda o fluxo 10 vezes por cenário e
+calcula a **mediana** dos 10 valores já produzidos pela Camada 1 (ou, quando não há Camada 1,
+a mediana dos 10 valores brutos por execução) — nunca agrupa as amostras individuais de
+múltiplas execuções num único cálculo. Ver `thesis/results/v5/DECISIONS.md` e
+`median_automation.py::summarize()`/`NAMED_SCALAR_METRICS`.
+
+| Métrica | Camada 1 (intra-execução) | Camada 2 (entre execuções) | N final na mediana |
+|---|---|---|---|
+| mTLS_handshake_bytes (P50) | **Mediana** de ~6 amostras de bytes por conexão física (dedup por `remoteIP:port`, outliers >3× a mediana removidos iterativamente — `filter_handshake_outliers`) | **Mediana** dos 10 P50s já calculados | 10 números (cada um já uma mediana de ~6) |
+| JWT médio | **Média** (não mediana) dos 26 tamanhos de JWT capturados na execução | **Mediana** das 10 médias já calculadas | 10 números (cada um já uma média de 26) |
+| total_bytes_exchanged | **Soma** de `request_bytes+response_bytes` das 28 chamadas da execução (não é uma estatística de tendência central, é um total) | **Mediana** das 10 somas | 10 números (cada um já uma soma de 28) |
+| bytes_by_participant (Client/AS/RS/PKI-CRL, sent/received) | **Soma** por participante/direção, sobre as chamadas roteadas a ele naquela execução | **Mediana** das 10 somas, separadamente por participante×direção | 10 números por célula da tabela |
+| Certificado do cliente (bytes DER) | Nenhuma — propriedade estática do arquivo de certificado (`client_cert_der_bytes(profile)`), idêntica em toda chamada | Mediana de 10 valores idênticos (trivial) | 10 números, todos iguais — não é uma agregação real, é uma constante reconfirmada 10× |
+| JWK_PK_size | **Nenhuma camada do pipeline de 180 execuções** | **Nenhuma** — não passa por `median_automation.py` de forma alguma | 0 — valor obtido fora do lote, por verificação ao vivo/estática (Decision 6), não por mediana de execuções |
+
+**Assimetria a não presumir por engano — JWT médio.** Ao contrário de `mTLS_handshake_bytes`,
+a Camada 1 do JWT médio é uma **média**, não uma mediana: `jwt_size_avg_bytes` é
+`statistics.mean()` sobre os 26 tamanhos de JWT de uma execução. Só a Camada 2 (entre as 10
+execuções) usa mediana. As duas métricas passam por "duas camadas de agregação", mas com
+processos estatísticos diferentes em cada uma — nem toda métrica é "mediana de mediana".
+
+**JWK_PK_size não é uma estatística do lote de 180 execuções.** É uma constante
+criptográfica — o tamanho fixo, em bytes, da chave pública ML-DSA-65 (1.952) ou da
+concatenação RSA+ML-DSA-65 (2.208) — confirmada por decodificação direta do material de
+chave (ao vivo via `/jwks`, ou estaticamente via `crypto-profiles/{pqc,hybrid}.json`), não
+calculada a partir de amostras coletadas nas execuções (Decision 6). Diferente de toda outra
+linha desta tabela, nenhuma das 180 execuções contribui matematicamente para este número —
+elas apenas confirmam, indiretamente, que a chave publicada em `/jwks` não mudou de tamanho
+durante o lote (o que de fato não mudaria, já que a chave é fixa por perfil).
+
+---
+
 ## Tráfego — OPINsize
 
 **Fórmula validada**: `OPINsize = N_mTLS × handshake_bytes(P50) + N_JWT × JWT_médio + N_JWK × JWK_PK_size`
