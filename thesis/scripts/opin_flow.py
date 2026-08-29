@@ -311,19 +311,44 @@ def load_client_signing_key(crypto_profile: str):
     return key, jwk["kid"], "PS256"
 
 
+def _run_pqc_signer(payload: str) -> str:
+    """
+    Spawns a fresh `docker run --rm -i` container per call (no long-lived
+    signer process) -- see PQC_SIGNER_IMAGE's own README for why. Observed
+    live during the v5 median-automation batch (PQC, 140ms, run 9/10): a
+    single invocation exceeded the original 30s timeout even though the
+    Docker daemon itself was otherwise healthy (a fresh manual `docker run`
+    right after returned in ~1s) -- a transient scheduling hiccup under the
+    sustained load of many consecutive ephemeral-container runs, not a
+    stuck daemon (contrast the `docker logs`-hang incident in the same
+    session, which took the whole daemon down for minutes and needed a
+    Docker Desktop restart). One retry at a longer timeout, same shape as
+    create_and_authorize_consent()'s PAR retry, absorbs that without
+    silently masking a real second failure -- see thesis/results/v5/DECISIONS.md.
+    """
+    last_error = None
+    for attempt in range(1, 3):
+        try:
+            result = subprocess.run(
+                ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
+                input=payload, capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired as e:
+            last_error = e
+            continue
+        if result.returncode != 0:
+            raise RuntimeError(f"pqc-signer failed: {result.stderr}")
+        return result.stdout.strip()
+    raise RuntimeError(f"pqc-signer timed out twice in a row: {last_error}")
+
+
 def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
     if alg == "PS256":
         return pyjwt.encode(claims, signing_key, algorithm="PS256", headers=headers)
     if alg == "ML-DSA-65":
         # signing_key is the raw private JWK here (see load_client_signing_key).
         payload = json.dumps({"jwk": signing_key, "headers": headers, "claims": claims})
-        result = subprocess.run(
-            ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
-            input=payload, capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"pqc-signer failed: {result.stderr}")
-        return result.stdout.strip()
+        return _run_pqc_signer(payload)
     if alg == "hybrid":
         return _sign_jwt_hybrid(claims, headers, signing_key)
     raise ValueError(f"unsupported signing alg: {alg}")
@@ -360,13 +385,7 @@ def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
         "jwk": pqc_jwk,
         "message_b64": base64.b64encode(canonical_claims).decode("ascii"),
     })
-    result = subprocess.run(
-        ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
-        input=sign_payload, capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"pqc-signer (payload-extension raw-sign) failed: {result.stderr}")
-    pqc_sig_raw = base64.b64decode(result.stdout.strip())
+    pqc_sig_raw = base64.b64decode(_run_pqc_signer(sign_payload).strip())
     pqc_sig_b64url = base64.urlsafe_b64encode(pqc_sig_raw).rstrip(b"=").decode("ascii")
 
     claims_with_pqc = {**claims, "pqc": {"alg": "ML-DSA-65", "signature": pqc_sig_b64url}}

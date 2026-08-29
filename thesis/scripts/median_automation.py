@@ -36,11 +36,23 @@ import baseline_automation as ba
 
 BASE_DIR = of.BASE_DIR
 
+# One retry per run for the whole flow (client_credentials -> consent ->
+# PAR -> login -> authorization_code exchange), not just the gateway-
+# metrics/pqc-signer sub-steps that already retry internally. Covers the
+# rare reentrant auth<->gateway introspection race documented as Decision 5
+# in thesis/results/v5/DECISIONS.md (auth mid-flight on the outer /token
+# call when the AS's own internal consent-fetch loops back through the
+# gateway to introspect against that same auth process -- observed once in
+# ~89 token exchanges). A SECOND consecutive failure on the same run is
+# treated as a real, new failure and stops the batch rather than retrying
+# again -- this is not a general-purpose flake-suppression retry.
+RUN_RETRY_LIMIT = 2
+
 NAMED_SCALAR_METRICS = {
     "jwt_size_avg_bytes": lambda m: m["jwt_size_avg_bytes"],
     "total_bytes_exchanged": lambda m: m["total_bytes_exchanged"],
     "client_cert_der_bytes": lambda m: m["client_cert_der_bytes"],
-    "handshake_bytes_p50_bytes": lambda m: m["gateway_metrics"]["handshake_bytes"]["p50_bytes"],
+    "handshake_bytes_p50_bytes": lambda m: (m["gateway_metrics"]["handshake_bytes"] or {}).get("p50_bytes"),
 }
 
 
@@ -50,7 +62,21 @@ def run_once(crypto_profile: str, latency_ms: int) -> dict:
     person_calls = of.run_person_flow(crypto_profile)
     run_end = datetime.now(timezone.utc)
     calls = insurance_calls + person_calls
+
+    # collect_gateway_metrics() already catches a `docker logs` failure/
+    # timeout internally and returns [] rather than raising (observed live:
+    # the daemon can be briefly slow to answer --since/--until right after a
+    # burst of consecutive runs) -- one retry here recovers the gateway-side
+    # sample in that case without treating a transient docker hiccup as a
+    # failed run; the underlying HTTP flow above already fully succeeded
+    # regardless. If it still comes back empty after the retry, handshake_ms/
+    # handshake_bytes legitimately stay None for this run, which median_of/
+    # variation_pct already filter out rather than crash on.
     gateway_entries = ba.collect_gateway_metrics(run_start, run_end)
+    if not gateway_entries:
+        print("  [gateway metrics] empty on first attempt, retrying once...")
+        gateway_entries = ba.collect_gateway_metrics(run_start, run_end)
+
     cert_bytes = of.client_cert_der_bytes(crypto_profile)
     metrics = ba.compute_metrics(
         calls, gateway_entries, latency_scenario_ms=latency_ms,
@@ -150,6 +176,20 @@ def write_median_report(summary: dict, crypto_profile: str, latency_ms: int, pat
     lines.append(", ".join(flagged) if flagged else "None -- every metric stayed within 5% across all runs.")
     lines.append("")
 
+    retry_log = summary.get("retry_log") or []
+    lines.append("## Run retries")
+    lines.append("")
+    if retry_log:
+        lines.append(
+            f"{len(retry_log)} run(s) needed a retry (see thesis/results/v5/DECISIONS.md, Decision 5):"
+        )
+        lines.append("")
+        for entry in retry_log:
+            lines.append(f"- run {entry['run']}, attempt {entry['attempt']}: {entry['error']}")
+    else:
+        lines.append("None -- every run succeeded on the first attempt.")
+    lines.append("")
+
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -183,25 +223,47 @@ def main():
     of.set_latency(args.latency_ms)
 
     runs = []
+    retry_log = []
     for i in range(1, args.runs + 1):
         print(f"\n=== Run {i}/{args.runs} ===")
-        metrics = run_once(crypto_profile, args.latency_ms)
+        metrics = None
+        last_error = None
+        for attempt in range(1, RUN_RETRY_LIMIT + 1):
+            try:
+                metrics = run_once(crypto_profile, args.latency_ms)
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < RUN_RETRY_LIMIT:
+                    print(f"  [run {i}] attempt {attempt} failed ({type(e).__name__}: {e}) -- retrying once "
+                          "(see thesis/results/v5/DECISIONS.md, Decision 5, for why: a rare, pre-existing "
+                          "reentrant auth<->gateway introspection race, not specific to this batch's own code)")
+                    retry_log.append({"run": i, "attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+        if metrics is None:
+            raise SystemExit(
+                f"Run {i}/{args.runs} failed on both attempts -- stopping (not retrying further; "
+                f"this is no longer the known rare race, treat as a new failure). Last error: {last_error}"
+            )
         runs.append(metrics)
         (runs_dir / f"run{i:02d}_baseline_metrics.json").write_text(
             json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        hb = metrics["gateway_metrics"]["handshake_bytes"]
         print(
             f"  jwt_size_avg_bytes={metrics['jwt_size_avg_bytes']}  "
             f"total_bytes_exchanged={metrics['total_bytes_exchanged']}  "
-            f"handshake_bytes.p50={metrics['gateway_metrics']['handshake_bytes']['p50_bytes']}  "
+            f"handshake_bytes.p50={hb['p50_bytes'] if hb else None}  "
             f"client_cert_der_bytes={metrics['client_cert_der_bytes']}"
         )
 
     summary = summarize(runs)
+    summary["retry_log"] = retry_log
     (output_dir / "median_metrics.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     write_median_report(summary, crypto_profile, args.latency_ms, output_dir / "MEDIAN_REPORT.md")
+    if retry_log:
+        print(f"\n{len(retry_log)} run(s) needed a retry: {retry_log}")
 
     print(f"\nWrote {output_dir / 'median_metrics.json'}")
     print(f"Wrote {output_dir / 'MEDIAN_REPORT.md'}")
