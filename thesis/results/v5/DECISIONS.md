@@ -153,3 +153,84 @@ expected to first appear, specifically from the PAR `request_uri`
 expiration retry (see the PAR retry fix, committed separately) adding one
 extra `POST /request` call on the rare run where it fires -- that is the
 mechanism this automation's `>5%` flag exists to catch.
+
+## 4. `pqc-signer` docker helper timeout -- a real, transient failure found only by running the Etapa 2 batch live
+
+**Context.** `opin_flow.py`'s `sign_jwt()` (ML-DSA-65 branch) and
+`_sign_jwt_hybrid()` both sign by spawning a fresh `docker run --rm -i
+mockopin-pqc-signer` container per call -- no long-lived signer process.
+During the Etapa 2 batch (PQC, 140ms, run 9/10, 88 runs into the session's
+own Docker usage), a single invocation exceeded the original 30s timeout
+and crashed the run with an unhandled `subprocess.TimeoutExpired`, after 8
+prior runs at the same scenario had completed identically (0% spread
+projected). Immediately retested manually: a fresh `docker run --rm -i
+mockopin-pqc-signer` returned in ~1s, and `docker version`/`docker ps`
+both responded normally -- ruling out the same full-daemon hang that had
+required a Docker Desktop restart earlier in the session (that incident
+took even `docker version` down for minutes). This was a milder, transient
+scheduling hiccup under sustained ephemeral-container load, not a stuck
+daemon.
+
+**Fix**: extracted both call sites' identical `subprocess.run(["docker",
+"run", "--rm", "-i", PQC_SIGNER_IMAGE], ...)` pattern into a shared
+`_run_pqc_signer()` helper, timeout raised 30s -> 60s, with one retry on
+`subprocess.TimeoutExpired` -- same shape as
+`create_and_authorize_consent()`'s existing PAR retry. A second consecutive
+timeout still raises `RuntimeError` loudly rather than being silently
+absorbed.
+
+**Verified**: unit test (`test_pqc_signer_retry.py`, scratch) monkeypatches
+`subprocess.run` to raise `TimeoutExpired` on the first call only --
+confirms recovery on the second attempt, and confirms a clean `RuntimeError`
+(not a silent failure) when both attempts time out. The 140ms scenario was
+then re-run from scratch (10 fresh runs, not resumed from the 8 partial
+ones) to keep the batch's per-scenario data uniform.
+
+## 5. A rare, pre-existing reentrant introspection race between `auth` and `mock_mtls` -- found live, not caused by anything in this batch's own code
+
+**Context.** PQC, 225ms, run 9/10 (89th token exchange in the batch so
+far) failed with `400 invalid_grant` at the `authorization_code` token
+exchange. Root-caused via `mock_mtls`'s own access log (`docker-compose
+logs mtls --since ... --until ...`, explicit `+00:00` offset -- a bare
+timestamp is silently misread as local time and returns nothing), cross-
+referenced against `auth`'s log and `mock_as/utils/opin/adapter.js`'s
+`getConsent()`:
+
+1. Client `POST /token` (authorization_code) arrives at `auth`.
+2. Mid-handler, `auth`'s own `InsurerAdapter.getConsent()` calls the RS
+   server-side (`matls-api.local`, the fixed classical transport
+   certificate from SSM, unrelated to `CRYPTO_PROFILE`) to fetch the
+   consent.
+3. That request reaches `mock_mtls`, which -- before proxying to the RS --
+   must itself introspect the AS's bearer token by calling **back** to
+   `auth:3000/token/introspection`.
+4. That introspection call got `EOF` (`"Failed to introspect token",
+   error:"...EOF"` -> `"Introspection failed, returning 401"`) --
+   `auth`'s single Node.js process was still mid-flight handling the
+   *outer* `/token` request from step 1 when this *self-referential* call
+   (`auth` -> RS -> gateway -> back to `auth`) arrived.
+5. `mock_mtls` returns 401 to the AS's `getConsent()` call; the AS logs
+   `"error fetching the consent ... 401"` and raises `InvalidGrant`
+   (`"consent ... not found"`); the original `/token` request fails with
+   `400 invalid_grant`.
+
+**Not specific to PQC, and not caused by anything this session changed**:
+the same v2 consent GET/PUT (clientCertBytes=2937, the fixed transport
+cert) happens on every profile, including Classic, which completed 60
+runs with zero incidents. This is a timing coincidence in a pre-existing,
+architecturally self-referential call chain (`auth` calling out to a
+service that calls back into `auth` itself) -- observed once in ~89 token
+exchanges across the batch so far. A structural fix (e.g. a dedicated
+keep-alive pool or longer introspection timeout inside `mock_mtls`/`auth`)
+would be a real architectural change to the mock stack's core request
+handling, out of scope for this median-automation work.
+
+**Fix**: `median_automation.py`'s per-run loop now retries the *entire*
+run (client_credentials -> consent -> PAR -> login -> authorization_code)
+up to `RUN_RETRY_LIMIT = 2` attempts total on ANY exception -- a second
+consecutive failure on the same run is treated as a genuinely new failure
+and stops the batch (`SystemExit`), not retried further. Every retry is
+logged to `median_metrics.json`'s `retry_log` and `MEDIAN_REPORT.md`'s
+"Run retries" section, so a scenario that needed a retry is visible in
+the final consolidated report rather than silently absorbed. The 225ms
+scenario was re-run from scratch with this fix in place.

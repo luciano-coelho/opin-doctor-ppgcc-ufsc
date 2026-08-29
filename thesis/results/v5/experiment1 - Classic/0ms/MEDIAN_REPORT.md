@@ -1,6 +1,6 @@
 # Median Report (classic, 0ms, 10 runs)
 
-Generated at: 2026-08-28T22:48:30.508636+00:00
+Generated at: 2026-08-28T22:55:28.996817+00:00
 
 Median, min, max and %-spread (`(max-min)/min * 100`) across the 10 runs for the size metrics named in scope (see thesis/results/v5/DECISIONS.md). Every other field in a run's baseline_metrics.json is preserved per-run under `runs/` but not aggregated here.
 
