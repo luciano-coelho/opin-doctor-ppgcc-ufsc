@@ -308,10 +308,21 @@ def b64url_decode_len(value: str) -> int:
 def extract_jwk_sizes(response_body):
     """
     Parses a /jwks-style response body and returns the size in bytes of each
-    individual public key: the modulus (n) for RSA, x+y for EC. This is the
-    isolated key-material size, distinct from the JWT sizes extract_jwts()
-    finds elsewhere (a JWT's header/claims add overhead on top of whichever
-    key signed it).
+    individual public key: the modulus (n) for RSA, x+y for EC, the raw
+    public key (`pub`) for ML-DSA-65 (kty "AKP", pqc profile), and the
+    concatenated classic+pqc key (`pk_hybrid`) for the hybrid profile's
+    composite key (kty "HYBRID", see mock_as/utils/opin/configuration.js --
+    pk_hybrid = classicPk || pqcPk under one kid). This is the isolated
+    key-material size, distinct from the JWT sizes extract_jwts() finds
+    elsewhere (a JWT's header/claims add overhead on top of whichever key
+    signed it).
+
+    The AKP/HYBRID branches were missing until the v5 OPINsize recompute
+    (thesis/results/v5/DECISIONS.md) found this function silently dropping
+    the pqc/hybrid AS signing key from every prior v5 run's jwk_sizes --
+    only the always-classical RSA-OAEP encryption key was ever captured for
+    those two profiles, since this function returned early via `else:
+    continue` for any kty it didn't recognize.
     """
     if not response_body:
         return []
@@ -333,6 +344,10 @@ def extract_jwk_sizes(response_body):
                 size_bytes = b64url_decode_len(key["n"])
             elif kty == "EC" and "x" in key and "y" in key:
                 size_bytes = b64url_decode_len(key["x"]) + b64url_decode_len(key["y"])
+            elif kty == "AKP" and "pub" in key:
+                size_bytes = b64url_decode_len(key["pub"])
+            elif kty == "HYBRID" and "pk_hybrid" in key:
+                size_bytes = b64url_decode_len(key["pk_hybrid"])
             else:
                 continue
         except Exception:

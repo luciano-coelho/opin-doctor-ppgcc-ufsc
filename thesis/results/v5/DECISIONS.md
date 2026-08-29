@@ -234,3 +234,50 @@ logged to `median_metrics.json`'s `retry_log` and `MEDIAN_REPORT.md`'s
 "Run retries" section, so a scenario that needed a retry is visible in
 the final consolidated report rather than silently absorbed. The 225ms
 scenario was re-run from scratch with this fix in place.
+
+## 6. `extract_jwk_sizes()` silently dropped the AS's PQC/hybrid signing key -- found while recomputing the analytical OPINsize from v5 data
+
+**Context.** Recomputing the analytical OPINsize formula
+(`OPINsize = N_mTLS x handshake_bytes(P50) + N_JWT x JWT_avg + N_JWK x
+JWK_PK_size`) from the committed v5 data required `JWK_PK_size` -- the
+AS's own signing-key public-key byte size -- for all three profiles.
+Classic's v5 runs had it (256 bytes, RSA-2048 modulus). PQC's and
+Hybrid's did not: every v5 run's `jwk_sizes` field contained only the
+always-classical RSA-OAEP encryption key (`use: "enc"`, 256 bytes),
+duplicated once per `/jwks` fetch -- the AS's actual *signing* key never
+appeared.
+
+**Root cause**: `baseline_automation.py`'s `extract_jwk_sizes()` only
+recognized `kty == "RSA"` and `kty == "EC"`, falling through to `continue`
+(silently dropping the key) for anything else. PQC's signing key is
+published under `kty: "AKP"` (ML-DSA-65, raw public key in the `pub`
+field); Hybrid's composite key is published under `kty: "HYBRID"` (the
+concatenated `classicPk || pqcPk`, in the `pk_hybrid` field -- see
+`thesis/results/v4/DECISIONS.md`, Etapa 5). Neither was ever handled, so
+every one of the 60 PQC runs and 60 Hybrid runs in the v5 batch silently
+lost this data point without erroring.
+
+**Fix**: added two branches to `extract_jwk_sizes()` -- `kty == "AKP"`
+reads `pub`, `kty == "HYBRID"` reads `pk_hybrid` -- both decoded the same
+way as the existing RSA/EC branches (`b64url_decode_len`).
+
+**Verified live**, against the exact unchanged AS key material the v5
+batch itself used (crypto-profiles/{pqc,hybrid}.json, static, unchanged
+all session): PQC's signing key = **1952 bytes** (ML-DSA-65's fixed public
+key size), Hybrid's = **2208 bytes** (256 + 1952, confirmed by construction).
+Both values were re-measured fresh from the running v5-era system, not
+carried over from `thesis/results/v3/tabela_final_v3.md`'s prior numbers
+(which happen to be numerically identical, since the underlying key sizes
+are structural constants of the scheme, not something subject to
+measurement noise -- but re-derived independently per the user's explicit
+instruction not to reuse prior-version values).
+
+**Applied to already-committed v5 data**: `jwk_sizes` in all 120 affected
+run files (`experiment2 - PQC/*/runs/run*.json`,
+`experiment3 - Hybrid/*/runs/run*.json`) patched in place to the correct
+4-entry-per-run shape (`[sig, enc, sig, enc]`, matching Classic's
+already-correct pattern -- two `/jwks` fetches per run, one from
+`run_insurance_flow`, one from `run_person_flow`). No other v5 output
+(medians, spread, retry_log) was affected -- `jwk_sizes` was never
+aggregated by `median_automation.py`'s `summarize()`, so this bug never
+touched any previously-reported number.
