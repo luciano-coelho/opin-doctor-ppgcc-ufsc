@@ -63,14 +63,18 @@ deterministically by profile (PQC's signer calls, measured earlier, were
 slower on average than Hybrid's, measured later -- the opposite of what
 would be needed to explain the inversion by profile alone, supporting
 "time-varying contention" over "PQC's mechanism is inherently slower
-here"), and 14ms is the scenario where PQC's and Hybrid's medians sit
-closest together in every other sense (|gap| = 0.51s, versus 0.92-1.95s
-in every other scenario) -- making it the single scenario most exposed to
-exactly this kind of noise flipping which one lands on top. That is a
-plausible, evidence-consistent mechanism, not a proven root cause of this
-specific inversion. Classic's own median (5.97s) is far below both, so
-the *classical-vs-hybridized-signing* distinction the hypothesis cares
-about most is untouched by this inversion either way.
+here"). The |PQC-Hybrid| gap is also smallest at low latency and widens
+steadily from 30ms on (0.60s at 0ms, 0.52s at 14ms, 0.92s at 30ms, 1.28s
+at 140ms, 1.47s at 225ms, 1.95s at 320ms) -- 14ms has the single smallest
+gap of the six, consistent with it being more exposed to noise flipping
+which profile lands on top. This is not a clean or exclusive
+explanation, though: 0ms's gap (0.60s) is nearly as small and did **not**
+invert, so gap size alone does not fully account for why 14ms specifically
+flipped and 0ms didn't. Taken together, the evidence supports "plausible
+contributing factor," not a proven, sufficient cause of this specific
+inversion. Classic's own median (5.97s) is far below both, so the
+*classical-vs-hybridized-signing* distinction the hypothesis cares about
+most is untouched by this inversion either way.
 
 **Every other scenario confirms the expected ordering cleanly.** The
 *absolute* gap between Classic and the other two does **not** widen as
@@ -178,14 +182,22 @@ respective incident.
 
 ## Cross-check against the size batch (v5's own tabela_final_v5.md/CONSOLIDATED_REPORT.md)
 
-Confirmed once, during the pilot (Decision 6): same flow, `call_count=28`,
-`N_JWT=26`, `N_JWK` entries=4 (2 per fetch), `N_mTLS=6` -- identical to
-every value already established for the size batch. Not re-checked for
-every one of the other 17 combinations since the flow code itself never
-changed between them.
+`N_JWT=26`/`N_JWK` entries=4 (2 per fetch)/`N_mTLS=6` confirmed once,
+during the pilot (Decision 6) -- identical to every value already
+established for the size batch. Not re-checked for every one of the
+other 17 combinations, since those require a gateway-log fetch this
+batch doesn't otherwise need. `call_count=28`, which every one of this
+batch's own runs already records, **was** re-checked exhaustively in a
+full post-hoc sabatina: all 198 files (180 official + 18 warmup) show
+`call_count=28`, no exceptions -- the "same flow throughout" claim holds
+at full-batch strength for the one cross-check metric that didn't
+require extra instrumentation to verify after the fact.
 
-## Not yet done
+## Status
 
-- This report and the underlying `runs/`/`median_metrics.json`/
-  `report.md` data, plus the `opin_flow.py`/`latency_automation.py` code
-  changes from Decisions 1, 7, 8, 9, 10, are **not yet committed**.
+Committed and pushed (`b0b7f78`, `a18d1de`), with two follow-up
+correction commits after independent review (`06641f3`, and this
+report's own gap-range fix). A full, independent sabatina re-verified
+every number in this report exhaustively against the raw `runs/`/
+`median_metrics.json` data -- see the session record for the complete
+checklist. Approved as the thesis's definitive latency data.
