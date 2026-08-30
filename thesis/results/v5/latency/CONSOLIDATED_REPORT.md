@@ -72,11 +72,17 @@ specific inversion. Classic's own median (5.97s) is far below both, so
 the *classical-vs-hybridized-signing* distinction the hypothesis cares
 about most is untouched by this inversion either way.
 
-**Every other scenario confirms the expected ordering cleanly**, and the
-gap between Classic and the other two widens sharply as latency increases
-(consistent with Classic's 6 mTLS handshakes and 26 JWTs not needing any
-docker subprocess spawn, while PQC/Hybrid's per-JWT signing cost stays
-roughly constant regardless of network latency).
+**Every other scenario confirms the expected ordering cleanly.** The
+*absolute* gap between Classic and the other two does **not** widen as
+latency increases -- it stays roughly constant throughout (Classic-to-PQC:
+6.31s at 0ms, 4.65-4.83s at 140-320ms; Classic-to-Hybrid: 6.30-6.91s
+across every scenario, no clear trend), consistent with the signer's
+per-JWT cost being a fixed overhead that network latency doesn't change.
+What changes sharply is the *ratio*: PQC/Hybrid start at ~2.1-2.8x
+Classic's median at 0-14ms and converge to ~1.1-1.2x by 225-320ms, as the
+same fixed few seconds of signing overhead becomes a shrinking fraction
+of an ever-larger total flow time. This is the same dilution effect
+driving the spread convergence noted below.
 
 ## Spread check (the ~60-70% checkpoint)
 
@@ -97,13 +103,26 @@ scenarios did exceed it before a fix/re-run (PQC 14ms's first attempt:
 68.26%; Hybrid 140ms's first attempt: 245.42%, see below) -- both
 resolved and re-run per the checkpoints agreed in advance.
 
-Spread pattern confirms Decision 8's own finding: **Classic's spread
-collapses toward 0% as latency rises** (network delay dominates,
-swamping OS/process jitter -- 35% at 0ms down to 0.33% at 320ms), while
-**PQC/Hybrid's spread stays comparatively elevated even at high latency**
-(signer-subprocess overhead doesn't shrink as network delay grows, so it
-remains a larger fraction of an already-larger total less consistently
-than Classic's pure network-bound cost does).
+**Classic's spread collapses toward 0% as latency rises** (35.20% at
+0ms, essentially flat to 35.39% at 14ms, then falling steadily to 0.33%
+at 320ms) -- network delay dominates, swamping OS/process jitter,
+confirming Decision 8's own finding.
+
+**PQC/Hybrid do not show a "stays elevated" trend -- both are irregular
+across the 6 scenarios, and both converge to Classic's own low level by
+320ms.** Notably, at 0-30ms Classic's spread is actually the *highest* of
+the three (e.g. 0ms: Classic 35.20% vs. PQC 12.58%/Hybrid 4.89%) --
+Classic's absolute T_fluxo is smallest there (3.8-8.1s), so its own
+network/OS jitter is a larger fraction of a smaller number. PQC's and
+Hybrid's spread only exceeds Classic's clearly at 140-225ms (PQC
+19.66%/1.11% and Hybrid 12.47%/10.51%, against Classic's 1.74%/1.42%) --
+this is where the fixed few seconds of signer-subprocess jitter
+identified in Decision 8 is large relative to Classic's own,
+by-then-collapsed network jitter. By 320ms all three converge to a
+common low floor (0.33-0.64%): absolute T_fluxo is now large enough
+(57-64s) that *neither* network jitter *nor* signer-subprocess jitter is
+proportionally significant for any profile -- the same dilution effect
+already noted for the medians above, now visible in the spread too.
 
 ## Incidents encountered during the batch (all resolved, full detail in DECISIONS.md)
 
