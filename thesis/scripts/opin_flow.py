@@ -526,6 +526,33 @@ class RequestUriExpiredError(RuntimeError):
     """
 
 
+class InteractionSessionLostError(RuntimeError):
+    """
+    Raised when oidc-provider reports the interaction session cookie
+    itself as missing/unrecognized (`SessionNotFound`, "interaction
+    session id cookie not found") -- observed live during the v5 latency
+    batch (Classic, 320ms, run 3/10), after ~194 prior successful flow
+    executions in the same session with no recurrence in 7 further
+    deliberate reproduction attempts (cookie transport traced and
+    confirmed correct in every one of those 7 -- the `_interaction` cookie
+    is path-scoped to `/interaction/{uid}` and was sent/received
+    consistently). The interaction's own configured TTL is 600s (see
+    mock_as/utils/opin/configuration.js's `ttl.Interaction`), far longer
+    than a single flow's ~25-60s duration even at 320ms, so a plain TTL
+    expiry does not explain it -- root cause not confirmed, unlike
+    RequestUriExpiredError above (which WAS confirmed via deliberate
+    reproduction). Treated with the same retry strategy regardless, on the
+    same reasoning RequestUriExpiredError already established: a fresh
+    GET /auth (new interaction, new cookies) is the only thing that could
+    possibly fix a session that's already unrecognized, so this propagates
+    out of wait_for_authorization_code() the same way, for
+    create_and_authorize_consent()'s retry loop to catch alongside it. See
+    thesis/results/v5/latency/DECISIONS.md, Decision 7, for the
+    investigation and the honest "cause not confirmed, treated
+    defensively" call.
+    """
+
+
 def simulate_login(auth_url: str, cert) -> None:
     """
     Drives the login+consent interaction over plain HTTP, exactly like a
@@ -547,12 +574,22 @@ def simulate_login(auth_url: str, cert) -> None:
     session.cert = cert
     session.verify = False
 
+    def _check_session_lost(resp):
+        # See InteractionSessionLostError's docstring: root cause not
+        # confirmed, checked at every checkpoint below defensively since
+        # it's not known which step actually surfaces it.
+        if "SessionNotFound" in resp.text or "interaction session id cookie not found" in resp.text:
+            raise InteractionSessionLostError(
+                f"interaction session lost; final URL={resp.url}, body[:500]={resp.text[:500]}"
+            )
+
     resp = session.get(auth_url, allow_redirects=True, timeout=60)
     if "/interaction/" not in resp.url:
         if "invalid_request_uri" in resp.text:
             raise RequestUriExpiredError(
                 f"PAR request_uri expired before GET /auth completed; final URL={resp.url}"
             )
+        _check_session_lost(resp)
         raise RuntimeError(f"No interaction page reached; final URL={resp.url}, body[:500]={resp.text[:500]}")
 
     uid = resp.url.rstrip("/").rsplit("/", 1)[-1]
@@ -563,10 +600,12 @@ def simulate_login(auth_url: str, cert) -> None:
             allow_redirects=True, timeout=60,
         )
         if "/interaction/" not in resp.url:
+            _check_session_lost(resp)
             raise RuntimeError(f"Login did not reach interaction page; final URL={resp.url}, body[:500]={resp.text[:500]}")
         uid = resp.url.rstrip("/").rsplit("/", 1)[-1]
 
     if "/confirm" not in resp.text:
+        _check_session_lost(resp)
         raise RuntimeError(f"No consent/confirm page reached; body[:500]={resp.text[:500]}")
 
     confirm_fields = {}
@@ -584,6 +623,7 @@ def simulate_login(auth_url: str, cert) -> None:
 
 def wait_for_authorization_code(
     auth_url: str, cert, timeout_seconds: int = 600, attempt_timeout_seconds: int = 20, max_attempts: int = 3,
+    timing: dict | None = None,
 ) -> str:
     """
     Runs simulate_login() up to max_attempts times against the SAME local
@@ -607,12 +647,24 @@ def wait_for_authorization_code(
     hybrid mode or this etapa's own changes. See thesis/results/v4/
     DECISIONS.md, Etapa 7, for the full investigation.
 
-    RequestUriExpiredError is deliberately NOT caught here -- unlike the
-    race above, retrying simulate_login() again with this same auth_url
-    can never help (the request_uri embedded in it is what expired; only a
-    fresh PAR call gets a new one), so it propagates straight out to
+    RequestUriExpiredError and InteractionSessionLostError are deliberately
+    NOT caught here -- unlike the race above, retrying simulate_login()
+    again with this same auth_url can never help (the request_uri embedded
+    in it is what expired, or the interaction session behind it is already
+    unrecognized; either way only a fresh PAR call starting a brand new
+    interaction can help), so both propagate straight out to
     create_and_authorize_consent(), the layer that actually can fix it by
     redoing PAR from scratch.
+
+    timing, when given (see thesis/results/v5/latency/DECISIONS.md): a
+    shared dict this function adds to, never replaces. Each discarded
+    attempt (the `while` loop timing out without a callback, this
+    function's own retry above) adds its wall-clock duration to
+    timing["wasted_seconds"] and a record to timing["retries"] -- the
+    latency batch's T_fluxo excludes this time, on the principle that a
+    discarded attempt is measurement-environment noise, not real flow
+    cost (same principle already applied to bytes: a discarded call was
+    never added to `calls` either).
     """
     cert_path, key_path = _generate_callback_tls_cert()
     try:
@@ -639,6 +691,12 @@ def wait_for_authorization_code(
                             f"({elapsed_total:.0f}s total)"
                         )
                     if time.time() - attempt_started > attempt_timeout_seconds:
+                        if timing is not None:
+                            wasted = time.time() - attempt_started
+                            timing["wasted_seconds"] = timing.get("wasted_seconds", 0.0) + wasted
+                            timing.setdefault("retries", []).append(
+                                {"step": "login_race", "attempt": attempt, "wasted_seconds": round(wasted, 3)}
+                            )
                         break  # give up this attempt, retry simulate_login() from scratch
                     time.sleep(0.5)
                 else:
@@ -771,7 +829,7 @@ def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
         calls.append(call)
 
 
-def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *, permissions, scope, poll_count):
+def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *, permissions, scope, poll_count, timing=None):
     """
     Shared AS handshake used by both flows (insurance consents and person):
     client_credentials token, create consent, poll its status, PAR + manual
@@ -781,6 +839,11 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     separate OPIN API domains/plans, not a single flow with variations, by
     reading both plans' raw logs in
     thesis/results/experiment1 - Classic/0ms/.
+
+    timing: see wait_for_authorization_code()'s docstring -- passed through
+    unchanged, plus this function's own PAR-retry loop adds to it the same
+    way (a request_uri that expired before login completed is discarded
+    measurement-environment noise, not real flow cost).
     """
     # POST /token (client_credentials)
     assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
@@ -857,6 +920,8 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     par_max_attempts = 3
     par_call = None
     for par_attempt in range(1, par_max_attempts + 1):
+        par_attempt_started = time.monotonic()
+        wasted_before_par_attempt = timing.get("wasted_seconds", 0.0) if timing is not None else 0.0
         state = secrets.token_urlsafe(9)
         nonce = secrets.token_urlsafe(9)
         verifier, challenge = make_pkce_pair()
@@ -880,9 +945,24 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
 
         auth_url = f"https://{AUTH_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
         try:
-            code = wait_for_authorization_code(auth_url, cert)
+            code = wait_for_authorization_code(auth_url, cert, timing=timing)
             break
-        except RequestUriExpiredError:
+        except (RequestUriExpiredError, InteractionSessionLostError) as e:
+            step_name = "par_ttl" if isinstance(e, RequestUriExpiredError) else "interaction_session_lost"
+            if timing is not None:
+                # total_span covers this whole failed PAR attempt, including
+                # any nested login_race retries wait_for_authorization_code()
+                # already recorded into timing["wasted_seconds"] on its own
+                # -- subtract those out so the same wall-clock time is never
+                # counted twice (once as "login_race", once folded into
+                # "par_ttl"/"interaction_session_lost").
+                total_span = time.monotonic() - par_attempt_started
+                already_recorded_inside = timing.get("wasted_seconds", 0.0) - wasted_before_par_attempt
+                wasted = max(0.0, total_span - already_recorded_inside)
+                timing["wasted_seconds"] = timing.get("wasted_seconds", 0.0) + wasted
+                timing.setdefault("retries", []).append(
+                    {"step": step_name, "attempt": par_attempt, "wasted_seconds": round(wasted, 3)}
+                )
             if par_attempt == par_max_attempts:
                 raise
     calls.append(par_call)
@@ -908,10 +988,13 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     return consent_id, consent_url, cc_access_token, ac_access_token
 
 
-def run_insurance_flow(crypto_profile: str):
+def run_insurance_flow(crypto_profile: str, timing=None):
     """
     opin-consent-api-status-test-v3 (Insurance consents api test V3.0.0
     plan): 13 HTTP calls -- see the module docstring for the full sequence.
+
+    timing: see wait_for_authorization_code()'s docstring -- optional,
+    passed straight through to create_and_authorize_consent().
     """
     cert = get_client_cert_paths(crypto_profile)
     signing_key, kid, alg = load_client_signing_key(crypto_profile)
@@ -922,6 +1005,7 @@ def run_insurance_flow(crypto_profile: str):
     consent_id, consent_url, cc_access_token, ac_access_token = create_and_authorize_consent(
         calls, session, cert, signing_key, kid, alg,
         permissions=INSURANCE_CONSENT_PERMISSIONS, scope=INSURANCE_AUTHORIZATION_SCOPES, poll_count=3,
+        timing=timing,
     )
 
     # GET consent x2 (AUTHORISED) -- this plan re-checks status after login,
@@ -946,7 +1030,7 @@ def run_insurance_flow(crypto_profile: str):
     return calls
 
 
-def run_person_flow(crypto_profile: str):
+def run_person_flow(crypto_profile: str, timing=None):
     """
     person_api_core_test-module_v2.0.0 (person_test-plan_v2.0.0 plan): 16
     HTTP calls -- jwks/PKI/token/consent/PAR/login/token (8, shared with the
@@ -966,6 +1050,7 @@ def run_person_flow(crypto_profile: str):
     consent_id, _consent_url, _cc_access_token, ac_access_token = create_and_authorize_consent(
         calls, session, cert, signing_key, kid, alg,
         permissions=PERSON_CONSENT_PERMISSIONS, scope=PERSON_AUTHORIZATION_SCOPES, poll_count=1,
+        timing=timing,
     )
 
     person_url = f"https://{API_HOST}/open-insurance/insurance-person/v2/insurance-person"
