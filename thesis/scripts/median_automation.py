@@ -222,39 +222,51 @@ def main():
 
     of.set_latency(args.latency_ms)
 
-    runs = []
-    retry_log = []
-    for i in range(1, args.runs + 1):
-        print(f"\n=== Run {i}/{args.runs} ===")
-        metrics = None
-        last_error = None
-        for attempt in range(1, RUN_RETRY_LIMIT + 1):
-            try:
-                metrics = run_once(crypto_profile, args.latency_ms)
-                break
-            except Exception as e:
-                last_error = e
-                if attempt < RUN_RETRY_LIMIT:
-                    print(f"  [run {i}] attempt {attempt} failed ({type(e).__name__}: {e}) -- retrying once "
-                          "(see thesis/results/v5/DECISIONS.md, Decision 5, for why: a rare, pre-existing "
-                          "reentrant auth<->gateway introspection race, not specific to this batch's own code)")
-                    retry_log.append({"run": i, "attempt": attempt, "error": f"{type(e).__name__}: {e}"})
-        if metrics is None:
-            raise SystemExit(
-                f"Run {i}/{args.runs} failed on both attempts -- stopping (not retrying further; "
-                f"this is no longer the known rare race, treat as a new failure). Last error: {last_error}"
+    # Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): run_once() below
+    # calls run_insurance_flow()/run_person_flow() directly, bypassing
+    # opin_flow.py's own main() -- which is where tls_kem_proxy's lifecycle
+    # normally lives. Started once for the whole scenario (all `--runs`
+    # attempts), not once per run: `go run .` recompiles cold each start
+    # (several real seconds), which would otherwise leak into every run's
+    # own timing exactly like a warmup cost paid repeatedly. No-op for
+    # classic (returns None) -- see start_tls_kem_proxy().
+    tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
+    try:
+        runs = []
+        retry_log = []
+        for i in range(1, args.runs + 1):
+            print(f"\n=== Run {i}/{args.runs} ===")
+            metrics = None
+            last_error = None
+            for attempt in range(1, RUN_RETRY_LIMIT + 1):
+                try:
+                    metrics = run_once(crypto_profile, args.latency_ms)
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt < RUN_RETRY_LIMIT:
+                        print(f"  [run {i}] attempt {attempt} failed ({type(e).__name__}: {e}) -- retrying once "
+                              "(see thesis/results/v5/DECISIONS.md, Decision 5, for why: a rare, pre-existing "
+                              "reentrant auth<->gateway introspection race, not specific to this batch's own code)")
+                        retry_log.append({"run": i, "attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+            if metrics is None:
+                raise SystemExit(
+                    f"Run {i}/{args.runs} failed on both attempts -- stopping (not retrying further; "
+                    f"this is no longer the known rare race, treat as a new failure). Last error: {last_error}"
+                )
+            runs.append(metrics)
+            (runs_dir / f"run{i:02d}_baseline_metrics.json").write_text(
+                json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
             )
-        runs.append(metrics)
-        (runs_dir / f"run{i:02d}_baseline_metrics.json").write_text(
-            json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        hb = metrics["gateway_metrics"]["handshake_bytes"]
-        print(
-            f"  jwt_size_avg_bytes={metrics['jwt_size_avg_bytes']}  "
-            f"total_bytes_exchanged={metrics['total_bytes_exchanged']}  "
-            f"handshake_bytes.p50={hb['p50_bytes'] if hb else None}  "
-            f"client_cert_der_bytes={metrics['client_cert_der_bytes']}"
-        )
+            hb = metrics["gateway_metrics"]["handshake_bytes"]
+            print(
+                f"  jwt_size_avg_bytes={metrics['jwt_size_avg_bytes']}  "
+                f"total_bytes_exchanged={metrics['total_bytes_exchanged']}  "
+                f"handshake_bytes.p50={hb['p50_bytes'] if hb else None}  "
+                f"client_cert_der_bytes={metrics['client_cert_der_bytes']}"
+            )
+    finally:
+        of.stop_tls_kem_proxy(tls_kem_proxy_proc)
 
     summary = summarize(runs)
     summary["retry_log"] = retry_log

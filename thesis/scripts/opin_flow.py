@@ -103,7 +103,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import jwt as pyjwt
 import rfc8785
@@ -190,6 +190,78 @@ CLIENT_ID = "client_one"
 AUTH_HOST = "auth.local"
 AUTH_MTLS_HOST_HEADER = "matls-auth.local"
 API_HOST = "api.local"
+DIRECTORY_HOST = "directory"
+
+# Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): under pqc/hybrid, the
+# gateway's mTLS now requires an ML-KEM group this script's Python/OpenSSL
+# stack can't negotiate (Fase 0). tls_kem_proxy (thesis/scripts/
+# tls_kem_proxy/) bridges that gap -- this script still talks https:// to it
+# locally (the proxy terminates that with its own throwaway cert and
+# re-originates a real mTLS connection with the right group upstream);
+# GATEWAY_SCHEME stays "https" unconditionally on purpose -- an earlier
+# plain-HTTP version of the local hop broke the login flow, because
+# oidc-provider's interaction-session cookie carries the Secure attribute
+# and Python's own cookie jar silently drops Secure cookies sent back over
+# a connection it sees as plain HTTP, confirmed live. AUTH_HOST/API_HOST/
+# DIRECTORY_HOST above are deliberately left unchanged by any of this:
+# they're also used as JWT claim values (e.g. the "aud" in
+# make_request_object()) that must keep naming the gateway's real logical
+# identity regardless of how this script physically reaches it. Only the
+# separate *_CONNECT_HOST below (the network destination) changes; every
+# call site that doesn't already pass an explicit host_header= needs one
+# added now, since the default Host-header-from-URL behavior requests()
+# falls back to would otherwise leak the proxy's own address.
+_CRYPTO_PROFILE_FOR_ROUTING = os.environ.get("CRYPTO_PROFILE", "classic")
+_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("pqc", "hybrid")
+TLS_KEM_PROXY_PORT = int(os.environ.get("TLS_KEM_PROXY_PORT", "8443"))
+
+GATEWAY_SCHEME = "https"
+# "127.0.0.1", never the string "localhost": confirmed live (thesis/results/
+# v6/Level 1/DECISIONS.md, Decision 3) that resolving "localhost" costs
+# ~2 seconds per FRESH connection on this machine -- classic IPv6-then-
+# IPv4 "happy eyeballs" fallback (::1 attempted first, fails/times out,
+# then retries 127.0.0.1) -- while an already-open, reused connection is
+# unaffected (name resolution only happens once, at connect time). The
+# real flow opens ~6 fresh connections per execution and never reuses one
+# across pools, so this alone was adding ~10-12s of pure DNS/connect
+# artifact per run, previously misread as "cost of the proxy architecture."
+AUTH_CONNECT_HOST = f"127.0.0.1:{TLS_KEM_PROXY_PORT}" if _USE_TLS_KEM_PROXY else AUTH_HOST
+API_CONNECT_HOST = f"127.0.0.1:{TLS_KEM_PROXY_PORT}" if _USE_TLS_KEM_PROXY else API_HOST
+DIRECTORY_CONNECT_HOST = f"127.0.0.1:{TLS_KEM_PROXY_PORT}" if _USE_TLS_KEM_PROXY else DIRECTORY_HOST
+
+# Every hostname the gateway answers for (mock-service-os/mock_mtls's
+# certificate SANs) -- used only by ProxyRewriteAdapter below, to catch
+# redirects the AS generates itself using its own configured, absolute
+# issuer URL (e.g. Location: https://auth.local/auth/<uid>), which would
+# otherwise escape tls_kem_proxy entirely and hit the real gateway direct
+# -- confirmed live: simulate_login()'s post-login redirect does exactly
+# this, and a plain URL swap at the call site (which is all every other
+# do_call()-based call site above needed) does not help, because the
+# redirect target is server-generated, not something this script builds.
+_KNOWN_GATEWAY_HOSTS = frozenset({
+    AUTH_HOST, AUTH_MTLS_HOST_HEADER, API_HOST, "matls-api.local", DIRECTORY_HOST,
+})
+
+
+class ProxyRewriteAdapter(requests.adapters.HTTPAdapter):
+    """
+    Rewrites any request -- including ones requests.Session generates
+    internally while auto-following a redirect -- whose target hostname is
+    one of _KNOWN_GATEWAY_HOSTS to instead go through tls_kem_proxy,
+    preserving the original hostname as an explicit Host header so
+    gateway-side routing (which reads Host, not the physical destination)
+    is unaffected. Only mounted on simulate_login()'s session: that's the
+    one call path in this script using allow_redirects=True against a
+    server that can hand back an absolute, real-hostname redirect target.
+    """
+    def send(self, request, **kwargs):
+        if _USE_TLS_KEM_PROXY:
+            parsed = urlparse(request.url)
+            if parsed.hostname in _KNOWN_GATEWAY_HOSTS:
+                request.headers["Host"] = parsed.hostname
+                request.url = urlunparse(parsed._replace(netloc=AUTH_CONNECT_HOST))
+        return super().send(request, **kwargs)
+
 
 CALLBACK_HOST = "127.0.0.1"
 CALLBACK_PORT = 8765
@@ -340,6 +412,128 @@ def _run_pqc_signer(payload: str) -> str:
             raise RuntimeError(f"pqc-signer failed: {result.stderr}")
         return result.stdout.strip()
     raise RuntimeError(f"pqc-signer timed out twice in a row: {last_error}")
+
+
+TLS_KEM_PROXY_SRC_DIR = THESIS_DIR / "scripts" / "tls_kem_proxy"
+TLS_KEM_PROXY_CONTAINER_NAME = "tls_kem_proxy_run"
+TLS_KEM_PROXY_CURVE_BY_PROFILE = {"pqc": "mlkem1024", "hybrid": "x25519mlkem768"}
+
+
+def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
+    """
+    Starts tls_kem_proxy (thesis/scripts/tls_kem_proxy/) as a long-lived
+    background container for the duration of one run, bridging the same
+    ML-KEM-group gap _run_pqc_signer() above bridges for signing -- see
+    thesis/results/v6/Level 1/ARCHITECTURE.md, Fase 2. Returns None for
+    classic (nothing to start; opin_flow.py talks to the gateway directly,
+    unchanged). Uses --network so the proxy can reach the gateway by its
+    compose service name ("mtls") rather than depending on the host's own
+    port 443 mapping.
+
+    A fixed container name (not --rm's auto-generated one) lets
+    stop_tls_kem_proxy() reliably `docker stop` it even if this Popen handle
+    were ever lost -- matches this project's existing preference for
+    explicit, inspectable state over relying on process handles alone.
+
+    TLS_KEM_PROXY_CURVE_OVERRIDE (env var), when set to "classical", forces
+    the proxy's upstream curve to classical instead of the profile's own
+    KEM group -- everything else (which cert, which profile's signing
+    behavior) stays exactly as normal. This is the "Go-clássico via proxy"
+    T_fluxo isolation baseline (thesis/results/v6/Level 1/DECISIONS.md):
+    same two-hop architecture, same client cert, only the curve differs,
+    so latency_automation.py can be reused completely unmodified to
+    separate "cost of the proxy hop existing" from "cost of the KEM group
+    itself" -- mirroring how the Go-clássico handshake_bytes baseline
+    already isolates the same variable for size.
+    """
+    if crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE:
+        return None
+
+    subprocess.run(
+        ["docker", "rm", "-f", TLS_KEM_PROXY_CONTAINER_NAME],
+        capture_output=True, text=True,
+    )  # clean up a stale container from a prior crashed run, if any
+
+    crt_path, key_path = get_client_cert_paths(crypto_profile)
+    curve = os.environ.get("TLS_KEM_PROXY_CURVE_OVERRIDE") or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
+
+    proc = subprocess.Popen(
+        [
+            "docker", "run", "--rm", "-i",
+            "--name", TLS_KEM_PROXY_CONTAINER_NAME,
+            "--network", "insurance-server-lambdas_default",
+            "-p", f"127.0.0.1:{TLS_KEM_PROXY_PORT}:{TLS_KEM_PROXY_PORT}",
+            "-v", f"{TLS_KEM_PROXY_SRC_DIR}:/src",
+            "-v", f"{CERTS_DIR}:/certs:ro",
+            "-w", "/src",
+            "golang:1.27-rc-alpine",
+            "go", "run", ".",
+            "-listen", f":{TLS_KEM_PROXY_PORT}",
+            "-target", "mtls:443",
+            "-cert", f"/certs/{Path(crt_path).name}",
+            "-key", f"/certs/{Path(key_path).name}",
+            "-curve", curve,
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+    _wait_for_tls_kem_proxy_ready(proc)
+    return proc
+
+
+def _wait_for_tls_kem_proxy_ready(proc: subprocess.Popen, timeout_seconds: int = 30) -> None:
+    """
+    Polls with a real HTTP request rather than a bare TCP connect or a fixed
+    sleep. `go run` first compiles the module (a few real seconds, cold,
+    inside the container) before the Go process itself calls
+    ListenAndServe/Accept -- but Docker Desktop's published-port proxy binds
+    the host port as soon as the container starts, well before that. A bare
+    TCP connect against that port succeeds immediately and proves nothing;
+    only a real HTTP round trip confirms tls_kem_proxy itself is actually
+    accepting connections (confirmed empirically: the naive TCP-connect
+    version above raced this and produced "RemoteDisconnected" on the very
+    first real request). Any HTTP response at all counts as ready, even an
+    error one from the gateway -- this only needs to prove the local
+    listener is up, not that a specific request would succeed.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            output = proc.stdout.read() if proc.stdout else ""
+            raise RuntimeError(f"tls_kem_proxy exited early (code {proc.returncode}):\n{output}")
+        try:
+            requests.get(f"https://127.0.0.1:{TLS_KEM_PROXY_PORT}/", timeout=1, verify=False)
+            return
+        except requests.exceptions.RequestException:
+            time.sleep(0.3)
+    raise RuntimeError(f"tls_kem_proxy did not answer HTTPS on port {TLS_KEM_PROXY_PORT} within {timeout_seconds}s")
+
+
+def stop_tls_kem_proxy(proc: subprocess.Popen | None) -> None:
+    """
+    `docker stop` is what actually matters -- it blocks until the container
+    itself is confirmed gone (or forcibly kills it after Docker's own grace
+    period). The Popen handle's own exit (`docker run --rm -i`'s CLI process
+    noticing its container died and returning) is expected to follow almost
+    immediately, but isn't always fast enough to win a short race in this
+    environment -- confirmed live: `docker stop` succeeded, cleanly, and
+    `proc.wait(timeout=10)` still hit `TimeoutExpired` right after. Given
+    `--rm` already means Docker itself deletes the container on stop, and
+    this whole function's job is "make sure it's gone," not "make sure this
+    specific Python handle joins," a slow-to-notice Popen isn't treated as
+    a real failure -- only logged.
+    """
+    if proc is None:
+        return
+    subprocess.run(
+        ["docker", "stop", TLS_KEM_PROXY_CONTAINER_NAME],
+        capture_output=True, text=True, timeout=30,
+    )
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        print(f"  [tls_kem_proxy] docker stop succeeded but the CLI process handle "
+              f"didn't join within 30s -- container is stopped either way, continuing.")
 
 
 def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
@@ -573,6 +767,19 @@ def simulate_login(auth_url: str, cert) -> None:
     session = requests.Session()
     session.cert = cert
     session.verify = False
+    # Only takes effect under pqc/hybrid, where the initial GET below
+    # points at tls_kem_proxy (AUTH_CONNECT_HOST) directly rather than
+    # AUTH_HOST -- without this, that one request's Host header would
+    # default to the proxy's own address ("localhost:8443"), which the
+    # gateway's router doesn't recognize (confirmed live: 404).
+    session.headers["Host"] = AUTH_HOST
+    # ProxyRewriteAdapter (module level): covers what the line above does
+    # not -- redirects the AS generates itself using its own absolute,
+    # real-hostname issuer URL (e.g. Location: https://auth.local/...),
+    # which would otherwise escape tls_kem_proxy entirely. Both mechanisms
+    # are needed together; confirmed live neither alone is sufficient. No-op
+    # under classic either way.
+    session.mount("https://", ProxyRewriteAdapter())
 
     def _check_session_lost(resp):
         # See InteractionSessionLostError's docstring: root cause not
@@ -806,7 +1013,10 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
 
 def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
     # 1. GET /jwks
-    call, resp = do_call(session, "GET", f"https://{AUTH_HOST}/jwks", cert=cert, src="FetchServerKeys")
+    call, resp = do_call(
+        session, "GET", f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/jwks", cert=cert,
+        host_header=AUTH_HOST, src="FetchServerKeys",
+    )
     calls.append(call)
 
     # 2-3. GET root-ca.pem / issuer-ca.pem. All three profiles now resolve
@@ -821,10 +1031,10 @@ def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
     # external, classical host); and thesis/results/v5/DECISIONS.md for
     # classic's own local stand-in (closing the same gap for the last
     # remaining profile still hitting crl.sandbox.pki.opinbrasil.com.br).
-    ca_host = "directory"
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
-            session, "GET", f"https://{ca_host}/{path}", cert=None, src="OpinInsertMtlsCa"
+            session, "GET", f"{GATEWAY_SCHEME}://{DIRECTORY_CONNECT_HOST}/{path}", cert=None,
+            host_header=DIRECTORY_HOST, src="OpinInsertMtlsCa",
         )
         calls.append(call)
 
@@ -854,7 +1064,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
         "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
     }
     call, resp = do_call(
-        session, "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+        session, "POST", f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, data=body, src="CallTokenEndpoint",
     )
     calls.append(call)
@@ -872,26 +1082,26 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
         }
     })
     call, resp = do_call(
-        session, "POST", f"https://{API_HOST}/open-insurance/consents/v3/consents", cert=cert,
+        session, "POST", f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/open-insurance/consents/v3/consents", cert=cert,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {cc_access_token}",
             "x-idempotency-key": str(uuid.uuid4()),
             "x-fapi-auth-date": datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT"),
         },
-        data=consent_body, src="CallConsentEndpointWithBearerToken",
+        data=consent_body, host_header=API_HOST, src="CallConsentEndpointWithBearerToken",
     )
     calls.append(call)
     resp.raise_for_status()
     consent_id = parse_rs_body(resp)["data"]["consentId"]
     consent_uid = consent_id.rsplit(":", 1)[-1]
-    consent_url = f"https://{API_HOST}/open-insurance/consents/v3/consents/{consent_id}"
+    consent_url = f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/open-insurance/consents/v3/consents/{consent_id}"
 
     # GET consent x poll_count (AWAITING_AUTHORIZATION)
     for _ in range(poll_count):
         call, resp = do_call(
             session, "GET", consent_url, cert=cert,
-            headers={"Authorization": f"Bearer {cc_access_token}"}, src="CallProtectedResource",
+            headers={"Authorization": f"Bearer {cc_access_token}"}, host_header=API_HOST, src="CallProtectedResource",
         )
         calls.append(call)
 
@@ -937,13 +1147,13 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
         }
         par_call, resp = do_call(
-            session, "POST", f"https://{AUTH_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+            session, "POST", f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/request", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
             headers={"Content-Type": "application/x-www-form-urlencoded"}, data=par_body, src="CallPAREndpoint",
         )
         resp.raise_for_status()
         request_uri = resp.json()["request_uri"]
 
-        auth_url = f"https://{AUTH_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
+        auth_url = f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
         try:
             code = wait_for_authorization_code(auth_url, cert, timing=timing)
             break
@@ -978,7 +1188,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
         "code_verifier": verifier,
     }
     call, resp = do_call(
-        session, "POST", f"https://{AUTH_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
+        session, "POST", f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/token", cert=cert, host_header=AUTH_MTLS_HOST_HEADER,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, data=token_body, src="CallTokenEndpoint",
     )
     calls.append(call)
@@ -1023,7 +1233,7 @@ def run_insurance_flow(crypto_profile: str, timing=None):
     for _ in range(2):
         call, resp = do_call(
             session, "GET", consent_url, cert=cert,
-            headers={"Authorization": f"Bearer {cc_access_token}"}, src="CallProtectedResource",
+            headers={"Authorization": f"Bearer {cc_access_token}"}, host_header=API_HOST, src="CallProtectedResource",
         )
         calls.append(call)
 
@@ -1053,12 +1263,15 @@ def run_person_flow(crypto_profile: str, timing=None):
         timing=timing,
     )
 
-    person_url = f"https://{API_HOST}/open-insurance/insurance-person/v2/insurance-person"
+    person_url = f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/open-insurance/insurance-person/v2/insurance-person"
     auth_header = {"Authorization": f"Bearer {ac_access_token}"}
 
     last_resp = None
     for _ in range(2):
-        call, resp = do_call(session, "GET", person_url, cert=cert, headers=auth_header, src="CallProtectedResource")
+        call, resp = do_call(
+            session, "GET", person_url, cert=cert, headers=auth_header,
+            host_header=API_HOST, src="CallProtectedResource",
+        )
         calls.append(call)
         last_resp = resp
     last_resp.raise_for_status()
@@ -1068,7 +1281,7 @@ def run_person_flow(crypto_profile: str, timing=None):
         for _ in range(2):
             call, resp = do_call(
                 session, "GET", f"{person_url}/{policy_id}/{sub_resource}", cert=cert,
-                headers=auth_header, src="CallProtectedResource",
+                headers=auth_header, host_header=API_HOST, src="CallProtectedResource",
             )
             calls.append(call)
 
@@ -1123,15 +1336,24 @@ def main():
 
     set_latency(args.latency_ms)
 
-    run_start = datetime.now(timezone.utc)
+    # Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): pqc/hybrid need
+    # tls_kem_proxy up before either flow makes its first call, and torn
+    # down afterwards regardless of success/failure so a crashed run never
+    # leaves a stray long-lived container behind. No-op (returns None) for
+    # classic -- see start_tls_kem_proxy().
+    tls_kem_proxy_proc = start_tls_kem_proxy(crypto_profile)
+    try:
+        run_start = datetime.now(timezone.utc)
 
-    print("\n### Flow 1/2: Insurance consents api test V3.0.0 ###")
-    insurance_calls = run_insurance_flow(crypto_profile)
+        print("\n### Flow 1/2: Insurance consents api test V3.0.0 ###")
+        insurance_calls = run_insurance_flow(crypto_profile)
 
-    print("\n### Flow 2/2: person_test-plan_v2.0.0 ###")
-    person_calls = run_person_flow(crypto_profile)
+        print("\n### Flow 2/2: person_test-plan_v2.0.0 ###")
+        person_calls = run_person_flow(crypto_profile)
 
-    run_end = datetime.now(timezone.utc)
+        run_end = datetime.now(timezone.utc)
+    finally:
+        stop_tls_kem_proxy(tls_kem_proxy_proc)
     calls = insurance_calls + person_calls
 
     gateway_entries = ba.collect_gateway_metrics(run_start, run_end)

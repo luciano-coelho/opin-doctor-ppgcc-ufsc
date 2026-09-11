@@ -71,6 +71,22 @@ var (
 	// Decision 10.
 	serverCertFilePath = "certs/mtls.crt"
 	serverKeyFilePath  = "certs/mtls.key"
+
+	// serverCurvePreferences/serverMinVersion: the TLS key-exchange group(s)
+	// the gateway negotiates. Classical by default (Clássico's own, correct
+	// baseline); pqc and hybrid override these in init() below to cover
+	// Nível 1 (the HNDL-relevant key exchange, distinct from the
+	// certificate's signature) -- see thesis/results/v6/Level 1/
+	// ARCHITECTURE.md, Fase 1/2. Each profile's key exchange now matches
+	// that profile's own signature philosophy: pqc gets pure MLKEM1024 (no
+	// classical component, mirroring its pure ML-DSA-65 signature), hybrid
+	// gets the combined X25519MLKEM768 (mirroring its RSA+ML-DSA-65 dual
+	// signature). No classical fallback in either list, deliberately: a
+	// client that can't negotiate the intended group must fail visibly, not
+	// silently downgrade -- the same "no silent fallback" principle the
+	// hybrid certificate's AND gate already applies.
+	serverCurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
+	serverMinVersion       = uint16(tls.VersionTLS12)
 )
 
 func init() {
@@ -90,6 +106,13 @@ func init() {
 	case "pqc":
 		serverCertFilePath = "certs/mtls_pqc.crt"
 		serverKeyFilePath = "certs/mtls_pqc.key"
+		// Nível 1: pure ML-KEM, no classical curve alongside it, matching
+		// this profile's pure ML-DSA-65 signature. Forces TLS 1.3 -- the
+		// group doesn't exist in TLS 1.2 -- though the gateway already
+		// negotiates 1.3 in practice even under classic's TLS 1.2 floor, so
+		// this doesn't introduce a second new variable alongside the KEM.
+		serverCurvePreferences = []tls.CurveID{tls.MLKEM1024}
+		serverMinVersion = tls.VersionTLS13
 	case "hybrid":
 		// mtls_hybrid.crt/.key: an ordinary RSA cert/key pair as far as
 		// crypto/tls itself is concerned -- the ML-DSA-65 material rides
@@ -109,6 +132,10 @@ func init() {
 		// thesis/results/v4/DECISIONS.md.
 		rootCaServeFilePath = "certs/root_ca_hybrid.crt"
 		issuerCaServeFilePath = "certs/issuer_ca_hybrid.crt"
+		// Nível 1: the combined classical+PQC group, matching this
+		// profile's own RSA+ML-DSA-65 dual signature.
+		serverCurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
+		serverMinVersion = tls.VersionTLS13
 	}
 }
 
@@ -120,6 +147,7 @@ type handshakeInfo struct {
 	end             time.Time
 	tlsVersion      string
 	cipherSuite     string
+	curveID         string
 	clientCertBytes int
 	handshakeBytes  int
 }
@@ -435,9 +463,9 @@ func tlsConfiguration() *tls.Config {
 		InsecureSkipVerify:    true,
 		ClientCAs:             caCerts,
 		ClientAuth:            tls.VerifyClientCertIfGiven,
-		MinVersion:            tls.VersionTLS12,
+		MinVersion:            serverMinVersion,
 		MaxVersion:            tls.VersionTLS13,
-		CurvePreferences:      []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+		CurvePreferences:      serverCurvePreferences,
 		VerifyPeerCertificate: hybridVerifyPeerCertificateFunc(),
 
 		CipherSuites: []uint16{
@@ -453,14 +481,38 @@ func tlsConfiguration() *tls.Config {
 		},
 	}
 
-	// Purely observational hook: fires right after the ClientHello is parsed,
-	// before certificate exchange/verification, giving us a precise handshake
-	// start time keyed by remote address. Returning (nil, nil) tells the TLS
-	// stack "no per-client override, use cfg as-is" -- this does not alter
-	// negotiation behavior in any way (cipher suites/versions/certs unchanged).
+	// internalCallerClassicConfig: a shallow copy of cfg with the key-exchange
+	// dimension pinned back to classical, for exactly one caller --
+	// auth's own InsurerAdapter.getConsent() (mock_as/utils/opin/adapter.js),
+	// which reaches this gateway as a TLS *client* over matls-api.local to
+	// fetch the consent from the RS. That call already uses a fixed
+	// classical certificate "unrelated to CRYPTO_PROFILE" (Decision 5,
+	// thesis/results/v5/size/DECISIONS.md) -- extending that same carve-out
+	// to the key-exchange dimension here, not introducing a new one. See
+	// thesis/results/v6/Level 1/DECISIONS.md for the incident this fixes:
+	// pinning the whole gateway's CurvePreferences to the profile's new
+	// group broke this call outright (Node's TLS client can't negotiate
+	// MLKEM1024/X25519MLKEM768 any more than Python could), 100% of the
+	// time, not the rare Decision-5/9 timing race it superficially
+	// resembled (same InvalidGrant/getConsent error shape, different and
+	// fully deterministic cause: TLS alert 40, handshake_failure).
+	internalCallerConfig := *cfg
+	internalCallerConfig.CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
+	internalCallerConfig.MinVersion = tls.VersionTLS12
+
+	// Purely observational hook, plus (new) the one per-connection override
+	// above: fires right after the ClientHello is parsed, before
+	// certificate exchange/verification. Returning (nil, nil) tells the TLS
+	// stack "no per-client override, use cfg as-is" for every caller except
+	// the one matched by SNI below -- this does not alter negotiation
+	// behavior for anyone else in any way (cipher suites/versions/certs
+	// unchanged).
 	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		if hello.Conn != nil {
 			handshakeStartTimes.Store(hello.Conn.RemoteAddr().String(), time.Now())
+		}
+		if hello.ServerName == "matls-api.local" {
+			return &internalCallerConfig, nil
 		}
 		return nil, nil
 	}
@@ -494,6 +546,11 @@ func connStateHandshakeLogger(c net.Conn, state http.ConnState) {
 			cs := tlsConn.ConnectionState()
 			info.tlsVersion = tls.VersionName(cs.Version)
 			info.cipherSuite = tls.CipherSuiteName(cs.CipherSuite)
+			// CurveID: the key-exchange group actually negotiated -- this is
+			// the ground truth for Nível 1's own proof (thesis/results/v6/
+			// Level 1/ARCHITECTURE.md, Fase 3): confirms per-connection which
+			// group was really used, not just which one the config asked for.
+			info.curveID = cs.CurveID.String()
 			if len(cs.PeerCertificates) > 0 {
 				info.clientCertBytes = len(cs.PeerCertificates[0].Raw)
 			}
@@ -520,6 +577,7 @@ func connStateHandshakeLogger(c net.Conn, state http.ConnState) {
 			slog.Int64("handshakeDurationMs", info.end.Sub(info.start).Milliseconds()),
 			slog.String("tlsVersion", info.tlsVersion),
 			slog.String("cipherSuite", info.cipherSuite),
+			slog.String("curveID", info.curveID),
 			slog.Int("clientCertBytes", info.clientCertBytes),
 			slog.Int("mtlsHandshakeBytes", info.handshakeBytes),
 		)
@@ -604,6 +662,7 @@ func loggingMiddleware(h http.Handler) http.Handler {
 				slog.Int64("mtlsHandshakeDurationMs", hs.end.Sub(hs.start).Milliseconds()),
 				slog.String("tlsVersion", hs.tlsVersion),
 				slog.String("cipherSuite", hs.cipherSuite),
+				slog.String("curveID", hs.curveID),
 				slog.Int("clientCertBytes", hs.clientCertBytes),
 				slog.Int("mtlsHandshakeBytes", hs.handshakeBytes),
 			)

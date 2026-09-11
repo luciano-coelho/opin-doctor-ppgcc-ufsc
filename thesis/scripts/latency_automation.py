@@ -205,6 +205,10 @@ def main():
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--experiment-number", default=os.environ.get("EXPERIMENT_NUMBER", "1"))
     parser.add_argument("--results-version", default=os.environ.get("RESULTS_VERSION", "v5"))
+    parser.add_argument("--output-subdir", default=None,
+                         help="optional extra path segment between the experiment folder and "
+                              "{latency_ms}ms/ -- e.g. 'go-classical-baseline', mirroring "
+                              "median_automation.py's own baseline nesting convention")
     args = parser.parse_args()
 
     crypto_profile = os.environ.get("CRYPTO_PROFILE", "classic")
@@ -222,30 +226,45 @@ def main():
         raise SystemExit(
             f"No {results_root}/experiment{args.experiment_number}* folder found -- create it first."
         )
-    output_dir = experiment_dir / f"{args.latency_ms}ms"
+    output_dir = experiment_dir
+    if args.output_subdir:
+        output_dir = output_dir / args.output_subdir
+    output_dir = output_dir / f"{args.latency_ms}ms"
     runs_dir = output_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
 
     of.set_latency(args.latency_ms)
 
-    whole_run_retries = []
+    # Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): started once for
+    # the whole scenario (warmup + all `--runs` attempts), before the warmup
+    # run so warmup also absorbs the proxy's own first-connection effects,
+    # not just the flow's usual ones -- not inside any timed region, and
+    # not restarted per run (`go run .` recompiles cold each start, several
+    # real seconds, which would otherwise pollute every single run's own
+    # T_fluxo). No-op for classic. See median_automation.py's identical
+    # wrapping for the size-metric batch.
+    tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
+    try:
+        whole_run_retries = []
 
-    print("\n=== Warmup run (discarded, not counted) ===")
-    warmup = run_once_timed_with_retry(crypto_profile, "warmup", whole_run_retries)
-    (runs_dir / "run00_warmup.json").write_text(
-        json.dumps(warmup, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    print(f"  T_fluxo={warmup['t_fluxo_seconds']:.4f}s  retries={warmup['retries']}")
-
-    runs = []
-    for i in range(1, args.runs + 1):
-        print(f"\n=== Run {i}/{args.runs} ===")
-        r = run_once_timed_with_retry(crypto_profile, f"run{i:02d}", whole_run_retries)
-        runs.append(r)
-        (runs_dir / f"run{i:02d}.json").write_text(
-            json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8"
+        print("\n=== Warmup run (discarded, not counted) ===")
+        warmup = run_once_timed_with_retry(crypto_profile, "warmup", whole_run_retries)
+        (runs_dir / "run00_warmup.json").write_text(
+            json.dumps(warmup, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        print(f"  T_fluxo={r['t_fluxo_seconds']:.4f}s  retries={r['retries']}")
+        print(f"  T_fluxo={warmup['t_fluxo_seconds']:.4f}s  retries={warmup['retries']}")
+
+        runs = []
+        for i in range(1, args.runs + 1):
+            print(f"\n=== Run {i}/{args.runs} ===")
+            r = run_once_timed_with_retry(crypto_profile, f"run{i:02d}", whole_run_retries)
+            runs.append(r)
+            (runs_dir / f"run{i:02d}.json").write_text(
+                json.dumps(r, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"  T_fluxo={r['t_fluxo_seconds']:.4f}s  retries={r['retries']}")
+    finally:
+        of.stop_tls_kem_proxy(tls_kem_proxy_proc)
 
     summary = summarize(runs)
     summary["crypto_profile"] = crypto_profile
