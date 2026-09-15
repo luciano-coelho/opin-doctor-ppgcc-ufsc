@@ -5,9 +5,11 @@ estão corretos, à luz do que aprendemos construindo o sistema de verdade? (2) 
 propõe, o que os Experimentos 1/2/3 já cobrem, o que ainda falta, e o que é impossível de fazer
 agora por alguma limitação técnica real (não por falta de tempo)?
 
-Tudo aqui foi checado direto no código-fonte e nos dados da v5 — não é opinião nem
+Tudo aqui foi checado direto no código-fonte e nos dados da v5/v7 — não é opinião nem
 suposição. Onde alguma coisa não pôde ser confirmada com certeza, isso está marcado
-explicitamente.
+explicitamente. A Parte 2 foi reescrita por completo após uma verificação de cobertura dedicada,
+cruzando o SAD, o código de v5/v6/v7, e a pasta `thesis/results/v7/artifacts/` — as Partes 1 e 3
+(diagramas do SAD e entendimento teórico) não mudaram desde a versão anterior.
 
 ---
 
@@ -82,95 +84,105 @@ consistentes com o que sabemos na prática, nos pontos em que já tivemos a chan
 
 ## Parte 2 — O que já está coberto, o que falta, e o que é impossível
 
-A tabela abaixo cruza os 11 passos do SAD contra o que os Experimentos 1/2/3 (Clássico/PQC/
-Híbrido) realmente construíram e mediram.
+**Atualizado para a v7** (thesis/results/v7/, que fundiu Nível 1 + Nível 2 num único lote de
+medição unificado, Decision 1/2 de `thesis/results/v7/DECISIONS.md`, e cujos achados de
+implementação estão catalogados com prova criptográfica real em
+`thesis/results/v7/artifacts/{classico,pqc,hybrid}/README.md`). A versão anterior desta tabela
+descrevia a troca de chave TLS (Nível 1) como trabalho futuro — isso mudou: a v7 implementou e
+mediu essa migração nos mesmos três perfis já existentes, sem precisar de um quarto perfil
+separado como esta mesma seção antes previa. O texto abaixo reflete o estado real depois dessa
+verificação de cobertura completa (SAD × implementação × `artifacts/`), passo a passo.
 
-| # | Passo do SAD | Nível de urgência (SAD) | Status nos Experimentos | Evidência |
+A tabela abaixo cruza os 11 passos do SAD contra o que os Experimentos 1/2/3 (Clássico/PQC/
+Híbrido) + a v7 realmente construíram, mediram, e catalogaram como artefato verificável.
+
+| # | Passo do SAD | Nível de urgência (SAD) | Status | Evidência |
 |---|---|---|---|---|
 | 1 | Onboarding regulatório | — (sem criptografia) | Fora de escopo (não envolve criptografia, é processo administrativo) | — |
 | 2 | Registro no Diretório | — (sem criptografia) | Fora de escopo (idem) | — |
-| 3 | Emissão de certificado ICP-Brasil | Nível 2 | **Coberto** — certificados híbridos gerados e medidos (Clássico/PQC/Híbrido) | `certs/main.go`, Seção 7 do documento de arquitetura v5 |
-| 4a | BRCAC (parte RSA — identidade) | Nível 2 | **Coberto** — mesma cadeia de certificados híbridos acima | idem |
-| 4a | BRCAC (parte ECDHE — troca de chave da sessão TLS) | **Nível 1** (o mais urgente) | **Não coberto** — nenhum perfil usa um grupo de troca de chave híbrido; é sempre clássico puro | `mock_mtls/main.go`, `CurvePreferences` só com curvas clássicas (P-521/P-384/P-256) |
-| 4b | BRSEAL (certificado de assinatura) | Nível 2 | **Coberto** — mesmo mecanismo de certificado híbrido | idem passo 3 |
-| 5 | SSA (credencial de aplicação emitida pelo Diretório) | Nível 2 | **Não coberto** — o fluxo simulado usa um cliente já pré-cadastrado, nunca busca uma SSA | `opin_flow.py`: "No SSA fetch in either flow... client_one is a statically pre-registered client" |
-| 6 | DCR (registro dinâmico de cliente) | Nível 2 (+ Nível 1 pela parte ECDHE) | **Não coberto** — mesma razão do passo 5 | idem |
-| 7 | Consentimento (OIDC) — assinatura | Nível 2 | **Coberto** — Strong Nesting no `id_token`, medido e verificado | Seção 5.6 do documento de arquitetura v5 |
-| 7 | Consentimento (OIDC) — criptografia do `id_token` (RSA-OAEP) | **Nível 1** | **Impossível migrar hoje** — sem suporte da biblioteca `jose`, sem padrão JOSE/COSE para ML-KEM | `configuration.js`: comentário explícito no código citando a retirada do rascunho no IETF |
-| 8 | Token de acesso (FAPI) | Nível 2 | **Coberto** — assinatura híbrida, medida | Tabela final v5 |
-| 9 | Troca de dados via API — assinatura das respostas | Nível 2 | **Coberto** — extensão por payload / Strong Nesting conforme o artefato | Seção 5 do documento de arquitetura v5 |
-| 9 | Troca de dados via API — confidencialidade (RSA-OAEP + ECDHE) | **Nível 1** | **Não coberto** — mesma limitação dos itens acima | idem 4a/7 |
-| 10 | Trilhas de auditoria (SHA-256) | Nível 3 | **Não coberto** — nenhuma migração de hash foi feita neste projeto | — |
-| 11 | Revogação (CRL/OCSP) | Nível 2 | **Não coberto** — não existe verificação de revogação implementada no mock | Confirmado: as únicas chamadas com "crl" na URL buscam certificado de CA, não lista de revogação |
+| 3 | Emissão de certificado ICP-Brasil | Nível 2 | **Coberto** — certificados híbridos gerados, medidos e com prova criptográfica real catalogada | `certs/main.go`; `artifacts/{classico,pqc,hybrid}/README.md`, Seção 1 |
+| 4a | BRCAC (parte RSA/ML-DSA-65 — identidade) | Nível 2 | **Coberto** — mesma cadeia de certificados acima | idem |
+| 4a | BRCAC (parte ECDHE/ML-KEM — troca de chave da sessão TLS) | **Nível 1** (o mais urgente) | **Coberto, com ressalva verificada** — desde a v7 (Decision 1), os três perfis negociam via o mesmo cliente Go (`tls_kem_proxy`): PQC usa MLKEM1024 puro, Híbrido usa X25519MLKEM768, medido (`handshake_bytes` salta de 5.119 para 16.605/18.023 bytes) e capturado com prova real (RFC 5705 key export). **Ressalva**: existe uma exceção interna, deliberada e pré-existente (Decision 5, `thesis/results/v5/size/DECISIONS.md`, estendida à troca de chave), que mantém curvas clássicas para exatamente uma conexão de serviço interno (`auth`→RS, SNI `matls-api.local`, cujo cliente Node.js não negocia MLKEM/X25519MLKEM768) — confirmada ao vivo, correspondência 1:1 entre a exceção e cada handshake clássico observado, sem nenhum caso não explicado. Não afeta o tráfego cliente↔gateway medido nem as métricas já reportadas (esse tráfego interno já era excluído delas desde a v6, Decision 7) | `mock_mtls/main.go`, `serverCurvePreferences`/`GetConfigForClient`; `thesis/results/v7/DECISIONS.md`, Decision 5; `artifacts/{pqc,hybrid}/README.md`, Seção 4 |
+| 4b | BRSEAL (certificado de assinatura) | Nível 2 | **Coberto** — mesmo mecanismo de certificado híbrido. Nota: neste protótipo, BRCAC e BRSEAL são a mesma identidade (mesma chave RSA/certificado) reaproveitada para transporte mTLS e assinatura — não dois artefatos PKI fisicamente distintos como no OPIN real (confirmado comparando o módulo de `client_one.jwks` com o de `client_one.crt`, byte a byte) | idem passo 3 |
+| 5 | SSA (credencial de aplicação emitida pelo Diretório) | Nível 2 | **Não coberto** — o fluxo simulado usa um cliente já pré-cadastrado, nunca busca uma SSA (inalterado desde antes da v7) | `opin_flow.py`: "No SSA fetch in either flow... client_one is a statically pre-registered client" |
+| 6 | DCR (registro dinâmico de cliente) | Nível 2 (+ Nível 1 pela parte ECDHE) | **Não coberto** — mesma razão do passo 5; a cobertura de Nível 1 conquistada na v7 não ajuda aqui porque o fluxo de DCR em si nunca é exercitado (inalterado) | idem |
+| 7 | Consentimento (OIDC) — assinatura do `id_token` | Nível 2 | **Coberto** — Strong Nesting (Híbrido)/PS256 (Clássico)/ML-DSA-65 (PQC), com `id_token` real capturado, decifrado e com assinatura interna verificada nos três perfis (fechando uma lacuna de catalogação identificada nesta mesma verificação: a assinatura já era medida, mas não havia artefato real até agora) | `artifacts/{classico,pqc,hybrid}/README.md`, Seção 5 |
+| 7 | Consentimento (OIDC) — criptografia do `id_token` (RSA-OAEP) | **Nível 1** | **Impossível migrar hoje, confirmado nos três perfis** — sem suporte da biblioteca `jose`, sem padrão JOSE/COSE para ML-KEM; o `id_token` do perfil PQC tem assinatura ML-DSA-65 pura por dentro, mas o JWE que o envolve continua RSA-OAEP igual ao Clássico — evidência direta e concreta desse achado, não apenas teórica | `configuration.js`: comentário explícito no código citando a retirada do rascunho no IETF; `artifacts/pqc/README.md`, Seção 5 |
+| 8 | Token de acesso (FAPI) | Nível 2 | **Reclassificado** — o `access_token` em si é **opaco** (`certificateBoundAccessTokens: true`, sem `formats.AccessToken` configurado; confirmado ao vivo: string de 43 caracteres, sem estrutura JWT), não carrega nenhuma assinatura. A afirmação anterior ("assinatura híbrida, medida") descrevia na verdade o `client_assertion` (`private_key_jwt`) que o cliente assina para se autenticar ao pedir o token — esse sim é PS256/ML-DSA-65/payload-extension conforme o perfil, agora capturado e verificado com o AND gate de produção real | `artifacts/{classico,pqc,hybrid}/README.md`, Seção 6 |
+| 9 | Troca de dados via API — assinatura das respostas | Nível 2 | **Coberto** — extensão por payload (Clássico/PQC/Híbrido conforme o esquema), com prova criptográfica real e reproduzível nos três perfis | `artifacts/{classico,pqc,hybrid}/README.md`, Seção 2 |
+| 9 | Troca de dados via API — confidencialidade via canal (ECDHE/ML-KEM) | **Nível 1** | **Coberto, mesma ressalva do item 4a-ECDHE** — as chamadas de API (`API_CONNECT_HOST`) passam pela mesma troca de chave TLS migrada, medida no mesmo `handshake_bytes` | idem 4a-ECDHE |
+| 9 | Troca de dados via API — confidencialidade via payload (RSA-OAEP/JWE) | **Nível 1** | **Não coberto, mesma limitação do item 7-enc** — nenhuma resposta de API é hoje cifrada (apenas assinada); se fosse, esbarraria na mesma ausência de padrão JOSE/COSE para ML-KEM | idem 7-enc |
+| 10 | Trilhas de auditoria (SHA-256) | Nível 3 | **Não coberto** — nenhuma migração de hash foi feita neste projeto; reconfirmado nesta verificação (único "audit" no código são anotações `@Audited` do Hibernate/JPA, auditoria de banco, não trilha com hash de integridade) | `insurance-server-lambdas/.../domain/*.java` |
+| 11 | Revogação (CRL/OCSP) | Nível 2 | **Não coberto** — não existe verificação de revogação implementada no mock; reconfirmado nesta verificação | Confirmado: as únicas chamadas com "crl" na URL buscam certificado de CA, não lista de revogação |
+
+### Lacunas explícitas, depois desta verificação completa
+
+1. **SAD promete, não implementado**: passos 5 (SSA), 6 (DCR), 10 (trilha de auditoria com
+   hash), 11 (revogação CRL/OCSP) — nenhum tocado por v5/v6/v7, sem mudança de status desde
+   a versão anterior deste documento.
+2. **Genuinamente impossível hoje, não uma lacuna do projeto**: a criptografia (JWE) do
+   `id_token`/das respostas de API (passos 7-enc/9-enc) — confirmado nos três perfis, inclusive
+   com um `id_token` PQC real cuja assinatura é ML-DSA-65 pura mas cuja cifragem continua
+   RSA-OAEP, por ausência de padrão JOSE/COSE pós-quântico.
+3. **Estava medido mas sem artefato catalogado — fechado nesta rodada**: o `id_token` (passo
+   7) tinha sua assinatura medida em agregado desde a v5, mas nenhuma pasta de artefatos
+   continha um exemplo real, decifrado e verificado, até esta verificação — fechado com a Seção
+   5 dos três READMEs de `artifacts/`.
+4. **Classificação anterior imprecisa — corrigida nesta rodada**: o passo 8 (token de acesso)
+   atribuía assinatura híbrida ao `access_token`, que na verdade é opaco; a assinatura real
+   pertence ao `client_assertion`, agora capturada e catalogada (Seção 6 dos três READMEs).
 
 ### Resumo por nível de urgência
 
-- **Nível 1 (o que o próprio SAD chama de mais urgente, por causa do HNDL)**: **quase nada
-  coberto**. A troca de chave do TLS (ECDHE) continua 100% clássica em todos os perfis, e a
-  criptografia de dados (RSA-OAEP/JWE) também — sendo que essa segunda parte é
-  genuinamente impossível de resolver agora, não por escolha nossa.
-- **Nível 2 (assinaturas)**: **é onde está praticamente todo o trabalho já feito**. Certificados,
-  tokens de acesso, consentimento, id_token — tudo isso foi migrado, medido, e validado nos
-  três perfis, com 360 execuções completas (180 de tamanho + 180 de latência).
+- **Nível 1 (o que o próprio SAD chama de mais urgente, por causa do HNDL)**: **majoritariamente
+  coberto desde a v7**, com uma ressalva verificada. A troca de chave TLS (ECDHE→ML-KEM) está
+  migrada e medida nos três perfis, para o tráfego cliente↔gateway (que é o que a equação
+  OPINsize mede) — a única exceção é uma rota de serviço interno, pré-existente e fora do
+  tráfego medido, cuja causa está confirmada e documentada (Decision 5, v7). A criptografia de
+  dados/`id_token` (RSA-OAEP/JWE) continua 100% clássica em todos os perfis — confirmado,
+  genuinamente impossível de resolver hoje, não por escolha do projeto.
+- **Nível 2 (assinaturas)**: continua onde está a maior parte do trabalho, agora com catalogação
+  completa. Certificados, `client_assertion`, consentimento/`id_token`, respostas de API — tudo
+  migrado, medido, e com prova criptográfica real capturada nos três perfis.
 - **Nível 3 (hash das trilhas de auditoria)**: não tocado.
 
-Isso não é um problema — é uma informação importante para posicionar a tese com precisão: **os
-Experimentos 1/2/3 validam, na prática, exatamente a categoria que o SAD chama de Nível 2**, e
-ainda não tocam nas categorias 1 e 3. Isso é uma escolha de escopo perfeitamente razoável
-(assinatura é o ponto de partida mais natural), mas o texto da tese deveria deixar isso explícito,
-em vez de dar a impressão de que "o protótipo valida o framework" de forma genérica.
+Isso muda a posição da tese em relação à versão anterior deste documento: os Experimentos
+1/2/3 + a v7 **não validam mais só o Nível 2** — cobrem a maior parte do Nível 1 também, com
+uma exceção pontual, bem compreendida e documentada, e uma segunda parte do Nível 1
+(criptografia de payload) que permanece genuinamente fora de alcance do estado da arte atual,
+não por limitação deste projeto.
 
-### O que falta no Nível 1 e no Nível 3 é viável de implementar?
+### O trabalho de Nível 1 que restava: como foi resolvido, e o que continua impossível
 
-O Nível 1 não é uma coisa só — tem duas partes com viabilidades bem diferentes. E o Nível 3, ao
-ser investigado, revelou que nem existe ainda o que migrar.
+A avaliação anterior via a troca de chave TLS como "viável, mas cara" — exigindo, na análise de
+então, um **quarto perfil separado** ("Híbrido+KEM") para não invalidar a comparação controlada
+já escrita, já que trocar a troca de chave de um perfil existente misturaria duas variáveis
+(troca de chave *e* assinatura) na mesma medição.
 
-**Troca de chave TLS (ECDHE → ML-KEM híbrido): viável.** Diferente da criptografia do
-`id_token` (que é genuinamente impossível hoje), essa parte não esbarra em nenhum padrão em
-falta. O Go, desde a versão 1.23, já suporta nativamente um grupo de troca de chave híbrido para
-TLS 1.3 (`X25519MLKEM768`) na própria biblioteca padrão — nada de biblioteca externa, nada de
-rascunho de padrão pendente. Hoje o `mock_mtls/main.go` só configura curvas clássicas
-(`CurvePreferences: []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}`). Trocar isso por
-um grupo híbrido é uma mudança de configuração, não uma barreira de padrão em aberto.
+**O que realmente aconteceu na v7 foi diferente e mais simples**: em vez de um quarto perfil, a
+v7 (Decision 1) unificou os três perfis existentes sob o mesmo cliente Go (`tls_kem_proxy`),
+variando apenas a curva/grupo pedido — Clássico continua puramente ECDHE clássico, PQC passa
+a pedir MLKEM1024 puro, Híbrido passa a pedir X25519MLKEM768. Isso preserva exatamente a
+comparação controlada que a avaliação anterior queria proteger (cada perfil ainda usa "sua
+própria" troca de chave, coerente com sua própria filosofia de assinatura — PQC pura com PQC
+pura, híbrida com híbrida), sem precisar de um quarto perfil nem invalidar a v5: a v6 (Nível 1)
+mediu esse mesmo aspecto isoladamente antes da fusão, e a v7 então fundiu Nível 1 + Nível 2 no
+lote de 360 execuções (180 tamanho + 180 latência) que hoje é a referência.
 
-Mas viável não quer dizer barato de encaixar na v5 que já existe. A métrica
-`mTLS_handshake_bytes` é um dos três termos da própria equação OPINsize
-(`OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_médio + N_JWK × JWK_PK_size`).
-Trocar a troca de chave clássica (ECDHE, ~32-66 bytes de chave efêmera) por uma híbrida com
-ML-KEM-768 adiciona ao handshake uma chave pública de **1.184 bytes** e um ciphertext de
-**1.088 bytes** — mais de 2 KB extras por handshake, repetidos a cada um dos 6 handshakes do
-fluxo (`N_mTLS = 6`). Isso cascateia para quase toda métrica já reportada e aprovada na v5:
-`mTLS_handshake_bytes` muda diretamente; `OPINsize` muda, porque handshake é um dos três
-termos da fórmula; os totais de tráfego do AS, do RS e do cliente mudam, porque são soma de
-tudo que trafegou, handshake incluso; e `T_fluxo` (latência) muda também, porque mais bytes
-trafegando em cada um dos 6 handshakes tem custo de transmissão, especialmente nos cenários
-de latência mais alta.
+O impacto na equação OPINsize previsto pela avaliação anterior se confirmou na direção certa,
+com a magnitude real medida em vez de estimada: `handshake_bytes` sobe de 5.119 bytes
+(Clássico) para 16.605 (PQC) e 18.023 (Híbrido) — bem acima da estimativa de "+2 KB" que a
+avaliação anterior calculou a partir dos tamanhos isolados de chave pública/ciphertext do
+ML-KEM-768 (a diferença vem de MLKEM1024 ser maior que ML-KEM-768, e de custos de handshake
+adicionais como certificados maiores e mais round-trips). `OPINsize`, os totais de tráfego por
+participante, e `T_fluxo` mudaram todos na mesma direção prevista, agora com números reais.
 
-O motivo é metodológico: a v5 atual foi desenhada como uma comparação limpa, em que os três
-perfis (Clássico/PQC/Híbrido) usam **a mesma troca de chave clássica**, variando só a
-assinatura — isso é o que isola exatamente a variável que os experimentos se propõem a medir
-(Nível 2). Adicionar ML-KEM só ao perfil Híbrido faria esse perfil deixar de ser "mesma troca de
-chave, assinatura diferente" e virar "troca de chave *e* assinatura diferentes ao mesmo tempo",
-quebrando a comparação controlada já escrita, aprovada e sabatinada. Isso não invalida os
-dados atuais — eles continuam corretos como medição do esquema híbrido *de assinatura*, que é
-exatamente o que Nível 2 significa. Mas cobrir Nível 1 de forma limpa exige um **quarto perfil
-separado** ("Híbrido+KEM", por exemplo), com seu próprio lote completo de execuções, do
-mesmo jeito rigoroso que os três perfis atuais — não dá para só trocar a configuração do perfil
-Híbrido existente sem invalidar a tabela e o relatório de latência já escritos.
-
-**Hash das trilhas de auditoria (SHA-256 → SHA-384): nada para migrar ainda.** Ao procurar por
-algum mecanismo de trilha de auditoria (log imutável com hash de integridade, que é o que o
-passo 10 do SAD descreve) em todo o projeto, o único "audit" que aparece no código são
-anotações `@Audited` do Hibernate/JPA nas entidades do seguro
-(`insurance-server-lambdas/.../domain/*.java`) — isso é auditoria de banco de dados (quem criou
-ou alterou um registro e quando), não o mecanismo de integridade criptográfica que o SAD está
-descrevendo. SHA-256 hoje só aparece como parte interna do PS256 (a assinatura RSA-PSS usa
-SHA-256 como função de hash), não como um mecanismo separado de proteção de log.
-
-Ou seja: esse item não é "impossível de migrar" — é que **a funcionalidade em si ainda não
-existe** no protótipo. Cobrir esse ponto exigiria primeiro construir um mecanismo de trilha de
-auditoria com hash, e só depois decidir sobre migrar esse hash para SHA-384. É um passo antes
-dos outros itens da tabela, não uma simples troca de algoritmo.
+**Hash das trilhas de auditoria (SHA-256 → SHA-384): continua nada para migrar.** Reconfirmado
+nesta verificação: não existe mecanismo de trilha de auditoria com hash de integridade no
+projeto — o único "audit" que aparece são anotações `@Audited` do Hibernate/JPA (auditoria de
+banco de dados, não o mecanismo criptográfico que o SAD descreve). Cobrir esse ponto ainda
+exigiria primeiro construir a funcionalidade, e só depois decidir sobre o algoritmo de hash — um
+passo antes dos outros itens da tabela, não uma simples troca de algoritmo.
 
 ---
 
@@ -228,12 +240,18 @@ dentro do próprio SO6.
 1. **Os diagramas do SAD estão majoritariamente corretos**, com dois ajustes pontuais: o
    rótulo do passo 4a deveria separar autenticidade de confidencialidade, e os passos 7/8
    deveriam listar a dependência de RSA-OAEP que hoje só aparece no passo 9.
-2. **O trabalho prático (Experimentos 1/2/3) cobre bem o Nível 2 do próprio framework do SAD**
-   (assinaturas — certificados, tokens, consentimento) e **ainda não toca o Nível 1** (troca de
-   chave TLS e criptografia de dados) **nem o Nível 3** (hash das trilhas de auditoria).
+2. **O trabalho prático (Experimentos 1/2/3 + v7) cobre bem o Nível 2 do próprio framework do
+   SAD** (assinaturas — certificados, `client_assertion`, consentimento/`id_token`, respostas de
+   API) **e, desde a v7, cobre também a maior parte do Nível 1** (a troca de chave TLS
+   ECDHE→ML-KEM está migrada, medida e catalogada com prova real nos três perfis, com uma
+   exceção pontual e bem documentada — uma rota de serviço interno pré-existente, fora do
+   tráfego medido). A outra metade do Nível 1 (criptografia de dados via JWE/RSA-OAEP) e o
+   Nível 3 (hash das trilhas de auditoria) continuam fora de escopo.
 3. **Uma parte do Nível 1 é genuinamente impossível de resolver agora** — a criptografia do
    `id_token`/dados via RSA-OAEP não tem alternativa pós-quântica disponível na biblioteca
-   usada, porque nem existe ainda um padrão JOSE/COSE para ML-KEM. Isso é um achado forte,
+   usada, porque nem existe ainda um padrão JOSE/COSE para ML-KEM. Confirmado nos três
+   perfis, incluindo um `id_token` PQC real cuja assinatura é ML-DSA-65 pura por dentro de uma
+   cifragem RSA-OAEP inalterada — evidência concreta, não só teórica. Isso é um achado forte,
    não uma lacuna do projeto.
 4. **A descrição teórica de assinatura híbrida no Capítulo 2 do SAD é mais simples do que o que
    foi construído na prática** — o trabalho real já resolveu, testou e documentou formalmente a
@@ -242,3 +260,7 @@ dentro do próprio SO6.
 5. **A seção de metodologia experimental do SAD (3.4) descreve ferramentas e fluxos diferentes
    dos que foram realmente usados** — vale atualizar para refletir o que já foi validado (e com
    qual rigor) antes da apresentação do SAD.
+6. **A classificação do passo 8 (token de acesso) estava imprecisa e foi corrigida**: o
+   `access_token` em si é opaco, sem assinatura nenhuma; a assinatura híbrida/PQC real vive no
+   `client_assertion` que o cliente usa para se autenticar ao pedir o token — agora capturado e
+   verificado nos três perfis (`artifacts/*/README.md`, Seção 6).

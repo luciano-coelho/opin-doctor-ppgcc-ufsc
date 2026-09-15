@@ -489,3 +489,176 @@ explained." **This finding must be presented in `CONSOLIDATED_REPORT.md`
 as a Go-vs-Python client-implementation artifact of this etapa's own
 measurement method, explicitly not implied as a Nível 1 performance
 benefit of any kind.**
+
+## 7. Closing Decision 6's residual: repeated across all 6 scenarios, plus a real second structural finding, plus an honest data-availability limit
+
+**Context.** Decision 6 left 35-40% of the 320ms gap unexplained. Explicit
+instruction: do not accept this as permanent -- repeat the controlled
+fresh-connection test across all 6 scenarios, decompose the residual with
+direct evidence, and either close the gap completely or exhaust reasonable
+hypotheses and conclude with evidence that what remains is genuine noise.
+
+**Step 1 -- repeated the Decision 6 test at all 6 scenarios, both certs.**
+Same method: Go vs Python, classical curve fixed, matls-api.local
+carve-out, direct (no proxy) on both sides, n=5 fresh connections
+(`coldconn`) and n=5 requests on one reused connection after 1 discarded
+warmup (`warmreq`, `relay_overhead_test/main.go` extended to print
+per-request timings in warmreq mode too, for a median instead of only
+mean/min/max). Fresh-connection delta (Python minus Go, seconds):
+
+| Scenario | PQC cert | Hybrid cert |
+|---|---|---|
+| 0ms | 0.0172 | 0.0224 |
+| 14ms | 0.0204 | 0.0280 |
+| 30ms | 0.0359 | 0.0406 |
+| 140ms | 0.1487 | 0.1412 |
+| 225ms | 0.2334 | 0.2334 |
+| 320ms | 0.3264 | 0.3271 |
+
+Identical between certs at every scenario (confirms Decision 6's finding
+again: cert size plays no role) and scales monotonically and near-linearly
+with injected latency. Warm/reused-connection delta stayed negligible at
+every scenario (-0.001s to +0.0075s) -- **ruling out reused-connection
+request cost as a contributor at any scenario**, not just 320ms.
+
+**Step 2 -- compared 6x(fresh delta) + 22x(warm delta) against each
+scenario's actual v6-vs-v5 gap.** Result: the model only produces a
+sensible answer where the actual gap is large enough to be a real signal.
+
+| Scenario | Profile | Actual gap (v6-v5) | Model-explained | Verdict |
+|---|---|---|---|---|
+| 0ms | PQC | +0.71s | +0.10s | **wrong sign** -- noise-dominated |
+| 0ms | Híbrido | -0.08s | +0.13s | over-predicts a near-zero gap -- noise-dominated |
+| 14ms | PQC | -0.71s | +0.12s | only 17% -- mostly noise |
+| 14ms | Híbrido | -0.04s | +0.17s | over-predicts -- noise-dominated (known 51.3%-spread anomaly, Etapa 2) |
+| 30ms | PQC | -0.47s | +0.22s | 46% |
+| 30ms | Híbrido | +0.16s | +0.24s | **wrong sign** -- noise-dominated |
+| 140ms | PQC | -1.35s | +0.89s | **66%** |
+| 140ms | Híbrido | +0.03s | +0.85s | **wrong sign**, gap too close to zero -- noise-dominated |
+| 225ms | PQC | -2.18s | +1.40s | **64%** |
+| 225ms | Híbrido | -0.18s | +1.40s | over-predicts massively -- noise-dominated |
+| 320ms | PQC | -3.43s | +2.03s | **59%** |
+| 320ms | Híbrido | -3.15s | +2.13s | **68%** |
+
+**Only 4 of the 12 profile/scenario combinations have a gap large enough
+to be a reliable signal at all** (PQC at 140/225/320ms, Híbrido at 320ms
+only) -- and at exactly those 4, the fresh-connection-efficiency model
+explains a consistent **59-68%** of the gap, every time. At the other 8,
+the model's own precise, clean, monotonic prediction has the wrong sign or
+vastly overshoots a gap that is too small to be anything but run-to-run
+noise given this etapa's own measured spreads (many of these scenarios
+carry 15-50%+ spread on a 10-14s base). **This is itself a finding, not an
+assumption**: most of the "v6 faster than v5" table's small entries were
+never a real effect to explain in the first place.
+
+**Step 3 -- decomposed where time actually goes, with direct evidence, for
+the consistent 59-68% (not the noise-dominated cells).** Instrumented one
+live Go-clássico run (PQC cert, 320ms) with the gateway's own access log
+(`docker logs`, the same instrumentation Decision 1/2 used), deduplicating
+by `remoteIP` (`baseline_automation.py`'s existing
+`dedupe_handshake_samples_by_connection`). Found **13 distinct mTLS
+connections at the gateway per flow execution, not 6**:
+
+- **6 connections from the client-facing side** (`tls_kem_proxy`'s own IP),
+  handshake 323-329ms (~1x the 320ms injected delay) -- these are exactly
+  the `N_mTLS = 6` client-driven connections the whole Decision 3-6
+  analysis has been modeling.
+- **7 connections from a second, different IP**, handshake 641-644ms
+  (~2x the 320ms injected delay -- almost exactly double), all with `host:
+  matls-api.local` -- i.e., the internal `auth`-to-RS call the Decision 1
+  carve-out exists for, not anything client-driven. Same TLS 1.3 version,
+  same cipher suite (`TLS_AES_128_GCM_SHA256`) as the fast connections --
+  ruling out a KEM/HelloRetryRequest explanation for the 2x cost (checked
+  directly, not assumed): this call already stays on the classical carve-
+  out, so no group mismatch/retry is possible here regardless of profile.
+  The paths (`/open-insurance/consents/v2/consents/{id}` x6,
+  `/user/.../person-policies` x1) and repeat count per consent (3 internal
+  calls for one consent, 3 for the other) match the reentrant
+  AS<->RS introspection pattern already documented in `thesis/results/
+  v5/size/DECISIONS.md` Decision 5 and `thesis/results/v5/latency/
+  DECISIONS.md` Decision 9 -- pre-existing since v5, not introduced by
+  Nível 1. The 2x-round-trip cost itself is consistent with `auth`'s own
+  Node.js HTTPS client (not Python, not Go) needing more round trips per
+  handshake than Go's `crypto/tls` does -- a third data point for "TLS
+  client implementation affects round-trip count," on top of Decision 6's
+  Go-vs-Python finding.
+
+**Step 4 -- correction: the claim that v5's data "was not preserved" was
+wrong, and checking it properly overturns the race hypothesis in Step 3.**
+Challenged directly (per explicit instruction not to accept "data doesn't
+exist" without verification) before writing this decision. The check:
+
+- `thesis/results/v5/size/experiment{2,3} - {PQC,Hybrid}/{ms}ms/runs/
+  run01..10_baseline_metrics.json` **do exist and are committed** -- this
+  was confirmed, not assumed. `thesis/results/v5/latency/.../runs/
+  run01..10.json` do **not** carry gateway data (only `t_fluxo_seconds`,
+  `naive_elapsed_seconds`, `wasted_seconds`, `retries`, `call_count`) --
+  this scope limitation is real, and symmetric: v6's own latency run JSONs
+  (`thesis/results/v6/Level 1/latency/.../runs/run*.json`) carry exactly
+  the same fields and nothing more. Neither version's *latency* batch ever
+  captured gateway connection detail -- not a v5-specific gap.
+- The *size* batch's JSON, in both v5 and v6, has a
+  `gateway_metrics.requests_logged` field (every access-log line the
+  gateway wrote in the run's time window) alongside `total_requests` (the
+  client's own call count, always 28). **The difference between these two
+  numbers is exactly the count of non-client-driven (server-internal)
+  requests hitting the gateway during that run** -- data that already
+  existed, was already committed, and directly answers the question Step 3
+  called unanswerable.
+- Checked across all 10 runs, all 6 scenarios, both profiles, for both
+  v5 and v6 (120 individual run files): **the difference is exactly 10 in
+  every single v5 run and exactly 14 in every single v6 run, with zero
+  exceptions, at every scenario, both profiles.**
+
+This directly **overturns** Step 3's "timing-dependent race, count might
+vary" hypothesis: the count does not vary at all -- it is perfectly
+deterministic in both versions, just at two different fixed values. v6 has
+**exactly 4 more** server-internal requests per flow execution than v5,
+always, everywhere. This is a real, structural, non-noise difference
+between the two versions' flow behavior -- not a race manifesting
+differently, and not something that "can't be known." The root cause of
+*why* it's specifically 4 more (which retry path, triggered by what
+timing threshold) was not traced further -- the existence and determinism
+of the difference is confirmed; the precise causal mechanism inside
+`auth`'s retry logic is not.
+
+**What this does and doesn't close.** The confirmed +4 gives a real,
+quantified, non-speculative additional contributor: 4 extra connections
+per flow, each independently confirmed (Step 3's live capture) to cost
+roughly 2x a client-driven connection's round-trip time at a given
+scenario (~641-644ms vs ~323-329ms at 320ms). At 320ms that alone is
+in the same order of magnitude as the remaining residual (roughly
+4 x ~0.32s of extra handshake time ≈ 1.3s, against a residual of
+~1.1-1.4s at 320ms for PQC) -- plausibly sufficient to close most or all
+of it. **This was not converted into an exact, verified seconds-by-
+scenario reconciliation**: Step 3's live per-connection capture used the
+Go-clássico (classical-curve) path specifically, one ad-hoc run, not the
+audited 10-run batches themselves, and reconciling its connection count
+against the batch's own aggregate `requests_logged` numbers exactly
+(13 distinct connections observed live vs the 14-request/28-call ratio
+implied by the batch data) was not fully squared before this decision was
+written. The count-level finding (deterministic +4, confirmed from
+already-existing, already-committed data) is solid; the exact
+seconds-level attribution of the remaining residual to that +4 is
+directionally supported, plausible in magnitude, but not independently
+re-verified to the same standard as the count itself.
+
+**Conclusion.** The Go-vs-Python client-implementation effect (Decision 6)
+is confirmed as a real mechanism explaining **59-68%** of the gap at the 4
+scenarios where the gap is a real signal (PQC 140/225/320ms, Híbrido
+320ms); the other 8 profile/scenario cells were never a real effect to
+explain. A second, now also confirmed-deterministic (not race-driven)
+contributor exists: v6 makes exactly 4 more server-internal, Node.js-
+driven mTLS connections per flow than v5, in every single run checked,
+each costing roughly 2x a client connection's round trip. This is
+plausible, in-the-right-order-of-magnitude cause of most of the remaining
+32-41%, but was not converted into a verified, scenario-by-scenario
+seconds reconciliation before this decision was written -- that
+reconciliation, and tracing the +4's exact cause inside `auth`'s retry
+logic, are the two concrete, well-defined next steps, not open-ended
+"further investigation." **Do not describe this in `CONSOLIDATED_REPORT.md`
+as either "data doesn't exist" (Decision 6/7 draft 1's error, corrected
+here) or "gap fully closed" (not yet independently verified) -- describe it
+as: confirmed deterministic +4 server-internal connections, plausible
+primary explanation for most of the remaining residual by order-of-
+magnitude, exact reconciliation still pending.**

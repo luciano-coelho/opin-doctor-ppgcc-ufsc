@@ -1,0 +1,24 @@
+Comando (executa dentro do container `auth`, onde vivem o node_modules e o
+payloadExtensionVerification.js reais do mock_as):
+
+  docker cp insurance-server-lambdas/src/main/resources/crypto-profiles/hybrid.json \
+      insurance-server-lambdas-auth-1:/tmp/hybrid.json
+  docker cp thesis/results/v7/artifacts/hybrid/example_jwt_premium_compact.txt \
+      insurance-server-lambdas-auth-1:/tmp/jwt.txt
+  docker cp thesis/scripts/verify_hybrid_jwt/verify_jwt.mjs \
+      insurance-server-lambdas-auth-1:/tmp/verify_jwt.mjs
+  docker exec insurance-server-lambdas-auth-1 node /tmp/verify_jwt.mjs /tmp/hybrid.json /tmp/jwt.txt
+
+Output real:
+
+Classic (RS256) public JWK, derived from hybrid.json: {"kty":"RSA","n":"1KEH2RKcHf2dRKmVcfNB_6vVTuE_VFujAg5ajRjcPIq2rnvwQNXGDydGvbhwTJS9xB9j-7WMpyneAnB09s4Xci3EoZJgINO-dD0t7y1mrn46DxwuLYzCCMQb2f5ySjZj6DdU8YLcL43OJJ5MEguQea_FmMX3hhfTd5EqtT_nrcI-toS8vpshhQb1XCfdIfQvFxfndESLaf-_WfnSHx-g3eAEYpN7sGOUxDNrpkkc1JxnjGQiT59Rpw_JutD3ea2S4XwtspxZjFfS8TkfLVWX9lXfwf7m53XLUx8SnpycNCFb0JV1G2gBkNOJ5yGYhL0QNRklC5fzi8ARFV4AYppNCQ","e":"AQAB","alg":"RS256"}
+ML-DSA-65 public JWK, derived from hybrid.json via X.509 SPKI parsing: {"kty":"AKP","alg":"ML-DSA-65","use":"sig","kid":"5226750c-4adb-4d00-be74-c6a38845622d","pub":"nRsKrNTf1cz2CJiG7ZwUiUpu...(truncated)"}
+VERIFICATION RESULT: {
+  "valid": true,
+  "reason": "both RS256 and ML-DSA-65 verified",
+  "hybridShaped": true
+}
+
+(aviso do Node, informativo, não um erro: "The ML-DSA-65 Web Crypto API
+algorithm is an experimental feature and might change at any time" -- Node
+24 ainda marca sua própria implementação nativa de ML-DSA como experimental)

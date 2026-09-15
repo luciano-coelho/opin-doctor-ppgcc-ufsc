@@ -1,0 +1,16 @@
+Comando: docker run --rm --network insurance-server-lambdas_default \
+  -v "<repo>/thesis/scripts/verify_kem_export:/src" -v "<repo>/mock-service-os/certs:/certs:ro" -w /src \
+  golang:1.27-rc-alpine go run . mlkem1024 /certs/client_one_pqc.crt /certs/client_one_pqc.key
+
+connection 1: curveID=MLKEM1024 tlsVersion=TLS 1.3 exported(32B)=d2d7b3bd7714b426b128d2c0500ae2b1b965f4e3387dd84234cdf7228a6ed529
+connection 2: curveID=MLKEM1024 tlsVersion=TLS 1.3 exported(32B)=a1101913ec7b0234d386503186a9bd68a73c612803ad236743cfdfc4e654dc16
+
+RESULT: verificado -- ambas as conexoes negociaram MLKEM1024 (grupo=mlkem1024), e o material de chave exportado
+(RFC 5705) e DIFERENTE entre as duas -- confirma que o segredo de sessao foi de fato derivado de uma troca de
+chave nova a cada conexao, nao um valor fixo ou decorativo.
+
+Nota: "MLKEM1024" e o nome do grupo puro (RFC 9880 / Go's tls.MLKEM1024) --
+nao ha nenhum componente classico (X25519 ou qualquer curva ECDHE) misturado
+neste grupo, ao contrario de X25519MLKEM768 (usado no perfil Hibrido). A
+ferramenta tambem teria falhado (RESULT: FAIL) se qualquer curveID diferente
+de "MLKEM1024" tivesse sido negociado nas duas conexoes.

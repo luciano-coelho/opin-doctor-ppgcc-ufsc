@@ -121,7 +121,7 @@ def switch(profile: str) -> None:
     print(f"  running {SETTLING_WARMUP_RUNS} discarded full-flow executions to settle "
           f"the freshly (re)started containers (Decision 4) ...")
     of.set_latency(0)
-    proc = of.start_tls_kem_proxy(profile) if profile != "classic" else None
+    proc = of.start_tls_kem_proxy(profile)  # v7: classic also goes through the proxy now (Decision 1)
     try:
         for i in range(1, SETTLING_WARMUP_RUNS + 1):
             t0 = time.monotonic()

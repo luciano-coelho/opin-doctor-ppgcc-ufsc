@@ -212,7 +212,7 @@ DIRECTORY_HOST = "directory"
 # added now, since the default Host-header-from-URL behavior requests()
 # falls back to would otherwise leak the proxy's own address.
 _CRYPTO_PROFILE_FOR_ROUTING = os.environ.get("CRYPTO_PROFILE", "classic")
-_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("pqc", "hybrid")
+_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid")
 TLS_KEM_PROXY_PORT = int(os.environ.get("TLS_KEM_PROXY_PORT", "8443"))
 
 GATEWAY_SCHEME = "https"
@@ -335,6 +335,42 @@ def get_client_cert_paths(crypto_profile: str):
     return str(crt), str(key)
 
 
+def get_local_leg_cert_paths(crypto_profile: str):
+    """
+    The `cert=` value do_call()'s requests.Session actually presents on the
+    LOCAL Python->127.0.0.1:8443 connection -- NOT the certificate that
+    authenticates to the real gateway. get_client_cert_paths() above still
+    supplies the real one, unchanged, to start_tls_kem_proxy() (thesis/
+    results/v7/DECISIONS.md, Decision 5): that's the Go proxy's own second,
+    real mTLS connection to the gateway, loaded natively by Go's crypto/tls
+    + crypto/mldsa when the proxy process starts.
+
+    For pqc/hybrid, this returns None: tls_kem_proxy's local-facing
+    listener (thesis/scripts/tls_kem_proxy/main.go,
+    generateLocalListenerCert()) never sets ClientAuth, so it never asks
+    for or checks a client certificate on this leg at all. Whatever Python
+    presented here was always cosmetic and discarded -- the real mTLS
+    identity is established entirely by the proxy's own far-side
+    connection. Presenting one anyway happened to keep working for hybrid
+    (client_one_hybrid.key is an ordinary loadable RSA key) but was never
+    *necessary*; for pqc it stopped working outright on this host (Decision
+    5: stock OpenSSL 3.0 cannot parse client_one_pqc.key's native ML-DSA-65
+    PKCS8 structure at all -- confirmed independent of any network
+    activity -- which is not something this project's own code or cert
+    files caused). Dropping the pointless local presentation removes a
+    dependency on a check that never had any real effect on which identity
+    reaches the gateway, restoring reproducibility without changing
+    anything that was ever actually measured or verified.
+
+    classic is left untouched (still presents client_one.crt on this leg,
+    via get_client_cert_paths()) -- it was never broken, and this fix is
+    scoped to the two profiles that were.
+    """
+    if crypto_profile in ("pqc", "hybrid"):
+        return None
+    return get_client_cert_paths(crypto_profile)
+
+
 PQC_SIGNER_IMAGE = "mockopin-pqc-signer"
 
 
@@ -416,7 +452,7 @@ def _run_pqc_signer(payload: str) -> str:
 
 TLS_KEM_PROXY_SRC_DIR = THESIS_DIR / "scripts" / "tls_kem_proxy"
 TLS_KEM_PROXY_CONTAINER_NAME = "tls_kem_proxy_run"
-TLS_KEM_PROXY_CURVE_BY_PROFILE = {"pqc": "mlkem1024", "hybrid": "x25519mlkem768"}
+TLS_KEM_PROXY_CURVE_BY_PROFILE = {"classic": "classic", "pqc": "mlkem1024", "hybrid": "x25519mlkem768"}
 
 
 def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
@@ -424,11 +460,14 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
     Starts tls_kem_proxy (thesis/scripts/tls_kem_proxy/) as a long-lived
     background container for the duration of one run, bridging the same
     ML-KEM-group gap _run_pqc_signer() above bridges for signing -- see
-    thesis/results/v6/Level 1/ARCHITECTURE.md, Fase 2. Returns None for
-    classic (nothing to start; opin_flow.py talks to the gateway directly,
-    unchanged). Uses --network so the proxy can reach the gateway by its
-    compose service name ("mtls") rather than depending on the host's own
-    port 443 mapping.
+    thesis/results/v6/Level 1/ARCHITECTURE.md, Fase 2. As of v7 (thesis/
+    results/v7/DECISIONS.md, Decision 1), this runs for all three profiles,
+    classic included -- there is no more "talk to the gateway directly"
+    path; classic just requests the "classic" curve (the gateway's own
+    already-classical default under CRYPTO_PROFILE=classic, no SNI trick
+    needed) instead of a KEM group. Uses --network so the proxy can reach
+    the gateway by its compose service name ("mtls") rather than depending
+    on the host's own port 443 mapping.
 
     A fixed container name (not --rm's auto-generated one) lets
     stop_tls_kem_proxy() reliably `docker stop` it even if this Popen handle
@@ -1206,7 +1245,7 @@ def run_insurance_flow(crypto_profile: str, timing=None):
     timing: see wait_for_authorization_code()'s docstring -- optional,
     passed straight through to create_and_authorize_consent().
     """
-    cert = get_client_cert_paths(crypto_profile)
+    cert = get_local_leg_cert_paths(crypto_profile)
     signing_key, kid, alg = load_client_signing_key(crypto_profile)
     calls = []
     session = requests.Session()
@@ -1251,7 +1290,7 @@ def run_person_flow(crypto_profile: str, timing=None):
     -- notably GET insurance-person is called twice, not once, despite it
     reading as a single lookup.
     """
-    cert = get_client_cert_paths(crypto_profile)
+    cert = get_local_leg_cert_paths(crypto_profile)
     signing_key, kid, alg = load_client_signing_key(crypto_profile)
     calls = []
     session = requests.Session()

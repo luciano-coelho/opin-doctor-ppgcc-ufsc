@@ -142,15 +142,26 @@ func runRelay(listen, target, certPath, keyPath, curveName string, localTLSConfi
 		log.Fatalf("tls_kem_proxy: load client cert %s/%s: %v", certPath, keyPath, err)
 	}
 
-	// "classical" exists for the T_fluxo isolation baseline (thesis/
-	// results/v6/Level 1/DECISIONS.md): same proxy, same two-hop
-	// architecture, same client cert -- only the curve differs -- so the
-	// KEM's own latency cost can be separated from the cost of the proxy
-	// hop existing at all, mirroring how the Go-clássico handshake_bytes
-	// baseline already isolates the same variable for size.
+	// "classic" is v7's real Classic-profile traffic (thesis/results/v7/
+	// DECISIONS.md, Decision 1): the gateway's own default CurvePreferences
+	// under CRYPTO_PROFILE=classic is already exactly this classical list
+	// (mock-service-os/mock_mtls/main.go's package-level default, untouched
+	// by that file's init() for the classic case), so this needs no SNI
+	// trick -- it just presents a classical ClientHello over the ordinary
+	// default routing, same as the mlkem1024/x25519mlkem768 cases below.
+	//
+	// "classical" (kept, not used by v7) is the older T_fluxo isolation
+	// baseline from thesis/results/v6/Level 1/DECISIONS.md, superseded by
+	// v7's unification (every profile now goes through this same client, so
+	// there is no more Python-vs-Go confound left to isolate against) but
+	// left in place in case a future diagnostic needs to force the
+	// matls-api.local carve-out again.
 	var curvePreferences []tls.CurveID
 	minVersion := uint16(tls.VersionTLS13)
 	switch curveName {
+	case "classic":
+		curvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
+		minVersion = tls.VersionTLS12
 	case "classical":
 		curvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
 		minVersion = tls.VersionTLS12 // matches the gateway's own Classic floor; still negotiates 1.3 in practice
@@ -159,7 +170,7 @@ func runRelay(listen, target, certPath, keyPath, curveName string, localTLSConfi
 	case "x25519mlkem768":
 		curvePreferences = []tls.CurveID{tls.X25519MLKEM768}
 	default:
-		log.Fatalf("tls_kem_proxy: unknown -curve %q (want classical, mlkem1024, or x25519mlkem768)", curveName)
+		log.Fatalf("tls_kem_proxy: unknown -curve %q (want classic, classical, mlkem1024, or x25519mlkem768)", curveName)
 	}
 
 	// InsecureSkipVerify: this lab's gateway presents a self-signed chain

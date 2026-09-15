@@ -228,8 +228,9 @@ def main():
     # normally lives. Started once for the whole scenario (all `--runs`
     # attempts), not once per run: `go run .` recompiles cold each start
     # (several real seconds), which would otherwise leak into every run's
-    # own timing exactly like a warmup cost paid repeatedly. No-op for
-    # classic (returns None) -- see start_tls_kem_proxy().
+    # own timing exactly like a warmup cost paid repeatedly. As of v7
+    # (thesis/results/v7/DECISIONS.md, Decision 1), classic also goes
+    # through the proxy -- see start_tls_kem_proxy().
     tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
     try:
         runs = []

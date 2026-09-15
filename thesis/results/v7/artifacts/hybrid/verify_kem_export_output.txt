@@ -1,0 +1,10 @@
+Comando: docker run --rm --network insurance-server-lambdas_default \
+  -v "<repo>/thesis/scripts/verify_kem_export:/src" -v "<repo>/mock-service-os/certs:/certs:ro" -w /src \
+  golang:1.27-rc-alpine go run . /certs/client_one_hybrid.crt /certs/client_one_hybrid.key
+
+connection 1: curveID=X25519MLKEM768 tlsVersion=TLS 1.3 exported(32B)=3bb7ce2812ac6833ec4484a9ed68c0f7c4db74af5aa53d34229447fb913a7778
+connection 2: curveID=X25519MLKEM768 tlsVersion=TLS 1.3 exported(32B)=0456a3e67350bb00e6086436db013ca6902c70d5401e2cd24c5da7c52a092216
+
+RESULT: verificado -- ambas as conexoes negociaram X25519MLKEM768, e o material de chave exportado (RFC 5705)
+e DIFERENTE entre as duas -- confirma que o segredo de sessao foi de fato derivado de uma troca de chave nova
+a cada conexao (o mecanismo KEM/ECDHE efemero real), nao um valor fixo ou decorativo.

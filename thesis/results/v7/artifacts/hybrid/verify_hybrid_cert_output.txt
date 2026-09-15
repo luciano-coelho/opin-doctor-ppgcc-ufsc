@@ -1,0 +1,6 @@
+Comando: docker run --rm -v "<caminho>/mock-service-os/certs:/src" -w /src golang:1.27-rc-alpine go run . -verify-hybrid client_one
+
+Subject's own ML-DSA-65 public key (SubjectAltPublicKeyInfo), 1952 bytes, first 16 as hex: 07b8d33d7a261d017ef2f6b70ceac247...
+Alternative signature (AltSignatureValue), 3309 bytes, first 16 as hex: a49021396523fef8ef74eab565285e60...
+Reconstructed preTBS: 2996 bytes (original final TBS was 6323 bytes -- the difference is exactly the AltSignatureValue extension this removes)
+RESULT: verificado -- a assinatura ML-DSA-65 (AltSignatureValue) e valida para a chave ML-DSA-65 da CA emissora (issuer_ca_pqc.crt) sobre o preTBS reconstruido de /src/client_one_hybrid.crt.

@@ -241,7 +241,8 @@ def main():
     # not just the flow's usual ones -- not inside any timed region, and
     # not restarted per run (`go run .` recompiles cold each start, several
     # real seconds, which would otherwise pollute every single run's own
-    # T_fluxo). No-op for classic. See median_automation.py's identical
+    # T_fluxo). As of v7, classic also goes through the proxy (Decision 1,
+    # thesis/results/v7/DECISIONS.md). See median_automation.py's identical
     # wrapping for the size-metric batch.
     tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
     try:

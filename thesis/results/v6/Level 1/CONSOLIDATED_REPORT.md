@@ -73,22 +73,50 @@ espectro de latência de rede testado, não só em 0ms.
 | 225ms | -2,18s | -0,18s |
 | 320ms | -3,43s | -3,15s |
 
-**Ressalva importante sobre esta tabela, investigada antes de ser incluída aqui**: v6 aparece
-consistentemente *mais rápido* que a v5 nos cenários de latência mais alta, o que à primeira
-vista soa contraintuitivo (v6 tem uma camada a mais, o proxy). Isolado diretamente (Decision 6):
-um teste controlado a 320ms, curva clássica fixa nos dois lados (nenhum KEM envolvido), sem proxy
-em nenhum dos dois, mostrou que o cliente Go completa uma conexão nova + requisição em ~1,31s
-contra ~1,65s do cliente Python — uma vantagem de ~0,34s por conexão nova que, multiplicada pelas
-6 conexões mTLS de um fluxo completo, soma ~2,0s, explicando 60-65% do gap de 3,15-3,43s
-observado em 320ms. **Esta tabela não é um achado do Nível 1** — não reflete nada sobre o ML-KEM,
-o proxy de dois hops ou esta etapa em si. Ela reflete v6 agora rodar suas conexões mTLS por um
-cliente Go (`crypto/tls`, via `tls_kem_proxy`, independente da curva) em vez do cliente
-Python/OpenSSL que a v5 usava diretamente — e a implementação TLS 1.3 do Go parece precisar de
-menos idas-e-voltas efetivas por conexão nova, vantagem que só aparece quando cada ida-e-volta
-carrega latência real injetada. O restante do gap (35-40%) não foi investigado a fundo e fica
-registrado como não explicado, não arredondado para "totalmente resolvido" (ver Decision 6 para
-o detalhe completo). Esta tabela é reportada por transparência, não como evidência de que o
-Nível 1 "acelerou" o sistema.
+**Ressalva importante sobre esta tabela, investigada de ponta a ponta nos 6 cenários antes de
+ser incluída aqui (Decisions 6 e 7)**: v6 aparece mais rápido que a v5 em alguns cenários de
+latência mais alta, o que à primeira vista soa contraintuitivo (v6 tem uma camada a mais, o
+proxy). **Primeiro fato confirmado: a maioria dessas células não é um sinal real.** Repetindo o
+teste controlado (curva clássica fixa, sem KEM, sem proxy, Go vs Python numa conexão nova) nos 6
+cenários, o delta por conexão escala de forma limpa e monotônica com a latência injetada
+(0,017-0,022s em 0ms até 0,326-0,327s em 320ms, idêntico entre os dois certificados). Comparando
+esse modelo (×6 conexões do cliente) contra o gap real de cada célula da tabela, ele só bate em
+**4 das 12 combinações perfil/cenário** — PQC em 140/225/320ms e Híbrido em 320ms — explicando
+consistentemente **59-68%** do gap nessas 4. Nas outras 8, o modelo prevê o sinal errado ou
+excede em muito um gap pequeno demais para ser outra coisa que ruído de execução (spreads de
+15-50%+ sobre uma base de 10-14s) — ou seja, a maior parte da tabela acima não precisa de
+explicação nenhuma, porque não é um efeito real.
+
+**Para os 32-41% restantes nas 4 células com sinal real**, a instrumentação direta do log de
+acesso do gateway (mesma técnica das Decisions 1/2) revelou que um fluxo completo faz **13
+conexões mTLS no gateway, não 6**: as 6 do cliente (Python/Go, já modeladas acima) mais **7
+conexões internas do próprio `auth`** (chamada de volta pro RS via `matls-api.local`, o mesmo
+carve-out da Decision 1 — já documentada desde a Decision 5/9 da v5, não é nova do Nível 1), cada
+uma custando ~2× o tempo de handshake das conexões do cliente (mesma versão TLS, mesma cipher
+suite — não é HelloRetryRequest por KEM, confirmado diretamente).
+
+**Verificado depois, com evidência, se essa contagem varia por causa da race já documentada
+(Decisions 5/9) ou se é determinística**: os `run*_baseline_metrics.json` da v5 (tamanho) existem,
+estão commitados, e trazem `gateway_metrics.requests_logged` — cuja diferença para
+`total_requests` (chamadas do cliente) é exatamente a contagem de requisições internas do
+servidor. Checado nos 10 runs, 6 cenários, 2 perfis, para v5 e v6 (120 arquivos): **a diferença é
+sempre exatamente 10 na v5 e sempre exatamente 14 na v6, sem uma única exceção.** Não é race — é
+determinístico. **v6 faz exatamente 4 conexões internas a mais que a v5, sempre, em todo cenário
+e perfil.** Essa contagem extra, a ~2× o custo de round-trip por conexão, está na mesma ordem de
+grandeza do resíduo restante em 320ms (~4×0,32s ≈ 1,3s contra um resíduo de ~1,1-1,4s) — explicação
+plausível e provável para a maior parte do que sobra, mas a reconciliação exata segundo a segundo,
+cenário a cenário, ainda não foi verificada de forma independente (a captura ao vivo usada pra
+confirmar o custo por conexão foi uma execução avulsa do baseline Go-clássico, não uma auditoria
+direta dos 10 runs oficiais do lote).
+
+**Conclusão honesta**: o mecanismo Go-vs-Python está confirmado e explica 59-68% do gap nos 4
+cenários onde o gap é um sinal real; os outros 8 cenários da tabela não representam um efeito
+real pra começo de conversa; e as 4 conexões internas extras, determinísticas e confirmadas por
+dado já existente (não uma suposição), são a explicação mais provável para a maior parte do que
+resta — mas essa última parte não foi fechada com uma reconciliação segundo a segundo verificada
+de forma independente. Detalhe completo, incluindo a correção de uma afirmação anterior incorreta
+sobre a v5 não ter dado suficiente, na Decision 7. Esta tabela é reportada por transparência, não
+como evidência de que o Nível 1 "acelerou" o sistema.
 
 ---
 

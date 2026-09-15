@@ -1,0 +1,61 @@
+Full compact JWT (RS-issued, GET .../premium response, perfil Classico):
+
+eyJhbGciOiJQUzI1NiIsImtpZCI6IjA0MTQ4NmVhLWY3YjgtNGIzNi05ZGZiLWZhZGYyOTY2ZDBlOCIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7ImFtb3VudCI6eyJhbW91bnQiOiIxNiIsInVuaXRUeXBlIjoiUE9SQ0VOVEFHRU0ifSwicGF5bWVudHNRdWFudGl0eSI6NCwiY292ZXJhZ2VzIjpbeyJicmFuY2giOiIwMTExIiwiY29kZSI6IkNJUlVSR0lBIiwicHJlbWl1bUFtb3VudCI6eyJhbW91bnQiOiIxNjgwLjcxIiwidW5pdFR5cGUiOiJQT1JDRU5UQUdFTSJ9fV0sInBheW1lbnRzIjpbeyJtb3ZlbWVudERhdGUiOiIyMDIzLTEwLTAxIiwibW92ZW1lbnRUeXBlIjoiQ09NUEVOU0FDQU9fRklOQU5DRUlSQSIsIm1vdmVtZW50T3JpZ2luIjoiRU1JU1NBT19ESVJFVEEiLCJtb3ZlbWVudFBheW1lbnRzTnVtYmVyIjoxLCJhbW91bnQiOnsiYW1vdW50IjoiNjgwLjcxIiwidW5pdFR5cGUiOiJNT05FVEFSSU8iLCJ1bml0Ijp7ImNvZGUiOiJCciIsImRlc2NyaXB0aW9uIjoiQlJMIn19LCJtYXR1cml0eURhdGUiOiIyMDIzLTEwLTAxIiwidGVsbGVySWQiOiJzdHJpbmciLCJ0ZWxsZXJJZFR5cGUiOiJDUEYiLCJ0ZWxsZXJJZFR5cGVPdGhlcnMiOiJSTkUiLCJ0ZWxsZXJOYW1lIjoic3RyaW5nIiwiZmluYW5jaWFsSW5zdGl0dXRpb25Db2RlIjoic3RyaW5nIiwicGF5bWVudFR5cGUiOiJCT0xFVE8ifV19LCJsaW5rcyI6eyJzZWxmIjoiaHR0cHM6Ly9hcGkubG9jYWwvb3Blbi1pbnN1cmFuY2UvaW5zdXJhbmNlLXBlcnNvbi92Mi9pbnN1cmFuY2UtcGVyc29uLzQyNGE1Y2FhLWU2MjUtNDYxMC04OGY1LTU5ODg4NGIxZTk5Ny9wcmVtaXVtIn0sIm1ldGEiOnsidG90YWxSZWNvcmRzIjoxLCJ0b3RhbFBhZ2VzIjoxfX0.ZGp--yva49w_m3UInPr_N7TZv9Oz2ajpZWKIDngwb0-m3F3As7YdaKTJgDJU5gBeGKazDoq3Fl0wqcz5znaM8-NBp8pFgQzPJKuvOcH2AX0IonGzNborrM6_tpY_dvU3--WkOIAIDhQ3NwvFhxrhGCI-T6Qwu8fGw-yHoiVNPG9Uvzw2r2Q1yrCAMX3hFZO6m3kuxa0jJyaCafb9KBXGpy-r5hg8KeCWkp_m1tckHWZX9QCrvv5GF4A3PdHNKZYz4IgpstfQCTKbbImrJWEYfaxMsempuBbYOFIfCrM0obzs-wzorJGkVDpcMlC-SEyYWWjMeeJZ_8ipPENvClY5eA
+
+Decoded header:
+{
+  "alg": "PS256",
+  "kid": "041486ea-f7b8-4b36-9dfb-fadf2966d0e8",
+  "typ": "JWT"
+}
+
+Decoded payload:
+{
+  "data": {
+    "amount": {
+      "amount": "16",
+      "unitType": "PORCENTAGEM"
+    },
+    "paymentsQuantity": 4,
+    "coverages": [
+      {
+        "branch": "0111",
+        "code": "CIRURGIA",
+        "premiumAmount": {
+          "amount": "1680.71",
+          "unitType": "PORCENTAGEM"
+        }
+      }
+    ],
+    "payments": [
+      {
+        "movementDate": "2023-10-01",
+        "movementType": "COMPENSACAO_FINANCEIRA",
+        "movementOrigin": "EMISSAO_DIRETA",
+        "movementPaymentsNumber": 1,
+        "amount": {
+          "amount": "680.71",
+          "unitType": "MONETARIO",
+          "unit": {
+            "code": "Br",
+            "description": "BRL"
+          }
+        },
+        "maturityDate": "2023-10-01",
+        "tellerId": "string",
+        "tellerIdType": "CPF",
+        "tellerIdTypeOthers": "RNE",
+        "tellerName": "string",
+        "financialInstitutionCode": "string",
+        "paymentType": "BOLETO"
+      }
+    ]
+  },
+  "links": {
+    "self": "https://api.local/open-insurance/insurance-person/v2/insurance-person/424a5caa-e625-4610-88f5-598884b1e997/premium"
+  },
+  "meta": {
+    "totalRecords": 1,
+    "totalPages": 1
+  }
+}

@@ -85,6 +85,19 @@ var (
 	// client that can't negotiate the intended group must fail visibly, not
 	// silently downgrade -- the same "no silent fallback" principle the
 	// hybrid certificate's AND gate already applies.
+	//
+	// EXCEPTION, deliberate and SNI-scoped: GetConfigForClient below (see its
+	// own comment and internalCallerConfig) pins exactly one caller -- any
+	// connection whose ClientHello sets ServerName "matls-api.local" (auth's
+	// own InsurerAdapter.getConsent(), which Node's TLS stack cannot make
+	// negotiate MLKEM1024/X25519MLKEM768) -- back to this same classical-only
+	// list, regardless of CRYPTO_PROFILE. This is the ONLY source of
+	// classical key exchange under pqc/hybrid; confirmed live (thesis/
+	// results/v7/DECISIONS.md) that every single classical handshake logged
+	// under those profiles carries this exact SNI, one-to-one, no exceptions.
+	// It does not apply to the client-facing traffic opin_flow.py's
+	// tls_kem_proxy drives (different SNI), which is what thesis/results/v7/
+	// artifacts/*/README.md's handshake evidence (Seção 4) is about.
 	serverCurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
 	serverMinVersion       = uint16(tls.VersionTLS12)
 )
@@ -512,6 +525,8 @@ func tlsConfiguration() *tls.Config {
 			handshakeStartTimes.Store(hello.Conn.RemoteAddr().String(), time.Now())
 		}
 		if hello.ServerName == "matls-api.local" {
+			slog.Info("GetConfigForClient: internal-caller classical carve-out applied",
+				slog.String("sni", hello.ServerName), slog.String("remoteAddr", hello.Conn.RemoteAddr().String()))
 			return &internalCallerConfig, nil
 		}
 		return nil, nil

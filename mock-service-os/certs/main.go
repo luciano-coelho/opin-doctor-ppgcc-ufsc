@@ -99,6 +99,172 @@ func altSignatureValueExtension(sig []byte) pkix.Extension {
 	return pkix.Extension{Id: oidAltSignatureValue, Critical: false, Value: der}
 }
 
+// rawExtensions/rawTBSCertificate mirror RFC 5280's ASN.1 shape for
+// tbsCertificate, field-for-field, but leave every field except Extensions
+// as asn1.RawValue -- so re-marshaling after editing only the Extensions
+// list reproduces the original bytes for everything else exactly, with no
+// risk of Go's x509 template/encoding logic (Subject RDN reconstruction,
+// SAN encoding, etc.) silently producing different bytes than the original
+// encoder did. Only Extensions needs a typed shape, since that is the one
+// list this needs to filter (dropping AltSignatureValue) before re-signing
+// verification.
+type rawExtension struct {
+	Id       asn1.ObjectIdentifier
+	Critical bool `asn1:"optional"`
+	Value    []byte
+}
+type rawTBSCertificate struct {
+	Raw                asn1.RawContent
+	Version            int `asn1:"optional,explicit,default:0,tag:0"`
+	SerialNumber       asn1.RawValue
+	SignatureAlgorithm asn1.RawValue
+	Issuer             asn1.RawValue
+	Validity           asn1.RawValue
+	Subject            asn1.RawValue
+	PublicKey          asn1.RawValue
+	IssuerUniqueId     asn1.BitString `asn1:"optional,tag:1"`
+	SubjectUniqueId    asn1.BitString `asn1:"optional,tag:2"`
+	Extensions         []rawExtension `asn1:"optional,explicit,tag:3"`
+}
+
+// verifyHybridCert re-derives the exact preTBS bytes generateHybridCert()
+// signed with ML-DSA-65 (Decision in thesis/results/v7/DECISIONS.md,
+// "Certificado híbrido" artifact writeup) directly from an already-issued
+// certificate on disk, and independently re-verifies the AltSignatureValue
+// extension against it -- proof that the second signature is a real,
+// checkable cryptographic signature, not just a correctly-sized field.
+//
+// This is the general verification algorithm for this hybrid-certificate
+// scheme (Bindel et al. 2019), not a one-off test shortcut: reconstruct the
+// tbsCertificate exactly as it was before AltSignatureValue was added (same
+// bytes for every other field, Extensions list minus that one extension),
+// then verify the alternative signature over that reconstructed preTBS --
+// mirroring exactly how the ordinary RSA signature is verified over the
+// final tbsCertificate.
+//
+// The alternative signature is verified against the ISSUING CA's ML-DSA-65
+// public key (issuer_ca_pqc.crt), not the leaf's own SubjectAltPublicKeyInfo
+// -- that extension declares the leaf's OWN alternative identity key (for
+// this leaf to be an alt-signing issuer in turn, or for future protocol use
+// noneof which this project currently exercises), exactly mirroring how the
+// ordinary RSA signature is checked against the issuer's RSA key, never the
+// subject's own.
+func verifyHybridCert(name, sourceDir string) {
+	certPath := filepath.Join(sourceDir, name+"_hybrid.crt")
+	cert := loadCertPEM(certPath)
+
+	var altPubExt, altSigValueExt *pkix.Extension
+	for i := range cert.Extensions {
+		switch {
+		case cert.Extensions[i].Id.Equal(oidSubjectAltPublicKeyInfo):
+			altPubExt = &cert.Extensions[i]
+		case cert.Extensions[i].Id.Equal(oidAltSignatureValue):
+			altSigValueExt = &cert.Extensions[i]
+		}
+	}
+	if altPubExt == nil || altSigValueExt == nil {
+		log.Fatalf("verify-hybrid %s: certificate is missing the hybrid extensions -- not a hybrid cert?", name)
+	}
+
+	// 1. The leaf's own alternative public key (SubjectAltPublicKeyInfo) --
+	// printed for evidence, not used to verify AltSignatureValue (see above).
+	var subjectSPKI hybridSubjectPublicKeyInfo
+	if _, err := asn1.Unmarshal(altPubExt.Value, &subjectSPKI); err != nil {
+		log.Fatalf("verify-hybrid %s: failed to parse SubjectAltPublicKeyInfo: %v", name, err)
+	}
+	fmt.Printf("Subject's own ML-DSA-65 public key (SubjectAltPublicKeyInfo), %d bytes, first 16 as hex: %x...\n",
+		len(subjectSPKI.PublicKey.Bytes), subjectSPKI.PublicKey.Bytes[:16])
+
+	// 2. The alternative signature itself.
+	var altSig asn1.BitString
+	if _, err := asn1.Unmarshal(altSigValueExt.Value, &altSig); err != nil {
+		log.Fatalf("verify-hybrid %s: failed to parse AltSignatureValue: %v", name, err)
+	}
+	fmt.Printf("Alternative signature (AltSignatureValue), %d bytes, first 16 as hex: %x...\n",
+		len(altSig.Bytes), altSig.Bytes[:16])
+
+	// 3. Reconstruct preTBS: parse the final TBS field-by-field, drop the
+	// AltSignatureValue extension only, re-marshal.
+	var tbs rawTBSCertificate
+	if _, err := asn1.Unmarshal(cert.RawTBSCertificate, &tbs); err != nil {
+		log.Fatalf("verify-hybrid %s: failed to parse tbsCertificate: %v", name, err)
+	}
+	var preExtensions []rawExtension
+	for _, e := range tbs.Extensions {
+		if !e.Id.Equal(oidAltSignatureValue) {
+			preExtensions = append(preExtensions, e)
+		}
+	}
+	tbs.Extensions = preExtensions
+	// RawContent is populated by Unmarshal but, if left set, gets reused
+	// verbatim by Marshal instead of re-encoding from the (now-edited)
+	// fields -- confirmed live: without this reset, the "reconstructed"
+	// preTBS silently came back byte-identical to the original final TBS,
+	// AltSignatureValue and all, and verification failed against a preTBS
+	// that was never actually missing that extension.
+	tbs.Raw = nil
+	preTBS, err := asn1.Marshal(tbs)
+	if err != nil {
+		log.Fatalf("verify-hybrid %s: failed to re-marshal preTBS: %v", name, err)
+	}
+	fmt.Printf("Reconstructed preTBS: %d bytes (original final TBS was %d bytes -- the difference is exactly the AltSignatureValue extension this removes)\n",
+		len(preTBS), len(cert.RawTBSCertificate))
+
+	// 4. Load the ISSUING CA's ML-DSA-65 public key and verify.
+	issuerPQCCert := loadCertPEM(filepath.Join(sourceDir, "issuer_ca_pqc.crt"))
+	issuerAltPub, ok := issuerPQCCert.PublicKey.(*mldsa.PublicKey)
+	if !ok {
+		log.Fatalf("verify-hybrid %s: issuer_ca_pqc.crt's public key is %T, not *mldsa.PublicKey", name, issuerPQCCert.PublicKey)
+	}
+
+	if err := mldsa.Verify(issuerAltPub, preTBS, altSig.Bytes, nil); err != nil {
+		fmt.Printf("RESULT: ML-DSA-65 signature INVALID for %s: %v\n", certPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("RESULT: verificado -- a assinatura ML-DSA-65 (AltSignatureValue) e valida para a chave "+
+		"ML-DSA-65 da CA emissora (issuer_ca_pqc.crt) sobre o preTBS reconstruido de %s.\n", certPath)
+}
+
+// verifyPQCCert proves the ML-DSA-65 keypair embedded in <name>.crt's
+// SubjectPublicKeyInfo is a real, functioning keypair -- not just a
+// correctly-sized/OID-tagged blob -- by signing a fresh challenge with the
+// matching private key on disk and verifying it against the public key
+// x509.ParseCertificate already decoded from the certificate. It also
+// confirms the certificate's OWN issuer signature is classical RSA, which is
+// the intended design for this profile (Etapa 3.1, generateClientCertPQC:
+// only the client's key/cert moves to PQC, the CA doesn't) -- not something
+// this check treats as a defect to route around.
+func verifyPQCCert(name, sourceDir string) {
+	certPath := filepath.Join(sourceDir, name+".crt")
+	cert := loadCertPEM(certPath)
+
+	pub, ok := cert.PublicKey.(*mldsa.PublicKey)
+	if !ok {
+		log.Fatalf("verify-pqc-cert %s: SubjectPublicKeyInfo is %T, not *mldsa.PublicKey", name, cert.PublicKey)
+	}
+	pubBytes := pub.Bytes()
+	fmt.Printf("Subject public key algorithm OID: %s (ML-DSA-65, FIPS 204)\n", oidMLDSA65.String())
+	fmt.Printf("SubjectPublicKeyInfo: %d bytes, first 16 as hex: %x...\n", len(pubBytes), pubBytes[:16])
+	fmt.Printf("Certificate signature algorithm (issuer signature): %s\n", cert.SignatureAlgorithm.String())
+
+	priv := loadMLDSAKeyPEM(filepath.Join(sourceDir, name+".key"))
+	challenge := []byte("v7-artifact-proof: " + name + " ML-DSA-65 keypair is live, " + time.Now().UTC().Format(time.RFC3339))
+	sig, err := priv.Sign(nil, challenge, nil)
+	if err != nil {
+		log.Fatalf("verify-pqc-cert %s: failed to sign challenge with private key: %v", name, err)
+	}
+	fmt.Printf("Challenge signed with %s.key, signature %d bytes, first 16 as hex: %x...\n", name, len(sig), sig[:16])
+
+	if err := mldsa.Verify(pub, challenge, sig, nil); err != nil {
+		fmt.Printf("RESULT: ML-DSA-65 signature INVALID for %s: %v\n", certPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("RESULT: verificado -- a assinatura ML-DSA-65 do desafio e valida contra a SubjectPublicKeyInfo "+
+		"de %s -- o par de chaves ML-DSA-65 do certificado e real e funcional, nao apenas um campo do tamanho certo. "+
+		"A propria assinatura do certificado (issuer) permanece classica (%s), por design (Etapa 3.1): so a chave "+
+		"do titular migra para PQC, a CA nao.\n", certPath, cert.SignatureAlgorithm.String())
+}
+
 // extractTBSBytes parses a Certificate's outer SEQUENCE { tbsCertificate,
 // signatureAlgorithm, signatureValue } and returns the raw encoded bytes of
 // its tbsCertificate field -- exactly the bytes an X.509 signature is
@@ -134,7 +300,19 @@ func main() {
 	resignAll := flag.Bool("resign-all", false, "Regenerate the CA (5-year validity, fresh key) and re-sign every existing RSA/ML-DSA-65 leaf cert this tool knows about with it, reusing each leaf's existing private key unchanged -- no new leaf key material, only new certificates. Fixes an expired CA without invalidating any already-measured cert/key size. mongo.pem and postgres.crt are NOT RSA/ML-DSA-65 leafs this tool originally generated (different SANs/key size) and are handled separately. See thesis/results/v4/DECISIONS.md.")
 	hybridName := flag.String("hybrid-name", "", "Generate <name>_hybrid.crt/.key: a classical RSA certificate carrying three additional X.509 extensions per Bindel et al. (2019), signed twice (RSA + ML-DSA-65) by the existing local CA (ca.crt/ca.key + issuer_ca_pqc.crt/.key). Reuses <name>.key (RSA) and <name>_pqc.key (ML-DSA-65) as the subject's existing key material -- both must already exist on disk. Does not touch the CA or any other cert. See thesis/results/v4/DECISIONS.md.")
 	classicName := flag.String("classic-name", "", "Generate <name>.crt (ordinary classical RSA leaf cert, no PQC material at all), signed by the existing local CA (ca.crt/ca.key) -- same mechanism as -pqc-name, but reusing an EXISTING RSA key (<name>.key, must already exist on disk) instead of generating a fresh one, since -hybrid-name already needed that same key for root_ca/issuer_ca. Does not touch the CA, the key, or any other cert. See thesis/results/v5/DECISIONS.md.")
+	verifyHybridName := flag.String("verify-hybrid", "", "Re-derive <name>_hybrid.crt's preTBS from the certificate already on disk and independently re-verify its AltSignatureValue (ML-DSA-65) extension against issuer_ca_pqc.crt's public key -- proof the second signature is real and checkable, not just a correctly-sized field. See thesis/results/v7/artifacts/.")
+	verifyPQCName := flag.String("verify-pqc-cert", "", "Sign a fresh challenge with <name>.key (ML-DSA-65) and verify it against <name>.crt's own SubjectPublicKeyInfo, also printing the certificate's (classical RSA) issuer signature algorithm -- proof the PQC leaf keypair is real and functional, not just a correctly-sized/OID-tagged field. See thesis/results/v7/artifacts/pqc/.")
 	flag.Parse()
+
+	if *verifyHybridName != "" {
+		verifyHybridCert(*verifyHybridName, sourceDir)
+		return
+	}
+
+	if *verifyPQCName != "" {
+		verifyPQCCert(*verifyPQCName, sourceDir)
+		return
+	}
 
 	if *resignAll {
 		resignEverything(sourceDir, *orgID)

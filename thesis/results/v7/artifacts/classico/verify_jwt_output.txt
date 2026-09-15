@@ -1,0 +1,19 @@
+Comando:
+  node thesis/scripts/verify_hybrid_jwt/verify_classic_jwt.mjs \
+    insurance-server-lambdas/src/main/resources/crypto-profiles/classic.json \
+    thesis/results/v7/artifacts/classico/example_jwt_premium_compact.txt
+
+Output real:
+
+Classic (PS256) public JWK, derived from classic.json: {"kty":"RSA","n":"1KEH2RKcHf2dRKmVcfNB_6vVTuE_VFujAg5ajRjcPIq2rnvwQNXGDydGvbhwTJS9xB9j-7WMpyneAnB09s4Xci3EoZJgINO-dD0t7y1mrn46DxwuLYzCCMQb2f5ySjZj6DdU8YLcL43OJJ5MEguQea_FmMX3hhfTd5EqtT_nrcI-toS8vpshhQb1XCfdIfQvFxfndESLaf-_WfnSHx-g3eAEYpN7sGOUxDNrpkkc1JxnjGQiT59Rpw_JutD3ea2S4XwtspxZjFfS8TkfLVWX9lXfwf7m53XLUx8SnpycNCFb0JV1G2gBkNOJ5yGYhL0QNRklC5fzi8ARFV4AYppNCQ","e":"AQAB"}
+VERIFICATION RESULT: {
+  "valid": true,
+  "reason": "PS256 verified",
+  "hasPqcClaim": false
+}
+
+Nota: o "n" acima é byte-idêntico ao "n" da classicSigningKey usada no perfil
+Híbrido (thesis/results/v7/artifacts/hybrid/verify_jwt_output.txt) -- o
+projeto reaproveita a mesma identidade RSA do RS entre os perfis Clássico e
+Híbrido; o Híbrido só adiciona a chave/assinatura ML-DSA-65 por cima da
+mesma base clássica, não troca a base. Não é uma coincidência nem um erro.
