@@ -316,7 +316,7 @@ ferramenta usada em Híbrido e Clássico roda aqui com o argumento
 `X25519MLKEM768` (o grupo híbrido clássico+PQC do perfil Híbrido) ou
 qualquer curva puramente clássica, o programa teria terminado em `RESULT:
 FAIL`, não com sucesso. `MLKEM1024`, ao contrário de `X25519MLKEM768`, não
-tem NENHUM componente ECDHE misturado no próprio nome do grupo (RFC 9880) —
+tem NENHUM componente ECDHE misturado no próprio nome do grupo (definido no Internet-Draft `draft-ietf-tls-mlkem`, IETF TLS WG, ainda não publicado como RFC) —
 não é um "híbrido com metade PQC", é o KEM puro. A exportação de material de
 chave (RFC 5705) confirma adicionalmente que o segredo de sessão é
 genuinamente novo a cada conexão, via KEM efêmero, não um valor fixo.

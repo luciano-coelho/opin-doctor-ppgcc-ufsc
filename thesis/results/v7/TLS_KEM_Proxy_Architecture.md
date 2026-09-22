@@ -234,7 +234,7 @@ o mesmo `CRYPTO_PROFILE=hybrid`: instrumentando `GetConfigForClient` com um log
 explícito e cruzando, conexão por conexão, contra os handshakes capturados, a
 correspondência foi 1:1 — as mesmas 35 aplicações da exceção, os mesmos 35
 `remoteAddr`, nenhum handshake clássico sem essa explicação (`thesis/results/v7/
-DECISIONS.md`, Decision 5, e `artifacts/{pqc,hybrid}/README.md`, Seção 4).
+DECISIONS.md`, Decision 6, e `artifacts/{pqc,hybrid}/README.md`, Seção 4).
 
 ### 3.3. O bug do `"localhost"` — uma discrepância de ~1000x que não foi aceita sem explicação
 
@@ -367,7 +367,7 @@ perfil medido por uma implementação de cliente diferente dos outros dois.
   hybrid}/README.md`, Seção 4, para a citação de linha exata mais recente).
 - `GetConfigForClient` — a exceção por SNI da Seção 3.2 (`hello.ServerName ==
   "matls-api.local"`), com o comentário do código já atualizado
-  (`thesis/results/v7/DECISIONS.md`, Decision 5) para deixar essa exceção
+  (`thesis/results/v7/DECISIONS.md`, Decision 6) para deixar essa exceção
   explícita ao lado da política "sem fallback silencioso".
 
 **Decisões e narrativas completas** (este documento resume; os originais têm o
@@ -380,4 +380,5 @@ detalhe investigativo passo a passo):
   spawn de subprocess (`_run_pqc_signer()`) que motivou o desenho de processo
   único e longa duração deste proxy.
 - `thesis/results/v7/DECISIONS.md`, Decision 1 (unificação dos três perfis),
-  Decision 5 (reconfirmação da exceção por SNI, correspondência 1:1).
+  Decision 5 (certificado local Python→proxy, reprodutibilidade PQC/Híbrido) e
+  Decision 6 (reconfirmação da exceção por SNI, correspondência 1:1).
