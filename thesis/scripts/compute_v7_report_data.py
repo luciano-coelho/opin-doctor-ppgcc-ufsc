@@ -163,6 +163,9 @@ for _, prof in PROFILES:
         "extended_with_der": original + k["der_body_total"],
         "delta_pct_with_der": k["der_body_total"] / original * 100,
     }
+    ext = data["opinsize"][prof]["extended"]
+    data["opinsize"][prof]["delta_pct_der_vs_extended"] = (data["opinsize"][prof]["extended_with_der"] - ext) / ext * 100
+    data["opinsize"][prof]["delta_pct_measured_vs_extended"] = (data["opinsize"][prof]["extended_with_measured_framing"] - ext) / ext * 100
 
 # -------------------------------------------------------------- latency
 for exp, prof in PROFILES:

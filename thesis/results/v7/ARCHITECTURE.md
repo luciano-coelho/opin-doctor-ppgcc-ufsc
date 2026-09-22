@@ -57,7 +57,7 @@ Este documento descreve, de forma independente, a arquitetura do experimento fin
 
 O perfil ativo é escolhido por uma única variável, `CRYPTO_PROFILE` (`classic`, `pqc` ou `hybrid`), lida por todos os componentes; a troca é feita por `switch_crypto_profile.py`, que também espera o ambiente assentar.
 
-**A conexão interna `auth`→RS.** Para exibir o consentimento, o AS consulta o RS pelo mesmo gateway (`matls-api.local`) com um certificado de transporte próprio, fixo e clássico. O cliente HTTPS do Node.js não negocia os grupos pós-quânticos, então essa única conexão é mantida clássica por uma exceção deliberada por SNI no gateway (Seção 5.3). Ela não faz parte do fluxo medido: não entra em N_mTLS nem em nenhuma métrica de tamanho ou de handshake.
+**A conexão interna `auth`→RS.** Para exibir o consentimento, o AS consulta o RS pelo mesmo gateway (`matls-api.local`) com um certificado de transporte próprio, fixo e clássico. O cliente HTTPS do Node.js não negocia os grupos pós-quânticos, então essa única conexão é mantida clássica por uma exceção deliberada por SNI no gateway (Seção 5.1). Ela não faz parte do fluxo medido: não entra em N_mTLS nem em nenhuma métrica de tamanho ou de handshake.
 
 ---
 
@@ -118,15 +118,9 @@ Para cada perfil, `artifacts/` traz uma captura real de cada artefato acima (cer
 
 ## 5. Camada de transporte
 
-### 5.1. Por que existe o `tls_kem_proxy`
+Os três perfis foram medidos sob a mesma arquitetura de cliente TLS (`tls_kem_proxy`), eliminando variáveis de confusão entre eles — cada perfil pede exatamente um grupo de troca de chave, sem fallback: se o servidor não o oferecer, a conexão falha de forma visível, em vez de recuar silenciosamente para clássico. Descrição completa, histórico de problemas e referências de código em [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md).
 
-O cliente de teste é Python, e a pilha TLS do Python (OpenSSL do sistema) não negocia `MLKEM1024` nem `X25519MLKEM768`. O Go negocia os dois nativamente. O `tls_kem_proxy` é um pequeno cliente TLS em Go, iniciado uma vez por execução, que faz a ponte: o Python fala TLS comum com o proxy local, e o proxy abre a conexão mTLS real com o gateway, com o certificado e o grupo de troca de chave do perfil ativo. Uma conexão local vira exatamente uma conexão upstream, de modo que as 6 conexões do fluxo se mantêm 6. Descrição completa, histórico de problemas e referências de código em [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md).
-
-### 5.2. A unificação dos três perfis
-
-Nas versões anteriores, o Clássico conectava direto ao gateway e só PQC/Híbrido passavam pelo proxy; assim, parte das diferenças entre perfis vinha de qual cliente TLS estava em uso. Na v7, **os três perfis passam pelo mesmo cliente** e diferem só na curva pedida (`classic`, `mlkem1024`, `x25519mlkem768`). Cada perfil pede exatamente um grupo, sem fallback: se o servidor não o oferecer, a conexão falha de forma visível, em vez de recuar silenciosamente para clássico.
-
-### 5.3. A política do gateway e sua única exceção
+### 5.1. A política do gateway e sua única exceção
 
 O gateway define a lista de grupos aceitos por `CRYPTO_PROFILE`: curvas clássicas no Clássico, somente `MLKEM1024` no PQC, somente `X25519MLKEM768` no Híbrido (com TLS 1.3 obrigatório nos dois últimos). Existe **uma exceção, deliberada e restrita por SNI**: toda conexão cujo `ServerName` seja `matls-api.local` (a chamada interna `auth`→RS) recebe a configuração clássica. Foi confirmado, conexão a conexão, que **todo** handshake clássico observado sob PQC/Híbrido tem esse SNI e que nenhum outro o tem (35 aplicações da exceção, 35 handshakes clássicos, mesmo endereço de origem em cada par; `DECISIONS.md`, Decision 6).
 
@@ -148,40 +142,25 @@ O `id_token` é cifrado (JWE, RSA-OAEP com AES-256-GCM) para a chave que o clien
 
 ---
 
-## 7. A equação OPINsize e a extensão para certificados de CA
+## 7. A equação OPINsize: a extensão proposta por esta tese
 
-### 7.1. A equação original
-
-O custo analítico de um fluxo completo é modelado por uma soma de três termos (equivalente à Eq. 3.1 de Schardong et al., 2022):
+A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos — o custo do handshake mTLS, dos tokens trafegados e das chaves públicas publicadas:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size
 ```
 
-| Termo | Significado | Neste fluxo |
-|---|---|---|
-| N_mTLS × handshake_bytes | Conexões mTLS × bytes do handshake (P50, camada de conexão bruta) | 6 × 5.119 / 16.605 / 18.023 |
-| N_JWT × JWT_size | Tokens trafegados × tamanho médio do token | 26 × 1.385,42 / 5.458,81 / 7.324,81 |
-| N_JWK × JWK_PK_size | Buscas de JWKS × tamanho da chave pública de assinatura do AS | 2 × 256 / 1.952 / 2.208 |
-
-(valores por perfil na ordem Clássico / PQC / Híbrido). Cada termo é um tamanho de material criptográfico, não de tráfego HTTP: o tamanho do JWT é o comprimento do token e o da chave é o tamanho da chave, sem cabeçalhos.
-
-### 7.2. O que a equação original não captura
-
-O fluxo baixa dois certificados de Autoridade Certificadora (`root-ca.pem` e `issuer-ca.pem`) no início de cada sub-fluxo, 4 transferências por execução completa. Esses certificados **não são handshake** (trafegam por HTTP, fora da negociação TLS), **não são JWT** e **não são chave de JWKS**; portanto nenhum dos três termos os inclui. O custo já era medido — os arquivos brutos o registram sob o participante "PKI/CRL" — mas nunca entrou na soma. Como é material criptográfico de pleno direito, cujo tamanho muda com o algoritmo dos certificados, a equação subestimava o custo do fluxo e o subestimava de forma desigual entre os perfis.
-
-Não há dupla contagem com o handshake: os certificados que trafegam **dentro** do handshake (o do servidor e o do cliente) são contados no termo de handshake; os certificados de CA baixados por HTTP são transferências distintas.
-
-### 7.3. A equação estendida
+Esta tese a estende com um quarto termo, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma. A partir daqui, **OPINsize refere-se sempre à fórmula estendida** — a de três termos não volta a aparecer como resultado, só serviu para justificar a extensão:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes
 ```
 
-- **N_PKI** = número de certificados de CA trocados no fluxo = 4 (2 da raiz + 2 da emissora).
-- **PKI_bytes** = tamanho médio, em bytes, dos dois certificados de CA servidos, **no formato em que trafegam (PEM)**. Como raiz e emissora têm tamanhos ligeiramente diferentes, N_PKI × PKI_bytes é a soma exata das 4 transferências.
+com N_mTLS = 6, N_JWT = 26, N_JWK = 2 e N_PKI = 4 (2 da raiz + 2 da emissora). `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos, **no formato em que trafegam (PEM)**; como raiz e emissora têm tamanhos ligeiramente diferentes, N_PKI × PKI_bytes é a soma exata das 4 transferências. Cada termo é um tamanho de material criptográfico, não de tráfego HTTP — o tamanho do JWT é o comprimento do token, o da chave é o tamanho da chave, sem cabeçalhos. Com N_PKI = 0 a equação se reduz à original, o que preserva a comparabilidade com a literatura.
 
-Com N_PKI = 0 a equação se reduz à original, de modo que a extensão preserva a comparabilidade com a literatura.
+### 7.1. Por que o termo de PKI é necessário
+
+O fluxo baixa dois certificados de CA (`root-ca.pem`, `issuer-ca.pem`) no início de cada sub-fluxo, 4 transferências por execução completa. Esses certificados **não são handshake** (trafegam por HTTP, fora da negociação TLS), **não são JWT** e **não são chave de JWKS**; nenhum dos três termos originais os inclui, embora o custo já fosse medido — os arquivos brutos o registram sob o participante "PKI/CRL". Não há dupla contagem com o handshake: os certificados que trafegam **dentro** dele (servidor e cliente) são contados no termo de handshake; os de CA baixados por HTTP são transferências distintas.
 
 **Origem dos dados, sem nova medição.** Os tamanhos dos certificados vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`) e foram validados contra o volume de resposta HTTP já registrado nos dados brutos: o volume medido menos o corpo dos 4 certificados dá um enquadramento HTTP de exatamente 103 bytes por resposta, idêntico nos três perfis, o que só ocorre se o corpo servido for o arquivo usado no cálculo.
 
@@ -191,55 +170,52 @@ Com N_PKI = 0 a equação se reduz à original, de modo que a extensão preserva
 | PQC | 4.048 | 4.052 | 4.050 | 4 | 16.200 | 16.612 | 412 (4 × 103) |
 | Híbrido | 9.337 | 9.341 | 9.339 | 4 | 37.356 | 37.768 | 412 (4 × 103) |
 
-### 7.4. Por que isso importa especificamente no cenário híbrido
+### 7.2. Por que isso importa especificamente no cenário híbrido
 
 No Híbrido, cada certificado de CA carrega, além da estrutura RSA, o material ML-DSA-65 completo (chave pública e assinatura alternativa) nas três extensões: cada um ocupa cerca de 9.337 bytes em PEM, contra 2.106 no Clássico e 4.048 no PQC. Em termos absolutos:
 
-- O termo de PKI do Híbrido é de **37.356 bytes**, isto é, **8,5× o termo de chave pública JWK** que a equação original já somava (4.416 bytes), e equivale a 34,5% do termo de handshake (108.138 bytes). Omitir esse termo escondia um custo maior que um dos três termos originais.
+- O termo de PKI do Híbrido é de **37.356 bytes** — **8,5× o termo de chave pública JWK** (4.416 bytes) e equivalente a 34,5% do termo de handshake (108.138 bytes): maior que um dos outros três termos da própria equação.
 - É **4,43× o termo de PKI do Clássico** e 2,31× o do PQC: o crescimento do material de CA é a parcela do custo mais sensível ao esquema de combinação escolhido, porque o Híbrido é o único perfil cujos certificados de CA carregam as duas assinaturas.
-- O termo de PKI não altera a ordem dos perfis nem o peso dominante dos JWTs (190.445 bytes no Híbrido). Seu efeito é **relativo**: aumenta a distância do Híbrido ao PQC e reduz a razão do PQC ao Clássico (7.5).
+- O termo de PKI não altera a ordem dos perfis nem o peso dominante dos JWTs (190.445 bytes no Híbrido) — sua participação no OPINsize de cada perfil está na Seção 7.3.
 
-### 7.5. Impacto numérico
+### 7.3. Impacto numérico
 
 | Termo | N | Clássico | PQC | Híbrido |
 |---|---:|---:|---:|---:|
 | N_mTLS × handshake_bytes | 6 | 30.714 | 99.630 | 108.138 |
 | N_JWT × JWT_size | 26 | 36.021 | 141.929 | 190.445 |
 | N_JWK × JWK_PK_size | 2 | 512 | 3.904 | 4.416 |
-| **OPINsize original (3 termos)** | | **67.247** | **245.463** | **302.999** |
-| N_PKI × PKI_bytes (novo) | 4 | 8.440 | 16.200 | 37.356 |
-| **OPINsize estendido (4 termos)** | | **75.687** | **261.663** | **340.355** |
-| Acréscimo do termo PKI (bytes) | | +8.440 | +16.200 | +37.356 |
-| Acréscimo do termo PKI (% do OPINsize original) | | +12,55% | +6,60% | +12,33% |
-| Peso do termo PKI no OPINsize estendido | | 11,15% | 6,19% | 10,98% |
+| N_PKI × PKI_bytes | 4 | 8.440 | 16.200 | 37.356 |
+| **OPINsize** | | **75.687** | **261.663** | **340.355** |
+| Peso do termo de PKI no OPINsize | | 11,15% | 6,19% | 10,98% |
 
-| Razão entre perfis | Fórmula original | Fórmula estendida |
-|---|---:|---:|
-| PQC / Clássico | 3,65× (+265,02%) | 3,46× (+245,72%) |
-| Híbrido / Clássico | 4,51× (+350,58%) | 4,50× (+349,69%) |
-| Híbrido / PQC | 1,23× (+23,44%) | 1,30× (+30,07%) |
+| Razão entre perfis | OPINsize |
+|---|---:|
+| PQC / Clássico | 3,46× (+245,72%) |
+| Híbrido / Clássico | 4,50× (+349,69%) |
+| Híbrido / PQC | 1,30× (+30,07%) |
 
-- O acréscimo é de +12,55% no Clássico, +6,60% no PQC e **+12,33% no Híbrido** sobre a fórmula original.
-- O Híbrido passa a estar **+30,07%** acima do PQC (antes, +23,44%).
-- O PQC, 3,46× o Clássico (antes, 3,65×): o PQC tem o menor acréscimo relativo porque, neste protótipo, os certificados de CA do perfil PQC têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA.
+- O termo de PKI representa 11,15% do OPINsize do Clássico, 6,19% do PQC e 10,98% do Híbrido — no Híbrido, o segundo maior componente da soma, atrás só do termo de JWT.
+- Pelo OPINsize, o Híbrido é 1,30× o PQC e 4,50× o Clássico; o PQC é 3,46× o Clássico.
+- O PQC tem a menor participação relativa do termo de PKI porque, neste protótipo, seus certificados de CA têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
 
-### 7.6. Sensibilidade e limites do termo
+### 7.4. Sensibilidade e limites do termo
 
 - **Formato do certificado.** O PEM (base64 com quebras de linha) ocupa cerca de 36–39% mais que o DER; PEM é o formato que efetivamente trafega. Em DER, o termo seria:
 
-| Perfil | CA raiz / emissora (DER, bytes) | N_PKI × PKI_bytes em DER (bytes) | OPINsize estendido (DER) | Acréscimo |
+| Perfil | CA raiz / emissora (DER, bytes) | N_PKI × PKI_bytes em DER (bytes) | OPINsize (DER) | Diferença |
 |---|---:|---:|---:|---:|
-| Clássico | 1.515 / 1.519 | 6.068 | 73.315 | +9,02% |
-| PQC | 2.947 / 2.951 | 11.796 | 257.259 | +4,81% |
-| Híbrido | 6.853 / 6.857 | 27.420 | 330.419 | +9,05% |
+| Clássico | 1.515 / 1.519 | 6.068 | 73.315 | −3,13% |
+| PQC | 2.947 / 2.951 | 11.796 | 257.259 | −1,68% |
+| Híbrido | 6.853 / 6.857 | 27.420 | 330.419 | −2,92% |
 
-- **Enquadramento HTTP.** Usando diretamente o volume de resposta medido (corpo + 103 bytes por certificado), o acréscimo muda em menos de 1 ponto percentual:
+- **Enquadramento HTTP.** Usando diretamente o volume de resposta medido (corpo + 103 bytes por certificado), o OPINsize muda em menos de 1 ponto percentual:
 
-| Perfil | OPINsize estendido (corpo PEM) | Acréscimo | OPINsize estendido (resposta HTTP medida) | Acréscimo |
-|---|---:|---:|---:|---:|
-| Clássico | 75.687 | +12,55% | 76.099 | +13,16% |
-| PQC | 261.663 | +6,60% | 262.075 | +6,77% |
-| Híbrido | 340.355 | +12,33% | 340.767 | +12,46% |
+| Perfil | OPINsize (corpo PEM) | OPINsize (resposta HTTP medida) | Diferença |
+|---|---:|---:|---:|
+| Clássico | 75.687 | 76.099 | +0,54% |
+| PQC | 261.663 | 262.075 | +0,16% |
+| Híbrido | 340.355 | 340.767 | +0,12% |
 
 - **N_PKI é uma propriedade do fluxo implementado.** O cliente de teste baixa os certificados de CA no início de cada sub-fluxo, sem cache; um cliente real com cache pagaria menos. A fórmula mantém N_PKI explícito para permitir outros valores, do mesmo modo que N_JWK.
 - **Escopo.** O OPINsize modela o custo dos artefatos criptográficos; não inclui cabeçalhos HTTP, sobrecarga de TLS/TCP/IP nem o tráfego de aplicação total (`total_bytes_exchanged`), que é outra métrica.
@@ -270,7 +246,7 @@ O gateway registra todas as conexões que vê, inclusive a interna `auth`→RS; 
 ## 9. Limites conhecidos da arquitetura
 
 1. A cifragem dos tokens permanece clássica nos três perfis (Seção 6.3).
-2. A conexão interna `auth`→RS permanece clássica por desenho (Seção 5.3).
+2. A conexão interna `auth`→RS permanece clássica por desenho (Seção 5.1).
 3. PQC usa ML-KEM-1024 (categoria NIST 5) e Híbrido, ML-KEM-768 (categoria 3): o Go só oferece ML-KEM-1024 sem componente clássico.
 4. O componente RSA do Híbrido é de 2.048 bits nos JWTs emitidos pelo AS e RS, por continuidade com o que já havia sido medido.
 5. O assinador ML-DSA-65 do cliente de teste usa um contêiner efêmero por assinatura, o que tem custo de tempo próprio e afeta o T_fluxo dos perfis PQC e Híbrido (`CONSOLIDATED_REPORT.md`, Seção 6).

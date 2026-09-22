@@ -75,9 +75,11 @@ for p in PROF:
     V[f"share_{p}"] = pct(o["pki_share_of_extended_pct"])
     V[f"opin1meas_{p}"] = n0(o["extended_with_measured_framing"])
     V[f"dpctmeas_{p}"] = pct(o["delta_pct_with_measured_framing"])
+    V[f"dvsmeas_{p}"] = spct(o["delta_pct_measured_vs_extended"])
     V[f"derbody_{p}"] = n0(k["der_body_total"])
     V[f"opin1der_{p}"] = n0(o["extended_with_der"])
     V[f"dpctder_{p}"] = pct(o["delta_pct_with_der"])
+    V[f"dvsder_{p}"] = spct(o["delta_pct_der_vs_extended"])
     V[f"rootder_{p}"] = n0(k["root_der"])
     V[f"issuerder_{p}"] = n0(k["issuer_der"])
     V[f"cs_{p}"] = n0(b["Client"]["sent_bytes"])
@@ -183,19 +185,16 @@ T["opin"] = "\n".join([
     f"| N_mTLS × handshake_bytes | {V['n_mtls']} | {V['t_hs_classic']} | {V['t_hs_pqc']} | {V['t_hs_hybrid']} |",
     f"| N_JWT × JWT_size | {V['n_jwt']} | {V['t_jwt_classic']} | {V['t_jwt_pqc']} | {V['t_jwt_hybrid']} |",
     f"| N_JWK × JWK_PK_size | {V['n_jwk']} | {V['t_jwk_classic']} | {V['t_jwk_pqc']} | {V['t_jwk_hybrid']} |",
-    f"| **OPINsize original (3 termos)** | | **{V['opin0_classic']}** | **{V['opin0_pqc']}** | **{V['opin0_hybrid']}** |",
-    f"| N_PKI × PKI_bytes (novo) | {V['n_pki']} | {V['t_pki_classic']} | {V['t_pki_pqc']} | {V['t_pki_hybrid']} |",
-    f"| **OPINsize estendido (4 termos)** | | **{V['opin1_classic']}** | **{V['opin1_pqc']}** | **{V['opin1_hybrid']}** |",
-    f"| Acréscimo do termo PKI (bytes) | | +{V['t_pki_classic']} | +{V['t_pki_pqc']} | +{V['t_pki_hybrid']} |",
-    f"| Acréscimo do termo PKI (% do OPINsize original) | | +{V['dpct_classic']} | +{V['dpct_pqc']} | +{V['dpct_hybrid']} |",
-    f"| Peso do termo PKI no OPINsize estendido | | {V['share_classic']} | {V['share_pqc']} | {V['share_hybrid']} |",
+    f"| N_PKI × PKI_bytes | {V['n_pki']} | {V['t_pki_classic']} | {V['t_pki_pqc']} | {V['t_pki_hybrid']} |",
+    f"| **OPINsize** | | **{V['opin1_classic']}** | **{V['opin1_pqc']}** | **{V['opin1_hybrid']}** |",
+    f"| Peso do termo de PKI no OPINsize | | {V['share_classic']} | {V['share_pqc']} | {V['share_hybrid']} |",
 ])
 T["opin_ratios"] = "\n".join([
-    "| Razão entre perfis | Fórmula original | Fórmula estendida |",
-    "|---|---:|---:|",
-    f"| PQC / Clássico | {V['opin0_ratio_pqc_classic']} ({V['opin0_up_pqc_classic']}) | {V['opin1_ratio_pqc_classic']} ({V['opin1_up_pqc_classic']}) |",
-    f"| Híbrido / Clássico | {V['opin0_ratio_hybrid_classic']} ({V['opin0_up_hybrid_classic']}) | {V['opin1_ratio_hybrid_classic']} ({V['opin1_up_hybrid_classic']}) |",
-    f"| Híbrido / PQC | {V['opin0_ratio_hybrid_pqc']} ({V['opin0_up_hybrid_pqc']}) | {V['opin1_ratio_hybrid_pqc']} ({V['opin1_up_hybrid_pqc']}) |",
+    "| Razão entre perfis | OPINsize |",
+    "|---|---:|",
+    f"| PQC / Clássico | {V['opin1_ratio_pqc_classic']} ({V['opin1_up_pqc_classic']}) |",
+    f"| Híbrido / Clássico | {V['opin1_ratio_hybrid_classic']} ({V['opin1_up_hybrid_classic']}) |",
+    f"| Híbrido / PQC | {V['opin1_ratio_hybrid_pqc']} ({V['opin1_up_hybrid_pqc']}) |",
 ])
 T["pki_detail"] = "\n".join([
     "| Perfil | CA raiz (bytes) | CA emissora (bytes) | PKI_bytes médio (bytes) | N_PKI | N_PKI × PKI_bytes (bytes) | Medido: resposta HTTP das 4 buscas (bytes) | Enquadramento HTTP (bytes) |",
@@ -205,17 +204,17 @@ T["pki_detail"] = "\n".join([
     for p in PROF
 ])
 T["sens"] = "\n".join([
-    "| Perfil | OPINsize estendido (corpo PEM) | Acréscimo | OPINsize estendido (resposta HTTP medida) | Acréscimo |",
-    "|---|---:|---:|---:|---:|",
+    "| Perfil | OPINsize (corpo PEM) | OPINsize (resposta HTTP medida) | Diferença |",
+    "|---|---:|---:|---:|",
 ] + [
-    f"| {NAME[p]} | {V[f'opin1_{p}']} | +{V[f'dpct_{p}']} | {V[f'opin1meas_{p}']} | +{V[f'dpctmeas_{p}']} |"
+    f"| {NAME[p]} | {V[f'opin1_{p}']} | {V[f'opin1meas_{p}']} | {V[f'dvsmeas_{p}']} |"
     for p in PROF
 ])
 T["sens_der"] = "\n".join([
-    "| Perfil | CA raiz / emissora (DER, bytes) | N_PKI × PKI_bytes em DER (bytes) | OPINsize estendido (DER) | Acréscimo |",
+    "| Perfil | CA raiz / emissora (DER, bytes) | N_PKI × PKI_bytes em DER (bytes) | OPINsize (DER) | Diferença |",
     "|---|---:|---:|---:|---:|",
 ] + [
-    f"| {NAME[p]} | {V[f'rootder_{p}']} / {V[f'issuerder_{p}']} | {V[f'derbody_{p}']} | {V[f'opin1der_{p}']} | +{V[f'dpctder_{p}']} |"
+    f"| {NAME[p]} | {V[f'rootder_{p}']} / {V[f'issuerder_{p}']} | {V[f'derbody_{p}']} | {V[f'opin1der_{p}']} | {V[f'dvsder_{p}']} |"
     for p in PROF
 ])
 T["participants"] = "\n".join([

@@ -11,7 +11,7 @@
 - **Tamanho é determinístico.** As 60 execuções de cada perfil (6 cenários de latência × 10 execuções) produziram exatamente os mesmos bytes em todas as métricas de tamanho: spread de 0,00% em todos os 18 cenários/perfis. A latência de rede injetada não altera nenhuma métrica de tamanho.
 - **O custo do handshake mTLS cresce de 5.119 bytes (Clássico) para 16.605 (PQC, 3,24×) e 18.023 (Híbrido, 3,52×).** O Híbrido paga 1,09× o handshake do PQC.
 - **O JWT médio passa de 1.385,42 bytes para 5.458,81 (PQC) e 7.324,81 (Híbrido)**, isto é, 3,94× e 5,29× o tamanho do Clássico.
-- **OPINsize com a fórmula original (três termos)**: 67.247 bytes (Clássico), 245.463 (PQC), 302.999 (Híbrido). **Com a fórmula estendida (novo termo de PKI/CRL)**: 75.687, 261.663 e 340.355 bytes — acréscimos de +12,55%, +6,60% e +12,33%, respectivamente (Seção 3.2).
+- **OPINsize**: esta tese estende a equação de Schardong et al. (2022) com um quarto termo, para o custo de certificados de Autoridade Certificadora que o fluxo baixa e que a formulação original não contempla. Pela fórmula estendida, o OPINsize da v7 é 75.687 bytes (Clássico), 261.663 (PQC) e 340.355 (Híbrido) (Seção 3.2).
 - **Latência (T_fluxo)**: a ordem Clássico < PQC < Híbrido vale em todos os 6 cenários de latência emulada, pelas medianas. Clássico e PQC têm distribuições totalmente separadas em todos os cenários; PQC e Híbrido têm intervalos [mín., máx.] que se sobrepõem em todos os 6 cenários, embora as medianas e um teste de postos exato apontem o Híbrido acima do PQC em todos eles (Seção 4.3).
 - **A diferença de latência entre Clássico e PQC/Híbrido é praticamente constante (de 5,25 a 6,70 s para o PQC), não proporcional à latência de rede**, e não deve ser atribuída apenas aos algoritmos: o desenho do assinador ML-DSA-65 do cliente de teste tem custo próprio de processo (Seção 6).
 - **Decomposição por participante**: AS e RS, antes colapsados em "Outros" por um artefato do roteamento via proxy, foram separados com uma captura pontual (uma execução por perfil, fora do protocolo estatístico oficial) que reconcilia exatamente com os totais já commitados; os bytes do handshake continuam sem decomposição por direção (Seção 3.3).
@@ -34,9 +34,9 @@ Um fluxo completo do Open Insurance Brasil (OPIN), executado por um cliente de t
 
 A criptografia de conteúdo dos tokens (JWE com RSA-OAEP no `id_token`) permanece clássica nos três perfis: não existe hoje padrão JOSE/COSE para cifragem pós-quântica de tokens, o que impede a migração dessa camada (ver `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`).
 
-### 2.3. Unificação pelo `tls_kem_proxy`
+### 2.3. Arquitetura de teste
 
-O cliente Python de teste não negocia os grupos de troca de chave `MLKEM1024` e `X25519MLKEM768`. Na v7, **os três perfis, inclusive o Clássico**, passam pelo mesmo cliente TLS em Go (`tls_kem_proxy`), variando apenas a curva pedida. Isso elimina a variável de confusão das versões anteriores (parte de qualquer diferença entre perfis vinha de qual implementação de cliente TLS estava em uso, não do algoritmo). Detalhes em `TLS_KEM_Proxy_Architecture.md`.
+Os três perfis foram medidos sob a mesma arquitetura de cliente TLS, eliminando variáveis de confusão entre eles — detalhes completos em `TLS_KEM_Proxy_Architecture.md`.
 
 ### 2.4. Protocolo de coleta
 
@@ -76,42 +76,39 @@ Razões entre perfis (cada coluna calculada sobre a linha correspondente da tabe
 | Híbrido / Clássico | 3,52× | 4,59× | 5,29× | 3,82× | 3,87× |
 | Híbrido / PQC | 1,09× | 2,32× | 1,34× | 1,38× | 1,38× |
 
-### 3.2. OPINsize com a fórmula estendida
+### 3.2. OPINsize (fórmula estendida)
 
-A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos. Esta consolidação a estende com um quarto, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma:
+A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos. Esta consolidação a estende com um quarto, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma. A justificativa completa da extensão está em `ARCHITECTURE.md`, Seção 7 (e `DECISIONS.md`, Decision 7). A partir daqui, **OPINsize refere-se sempre à fórmula estendida** — o único resultado desta seção:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes
 ```
 
-com N_mTLS = 6, N_JWT = 26, N_JWK = 2 e N_PKI = 4. `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos (raiz e emissora), no formato em que trafegam (PEM). A justificativa completa da extensão está em `ARCHITECTURE.md`, Seção 7 (e `DECISIONS.md`, Decision 7).
+com N_mTLS = 6, N_JWT = 26, N_JWK = 2 e N_PKI = 4. `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos (raiz e emissora), no formato em que trafegam (PEM). Com N_PKI = 0 a equação se reduz à original, o que preserva a comparabilidade com a literatura.
 
 | Termo | N | Clássico | PQC | Híbrido |
 |---|---:|---:|---:|---:|
 | N_mTLS × handshake_bytes | 6 | 30.714 | 99.630 | 108.138 |
 | N_JWT × JWT_size | 26 | 36.021 | 141.929 | 190.445 |
 | N_JWK × JWK_PK_size | 2 | 512 | 3.904 | 4.416 |
-| **OPINsize original (3 termos)** | | **67.247** | **245.463** | **302.999** |
-| N_PKI × PKI_bytes (novo) | 4 | 8.440 | 16.200 | 37.356 |
-| **OPINsize estendido (4 termos)** | | **75.687** | **261.663** | **340.355** |
-| Acréscimo do termo PKI (bytes) | | +8.440 | +16.200 | +37.356 |
-| Acréscimo do termo PKI (% do OPINsize original) | | +12,55% | +6,60% | +12,33% |
-| Peso do termo PKI no OPINsize estendido | | 11,15% | 6,19% | 10,98% |
+| N_PKI × PKI_bytes | 4 | 8.440 | 16.200 | 37.356 |
+| **OPINsize** | | **75.687** | **261.663** | **340.355** |
+| Peso do termo de PKI no OPINsize | | 11,15% | 6,19% | 10,98% |
 
-Razões entre perfis, antes e depois da extensão:
+Razões entre perfis:
 
-| Razão entre perfis | Fórmula original | Fórmula estendida |
-|---|---:|---:|
-| PQC / Clássico | 3,65× (+265,02%) | 3,46× (+245,72%) |
-| Híbrido / Clássico | 4,51× (+350,58%) | 4,50× (+349,69%) |
-| Híbrido / PQC | 1,23× (+23,44%) | 1,30× (+30,07%) |
+| Razão entre perfis | OPINsize |
+|---|---:|
+| PQC / Clássico | 3,46× (+245,72%) |
+| Híbrido / Clássico | 4,50× (+349,69%) |
+| Híbrido / PQC | 1,30× (+30,07%) |
 
 Leitura dos resultados:
 
-- O termo de PKI acrescenta 8.440 bytes ao Clássico (+12,55%), 16.200 ao PQC (+6,60%) e **37.356 ao Híbrido (+12,33%)**.
-- No Híbrido, o termo de PKI é **8,5× o termo de chave pública JWK** (que a fórmula original já somava) e equivale a 34,5% do termo de handshake. No PQC, o termo de PKI é 4,1× o de JWK. No Clássico, 16,5×.
-- O PQC tem o menor acréscimo relativo porque, neste protótipo, os certificados de CA do perfil PQC têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
-- Incluir o termo de PKI **aumenta a distância do Híbrido ao PQC** de +23,44% para +30,07%, e **reduz a razão PQC/Clássico** de 3,65× para 3,46×; a razão Híbrido/Clássico praticamente não muda (4,51× → 4,50×).
+- O termo de PKI vale 8.440 bytes no Clássico, 16.200 no PQC e 37.356 no Híbrido — 11,15%, 6,19% e 10,98% do OPINsize de cada perfil, respectivamente.
+- No Híbrido, o termo de PKI é **8,5× o termo de chave pública JWK** e equivale a 34,5% do termo de handshake. No PQC, o termo de PKI é 4,1× o de JWK. No Clássico, 16,5×.
+- O PQC tem a menor participação relativa do termo de PKI porque, neste protótipo, seus certificados de CA têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
+- Pelo OPINsize, o Híbrido é 1,30× o PQC e 4,50× o Clássico; o PQC é 3,46× o Clássico.
 
 **Como o termo de PKI foi validado sem nova medição.** Os tamanhos dos certificados de CA vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`), e foram confrontados com o volume de resposta HTTP já medido nos dados brutos (participante "PKI/CRL"). O volume medido menos o corpo dos 4 certificados dá um enquadramento HTTP de exatamente 103 bytes por resposta, **idêntico nos três perfis** — o que só é possível se o corpo servido for exatamente o arquivo usado no cálculo:
 
@@ -121,13 +118,13 @@ Leitura dos resultados:
 | PQC | 4.048 | 4.052 | 4.050 | 4 | 16.200 | 16.612 | 412 (4 × 103) |
 | Híbrido | 9.337 | 9.341 | 9.339 | 4 | 37.356 | 37.768 | 412 (4 × 103) |
 
-**Sensibilidade.** Usar diretamente o volume de resposta HTTP medido (corpo + 103 bytes de enquadramento por certificado), em vez do corpo PEM, muda o acréscimo em menos de 1 ponto percentual:
+**Sensibilidade.** Usar diretamente o volume de resposta HTTP medido (corpo + 103 bytes de enquadramento por certificado), em vez do corpo PEM, muda o OPINsize em menos de 1 ponto percentual:
 
-| Perfil | OPINsize estendido (corpo PEM) | Acréscimo | OPINsize estendido (resposta HTTP medida) | Acréscimo |
-|---|---:|---:|---:|---:|
-| Clássico | 75.687 | +12,55% | 76.099 | +13,16% |
-| PQC | 261.663 | +6,60% | 262.075 | +6,77% |
-| Híbrido | 340.355 | +12,33% | 340.767 | +12,46% |
+| Perfil | OPINsize (corpo PEM) | OPINsize (resposta HTTP medida) | Diferença |
+|---|---:|---:|---:|
+| Clássico | 75.687 | 76.099 | +0,54% |
+| PQC | 261.663 | 262.075 | +0,16% |
+| Híbrido | 340.355 | 340.767 | +0,12% |
 
 ### 3.3. Decomposição por participante e por direção
 

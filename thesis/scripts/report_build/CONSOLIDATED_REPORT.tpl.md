@@ -11,7 +11,7 @@
 - **Tamanho é determinístico.** As 60 execuções de cada perfil (6 cenários de latência × 10 execuções) produziram exatamente os mesmos bytes em todas as métricas de tamanho: spread de 0,00% em todos os 18 cenários/perfis. A latência de rede injetada não altera nenhuma métrica de tamanho.
 - **O custo do handshake mTLS cresce de {{hs_classic}} bytes (Clássico) para {{hs_pqc}} (PQC, {{hs_ratio_pqc_classic}}) e {{hs_hybrid}} (Híbrido, {{hs_ratio_hybrid_classic}}).** O Híbrido paga {{hs_ratio_hybrid_pqc}} o handshake do PQC.
 - **O JWT médio passa de {{jwtmean_classic}} bytes para {{jwtmean_pqc}} (PQC) e {{jwtmean_hybrid}} (Híbrido)**, isto é, {{jwt_ratio_pqc_classic}} e {{jwt_ratio_hybrid_classic}} o tamanho do Clássico.
-- **OPINsize com a fórmula original (três termos)**: {{opin0_classic}} bytes (Clássico), {{opin0_pqc}} (PQC), {{opin0_hybrid}} (Híbrido). **Com a fórmula estendida (novo termo de PKI/CRL)**: {{opin1_classic}}, {{opin1_pqc}} e {{opin1_hybrid}} bytes — acréscimos de +{{dpct_classic}}, +{{dpct_pqc}} e +{{dpct_hybrid}}, respectivamente (Seção 3.2).
+- **OPINsize**: esta tese estende a equação de Schardong et al. (2022) com um quarto termo, para o custo de certificados de Autoridade Certificadora que o fluxo baixa e que a formulação original não contempla. Pela fórmula estendida, o OPINsize da v7 é {{opin1_classic}} bytes (Clássico), {{opin1_pqc}} (PQC) e {{opin1_hybrid}} (Híbrido) (Seção 3.2).
 - **Latência (T_fluxo)**: a ordem Clássico < PQC < Híbrido vale em todos os 6 cenários de latência emulada, pelas medianas. Clássico e PQC têm distribuições totalmente separadas em todos os cenários; PQC e Híbrido têm intervalos [mín., máx.] que se sobrepõem em todos os 6 cenários, embora as medianas e um teste de postos exato apontem o Híbrido acima do PQC em todos eles (Seção 4.3).
 - **A diferença de latência entre Clássico e PQC/Híbrido é praticamente constante (de {{lat_gap_cp_min}} a {{lat_gap_cp_max}} s para o PQC), não proporcional à latência de rede**, e não deve ser atribuída apenas aos algoritmos: o desenho do assinador ML-DSA-65 do cliente de teste tem custo próprio de processo (Seção 6).
 - **Decomposição por participante**: AS e RS, antes colapsados em "Outros" por um artefato do roteamento via proxy, foram separados com uma captura pontual (uma execução por perfil, fora do protocolo estatístico oficial) que reconcilia exatamente com os totais já commitados; os bytes do handshake continuam sem decomposição por direção (Seção 3.3).
@@ -34,9 +34,9 @@ Um fluxo completo do Open Insurance Brasil (OPIN), executado por um cliente de t
 
 A criptografia de conteúdo dos tokens (JWE com RSA-OAEP no `id_token`) permanece clássica nos três perfis: não existe hoje padrão JOSE/COSE para cifragem pós-quântica de tokens, o que impede a migração dessa camada (ver `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`).
 
-### 2.3. Unificação pelo `tls_kem_proxy`
+### 2.3. Arquitetura de teste
 
-O cliente Python de teste não negocia os grupos de troca de chave `MLKEM1024` e `X25519MLKEM768`. Na v7, **os três perfis, inclusive o Clássico**, passam pelo mesmo cliente TLS em Go (`tls_kem_proxy`), variando apenas a curva pedida. Isso elimina a variável de confusão das versões anteriores (parte de qualquer diferença entre perfis vinha de qual implementação de cliente TLS estava em uso, não do algoritmo). Detalhes em `TLS_KEM_Proxy_Architecture.md`.
+Os três perfis foram medidos sob a mesma arquitetura de cliente TLS, eliminando variáveis de confusão entre eles — detalhes completos em `TLS_KEM_Proxy_Architecture.md`.
 
 ### 2.4. Protocolo de coleta
 
@@ -63,34 +63,34 @@ Razões entre perfis (cada coluna calculada sobre a linha correspondente da tabe
 
 {{table:size_ratios}}
 
-### 3.2. OPINsize com a fórmula estendida
+### 3.2. OPINsize (fórmula estendida)
 
-A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos. Esta consolidação a estende com um quarto, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma:
+A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos. Esta consolidação a estende com um quarto, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma. A justificativa completa da extensão está em `ARCHITECTURE.md`, Seção 7 (e `DECISIONS.md`, Decision 7). A partir daqui, **OPINsize refere-se sempre à fórmula estendida** — o único resultado desta seção:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes
 ```
 
-com N_mTLS = {{n_mtls}}, N_JWT = {{n_jwt}}, N_JWK = {{n_jwk}} e N_PKI = {{n_pki}}. `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos (raiz e emissora), no formato em que trafegam (PEM). A justificativa completa da extensão está em `ARCHITECTURE.md`, Seção 7 (e `DECISIONS.md`, Decision 7).
+com N_mTLS = {{n_mtls}}, N_JWT = {{n_jwt}}, N_JWK = {{n_jwk}} e N_PKI = {{n_pki}}. `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos (raiz e emissora), no formato em que trafegam (PEM). Com N_PKI = 0 a equação se reduz à original, o que preserva a comparabilidade com a literatura.
 
 {{table:opin}}
 
-Razões entre perfis, antes e depois da extensão:
+Razões entre perfis:
 
 {{table:opin_ratios}}
 
 Leitura dos resultados:
 
-- O termo de PKI acrescenta {{t_pki_classic}} bytes ao Clássico (+{{dpct_classic}}), {{t_pki_pqc}} ao PQC (+{{dpct_pqc}}) e **{{t_pki_hybrid}} ao Híbrido (+{{dpct_hybrid}})**.
-- No Híbrido, o termo de PKI é **{{hyb_pki_over_jwk}} o termo de chave pública JWK** (que a fórmula original já somava) e equivale a {{hyb_pki_over_hs}} do termo de handshake. No PQC, o termo de PKI é {{pqc_pki_over_jwk}} o de JWK. No Clássico, {{cls_pki_over_jwk}}.
-- O PQC tem o menor acréscimo relativo porque, neste protótipo, os certificados de CA do perfil PQC têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
-- Incluir o termo de PKI **aumenta a distância do Híbrido ao PQC** de {{opin0_up_hybrid_pqc}} para {{opin1_up_hybrid_pqc}}, e **reduz a razão PQC/Clássico** de {{opin0_ratio_pqc_classic}} para {{opin1_ratio_pqc_classic}}; a razão Híbrido/Clássico praticamente não muda ({{opin0_ratio_hybrid_classic}} → {{opin1_ratio_hybrid_classic}}).
+- O termo de PKI vale {{t_pki_classic}} bytes no Clássico, {{t_pki_pqc}} no PQC e {{t_pki_hybrid}} no Híbrido — {{share_classic}}, {{share_pqc}} e {{share_hybrid}} do OPINsize de cada perfil, respectivamente.
+- No Híbrido, o termo de PKI é **{{hyb_pki_over_jwk}} o termo de chave pública JWK** e equivale a {{hyb_pki_over_hs}} do termo de handshake. No PQC, o termo de PKI é {{pqc_pki_over_jwk}} o de JWK. No Clássico, {{cls_pki_over_jwk}}.
+- O PQC tem a menor participação relativa do termo de PKI porque, neste protótipo, seus certificados de CA têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
+- Pelo OPINsize, o Híbrido é {{opin1_ratio_hybrid_pqc}} o PQC e {{opin1_ratio_hybrid_classic}} o Clássico; o PQC é {{opin1_ratio_pqc_classic}} o Clássico.
 
 **Como o termo de PKI foi validado sem nova medição.** Os tamanhos dos certificados de CA vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`), e foram confrontados com o volume de resposta HTTP já medido nos dados brutos (participante "PKI/CRL"). O volume medido menos o corpo dos {{n_pki}} certificados dá um enquadramento HTTP de exatamente {{frame_each}} bytes por resposta, **idêntico nos três perfis** — o que só é possível se o corpo servido for exatamente o arquivo usado no cálculo:
 
 {{table:pki_detail}}
 
-**Sensibilidade.** Usar diretamente o volume de resposta HTTP medido (corpo + {{frame_each}} bytes de enquadramento por certificado), em vez do corpo PEM, muda o acréscimo em menos de 1 ponto percentual:
+**Sensibilidade.** Usar diretamente o volume de resposta HTTP medido (corpo + {{frame_each}} bytes de enquadramento por certificado), em vez do corpo PEM, muda o OPINsize em menos de 1 ponto percentual:
 
 {{table:sens}}
 
