@@ -249,3 +249,73 @@ nesse cenário. Não investigado nem corrigido — decisão explícita do
 usuário: v6 deixa de ser fonte oficial assim que a v7 for consolidada
 (mesmo status histórico de v1–v4), não vale o tempo de investigar um dado
 que já será descontinuado.
+
+## 6. Reconfirmação da exceção por SNI (`GetConfigForClient`): correspondência 1:1 — sem falha de segurança, política e documentação corrigidas
+
+**Contexto.** Durante a verificação de cobertura do SAD, uma contagem de `curveID` no log do gateway sob `CRYPTO_PROFILE=hybrid` mostrou handshakes `CurveP256` coexistindo com `X25519MLKEM768`, apesar de o código dizer que a lista de grupos do perfil não tem fallback clássico ("must fail visibly, not silently downgrade"). Investigado como possível falha de segurança real antes de qualquer conclusão.
+
+**Evidência direta.** `GetConfigForClient` (`mock_mtls/main.go`) já continha a exceção por SNI herdada da Decision 1 do Nível 1 (v6): `hello.ServerName == "matls-api.local"` devolve uma configuração com `CurvePreferences` clássico. Instrumentada com um log permanente (`sni`, `remoteAddr`) e cruzada, conexão por conexão, com as linhas `mTLS handshake complete`: **35 aplicações da exceção, 35 handshakes `CurveP256` (filtrando por `"msg":"mTLS handshake complete"`, sem contar as linhas de `access log` que repetem o campo), mesmos `remoteAddr`, nenhum handshake clássico sem explicação.** Todos os endereços de origem eram o contêiner `auth`, o `Host` das requisições era `matls-api.local` e o caminho era a consulta de consentimento (`InsurerAdapter.getConsent()`). Uma primeira leitura de 70 handshakes foi um erro de contagem: o `curveID` aparece também nas linhas de `access log`, que duplicam o campo.
+
+**Conclusão.** É o mecanismo deliberado já documentado (extensão da Decision 5 da v5 à troca de chave), não uma falha. A afirmação do código estava incompleta, não errada em intenção.
+
+**Correções.** (1) O comentário de `serverCurvePreferences` agora declara a exceção por SNI e a evidência 1:1. (2) A Seção 4 dos READMEs de `artifacts/pqc/` e `artifacts/hybrid/` deixa de afirmar "sem componente clássico" de forma absoluta e qualifica: vale para o tráfego externo cliente↔gateway; a conexão interna `auth`→RS permanece clássica por desenho. (3) Log permanente em `GetConfigForClient` para que o mecanismo seja auditável.
+
+**Por que não muda nenhum dado.** A conexão interna já era excluída de todas as métricas (`compute_metrics()` filtra por `clientCertBytes`; v6 Decision 7).
+
+## 7. Equação OPINsize estendida com um termo de PKI/CRL
+
+**Decisão.** A equação de tamanho do fluxo passa a ter quatro termos: `OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes`. O termo novo cobre os certificados de CA (`root-ca.pem`, `issuer-ca.pem`) que o fluxo baixa por HTTP e que já eram medidos (participante "PKI/CRL"), mas nunca entravam na soma — a própria tabela final da v5 registrava que "a equação não tem termo de PKI/CRL". Com N_PKI = 0 a equação se reduz à original.
+
+**Definições.** N_PKI = 4 (2 buscas de cada certificado: uma por sub-fluxo; lido de `latency_per_endpoint`, idêntico nos três perfis). `PKI_bytes` = tamanho médio dos dois certificados servidos, em PEM (o formato que trafega), de modo que N_PKI × PKI_bytes é a soma exata das 4 transferências. Escolha do PEM e não do volume de resposta HTTP medido: os outros termos (JWT, JWK) são tamanhos de material criptográfico sem cabeçalhos HTTP; o PEM é o equivalente para certificados.
+
+**Validação sem nova medição.** Os tamanhos vêm dos arquivos servidos (`mock-service-os/certs/`; o gateway serve os PEM sem alteração). Confrontados com o volume de resposta HTTP já medido: medido − corpo = 412 bytes nos três perfis (4 respostas × 103 bytes de enquadramento, valor idêntico e inteiro em todos), o que só é possível se o corpo servido for o arquivo usado. Sensibilidade (DER em vez de PEM; volume HTTP medido em vez do PEM) em `ARCHITECTURE.md`, Seção 7.6.
+
+**Impacto** (valores completos em `CONSOLIDATED_REPORT.md`, Seção 3.2): Clássico 67.247 → 75.687 (+12,55%); PQC 245.463 → 261.663 (+6,60%); Híbrido 302.999 → 340.355 (+12,33%). O termo de PKI do Híbrido (37.356 bytes) é 8,5× o termo de JWK que a equação original já somava. Também: N_JWT × JWT_size passa a ser calculado com a soma exata dos 26 comprimentos de token (a convenção da v5 usava a média arredondada a 2 casas, que difere em menos de 0,1 byte).
+
+**Limite declarado.** N_PKI e N_JWK são propriedades do fluxo como implementado (sem cache no cliente de teste), não constantes do protocolo.
+
+**Ferramentas.** `thesis/scripts/compute_v7_report_data.py` (deriva os números dos `runs/` brutos) e `thesis/results/v7/report_data_v7.json`.
+
+## 8. Decomposição por participante: o que os dados brutos da v7 permitem e o que não permitem
+
+**Achado.** `compute_metrics()` (`baseline_automation.py`) atribui cada chamada a um participante pelo host da URL (`classify_participant`, `PARTICIPANT_HOSTS`). Na v7, todas as chamadas dos três perfis passam pelo proxy local (`127.0.0.1:8443`, Decision 1), então nenhum host de AS/RS/Diretório é reconhecido e AS e RS colapsam num único participante "Outros" (só os certificados de CA escapam, por serem classificados pelo sufixo do caminho). Confirmado nos 180 arquivos de tamanho: o conjunto de participantes é sempre `{Client, Other, PKI/CRL}`. Na v5, o Clássico e o PQC/Híbrido conectavam direto e mantinham AS e RS separados; a resolução se perdeu com a unificação.
+
+**Adicionalmente**, o gateway conta separadamente bytes lidos e escritos por conexão (`countingConn`), mas registra apenas a soma (`mtlsHandshakeBytes`), então os bytes do handshake não têm direção nos dados existentes.
+
+**Decisão.** Registrar as duas lacunas como limitação (`CONSOLIDATED_REPORT.md`, Seção 3.3), sem corrigir nem recoletar nesta consolidação (instrução explícita: nenhuma remedição). O que está disponível: Cliente × servidores agregados × Diretório/PKI-CRL, enviado × recebido, na camada de aplicação. Obter AS separado de RS exigiria classificar pelo cabeçalho `Host` (o parâmetro `host_header` já existe em `do_call()`) e uma execução instrumentada por perfil (os tamanhos são determinísticos: 0% de spread em 180 execuções); obter a direção do handshake exigiria acrescentar `bytesRead`/`bytesWritten` à linha de log do gateway e uma execução por perfil. Pendente de decisão do autor.
+
+## 9. Consolidação: auditoria independente e correção de uma referência normativa
+
+- **Auditoria.** Todas as métricas de tamanho e latência foram recalculadas dos `runs/` brutos (`thesis/scripts/audit_v7_from_raw.py`, saída em `audit_recompute_from_raw.txt`): 36 cenários/perfis, 0 divergências reais. Um alerta único foi arredondamento de exibição na sexta casa decimal do relatório de Híbrido/30 ms (a mediana de dois valores de 6 casas cai na sétima).
+- **Referência corrigida.** Os artefatos PQC citavam "RFC 9880" para o grupo `MLKEM1024` puro; a referência não se sustentou numa verificação: o grupo está definido no Internet-Draft `draft-ietf-tls-mlkem` (IETF TLS WG), ainda não publicado como RFC. Corrigido em `artifacts/pqc/README.md` e `verify_kem_export_output.txt`.
+
+## 10. Fechando a Decision 8: decomposição AS/RS via captura pontual determinística — não uma nova amostra estatística
+
+**Contexto.** A Decision 8 registrou que `bytes_by_participant` colapsa AS e RS num único participante "Outros", porque `classify_participant()` classifica pela URL efetivamente chamada, e na v7 essa URL é sempre `127.0.0.1:8443` (o proxy). Perguntado explicitamente se essa lacuna podia ser fechada reprocessando dados já existentes, sem repetir nenhuma das 180 execuções oficiais.
+
+**Verificação exaustiva, antes de qualquer captura nova.** Duas fontes de informação já existiam, nenhuma suficiente sozinha:
+
+1. **`do_call()` (`opin_flow.py`)**: cada chamada carrega `endpoint` (o caminho da URL, imune à reescrita do proxy — só o host muda) e os bytes de requisição/resposta, mas `compute_metrics()` consome essa lista em memória e só grava os agregados (`bytes_by_participant`, sem identidade de endpoint; `latency_per_endpoint`, com identidade de endpoint mas sem bytes). Confirmado varrendo recursivamente um `run01_baseline_metrics.json` inteiro por qualquer estrutura com `endpoint` e bytes juntos: nenhuma existe.
+2. **Log de acesso do gateway** (`collect_gateway_metrics()`): tem o `host` real (sobrevive ao túnel cru do proxy) e o caminho, mas só registra bytes no nível do handshake, nunca por requisição de aplicação.
+
+**Conclusão confirmada, não suposta**: os 180 arquivos brutos já escritos não contêm dado suficiente para essa separação por reprocessamento puro — a informação existiu em memória durante a coleta e foi descartada antes de tocar o disco.
+
+**Autorizada uma captura pontual — 3 execuções, não 180, mesma categoria de `artifacts/`.** `thesis/scripts/capture_participant_decomposition.py` roda um fluxo completo por perfil, com `do_call()` instrumentado para gravar `host_header` (o valor que `opin_flow.py` já usa para rotear cada chamada — `AUTH_HOST`/`AUTH_MTLS_HOST_HEADER` para o AS, `API_HOST` para o RS, `DIRECTORY_HOST` para PKI/CRL — nunca visto pelo proxy, que só embaralha o endereço físico) ao lado dos bytes de cada chamada.
+
+**Por que uma execução por perfil é suficiente — e por que isso não é uma amostra estatística nova.** A sabatina desta v7 (Seção 7 do `CONSOLIDATED_REPORT.md`) já provou 0,00% de spread em toda métrica de tamanho, nas 60 execuções de cada perfil (6 cenários × 10). Isso significa que as 28 chamadas do fluxo produzem, sempre, exatamente os mesmos bytes, na mesma ordem, para o mesmo endpoint — não uma variável aleatória com uma média, mas uma constante do fluxo implementado. A captura pontual não mede uma nova amostra dessa constante; ela **revela uma decomposição de um valor que já era conhecido em agregado**. Por isso essa captura não figura em `thesis/results/v7/size/`, não tem `runs/run01..10`, e não deve ser confundida com uma remedição: é reprocessamento, materializado por uma execução, porque a informação que falta (destino lógico de cada chamada) não existe em nenhum arquivo já gravado, mas o valor que ela revela já estava implícito nos 180 arquivos.
+
+**Validação — reconciliação exata com os dados já commitados, nos três perfis:**
+
+| Perfil | AS (enviado/recebido) | RS (enviado/recebido) | AS+RS enviado | AS+RS recebido | "Outros" já commitado (enviado/recebido) |
+|---|---|---|---|---|---|
+| Clássico | 14.188 / 11.911 | 26.034 / 5.111 | 40.222 | 17.022 | 40.222 / 17.022 |
+| PQC | 29.570 / 41.736 | 91.252 / 5.111 | 120.822 | 46.847 | 120.822 / 46.847 |
+| Híbrido | 31.058 / 59.411 | 121.196 / 5.111 | 152.254 | 64.522 | 152.254 / 64.522 |
+
+Idêntico, byte a byte, nos três perfis — e o PKI/CRL da captura (`sent_bytes`/`received_bytes`) também bate exatamente com o já commitado nos três casos. `thesis/scripts/compute_v7_report_data.py` recusa a rodar (assert) se qualquer uma dessas igualdades falhar.
+
+**Um problema real de ambiente encontrado no caminho, corrigido antes de aceitar a captura.** A primeira tentativa (Clássico) deu PKI/CRL `received_bytes = 772`, não os 732 já commitados — uma discrepância real, investigada antes de ser aceita. Causa: o script rodou com o Python global do host (`requests==2.32.3`), não com o `.venv` do projeto (`thesis/scripts/.venv`, `requests==2.34.2`, a versão que `requirements.txt` já fixa e que a coleta oficial usou). Versões diferentes de `requests`/`urllib3` produzem cabeçalhos HTTP de tamanho ligeiramente diferente. Refeito com `thesis/scripts/.venv/Scripts/python.exe`, o número bateu exatamente. Mesma categoria de achado da Decision 5 (drift de ambiente fora do controle deste projeto) — registrado aqui para que uma captura futura não repita o mesmo engano.
+
+**Também descoberto, sem custo adicional**: entre a pausa desta sessão e a retomada, o contêiner `psql` (dependência do RS) tinha caído (7 dias parado) e o RS (`mockapi`) estava saindo com erro de conexão — reiniciados antes de qualquer captura, nenhum dado dependia disso.
+
+**Resultado**: `thesis/results/v7/participant_decomposition_capture_{classic,pqc,hybrid}.json` (a captura crua, 28 linhas por perfil) e `report_data_v7.json`'s novo campo `participants_decomposed` (AS, RS, PKI/CRL, Client). `CONSOLIDATED_REPORT.md` (Seção 3.3) e `ARCHITECTURE.md` (Seção 8) atualizados com a tabela decomposta; a limitação registrada nas Decisions 8 fica fechada para a parte AS/RS — a decomposição do handshake por direção continua em aberto, sem solução equivalente disponível nos dados existentes.

@@ -1,0 +1,55 @@
+==============================================================================
+SIZE -- recomputed from size/<exp>/<scenario>ms/runs/run01..10_baseline_metrics.json
+==============================================================================
+
+Size: 18 cenarios/perfis, 180 execucoes brutas verificadas estruturalmente.
+
+Size -- spread maximo por cenario/perfil (recalculado) e constancia entre cenarios:
+  classic : spread maximo em qualquer metrica/cenario = 0.0%
+    jwt_size_avg_bytes: constante entre os 6 cenarios = 1385.42
+    total_bytes_exchanged: constante entre os 6 cenarios = 66828.0
+    client_cert_der_bytes: constante entre os 6 cenarios = 1494.0
+    handshake_bytes_p50_bytes: constante entre os 6 cenarios = 5119.0
+    jwk_sig: ['[(256, 256)]']
+    jwk_all: ["[(('RSA', 'sig', 256), ('RSA', 'enc', 256), ('RSA', 'sig', 256), ('RSA', 'enc', 256))]"]
+  pqc     : spread maximo em qualquer metrica/cenario = 0.0%
+    jwt_size_avg_bytes: constante entre os 6 cenarios = 5458.81
+    total_bytes_exchanged: constante entre os 6 cenarios = 185013.0
+    client_cert_der_bytes: constante entre os 6 cenarios = 2953.0
+    handshake_bytes_p50_bytes: constante entre os 6 cenarios = 16605.0
+    jwk_sig: ['[(1952, 1952)]']
+    jwk_all: ["[(('AKP', 'sig', 1952), ('RSA', 'enc', 256), ('AKP', 'sig', 1952), ('RSA', 'enc', 256))]"]
+  hybrid  : spread maximo em qualquer metrica/cenario = 0.0%
+    jwt_size_avg_bytes: constante entre os 6 cenarios = 7324.81
+    total_bytes_exchanged: constante entre os 6 cenarios = 255276.0
+    client_cert_der_bytes: constante entre os 6 cenarios = 6859.0
+    handshake_bytes_p50_bytes: constante entre os 6 cenarios = 18023.0
+    jwk_sig: ['[(2208, 2208)]']
+    jwk_all: ["[(('HYBRID', 'sig', 2208), ('RSA', 'enc', 256), ('HYBRID', 'sig', 2208), ('RSA', 'enc', 256))]"]
+
+==============================================================================
+LATENCY -- recomputed from latency/<exp>/<scenario>ms/runs/run01..10.json (run00_warmup excluded)
+==============================================================================
+
+Latency: 18 cenarios/perfis, 180 execucoes brutas verificadas (call_count, retries, wasted, naive==t_fluxo).
+
+Latency -- mediana / spread por cenario (recalculado):
+  perfil                 0ms              14ms              30ms             140ms             225ms             320ms
+  classic     2.8913s/25.77%    4.6932s/ 7.71%    7.1766s/ 5.21%   24.8593s/ 0.60%   38.4818s/ 0.45%   53.6696s/ 0.21%
+  pqc         9.5864s/24.81%   11.1529s/16.79%   13.3458s/20.86%   30.1075s/ 7.19%   44.3276s/ 6.36%   59.5692s/ 3.85%
+  hybrid     10.2697s/ 8.29%   12.2752s/19.89%   14.4922s/11.29%   32.3582s/ 8.37%   46.4166s/ 5.28%   61.4376s/ 4.13%
+  Spread maximo de latencia: 25.7695% em ('classic', 0)
+
+==============================================================================
+RESIDUO v5/v6 e proveniencia
+==============================================================================
+  378 arquivos brutos; generated_at de 2026-09-12T11:38:30.688987+00:00 ate 2026-09-12T18:19:05.066272+00:00
+  todos os arquivos brutos foram gerados a partir de 2026-09-12 (janela de coleta da v7) -- nenhum arquivo herdado de v5/v6.
+  nenhum generated_at duplicado entre arquivos brutos (sem copias entre pastas).
+  referencias textuais a pastas v1-v6 nos artefatos derivados: 18 ocorrencias, 1 tipos distintos
+    'thesis/results/v5/DECISIONS.md' (em: ['size\\experiment1 - Classic\\0ms\\MEDIAN_REPORT.md', 'size\\experiment1 - Classic\\140ms\\MEDIAN_REPORT.md', 'size\\experiment1 - Classic\\14ms\\MEDIAN_REPORT.md', 'size\\experiment1 - Classic\\225ms\\MEDIAN_REPORT.md', 'size\\experiment1 - Classic\\30ms\\MEDIAN_REPORT.md', 'size\\experiment1 - Classic\\320ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\0ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\140ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\14ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\225ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\30ms\\MEDIAN_REPORT.md', 'size\\experiment2 - PQC\\320ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\0ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\140ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\14ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\225ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\30ms\\MEDIAN_REPORT.md', 'size\\experiment3 - Hybrid\\320ms\\MEDIAN_REPORT.md']) -- texto de template do gerador do relatorio, nao dado herdado
+
+==============================================================================
+RESULTADO: 0 divergencias. Todas as 18 metricas de tamanho (4 escalares + 6 leituras de participante cada) e as 18 de latencia,
+recalculadas do zero a partir dos arquivos brutos, batem exatamente com median_metrics.json e com os relatorios .md derivados.
+==============================================================================
