@@ -4,6 +4,8 @@
 
 **Origem dos números**: todos os valores deste relatório foram recalculados do zero a partir dos arquivos brutos `runs/run01..10*.json` (378 arquivos, incluindo os 18 de aquecimento da latência), sem usar como referência os `median_metrics.json` já existentes; o resultado dessa auditoria independente está na Seção 7. Nenhuma execução foi refeita para este relatório: ele consolida dados coletados em 12/09/2026.
 
+**Como ler as tabelas deste documento.** Cada tabela vem precedida de uma frase curta dizendo o que ela mostra e como interpretar as colunas — não é preciso conhecimento prévio de nenhum termo técnico para acompanhar. Convenções usadas em toda parte: "×" significa "quantas vezes maior" (ex.: 3,24× quer dizer "3,24 vezes o valor de referência"); percentuais entre parênteses são a mesma razão expressa como crescimento (3,24× = +224%); "spread" é a variação entre o menor e o maior valor observado, calculada como (máximo − mínimo) / mínimo. Termos técnicos (AS, RS, mTLS, JWT, PKI etc.) estão definidos no Glossário ao final.
+
 ---
 
 ## 1. Resumo dos resultados
@@ -25,6 +27,8 @@
 Um fluxo completo do Open Insurance Brasil (OPIN), executado por um cliente de teste (`opin_flow.py`) contra um protótipo de servidor de autorização (AS), um servidor de recursos (RS) e um gateway mTLS: consentimento, pedido de autorização (PAR), login automatizado, troca de código por token e consulta a recursos. Cada execução completa tem **28 requisições HTTP** em dois sub-fluxos, **6 conexões mTLS** (três pools de conexão por sub-fluxo), **26 JWTs** trafegados, **2 buscas de JWKS** e **4 buscas de certificados de CA** (2 da raiz e 2 da emissora).
 
 ### 2.2. Os três perfis
+
+O experimento compara três configurações criptográficas do mesmo fluxo, variando dois mecanismos independentes: qual algoritmo assina os artefatos do fluxo (certificados, tokens) e qual mecanismo estabelece a chave secreta da conexão TLS. A tabela abaixo resume os dois, por perfil:
 
 | Perfil | Assinaturas | Troca de chave TLS |
 |---|---|---|
@@ -55,7 +59,7 @@ Os três perfis foram medidos sob a mesma arquitetura de cliente TLS, eliminando
 
 ### 3.1. Tamanho por artefato
 
-Valores idênticos nos 6 cenários de latência (spread de 0,00% nas 60 execuções de cada perfil):
+**O que esta tabela mostra.** "Artefato" aqui é cada peça de dado criptográfico que o fluxo produz ou transporta — um handshake TLS, um certificado, um token (JWT), uma chave pública. Para cada um, a tabela dá o tamanho médio em bytes, lado a lado nos três perfis, para responder à pergunta central desta seção: quanto maior fica cada peça quando se migra para PQC ou Híbrido? Os valores são idênticos nos 6 cenários de latência testados (0,00% de variação nas 60 execuções de cada perfil) — a latência de rede não influencia tamanho, só tempo.
 
 | Métrica (por fluxo completo) | Clássico | PQC | Híbrido |
 |---|---:|---:|---:|
@@ -68,7 +72,7 @@ Valores idênticos nos 6 cenários de latência (spread de 0,00% nas 60 execuç�
 | Tráfego de aplicação total, 28 requisições (bytes) | 66.828 | 185.013 | 255.276 |
 | Spread entre as 60 execuções (6 cenários × 10) de cada métrica | 0,00% | 0,00% | 0,00% |
 
-Razões entre perfis (cada coluna calculada sobre a linha correspondente da tabela anterior; "Saída dos servidores" é o total de bytes que o cliente recebe, ver Seção 3.3):
+**Como ler a tabela de razões abaixo.** Cada célula divide o valor de uma coluna de perfil (por exemplo, PQC) pelo valor do perfil de referência da linha (por exemplo, Clássico), usando a métrica indicada na coluna. Um valor de "3,24×" na coluna "Handshake" significa que o handshake daquele perfil é 3,24 vezes maior que o do perfil de referência. A coluna "Saída dos servidores" usa o total de bytes que o cliente recebe (ver Seção 3.3) como proxy do volume que os servidores enviam:
 
 | Razão | Handshake | Certificado | JWT médio | Tráfego total | Saída dos servidores |
 |---|---:|---:|---:|---:|---:|
@@ -86,6 +90,8 @@ OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size 
 
 com N_mTLS = 6, N_JWT = 26, N_JWK = 2 e N_PKI = 4. `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos (raiz e emissora), no formato em que trafegam (PEM). Com N_PKI = 0 a equação se reduz à original, o que preserva a comparabilidade com a literatura.
 
+**O que a tabela abaixo mostra.** Cada linha é um dos quatro termos da soma — quantas vezes aquele artefato aparece no fluxo (coluna N) multiplicado pelo seu tamanho, por perfil. A linha em negrito ("OPINsize") é a soma das quatro, o resultado final da equação; a última linha mostra que fração desse total vem só do termo novo (PKI):
+
 | Termo | N | Clássico | PQC | Híbrido |
 |---|---:|---:|---:|---:|
 | N_mTLS × handshake_bytes | 6 | 30.714 | 99.630 | 108.138 |
@@ -95,7 +101,7 @@ com N_mTLS = 6, N_JWT = 26, N_JWK = 2 e N_PKI = 4. `PKI_bytes` é o tamanho méd
 | **OPINsize** | | **75.687** | **261.663** | **340.355** |
 | Peso do termo de PKI no OPINsize | | 11,15% | 6,19% | 10,98% |
 
-Razões entre perfis:
+**Como ler a tabela de razões.** Mesma leitura da Seção 3.1: cada valor é "quantas vezes maior" o OPINsize de um perfil é em relação a outro, com a variação percentual equivalente entre parênteses.
 
 | Razão entre perfis | OPINsize |
 |---|---:|
@@ -110,7 +116,7 @@ Leitura dos resultados:
 - O PQC tem a menor participação relativa do termo de PKI porque, neste protótipo, seus certificados de CA têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
 - Pelo OPINsize, o Híbrido é 1,30× o PQC e 4,50× o Clássico; o PQC é 3,46× o Clássico.
 
-**Como o termo de PKI foi validado sem nova medição.** Os tamanhos dos certificados de CA vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`), e foram confrontados com o volume de resposta HTTP já medido nos dados brutos (participante "PKI/CRL"). O volume medido menos o corpo dos 4 certificados dá um enquadramento HTTP de exatamente 103 bytes por resposta, **idêntico nos três perfis** — o que só é possível se o corpo servido for exatamente o arquivo usado no cálculo:
+**Como o termo de PKI foi validado sem nova medição.** Os tamanhos dos certificados de CA vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`), e foram confrontados com o volume de resposta HTTP já medido nos dados brutos (participante "PKI/CRL"). O volume medido menos o corpo dos 4 certificados dá um enquadramento HTTP de exatamente 103 bytes por resposta, **idêntico nos três perfis** — o que só é possível se o corpo servido for exatamente o arquivo usado no cálculo. A tabela abaixo mostra essa conta, coluna a coluna, por perfil:
 
 | Perfil | CA raiz (bytes) | CA emissora (bytes) | PKI_bytes médio (bytes) | N_PKI | N_PKI × PKI_bytes (bytes) | Medido: resposta HTTP das 4 buscas (bytes) | Enquadramento HTTP (bytes) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -118,7 +124,7 @@ Leitura dos resultados:
 | PQC | 4.048 | 4.052 | 4.050 | 4 | 16.200 | 16.612 | 412 (4 × 103) |
 | Híbrido | 9.337 | 9.341 | 9.339 | 4 | 37.356 | 37.768 | 412 (4 × 103) |
 
-**Sensibilidade.** Usar diretamente o volume de resposta HTTP medido (corpo + 103 bytes de enquadramento por certificado), em vez do corpo PEM, muda o OPINsize em menos de 1 ponto percentual:
+**Sensibilidade — o resultado muda se PKI_bytes for medido de outra forma?** A tabela acima usou o tamanho do arquivo PEM; a tabela abaixo recalcula o mesmo OPINsize usando, em vez disso, o volume de resposta HTTP realmente medido (corpo + 103 bytes de enquadramento por certificado) — uma forma alternativa, igualmente válida, de definir o mesmo termo. A diferença entre as duas colunas de OPINsize mostra o quanto essa escolha metodológica pesa no resultado final: menos de 1 ponto percentual.
 
 | Perfil | OPINsize (corpo PEM) | OPINsize (resposta HTTP medida) | Diferença |
 |---|---:|---:|---:|
@@ -128,7 +134,9 @@ Leitura dos resultados:
 
 ### 3.3. Decomposição por participante e por direção
 
-Os dados brutos agregam os bytes de cada execução em três participantes: o **Cliente**, um participante colapsado ("Outros", AS e RS somados — o cliente de teste classifica cada chamada pelo endereço da URL, e na v7 todas as chamadas passam pelo proxy local `127.0.0.1:8443`, então o host real nunca chega a essa classificação) e o **Diretório/PKI-CRL**. Essa colisão foi resolvida sem reexecutar nenhuma das 180 medições estatísticas: uma captura pontual, uma execução por perfil, fora do protocolo oficial (mesma categoria da pasta `artifacts/`), registrou o destino lógico real de cada uma das 28 chamadas (o cabeçalho `Host` que `opin_flow.py` já define para cada chamada, nunca reescrito pelo proxy, que só embaralha o endereço físico) junto com seus bytes. Isso é válido para os 180 dados já coletados porque o tamanho já está provado 0,00% de spread em 60 execuções por perfil — a repartição AS/RS de uma execução vale para todas. A metodologia completa, incluindo um problema real de ambiente encontrado no caminho (versão errada do `requests` instalada gerando bytes diferentes dos oficiais até ser corrigido), está em `DECISIONS.md`, Decision 10. Cada captura reconcilia exatamente com o total "Outros" e "PKI/CRL" já commitados (AS + RS = Outros, byte a byte, nos três perfis) — a decomposição abaixo não é uma medição nova, é a mesma medição, corretamente separada:
+Os dados brutos agregam os bytes de cada execução em três participantes: o **Cliente**, um participante colapsado ("Outros", AS e RS somados — o cliente de teste classifica cada chamada pelo endereço da URL, e na v7 todas as chamadas passam pelo proxy local `127.0.0.1:8443`, então o host real nunca chega a essa classificação) e o **Diretório/PKI-CRL**. Essa colisão foi resolvida sem reexecutar nenhuma das 180 medições estatísticas: uma captura pontual, uma execução por perfil, fora do protocolo oficial (mesma categoria da pasta `artifacts/`), registrou o destino lógico real de cada uma das 28 chamadas (o cabeçalho `Host` que `opin_flow.py` já define para cada chamada, nunca reescrito pelo proxy, que só embaralha o endereço físico) junto com seus bytes. Isso é válido para os 180 dados já coletados porque o tamanho já está provado 0,00% de spread em 60 execuções por perfil — a repartição AS/RS de uma execução vale para todas. A metodologia completa, incluindo um problema real de ambiente encontrado no caminho (versão errada do `requests` instalada gerando bytes diferentes dos oficiais até ser corrigido), está em `DECISIONS.md`, Decision 10. Cada captura reconcilia exatamente com o total "Outros" e "PKI/CRL" já commitados (AS + RS = Outros, byte a byte, nos três perfis) — a decomposição abaixo não é uma medição nova, é a mesma medição, corretamente separada.
+
+**Como ler a tabela abaixo.** Cada linha combina um participante do fluxo (Cliente, AS, RS ou Diretório/PKI-CRL) com uma direção (bytes que ele *envia* ou bytes que ele *recebe*), num fluxo completo. É a mesma soma de bytes já usada na Seção 3.1, só que separada por quem manda e quem recebe cada byte, em vez de somada num único total:
 
 | Participante | Direção | Clássico | PQC | Híbrido |
 |---|---|---:|---:|---:|
@@ -144,7 +152,7 @@ Os dados brutos agregam os bytes de cada execução em três participantes: o **
 
 Como cada byte enviado por um participante é recebido pelo outro, as linhas fecham entre si: o total enviado pelo Cliente é igual ao total recebido pelos servidores e pelo Diretório, e vice-versa (verificado em cada uma das 180 execuções de tamanho, e a reconciliação AS+RS=Outros verificada nos três perfis pela captura pontual).
 
-Fração da saída (egress) total dos servidores por origem:
+**Por que isso importa: quem paga a conta de egress.** Provedores de nuvem cobram, em geral, pelo dado que *sai* de um servidor (egress), não pelo que entra. A tabela abaixo pega só as linhas "enviado" de AS, RS e Diretório/PKI-CRL acima e mostra que fração do total cada um representa — ou seja, de cada 100 bytes que os servidores emitem num fluxo, quantos vêm de cada um:
 
 | Fração da saída total dos servidores | Clássico | PQC | Híbrido |
 |---|---:|---:|---:|
@@ -152,9 +160,9 @@ Fração da saída (egress) total dos servidores por origem:
 | RS | 53,1% | 66,4% | 63,8% |
 | Diretório / PKI-CRL | 18,0% | 12,1% | 19,9% |
 
-**Uso para estimativa de custo.** Provedores de nuvem cobram, em geral, o dado que sai (egress). A saída por fluxo completo de cada servidor é a linha "enviado" correspondente na tabela acima; a do Cliente é a linha "Cliente — enviado". Multiplicar pelo número de fluxos esperado dá o volume mensal por participante; o preço unitário depende do provedor e não faz parte deste trabalho. O RS domina a saída dos servidores nos três perfis (a maior parte do tráfego de aplicação é a resposta das consultas de seguro, não os artefatos de autorização do AS).
+**Para projetar um custo real**, multiplique o valor "enviado" de cada participante (Seção 3.3, tabela de participantes) pelo número de fluxos esperado por mês; o preço por byte depende do provedor de nuvem escolhido e não faz parte deste trabalho. O RS domina a saída dos servidores nos três perfis — a maior parte do tráfego de aplicação é a resposta das consultas de seguro, não os artefatos de autorização do AS.
 
-**O que ainda não está disponível, mesmo depois desta captura:**
+**O que ainda não está disponível, mesmo depois desta captura.** A tabela abaixo lista, para cada tipo de recorte que se poderia querer nos dados, se ele já está coberto ou não, e por quê:
 
 | Decomposição solicitada | Situação |
 |---|---|
@@ -172,6 +180,8 @@ O T_fluxo é o tempo do fluxo completo (28 requisições), em segundos, medido c
 
 ### 4.1. Medianas por cenário
 
+**O que esta tabela mostra.** O tempo típico (mediana de 10 execuções) do fluxo completo, em segundos, para cada combinação de perfil criptográfico e latência de rede simulada. É a tabela mais direta para responder "quanto tempo a mais custa usar PQC ou Híbrido, numa rede com X ms de atraso":
+
 | Cenário | Clássico | PQC | Híbrido |
 |---:|---:|---:|---:|
 | 0 ms | 2,8913 | 9,5864 | 10,2697 |
@@ -182,6 +192,8 @@ O T_fluxo é o tempo do fluxo completo (28 requisições), em segundos, medido c
 | 320 ms | 53,6696 | 59,5692 | 61,4376 |
 
 ### 4.2. Distribuição completa (18 combinações perfil × cenário)
+
+**O que esta tabela mostra.** Detalha a tabela anterior: para cada combinação de perfil e cenário, não só a mediana, mas o menor e o maior tempo observado nas 10 execuções (Mín./Máx.), a média aritmética, o desvio-padrão (quanto os valores tipicamente se afastam da média) e o spread (a variação entre o menor e o maior, em percentual do menor) — a base para avaliar se as 10 execuções de cada linha foram consistentes entre si ou dispersas:
 
 | Perfil | Cenário | Mediana | Mín. | Máx. | Média | Desvio-padrão | Spread |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -208,6 +220,10 @@ O maior spread (diferença entre máximo e mínimo, relativa ao mínimo) de todo
 
 ### 4.3. Diferenças entre perfis e hipótese T_Clássico < T_PQC < T_Híbrido
 
+A hipótese natural é que o tempo do fluxo cresce na ordem Clássico < PQC < Híbrido, acompanhando a quantidade de criptografia envolvida. As duas tabelas abaixo testam essa hipótese com os dados medidos.
+
+**Primeira tabela — as diferenças, em números absolutos e relativos.** Para cada cenário de latência, quanto tempo a mais (em segundos) o PQC e o Híbrido levam em relação ao Clássico e um em relação ao outro, e a mesma diferença expressa como razão ("×"):
+
 | Cenário | PQC − Clássico (s) | Híbrido − Clássico (s) | Híbrido − PQC (s) | PQC / Clássico | Híbrido / Clássico | Híbrido / PQC |
 |---:|---:|---:|---:|---:|---:|---:|
 | 0 ms | 6,6951 | 7,3785 | 0,6833 | 3,32× | 3,55× | 1,07× |
@@ -216,6 +232,8 @@ O maior spread (diferença entre máximo e mínimo, relativa ao mínimo) de todo
 | 140 ms | 5,2482 | 7,4989 | 2,2507 | 1,21× | 1,30× | 1,07× |
 | 225 ms | 5,8458 | 7,9348 | 2,0890 | 1,15× | 1,21× | 1,05× |
 | 320 ms | 5,8996 | 7,7680 | 1,8683 | 1,11× | 1,14× | 1,03× |
+
+**Segunda tabela — a hipótese resiste a um teste estatístico?** "Vale"/"não vale" diz se a ordem das medianas segue a hipótese naquele cenário. "Separados"/"sobrepõem" diz se as faixas de valores observados (do mínimo ao máximo, nas 10 execuções) de dois perfis chegam a se cruzar, ou se um perfil é sempre mais rápido que o outro em toda execução. As colunas "p exato" vêm de um teste estatístico (teste de postos de Mann-Whitney) que estima a chance de a diferença observada ser só acaso — quanto menor o valor, mais forte a evidência de que a diferença é real, não coincidência (um p abaixo de 0,05 já costuma ser considerado forte; aqui os valores são bem menores):
 
 | Cenário | Ordem Clássico < PQC < Híbrido (medianas) | Intervalos [mín., máx.] Clássico × PQC | Intervalos PQC × Híbrido | p exato (PQC > Clássico) | p exato (Híbrido > PQC) |
 |---:|:---:|:---:|:---:|---:|---:|
@@ -236,7 +254,7 @@ O maior spread (diferença entre máximo e mínimo, relativa ao mínimo) de todo
 
 ## 5. Correções relevantes ao longo do caminho
 
-Resumo dos problemas reais encontrados e resolvidos até chegar a estes dados (a investigação completa de cada um está nos `DECISIONS.md` indicados):
+Nenhum resultado deste relatório saiu certo de primeira — a tabela abaixo resume, em ordem, cada problema real encontrado, o que ele causava, como foi corrigido, e onde a investigação completa está registrada (a coluna "Registro" aponta para o `DECISIONS.md` correspondente):
 
 | Problema | Efeito | Resolução | Registro |
 |---|---|---|---|
@@ -273,7 +291,7 @@ A investigação de um resíduo da v6 (diferença de +4 conexões registradas en
 
 ## 7. Confiabilidade e auditoria independente
 
-Antes de escrever este relatório, todas as métricas foram recalculadas do zero a partir dos arquivos brutos, sem consultar os agregados existentes (`thesis/scripts/audit_v7_from_raw.py`; saída completa em `thesis/results/v7/audit_recompute_from_raw.txt`):
+Antes de escrever este relatório, todas as métricas foram recalculadas do zero a partir dos arquivos brutos, sem consultar os agregados existentes (`thesis/scripts/audit_v7_from_raw.py`; saída completa em `thesis/results/v7/audit_recompute_from_raw.txt`). A tabela abaixo lista cada verificação feita e o que ela encontrou — "0 divergências" significa que o número recalculado do zero bateu exatamente com o número já publicado:
 
 | Verificação | Resultado |
 |---|---|

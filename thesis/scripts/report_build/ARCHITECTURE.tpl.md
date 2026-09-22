@@ -45,6 +45,8 @@ Este documento descreve, de forma independente, a arquitetura do experimento fin
                                                                             └── auth → RS (interno, sempre clássico)
 ```
 
+**O que a tabela abaixo mostra.** O diagrama acima é o mapa; a tabela dá, para cada caixa dele, o papel que cumpre no fluxo e a tecnologia em que foi implementada — útil para localizar rapidamente onde procurar código ou logs de um componente específico.
+
 | Componente | Papel | Tecnologia |
 |---|---|---|
 | **`opin_flow.py`** | Cliente de teste: executa o fluxo OPIN completo e mede o tempo de cada execução | Python |
@@ -65,6 +67,8 @@ O perfil ativo é escolhido por uma única variável, `CRYPTO_PROFILE` (`classic
 
 Cada execução tem dois sub-fluxos executados em sequência, num total de **28 requisições**:
 
+**O que a tabela abaixo mostra.** Cada linha é um dos dois sub-fluxos do OPIN (obter consentimento para dados de seguros, depois para dados de pessoas); a coluna "Requisições" conta quantas chamadas HTTP/TLS aquele sub-fluxo faz, e "Etapas" lista, na ordem em que acontecem, o que cada uma dessas chamadas é.
+
 | Sub-fluxo | Requisições | Etapas |
 |---|---:|---|
 | Consentimentos de seguros | 12 | `GET /jwks` · `GET root-ca.pem` · `GET issuer-ca.pem` · `POST /token` (client_credentials) · `POST` consentimento · `GET` consentimento ×3 · `POST /request` (PAR) · [login automatizado] · `POST /token` (authorization_code) · `GET` consentimento ×2 |
@@ -77,6 +81,8 @@ O login é automatizado e usa um pool de conexão separado (como um navegador fa
 ## 4. Os três perfis criptográficos
 
 ### 4.1. Onde cada primitiva atua
+
+**O que a tabela abaixo mostra.** Cada linha é um artefato criptográfico do fluxo (um certificado, um token, uma chave publicada); as três colunas mostram, lado a lado, qual algoritmo ou esquema aquele artefato usa em cada perfil. É a referência central para responder "o que muda, exatamente, quando o perfil muda?" para cada peça do sistema.
 
 | Artefato | Clássico | PQC | Híbrido |
 |---|---|---|---|
@@ -98,6 +104,8 @@ Tamanhos resultantes por fluxo (idênticos em todos os cenários de latência): 
 **PQC — filosofia "só pós-quântico".** Assinatura e troca de chave sem nenhum componente clássico. A única exceção é o certificado de cliente, cuja emissão pela CA continua RSA (a chave do titular é ML-DSA-65, mas a CA não migra): é o desenho deliberado de migrar primeiro a identidade do participante, sem exigir que a CA aprenda a assinar com ML-DSA-65.
 
 **Híbrido — filosofia "porta AND".** Comprometer o resultado exige quebrar os dois algoritmos ao mesmo tempo. Cada artefato usa o esquema de combinação mais adequado ao seu papel:
+
+**O que a tabela abaixo mostra.** O perfil Híbrido não usa um único jeito de combinar clássico e pós-quântico — usa três, cada um escolhido para o tipo de artefato em questão. A tabela lista os três esquemas, onde cada um é aplicado, como funciona por dentro (em que ordem se assina, o que entra em cada assinatura) e a propriedade de segurança que ele garante.
 
 | Esquema | Onde | Como funciona | Propriedade |
 |---|---|---|---|
@@ -164,6 +172,8 @@ O fluxo baixa dois certificados de CA (`root-ca.pem`, `issuer-ca.pem`) no iníci
 
 **Origem dos dados, sem nova medição.** Os tamanhos dos certificados vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`) e foram validados contra o volume de resposta HTTP já registrado nos dados brutos: o volume medido menos o corpo dos {{n_pki}} certificados dá um enquadramento HTTP de exatamente {{frame_each}} bytes por resposta, idêntico nos três perfis, o que só ocorre se o corpo servido for o arquivo usado no cálculo.
 
+**O que a tabela abaixo mostra.** Para cada perfil, o tamanho em bytes do certificado raiz e do certificado da emissora (no formato PEM, como trafegam), e a soma dos {{n_pki}} downloads que compõem o termo de PKI da equação — a base numérica de tudo que a Seção 7.2 discute.
+
 {{table:pki_detail}}
 
 ### 7.2. Por que isso importa especificamente no cenário híbrido
@@ -176,7 +186,11 @@ No Híbrido, cada certificado de CA carrega, além da estrutura RSA, o material 
 
 ### 7.3. Impacto numérico
 
+**O que a tabela abaixo mostra.** Cada linha é um termo da equação estendida; as colunas de perfil dão o valor de N (quantas vezes o termo ocorre no fluxo) e o resultado em bytes de cada termo, por perfil. A linha **OPINsize** é a soma dos quatro termos — o resultado final da equação — e a linha seguinte mostra que fração desse total o termo de PKI (o novo, desta tese) representa.
+
 {{table:opin}}
+
+**Como ler a tabela de razões abaixo.** Cada linha divide o OPINsize de um perfil pelo de outro, para responder diretamente "quantas vezes maior/mais pesado é X em relação a Y" — o mesmo tipo de razão usado nas tabelas de tamanho de `CONSOLIDATED_REPORT.md`, Seção 3.1.
 
 {{table:opin_ratios}}
 
@@ -186,11 +200,11 @@ No Híbrido, cada certificado de CA carrega, além da estrutura RSA, o material 
 
 ### 7.4. Sensibilidade e limites do termo
 
-- **Formato do certificado.** O PEM (base64 com quebras de linha) ocupa cerca de 36–39% mais que o DER; PEM é o formato que efetivamente trafega. Em DER, o termo seria:
+- **Formato do certificado.** O PEM (base64 com quebras de linha) ocupa cerca de 36–39% mais que o DER; PEM é o formato que efetivamente trafega. Em DER, o termo seria (a tabela abaixo recalcula o OPINsize com o termo de PKI em DER, e mostra a variação percentual em relação ao OPINsize oficial em PEM):
 
 {{table:sens_der}}
 
-- **Enquadramento HTTP.** Usando diretamente o volume de resposta medido (corpo + {{frame_each}} bytes por certificado), o OPINsize muda em menos de 1 ponto percentual:
+- **Enquadramento HTTP.** Usando diretamente o volume de resposta medido (corpo + {{frame_each}} bytes por certificado), o OPINsize muda em menos de 1 ponto percentual — a tabela abaixo é a mesma comparação, agora com o termo de PKI medido pelo tráfego HTTP real em vez do tamanho do arquivo PEM:
 
 {{table:sens}}
 
@@ -200,6 +214,8 @@ No Híbrido, cada certificado de CA carrega, além da estrutura RSA, o material 
 ---
 
 ## 8. Como as métricas são coletadas
+
+**O que a tabela abaixo mostra.** Para cada métrica usada nos resultados, de onde exatamente o valor sai (qual componente a registra) e o mecanismo de medição — útil para auditar a origem de qualquer número deste relatório ou de `CONSOLIDATED_REPORT.md`.
 
 | Métrica | Onde é medida | Como |
 |---|---|---|
