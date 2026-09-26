@@ -6,6 +6,9 @@ standards and API specifications. It is also the test bed for a doctoral
 thesis on migrating the OPIN consent flow from classical to post-quantum
 (PQC) and hybrid cryptography.
 
+**Author:** Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC
+**Advisors:** Prof. Ricardo Custódio, Dr. and Prof. Martín Vigil, Dr. — UFSC
+
 **Looking for the thesis results?** Start at
 [`thesis/README.md`](thesis/README.md) — the final, official numbers are in
 [`thesis/results/v7/`](thesis/results/v7/).
