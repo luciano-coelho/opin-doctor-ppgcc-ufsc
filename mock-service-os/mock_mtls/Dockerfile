@@ -1,4 +1,7 @@
-FROM golang:1.27-rc
+# Pinned by digest, not a floating "golang:1.27-rc" tag -- confirmed live
+# that a rebuild against the floating tag mid-thesis silently shifted
+# handshake_bytes for a profile whose curve config didn't change at all.
+FROM golang:1.27-rc@sha256:6a284ec7a8c67eff5882aaa53b07a57ee397553f8c85a92e5fc97c517f12201f
 # ML-DSA-65 mTLS client cert support (Etapa 3) needs crypto/mldsa +
 # crypto/x509/crypto/tls ML-DSA wiring, only in Go 1.27, unreleased as of
 # 2026-08 -- see thesis/results/experiment2 - PQC/DECISIONS.md (Decision 2).

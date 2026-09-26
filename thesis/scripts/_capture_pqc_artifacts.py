@@ -50,6 +50,7 @@ def _capturing_do_call(session, method, url, **kwargs):
 of.do_call = _capturing_do_call
 
 proc = of.start_tls_kem_proxy("pqc")
+pqc_signer_started = of.start_pqc_signer_service("pqc")  # persistent ML-DSA-65 signer
 
 of.get_client_cert_paths = lambda profile: (str(of.CERTS_DIR / "client_one.crt"), str(of.CERTS_DIR / "client_one.key"))
 
@@ -58,6 +59,7 @@ try:
     insurance_calls = of.run_insurance_flow("pqc")
     person_calls = of.run_person_flow("pqc")
 finally:
+    of.stop_pqc_signer_service(pqc_signer_started)
     of.stop_tls_kem_proxy(proc)
 
 calls = insurance_calls + person_calls

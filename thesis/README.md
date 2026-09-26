@@ -1,101 +1,108 @@
-# Thesis — Baseline Automation (PQC Migration)
+# Thesis — Post-Quantum Migration of the OPIN Ecosystem
 
-Tooling and data collected for the doctoral thesis on migrating from classical to post-quantum (PQC) cryptography in the Open Insurance Brasil (OPIN) ecosystem, using the local **MockOPIN** environment as the test bed.
+Tooling and data for the doctoral thesis on migrating the Open Insurance
+Brasil (OPIN) consent flow from classical to post-quantum (PQC) and hybrid
+cryptography, using the local **MockOPIN** environment (this repository) as
+the test bed.
+
+**The final, official results are in [`results/v7/`](results/v7/)** —
+start with [`results/v7/Consolidated_Metrics_Report_FINAL.md`](results/v7/Consolidated_Metrics_Report_FINAL.md)
+for the consolidated numbers, [`results/v7/ARCHITECTURE.md`](results/v7/ARCHITECTURE.md)
+for how the measured system works, and [`results/v7/DECISIONS.md`](results/v7/DECISIONS.md)
+for the engineering decisions and investigations behind the final setup.
+Earlier rounds (`v1`–`v6`) are preserved as historical record — each one
+documents, in its own `DECISIONS.md`, what changed and why it was
+superseded — but their numbers are not the ones to cite.
+
+## The experiment
+
+Three cryptographic profiles of the same OPIN consent flow are compared:
+
+| Profile | Signatures | TLS key exchange |
+|---|---|---|
+| Classic | RSA (PS256) | ECDHE, single P-384 curve |
+| PQC | Pure ML-DSA-65 (NIST FIPS 204); certificates issued by an RSA CA | Pure ML-KEM-1024 (NIST FIPS 203) |
+| Hybrid | RSA + ML-DSA-65 combined (dual-signed certificates, payload-extension JWTs, Strong Nesting on the `id_token`/JARM) | SecP384r1MLKEM1024 (P-384 + ML-KEM-1024) |
+
+Each profile drives the same complete flow (consent, PAR, automated login,
+token exchange, resource queries — 28 HTTP calls across two sub-flows) and
+is measured for both **size** (bytes of cryptographic material, via the
+OPINsize equation extended in this thesis with a fourth, PKI term) and
+**latency** (`T_fluxo`, across six emulated WAN-latency scenarios). See
+`results/v7/ARCHITECTURE.md` for the full system diagram and measurement
+methodology.
 
 ## Structure
 
-Each experiment (classical baseline, PQC, hybrid, ...) owns a self-contained
-folder under `results/`, with its own results, run logs, and any
-experiment-specific script. Tooling that isn't tied to a particular
-cryptography (running the Conformance Suite plans, injecting WAN latency,
-patching the suite itself) stays shared at the top level so later
-experiments reuse it as-is instead of duplicating it.
-
 ```
 thesis/
-├── README.md                     this file
-├── scripts/
-│   ├── baseline_automation.py    main automation: creates plans, runs the
-│   │                              "happy path" modules, exports logs, and
-│   │                              computes the metrics -- reused by every
-│   │                              experiment (output folder driven by the
-│   │                              latency-scenario CLI arg)
-│   ├── check_plan_modules.py     quick diagnostic script — creates a plan
-│   │                              and prints the exact module names the
-│   │                              Conformance Suite recognizes (useful
-│   │                              before adding a new plan to PLANS)
-│   └── set_latency.sh            injects/removes tc/netem WAN latency on
-│                                   the mTLS gateway container, crypto-agnostic
-├── config/
-│   ├── config_template_consents_v3.json   validated config for the
-│   │                                        "Insurance consents api test V3.0.0" plan
-│   └── config_template_person_v2.json     validated config for the
-│                                            "person_test-plan_v2.0.0" plan
-├── patches/
-│   └── ...                                 patched versions of Conformance Suite
-│                                            source files (see patches/README.md —
-│                                            needed because that folder is cloned
-│                                            on demand and gitignored)
+├── README.md            this file
+├── docs/                 SAD-vs-implementation coverage notes
+├── patches/              patched Conformance Suite source files (see patches/README.md
+│                          -- needed because that folder is cloned on demand and gitignored)
+├── config/               validated Conformance Suite plan configs (used by v1's tooling)
+├── scripts/              all automation shared across experiments -- see scripts/README.md
+│   ├── opin_flow.py            drives the actual OPIN flow directly (client_credentials,
+│   │                            consent, PAR, login, token exchange, resource queries) --
+│   │                            used by every experiment from v2 onward
+│   ├── switch_crypto_profile.py   switches CRYPTO_PROFILE, rebuilds/restarts the
+│   │                                affected containers, and waits for the environment
+│   │                                to settle before releasing it for measurement
+│   ├── median_automation.py    size-metric batches: N runs per scenario, writes
+│   │                            median_metrics.json + MEDIAN_REPORT.md
+│   ├── latency_automation.py   latency batches: N runs per scenario, writes
+│   │                            median_metrics.json + report.md
+│   ├── tls_kem_proxy/           Go TLS client bridging the key-exchange groups
+│   │                            (MLKEM1024, SecP384r1MLKEM1024, ...) that the
+│   │                            Python/OpenSSL stack driving opin_flow.py can't negotiate
+│   ├── pqc-signer/              ML-DSA-65 signer for the client side (Node.js,
+│   │                            native node:crypto) -- a persistent HTTP service,
+│   │                            reused across every signature in a run
+│   ├── verify_kem_export/       standalone Go tool proving a TLS group actually
+│   │                            derived a fresh session key (RFC 5705 export),
+│   │                            not just that the log says so
+│   └── audit_v7_from_raw.py     independent audit: recomputes every reported metric
+│                                  straight from the raw run files, no shortcuts
 └── results/
-    └── experiment1 - Classic/    Experiment 1: classical-cryptography baseline
-        ├── baseline/                       first exploratory single run (2026-07-20,
-        │                                     no injected latency) -- superseded by
-        │                                     the 0ms scenario below, kept for history
-        ├── 0ms/ 14ms/ 30ms/ 140ms/ 225ms/ 320ms/   the six WAN-latency scenarios
-        │                                             (baseline_metrics.json + raw
-        │                                             Conformance Suite logs per scenario)
-        ├── consolidated.json      the six scenarios' summary metrics side by side
-        ├── EXPERIMENT1_REPORT.md  human-readable comparative report
-        ├── Relatorio_Experimento1_Final.pdf   thesis report section for this experiment
-        ├── logs/
-        │   ├── execution_log_20260720.txt     full stdout of the baseline/ run
-        │   └── run_*.log, redo_*.log          stdout of each scenario run/retry
-        └── scripts/
-            └── consolidate_experiment1.py     builds consolidated.json/EXPERIMENT1_REPORT.md
-                                                 from the six scenarios above
+    ├── v7/                **final, official** -- size/, latency/, artifacts/ (real
+    │                       captured, cryptographically verified artifacts per profile),
+    │                       DECISIONS.md, ARCHITECTURE.md, Consolidated_Metrics_Report_FINAL.md
+    └── v1 .. v6/          earlier rounds, superseded but preserved as history
+                            (each one's own DECISIONS.md explains why it was superseded)
 ```
 
-## Infrastructure prerequisites
+## Running the experiment
 
-The automation depends on the full MockOPIN environment running (`make run-with-cs` at the project root), **with patches applied to the Conformance Suite source** (preserved in [`patches/`](patches/README.md) since that folder is cloned on demand and gitignored) — without them the suite tries to validate against Raidiam's real sandbox Directory and fails immediately:
+The automation depends on the full MockOPIN environment running (see the
+[repository root README](../README.md) for `make run`/`make run-with-cs`
+setup) and needs its own virtual environment — see
+[`scripts/README.md`](scripts/README.md) for why and how to create it.
 
-| File (in `insurance-server-lambdas/conformance-suite/src/main/java/net/openid/conformance/opin/testmodule/support/`) | Change |
-|---|---|
-| `OpinSetDirectoryInfo.java` | uses `directory.discoveryUrl`/`apibase`/`keystore` from the config instead of Raidiam's hardcoded sandbox URLs |
-| `CheckOpinDirectoryApiBase.java` | accepts `https://directory/` as a valid URL (in addition to Raidiam's) |
-| `CheckOpinDirectoryDiscoveryUrl.java` | accepts `https://directory/.well-known/openid-configuration` as a valid URL |
-| `OpinCallDirectoryParticipantsEndpoint.java` | builds the `/participants` URL from `directory.apibase` instead of a hardcoded one |
-
-After changing any of these files you need to rebuild (`make setup-cs` — build phase, ~15-20min) and recreate the container: `docker-compose up -d --force-recreate cs-server`.
-
-**Note on `preflight`:** even with the patches, the `opin-consents_api_preflight_test-module_v3` module always ends with `result=FAILED`. This comes from two conditions built into the suite's own core library (`OpinCheckDirectoryDiscoveryUrl`/`OpinCheckDirectoryApiBase`, shipped inside a dependency `.jar` — not editable) that insist on the real Raidiam Directory. Since they're `continue-on-failure`, the rest of the flow runs normally and the real traffic is captured in the log — only the result label ends up wrong. This is expected and documented in the script itself.
-
-## Configs (`config/`)
-
-Both files **must** use `"alias": "mock"` — the Conformance Suite builds the OAuth `redirect_uri` as `https://.../test/a/{alias}/callback`, and the only `redirect_uri` registered for `client_one` (in `insurance-server-lambdas/software_statement.json`) is `.../test/a/mock/callback`. Any other alias breaks authentication with `redirect_uri did not match any of the client's registered redirect_uris`.
-
-Certificates, JWKS, and CA used in the configs come from `mock-service-os/certs/` (client_one).
-
-## How to run
+To switch the active cryptographic profile and collect one scenario:
 
 ```bash
 cd thesis/scripts
-python baseline_automation.py
+python switch_crypto_profile.py pqc            # classic | pqc | hybrid
+python median_automation.py 0 --runs 10 --results-version v7/size --experiment-number 2
+python latency_automation.py 0 --runs 10 --results-version v7 --experiment-number 2
 ```
 
-Some modules (the ones that actually create/query a consent) pause at `status=WAITING` waiting for manual login + consent — the script prints the URL to the terminal and keeps polling on its own once it detects the real redirect. Mock user credentials: `usuario1@seguradoramodelo.com.br` / `P@ssword01`.
-
-To investigate a new plan before automating it:
-
-```bash
-python check_plan_modules.py
-```
+`opin_flow.py` can also be run directly for a single execution
+(`CRYPTO_PROFILE=pqc python opin_flow.py 0`), and the `_capture_*.py`
+one-shot scripts under `scripts/` regenerate the individual proof artifacts
+under `results/v7/artifacts/<profile>/`.
 
 ## Metrics collected
 
-- **Total bytes exchanged** across the full flow (classical OPINsize) — sum of headers + body for every real HTTP call.
-- **Latency per endpoint** — mean, P50, P95, P99, computed from the request/response timestamps in the suite's log.
-- **Size of every JWT** found in the payloads (client assertions, request objects, tokens) — the central data point for comparing against PQC signature sizes.
-- **Total number of HTTP requests** in the flow.
+- **OPINsize** — the flow's total cryptographic-material size: mTLS
+  handshake bytes, JWT sizes, published JWK sizes, and (this thesis's
+  extension) CA certificate bytes.
+- **Latency per endpoint and `T_fluxo`** — where in the flow the
+  post-quantum cost shows up, and how the complete flow behaves across six
+  emulated WAN-latency scenarios.
+- **Bytes per participant** — AS/RS/Directory egress, for estimating
+  cloud-egress cost of the migration.
 
-These metrics make up the classical-cryptography baseline; the next step of the research is to repeat the collection with PQC algorithms enabled and compare.
+See `results/v7/ARCHITECTURE.md` (methodology) and
+`results/v7/Consolidated_Metrics_Report_FINAL.md` (results) for the full
+detail.

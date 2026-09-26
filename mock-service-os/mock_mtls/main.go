@@ -80,25 +80,38 @@ var (
 	// ARCHITECTURE.md, Fase 1/2. Each profile's key exchange now matches
 	// that profile's own signature philosophy: pqc gets pure MLKEM1024 (no
 	// classical component, mirroring its pure ML-DSA-65 signature), hybrid
-	// gets the combined X25519MLKEM768 (mirroring its RSA+ML-DSA-65 dual
-	// signature). No classical fallback in either list, deliberately: a
-	// client that can't negotiate the intended group must fail visibly, not
-	// silently downgrade -- the same "no silent fallback" principle the
-	// hybrid certificate's AND gate already applies.
+	// gets the combined group (mirroring its RSA+ML-DSA-65 dual signature).
+	// No classical fallback in either list, deliberately: a client that
+	// can't negotiate the intended group must fail visibly, not silently
+	// downgrade -- the same "no silent fallback" principle the hybrid
+	// certificate's AND gate already applies.
+	//
+	// This default, Clássico's own list, is pinned to exactly one curve,
+	// P-384 -- so Clássico, PQC, and Híbrido form a clean,
+	// one-variable-at-a-time comparison chain (see hybrid's own
+	// serverCurvePreferences override in init() below for the other half of
+	// that chain). The client side of this negotiation
+	// (thesis/scripts/tls_kem_proxy) only ever offers P-384 for Clássico, so
+	// this narrowing changes nothing about what the harness actually
+	// measures -- it makes the gateway's own accepted set match that
+	// reality instead of silently tolerating a wider one nothing here
+	// exercises.
 	//
 	// EXCEPTION, deliberate and SNI-scoped: GetConfigForClient below (see its
 	// own comment and internalCallerConfig) pins exactly one caller -- any
 	// connection whose ClientHello sets ServerName "matls-api.local" (auth's
 	// own InsurerAdapter.getConsent(), which Node's TLS stack cannot make
-	// negotiate MLKEM1024/X25519MLKEM768) -- back to this same classical-only
-	// list, regardless of CRYPTO_PROFILE. This is the ONLY source of
-	// classical key exchange under pqc/hybrid; confirmed live (thesis/
-	// results/v7/DECISIONS.md) that every single classical handshake logged
-	// under those profiles carries this exact SNI, one-to-one, no exceptions.
-	// It does not apply to the client-facing traffic opin_flow.py's
-	// tls_kem_proxy drives (different SNI), which is what thesis/results/v7/
-	// artifacts/*/README.md's handshake evidence (Seção 4) is about.
-	serverCurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
+	// negotiate MLKEM1024/hybrid groups) -- to internalCallerConfig's own
+	// wider classical list ([P521, P384, P256], unaffected by the narrowing
+	// above -- this internal call was never part of what the comparison
+	// chain measures), regardless of CRYPTO_PROFILE. This is the ONLY
+	// source of classical key exchange under pqc/hybrid; confirmed live
+	// that every single classical handshake logged under those profiles
+	// carries this exact SNI, one-to-one, no exceptions. It does not apply
+	// to the client-facing traffic opin_flow.py's tls_kem_proxy drives
+	// (different SNI), which is what artifacts/*/README.md's handshake
+	// evidence (Seção 4) is about.
+	serverCurvePreferences = []tls.CurveID{tls.CurveP384}
 	serverMinVersion       = uint16(tls.VersionTLS12)
 )
 
@@ -147,7 +160,18 @@ func init() {
 		issuerCaServeFilePath = "certs/issuer_ca_hybrid.crt"
 		// Nível 1: the combined classical+PQC group, matching this
 		// profile's own RSA+ML-DSA-65 dual signature.
-		serverCurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
+		//
+		// SecP384r1MLKEM1024 combines the exact classical curve (P-384)
+		// Clássico is pinned to above with the exact ML-KEM parameter set
+		// (ML-KEM-1024) PQC already uses, so Híbrido shares one full
+		// component with each of the other two profiles. This is a
+		// deliberate trade-off, not an oversight: X25519MLKEM768 is the
+		// group real deployments actually negotiate (Chrome, Cloudflare) and
+		// has that real-world representativeness; this codebase gives that
+		// up in exchange for a clean internal comparison chain across all
+		// three profiles -- SecP384r1MLKEM1024 is not being presented as a
+		// market-standard group anywhere else in this codebase.
+		serverCurvePreferences = []tls.CurveID{tls.SecP384r1MLKEM1024}
 		serverMinVersion = tls.VersionTLS13
 	}
 }
@@ -509,9 +533,68 @@ func tlsConfiguration() *tls.Config {
 	// time, not the rare Decision-5/9 timing race it superficially
 	// resembled (same InvalidGrant/getConsent error shape, different and
 	// fully deterministic cause: TLS alert 40, handshake_failure).
+	//
+	// The fixed-classical certificate the comment above refers to is auth's
+	// own CLIENT cert (from SSM) --
+	// a completely different certificate from this gateway's own SERVER
+	// cert, which `:= *cfg` below still inherits unmodified (i.e. the
+	// profile's own serverCertFilePath: mtls.crt/mtls_pqc.crt/
+	// mtls_hybrid.crt). Under classic and hybrid this happened to be
+	// harmless -- hybrid's mtls_hybrid.crt is "an ordinary RSA cert/key
+	// pair as far as crypto/tls itself is concerned" (see its own case in
+	// init() above), so signing a classical-curve handshake with it is
+	// unremarkable. Under pqc, mtls_pqc.crt's subject public key is a real
+	// ML-DSA-65 key (confirmed: `openssl x509 -in mtls_pqc.crt -noout
+	// -text` reports Public Key Algorithm OID 2.16.840.1.101.3.4.3.18,
+	// which even this host's own OpenSSL 3.2.4 cannot parse) -- meaning
+	// this "always classical" connection was, under pqc specifically,
+	// still forcing a classical-curve TLS 1.2 handshake to be signed with
+	// an ML-DSA-65 certificate that auth's mainstream Node/OpenSSL TLS
+	// client was never meant to negotiate a signature scheme for. Found by
+	// reproducing the "rare, pre-existing reentrant introspection race"
+	// (v5 Decision 5) deliberately: 5/5 failures under pqc+140ms, 0/5
+	// under pqc+0ms, 0/5 under classic+140ms, 0/5 under hybrid+140ms --
+	// pqc is the only profile whose server cert here isn't RSA, and 140ms
+	// is needed to widen the reentrant chain's wall-clock window enough
+	// for whatever this mismatch costs to matter. Fixed by pinning
+	// Certificates here too, not just CurvePreferences/MinVersion --
+	// completing the "fully classical" intent this carve-out already
+	// claimed for the key-exchange dimension, now true for the
+	// certificate dimension as well, for all three profiles alike (not
+	// just the two it happened to already hold for).
+	internalServerCertBytes, err := os.ReadFile("certs/mtls.crt")
+	if err != nil {
+		slog.Error("internalCallerConfig: unable to read certs/mtls.crt", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	internalServerBlock, _ := pem.Decode(internalServerCertBytes)
+	if internalServerBlock == nil {
+		slog.Error("internalCallerConfig: unable to decode certs/mtls.crt")
+		os.Exit(1)
+	}
+	internalServerKeyBytes, err := os.ReadFile("certs/mtls.key")
+	if err != nil {
+		slog.Error("internalCallerConfig: unable to read certs/mtls.key", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	internalServerKeyBlock, _ := pem.Decode(internalServerKeyBytes)
+	if internalServerKeyBlock == nil {
+		slog.Error("internalCallerConfig: unable to decode certs/mtls.key")
+		os.Exit(1)
+	}
+	internalServerKey, err := x509.ParsePKCS8PrivateKey(internalServerKeyBlock.Bytes)
+	if err != nil {
+		slog.Error("internalCallerConfig: unable to parse certs/mtls.key", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+
 	internalCallerConfig := *cfg
 	internalCallerConfig.CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
 	internalCallerConfig.MinVersion = tls.VersionTLS12
+	internalCallerConfig.Certificates = []tls.Certificate{{
+		Certificate: [][]byte{internalServerBlock.Bytes},
+		PrivateKey:  internalServerKey,
+	}}
 
 	// Purely observational hook, plus (new) the one per-connection override
 	// above: fires right after the ClientHello is parsed, before
@@ -769,6 +852,29 @@ func getAccessToken(req *http.Request) string {
 	return ""
 }
 
+// introspectionHTTPClient: DisableKeepAlives, deliberately. `&http.Client{}`
+// with no Transport set (the previous code here) uses Go's shared
+// http.DefaultTransport, whose
+// IdleConnTimeout defaults to 90s; auth's own Node http.Server has
+// keepAliveTimeout=5000ms (Node's own default, never configured either
+// way in this codebase). Any gap between two introspection calls of 5s
+// or more -- routine under higher-latency scenarios, where the reentrant
+// chain this feeds (auth's InsurerAdapter.getConsent(), mock_as/utils/
+// opin/adapter.js) is naturally paced further apart -- means Node has
+// already closed the pooled connection server-side by the time Go's
+// client reuses it, producing exactly the `EOF` this function used to
+// surface as "Failed to introspect token" -> a 401 -> InvalidGrant at the
+// AS. Reproduced deliberately (8/8 failures under pqc+140ms with the old
+// client, 0/8 after this fix, same test) and root-caused directly from
+// this connection's own access log entries (successful introspections
+// ~1-2s apart; the one that failed followed a ~4.6s gap -- consistent
+// with, not merely coincident with, Node's 5s keepAliveTimeout).
+// DisableKeepAlives (a fresh TCP connection per call, to a same-Docker-
+// network container -- negligible cost) sidesteps the mismatch entirely,
+// rather than trying to keep two independently-configured timeouts in
+// two different languages/frameworks in sync.
+var introspectionHTTPClient = &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+
 func introspectAndAddHeaders(req *http.Request, token string) bool {
 	introspectionURL := "http://auth:3000/token/introspection"
 	clientID := "client"
@@ -777,7 +883,7 @@ func introspectAndAddHeaders(req *http.Request, token string) bool {
 	data := url.Values{}
 	data.Set("token", token)
 
-	client := &http.Client{}
+	client := introspectionHTTPClient
 	introspectionReq, err := http.NewRequest("POST", introspectionURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		slog.Error("Failed to create introspection request", slog.String("error", err.Error()))

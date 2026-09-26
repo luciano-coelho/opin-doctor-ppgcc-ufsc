@@ -135,64 +135,64 @@ def write_report(summary: dict, warmup: dict, crypto_profile: str, latency_ms: i
     lines = []
     lines.append(f"# Latency Report ({crypto_profile}, {latency_ms}ms, {summary['run_count']} runs)")
     lines.append("")
-    lines.append(f"Experimento (perfil): **{crypto_profile}**")
-    lines.append(f"Latência aplicada (cenário): **{latency_ms}ms**")
+    lines.append(f"Experiment (profile): **{crypto_profile}**")
+    lines.append(f"Applied latency (scenario): **{latency_ms}ms**")
     lines.append("")
     lines.append(
-        f"Warmup (execução 0, descartada, não entra em nenhuma estatística): "
+        f"Warmup (run 0, discarded, not included in any statistic): "
         f"T_fluxo = {warmup['t_fluxo_seconds']:.4f}s"
-        + (f", com retry(s): {warmup['retries']}" if warmup["retries"] else ", sem retry.")
+        + (f", with retry(s): {warmup['retries']}" if warmup["retries"] else ", no retry.")
     )
     lines.append("")
-    lines.append("## As 10 execuções -- valores individuais (ordem coletada)")
+    lines.append("## The 10 runs -- individual values (collection order)")
     lines.append("")
-    lines.append("| # | T_fluxo (s) | Desvio absoluto da mediana (s) | Retry? |")
+    lines.append("| # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |")
     lines.append("|---|---|---|---|")
     for i, (v, dev) in enumerate(zip(summary["individual_values_seconds"], summary["absolute_deviation_from_median"]), start=1):
         has_retry = any(rr["run"] == i for rr in summary["runs_with_retries"])
-        lines.append(f"| {i} | {v:.6f} | {dev:.6f} | {'SIM' if has_retry else 'não'} |")
+        lines.append(f"| {i} | {v:.6f} | {dev:.6f} | {'YES' if has_retry else 'no'} |")
     lines.append("")
-    lines.append("## Valores ordenados (ordem crescente)")
+    lines.append("## Sorted values (ascending order)")
     lines.append("")
     lines.append(", ".join(f"{v:.6f}" for v in summary["sorted_values_seconds"]))
     lines.append("")
-    lines.append("## Mediana e dispersão")
+    lines.append("## Median and dispersion")
     lines.append("")
-    lines.append(f"- Mediana: **{summary['median_seconds']:.6f}s**")
-    lines.append(f"- Mínimo: {summary['min_seconds']:.6f}s")
-    lines.append(f"- Máximo: {summary['max_seconds']:.6f}s")
-    lines.append(f"- Média: {summary['mean_seconds']:.6f}s")
-    lines.append(f"- Desvio padrão (amostral): {summary['stdev_seconds']:.6f}s")
+    lines.append(f"- Median: **{summary['median_seconds']:.6f}s**")
+    lines.append(f"- Minimum: {summary['min_seconds']:.6f}s")
+    lines.append(f"- Maximum: {summary['max_seconds']:.6f}s")
+    lines.append(f"- Mean: {summary['mean_seconds']:.6f}s")
+    lines.append(f"- Standard deviation (sample): {summary['stdev_seconds']:.6f}s")
     lines.append(f"- Spread (min/max): {summary['spread_pct']:.4f}%")
     lines.append("")
-    lines.append("## Anomalias")
+    lines.append("## Anomalies")
     lines.append("")
     if summary["runs_with_retries"]:
         lines.append(
-            f"{len(summary['runs_with_retries'])} de {summary['run_count']} execuções precisaram de retry "
-            "(tempo do retry excluído do T_fluxo medido -- ver thesis/results/v5/latency/DECISIONS.md):"
+            f"{len(summary['runs_with_retries'])} of {summary['run_count']} runs needed a retry "
+            "(retry time excluded from the measured T_fluxo -- see thesis/results/v5/latency/DECISIONS.md):"
         )
         lines.append("")
         for entry in summary["runs_with_retries"]:
-            lines.append(f"- Execução {entry['run']}: {entry['retries']}")
+            lines.append(f"- Run {entry['run']}: {entry['retries']}")
     else:
-        lines.append("Nenhuma execução precisou de retry (PAR TTL ou login race) neste cenário.")
+        lines.append("No run needed a retry (PAR TTL or login race) in this scenario.")
     lines.append("")
     whole_run_retries = summary.get("whole_run_retries") or []
     if whole_run_retries:
         lines.append(
-            f"{len(whole_run_retries)} execução(ões) inteira(s) descartada(s) e refeita(s) do zero "
-            "(race reentrante auth<->mock_mtls, Decision 9 -- não é a mesma coisa que o retry parcial acima):"
+            f"{len(whole_run_retries)} whole run(s) discarded and redone from scratch "
+            "(auth<->mock_mtls reentrant race, Decision 9 -- not the same thing as the partial retry above):"
         )
         lines.append("")
         for entry in whole_run_retries:
-            lines.append(f"- {entry['run']}, tentativa {entry['attempt']}: {entry['error']}")
+            lines.append(f"- {entry['run']}, attempt {entry['attempt']}: {entry['error']}")
         lines.append("")
-    lines.append("## Observações")
+    lines.append("## Observations")
     lines.append("")
     lines.append(
-        f"Spread de {summary['spread_pct']:.4f}% entre as 10 execuções. "
-        + ("Dentro do esperado para medição de tempo real (rede/SO), não achatado artificialmente -- nenhum outlier foi removido do cálculo da mediana." if summary["spread_pct"] < 20 else "**Spread elevado -- investigar antes de aceitar este cenário como concluído.**")
+        f"Spread of {summary['spread_pct']:.4f}% among the 10 runs. "
+        + ("Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation." if summary["spread_pct"] < 20 else "**Elevated spread -- investigate before accepting this scenario as complete.**")
     )
     lines.append("")
 
@@ -245,6 +245,11 @@ def main():
     # thesis/results/v7/DECISIONS.md). See median_automation.py's identical
     # wrapping for the size-metric batch.
     tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
+    # Same lifecycle as tls_kem_proxy_proc above, for the persistent
+    # ML-DSA-65 signer -- this is exactly the cost T_fluxo measures, so it
+    # matters even more here than in median_automation.py's size batch. See
+    # of.start_pqc_signer_service().
+    pqc_signer_started = of.start_pqc_signer_service(crypto_profile)
     try:
         whole_run_retries = []
 
@@ -265,6 +270,7 @@ def main():
             )
             print(f"  T_fluxo={r['t_fluxo_seconds']:.4f}s  retries={r['retries']}")
     finally:
+        of.stop_pqc_signer_service(pqc_signer_started)
         of.stop_tls_kem_proxy(tls_kem_proxy_proc)
 
     summary = summarize(runs)

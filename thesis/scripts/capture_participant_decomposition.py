@@ -45,11 +45,13 @@ def _capturing_do_call(session, method, url, **kwargs):
 of.do_call = _capturing_do_call
 
 proc = of.start_tls_kem_proxy(profile)
+pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
 try:
     of.set_latency(0)
     insurance_calls = of.run_insurance_flow(profile)
     person_calls = of.run_person_flow(profile)
 finally:
+    of.stop_pqc_signer_service(pqc_signer_started)
     of.stop_tls_kem_proxy(proc)
 
 calls = insurance_calls + person_calls

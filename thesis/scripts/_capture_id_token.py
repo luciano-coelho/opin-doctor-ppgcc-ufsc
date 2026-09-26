@@ -3,7 +3,7 @@ One-shot capture script -- NOT part of the official measurement pipeline.
 Runs opin_flow.py's real insurance flow under a given CRYPTO_PROFILE,
 capturing the raw /token response body (which embeds a real id_token, JWE-
 encrypted per Decision 10/thesis/results/v4/DECISIONS.md) for
-thesis/results/v7/artifacts/{classico,pqc,hybrid}/README.md's id_token
+thesis/results/v7/artifacts/{classic,pqc,hybrid}/README.md's id_token
 section. Writes id_token_raw.txt (the id_token JWE, compact form) under
 thesis/results/v7/artifacts/<profile_dir>/.
 
@@ -15,7 +15,7 @@ import sys
 
 sys.argv_profile = sys.argv[1]
 profile = sys.argv[1]
-profile_dir = {"classic": "classico", "pqc": "pqc", "hybrid": "hybrid"}[profile]
+profile_dir = {"classic": "classic", "pqc": "pqc", "hybrid": "hybrid"}[profile]
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 os.environ["CRYPTO_PROFILE"] = profile
@@ -41,11 +41,13 @@ if profile == "pqc":
     # safety net, kept only in case this script runs against a pre-fix copy.
 
 proc = of.start_tls_kem_proxy(profile)
+pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
 try:
     of.set_latency(0)
     calls = of.run_insurance_flow(profile)
     print(f"flow completed, {len(calls)} calls")
 finally:
+    of.stop_pqc_signer_service(pqc_signer_started)
     of.stop_tls_kem_proxy(proc)
 
 token_bodies = [rb["body"] for rb in raw_bodies if rb["endpoint"].rstrip("/").endswith("/token")]

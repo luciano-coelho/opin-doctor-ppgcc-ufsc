@@ -38,7 +38,9 @@ def start_stub(port: int) -> subprocess.Popen:
             "-p", f"127.0.0.1:{port}:{port}",
             "-v", f"{PROXY_SRC_DIR}:/src",
             "-w", "/src",
-            "golang:1.27-rc-alpine",
+            # Pinned by digest, not the floating "golang:1.27-rc-alpine"
+            # tag -- see opin_flow.py's TLS_KEM_PROXY_GO_IMAGE for why.
+            "golang:1.27-rc-alpine@sha256:c5aca77a4d16cb6688dbf3ccade67eff6f05ee208bc854d060e6947f5c27e23c",
             "go", "run", ".", "-stub", "-listen", f":{port}",
         ],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

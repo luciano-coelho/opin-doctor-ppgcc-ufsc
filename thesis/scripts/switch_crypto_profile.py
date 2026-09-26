@@ -92,6 +92,110 @@ def _start_if_exited(name: str) -> None:
         subprocess.run(["docker", "start", name], capture_output=True, text=True, timeout=30)
 
 
+PSQL_CONTAINER_NAME = "insurance-server-lambdas-psql-1"
+PSQL_CHECKPOINT_WARN_SECONDS = 5.0
+
+
+def _check_psql_checkpoint_health() -> None:
+    """
+    A manually-triggered `CHECKPOINT` is used as a cheap, direct probe of this host's actual
+    disk write/fsync performance for the psql container -- not inferred
+    from flow-level symptoms. Confirmed live: a healthy checkpoint here
+    (497 buffers, ~3MB dirty) completes in ~1.2s; the same psql container,
+    later in the same 13-day-old session, was observed taking 45-56s for
+    the same amount of data (`docker logs`, `checkpoint complete: ...
+    total=50.936 s` and similar) -- a ~40-50x degradation with no error,
+    no crash, and no symptom visible anywhere except unusually slow
+    responses on whichever endpoint happened to hit the DB at the wrong
+    moment (traced to Clássico's `POST /consents`, the flow's only
+    write-heavy call, producing a bimodal T_fluxo that looked at first
+    like a crypto-profile effect but wasn't). The degraded window ended
+    only because the container was later restarted (root cause not fully
+    pinned down -- plausibly WSL2/Docker Desktop VHDX-level I/O
+    contention accumulated over a long-lived session, not something this
+    script can prevent from recurring). This check exists so a recurrence
+    during a multi-day data-collection protocol is caught loudly,
+    immediately, before a single execution is measured against a degraded
+    database -- not discovered after the fact by a confusing spread number.
+    """
+    t0 = time.monotonic()
+    result = subprocess.run(
+        ["docker", "exec", "-e", "PGPASSWORD=test", PSQL_CONTAINER_NAME,
+         "psql", "-U", "test", "-d", "mock", "-c", "CHECKPOINT;"],
+        capture_output=True, text=True, timeout=90,
+    )
+    elapsed = time.monotonic() - t0
+    if result.returncode != 0:
+        raise RuntimeError(f"psql health check: CHECKPOINT failed:\n{result.stdout}\n{result.stderr}")
+    print(f"  psql health check: manual CHECKPOINT completed in {elapsed:.2f}s")
+    if elapsed > PSQL_CHECKPOINT_WARN_SECONDS:
+        raise SystemExit(
+            f"psql health check FAILED: CHECKPOINT took {elapsed:.2f}s (threshold {PSQL_CHECKPOINT_WARN_SECONDS}s). "
+            f"This host's disk I/O for the psql container is degraded -- the same condition that has previously "
+            f"produced Clássico's bimodal POST /consents latency during a pilot run. "
+            f"Do NOT proceed with data collection in this state: restart the psql container "
+            f"(`docker restart {PSQL_CONTAINER_NAME}`) and re-run this script."
+        )
+
+
+MTLS_READY_TIMEOUT_SECONDS = 30
+
+
+def _wait_for_mtls_ready(timeout_seconds: int = MTLS_READY_TIMEOUT_SECONDS) -> None:
+    """
+    Polls the gateway's own log for a readiness signal, not the
+    container-state check (`docker inspect ... Status`) this script relied
+    on alone before. Root cause, reproduced deliberately: `mock_mtls/main.go`'s `main()` calls
+    `loadSsaKey()` -- a blocking `http.Get` to localstack's keystore endpoint
+    -- BEFORE it ever calls `net.Listen`/`ListenAndServe` on port 443. Docker
+    reports the container "running" as soon as the process starts, which can
+    be well before that HTTP call returns and the TLS listener actually
+    binds. Reproduced live: 8 consecutive `docker compose up -d
+    --force-recreate mtls` cycles, polling `docker logs` for "Listening on
+    port 443" -- 7 of 8 took 2.4-2.9s, one took 16.2s. The one production
+    incident this fix responds to needed *more* than 30s (tls_kem_proxy's
+    own upstream dial saw repeated `remote error: tls: handshake failure`
+    for several seconds even after the proxy itself had started) -- worse
+    than anything reproduced here, but the same mechanism: whatever made
+    that one localstack round trip slow that day, this script's old fixed
+    18s sleep (10s + 8s) had no way to detect or wait out.
+
+    Note this does NOT replace start_tls_kem_proxy()'s own readiness check
+    (_wait_for_tls_kem_proxy_ready): that one only proves the proxy's local
+    listener is bound, not that its upstream dial to the real gateway would
+    succeed -- confirmed live to be an insufficient signal on its own (the
+    proxy reported itself ready, then failed every dial to mtls for several
+    seconds). This function checks the actual dependency directly, before
+    the proxy is ever started.
+
+    Checks the gateway's OWN log for "Listening on port 443"
+    (mock_mtls/main.go's own line, printed right after net.Listen succeeds)
+    rather than attempting a real HTTPS request -- an actual TLS handshake
+    is not a profile-agnostic signal here: under pqc/hybrid the gateway's
+    CurvePreferences only accepts MLKEM1024/SecP384r1MLKEM1024, which no
+    plain Python/OpenSSL client can ever negotiate (the entire reason
+    tls_kem_proxy exists). A first version of this check tried
+    `requests.get(..., verify=False)` and failed every single time under
+    pqc/hybrid with "tls alert handshake failure" -- not a readiness
+    problem, an expected, permanent property of those profiles that would
+    have made this check useless (or actively wrong) for 2 of 3 profiles.
+    Reading the log line sidesteps TLS entirely and checks the exact
+    code-level event that actually matters, regardless of profile.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["docker", "logs", "insurance-server-lambdas-mtls-1"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "Listening on port 443" in (result.stdout + result.stderr):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"mtls (gateway) did not log \"Listening on port 443\" within {timeout_seconds}s."
+    )
+
+
 def switch(profile: str) -> None:
     print(f"=== Switching CRYPTO_PROFILE -> {profile} ===")
     result = _compose(
@@ -118,10 +222,16 @@ def switch(profile: str) -> None:
             raise RuntimeError(f"{name} is '{status}' after retry -- switch failed, inspect manually")
     print("  containers up: auth, mtls, mockapi")
 
+    _wait_for_mtls_ready()
+    print("  mtls health check: gateway logged \"Listening on port 443\"")
+
+    _check_psql_checkpoint_health()
+
     print(f"  running {SETTLING_WARMUP_RUNS} discarded full-flow executions to settle "
           f"the freshly (re)started containers (Decision 4) ...")
     of.set_latency(0)
     proc = of.start_tls_kem_proxy(profile)  # v7: classic also goes through the proxy now (Decision 1)
+    pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
     try:
         for i in range(1, SETTLING_WARMUP_RUNS + 1):
             t0 = time.monotonic()
@@ -134,6 +244,7 @@ def switch(profile: str) -> None:
                 continue
             print(f"    settling run {i}/{SETTLING_WARMUP_RUNS}: {time.monotonic() - t0:.3f}s (discarded)")
     finally:
+        of.stop_pqc_signer_service(pqc_signer_started)
         if proc is not None:
             of.stop_tls_kem_proxy(proc)
     print(f"=== CRYPTO_PROFILE={profile} ready ===")

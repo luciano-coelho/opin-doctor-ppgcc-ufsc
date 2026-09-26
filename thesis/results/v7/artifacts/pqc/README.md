@@ -1,31 +1,31 @@
-# Artefatos reais — perfil PQC
+# Real artifacts — PQC profile
 
-Prova de implementação verificável para o perfil PQC, no mesmo padrão de
-`artifacts/hybrid/` e `artifacts/classico/`: cada artefato vem com a captura
-real, a explicação do mecanismo, e o ponto exato do código-fonte. Aqui a
-afirmação a provar é dupla: (1) que o material pós-quântico (ML-DSA-65 no
-certificado/JWT, MLKEM1024 no handshake) é genuíno e funcional, não apenas
-um campo do tamanho certo; e (2) que, onde o desenho é deliberadamente misto
-(o certificado, Etapa 3.1 — só a chave do titular migra para PQC, a CA
-permanece RSA), essa mistura é exatamente o que foi decidido, não uma PQC
-incompleta por acidente — e onde o desenho é puro para o tráfego externo
-(o handshake TLS do cliente ao gateway), ele é realmente puro, sem nenhum
-componente clássico (X25519 ou qualquer ECDHE) silenciosamente misturado
-nesse tráfego especificamente (ver a ressalva sobre o tráfego interno
-auth→RS na Seção 4).
+Verifiable proof of implementation for the PQC profile, following the same
+standard as `artifacts/hybrid/` and `artifacts/classic/`: each artifact
+comes with the real capture, the mechanism explanation, and the exact
+source-code reference. Here the claim to be proven is twofold: (1) that
+the post-quantum material (ML-DSA-65 in the certificate/JWT, MLKEM1024 in
+the handshake) is genuine and functional, not just a field of the right
+size; and (2) that, where the design is deliberately mixed (the
+certificate, Step 3.1 — only the subject's key migrates to PQC, the CA
+remains RSA), that mixture is exactly what was decided, not an accidental,
+incomplete PQC migration — and where the design is pure for external
+traffic (the client-to-gateway TLS handshake), it really is pure, with no
+classical component (X25519 or any ECDHE) silently mixed into that traffic
+specifically (see the caveat about internal auth→RS traffic in Section 4).
 
-Todo dado abaixo foi capturado ao vivo em `CRYPTO_PROFILE=pqc`, no mesmo
-pipeline v7 (`tls_kem_proxy`, Decision 1) usado para o lote de tamanho e
-latência.
+All data below was captured live under `CRYPTO_PROFILE=pqc`, on the same
+v7 pipeline (`tls_kem_proxy`, Decision 1) used for the size and latency
+batch.
 
 ---
 
-## 1. Certificado do titular (`client_one_pqc.crt`) — chave ML-DSA-65, emissor RSA
+## 1. Subject certificate (`client_one_pqc.crt`) — ML-DSA-65 key, RSA issuer
 
-### O artefato real
+### The real artifact
 
-Arquivo bruto: [`client_one_pqc.crt`](client_one_pqc.crt). Decodificação
-via `openssl x509 -text -noout`:
+Raw file: [`client_one_pqc.crt`](client_one_pqc.crt). Decoding via
+`openssl x509 -text -noout`:
 [`client_one_pqc.crt.txt`](client_one_pqc.crt.txt).
 
 ```
@@ -40,28 +40,28 @@ Subject Public Key Info:
 Signature Algorithm: sha256WithRSAEncryption
 ```
 
-Duas observações estruturais, ambas intencionais: **a assinatura do
-certificado (issuer) é RSA clássica**, não ML-DSA-65 — o certificado é
-emitido pela mesma CA `ca.crt`/`ca.key` que assina o certificado do
-Clássico (`artifacts/classico/`); e **o OpenSSL reconhece o OID da chave do
-titular (`2.16.840.1.101.3.4.3.18`, ML-DSA-65/FIPS 204) mas não consegue
-decodificá-la** — exatamente a mesma situação (e o mesmo motivo) já
-explicada em `artifacts/hybrid/README.md`, Seção 1: o OpenSSL 3.x deste
-ambiente não tem um provider ML-DSA-65 carregado, então ele imprime o OID
-corretamente (a estrutura ASN.1 é lida) mas para exatamente aí — não decodifica
-o conteúdo da chave, e isso é esperado, não um sinal de que a chave é
-inválida ou de tamanho errado.
+Two structural observations, both intentional: **the certificate's
+signature (issuer) is classical RSA**, not ML-DSA-65 — the certificate is
+issued by the same `ca.crt`/`ca.key` CA that signs the Classic certificate
+(`artifacts/classic/`); and **OpenSSL recognizes the subject key's OID
+(`2.16.840.1.101.3.4.3.18`, ML-DSA-65/FIPS 204) but cannot decode it** —
+exactly the same situation (and the same reason) already explained in
+`artifacts/hybrid/README.md`, Section 1: the OpenSSL 3.x in this
+environment does not have an ML-DSA-65 provider loaded, so it prints the
+OID correctly (the ASN.1 structure is parsed) but stops exactly there — it
+does not decode the key's contents, and this is expected, not a sign that
+the key is invalid or the wrong size.
 
-### A prova que realmente importa: a chave ML-DSA-65 do titular é real e funcional, o issuer é classicamente verificável
+### The proof that actually matters: the subject's ML-DSA-65 key is real and functional, the issuer is classically verifiable
 
-Como no certificado híbrido, a limitação do OpenSSL não impede uma prova
-criptográfica real — só exige uma ferramenta que entenda ML-DSA-65
-nativamente (Go 1.27rc2, `crypto/mldsa`, FIPS 204). A prova aqui é a chave
-mais direta possível: **assinar um desafio novo com a chave privada do
-titular e verificar contra a chave pública que o próprio certificado
-declara** — se isso funciona, a `SubjectPublicKeyInfo` é genuinamente o
-outro lado do par de chaves em `client_one_pqc.key`, não um blob do
-tamanho certo:
+As with the hybrid certificate, this OpenSSL limitation does not prevent a
+real cryptographic proof — it only requires a tool that understands
+ML-DSA-65 natively (Go 1.27rc2, `crypto/mldsa`, FIPS 204). The proof here
+is the most direct one possible: **sign a fresh challenge with the
+subject's private key and verify it against the public key the certificate
+itself declares** — if this works, the `SubjectPublicKeyInfo` is genuinely
+the other half of the key pair in `client_one_pqc.key`, not just a blob of
+the right size:
 
 ```
 $ docker run --rm -v "<repo>/mock-service-os/certs:/certs" -w /certs golang:1.27-rc-alpine \
@@ -77,78 +77,81 @@ um campo do tamanho certo. A propria assinatura do certificado (issuer) permanec
 por design (Etapa 3.1): so a chave do titular migra para PQC, a CA nao.
 ```
 
-Saída completa em
-[`verify_pqc_cert_output.txt`](verify_pqc_cert_output.txt). 1.952 bytes é
-exatamente o tamanho de uma chave pública ML-DSA-65 (FIPS 204, parameter
-set 65); 3.309 bytes é exatamente o tamanho de uma assinatura ML-DSA-65 —
-ambos batendo com os tamanhos já vistos no certificado híbrido e no JWT da
-Seção 2 abaixo, o que por si só é uma checagem cruzada (o mesmo algoritmo
-produzindo os mesmos tamanhos em três lugares independentes do sistema).
+Full output in
+[`verify_pqc_cert_output.txt`](verify_pqc_cert_output.txt). 1.952 bytes is
+exactly the size of an ML-DSA-65 public key (FIPS 204, parameter set 65);
+3.309 bytes is exactly the size of an ML-DSA-65 signature — both matching
+the sizes already seen in the hybrid certificate and in the JWT of Section
+2 below, which is itself a cross-check (the same algorithm producing the
+same sizes in three independent places in the system).
 
-**A segunda metade da prova** — o issuer signature realmente verifica —
-usa a ferramenta clássica de sempre, já que essa assinatura é RSA comum:
+**The second half of the proof** — that the issuer signature actually
+verifies — uses the usual classical tool, since this signature is plain
+RSA:
 
 ```
 $ openssl verify -CAfile ca.crt client_one_pqc.crt
 client_one_pqc.crt: OK
 ```
 
-DER completo: **2.953 bytes** (contra 1.494 do Clássico) — a diferença de
-1.459 bytes é essencialmente o custo de embutir uma SubjectPublicKeyInfo
-ML-DSA-65 (1.952 bytes de chave, mais o `AlgorithmIdentifier`/overhead
-ASN.1) no lugar de uma chave RSA-4096 comum, sem nenhuma extensão a mais —
-confirma que este certificado não é um híbrido "disfarçado": não tem
-`AltSignatureValue` nem `SubjectAltPublicKeyInfo`, só uma SPKI diferente.
+Full DER: **2.953 bytes** (versus 1.494 for Classic) — the 1.459-byte
+difference is essentially the cost of embedding an ML-DSA-65
+SubjectPublicKeyInfo (1.952 bytes of key, plus the `AlgorithmIdentifier`/
+ASN.1 overhead) in place of an ordinary RSA-4096 key, with no additional
+extension — confirming that this certificate is not a "disguised" hybrid:
+it has neither `AltSignatureValue` nor `SubjectAltPublicKeyInfo`, just a
+different SPKI.
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-Este é o desenho deliberado da Etapa 3.1 (mixing classical issuer +
-post-quantum subject key é X.509 ordinário — os dois campos são
-independentes): apenas a identidade do titular migra para PQC, a CA
-permanece inalterada e classicamente verificável por qualquer software já
-existente. Isso é diferente do certificado híbrido (`artifacts/hybrid/`),
-que preserva a assinatura RSA original E adiciona uma segunda assinatura
-ML-DSA-65 sobre o mesmo certificado — aqui não há segunda assinatura: a
-chave do titular simplesmente É ML-DSA-65, ponto, e a CA nunca precisou
-aprender a assinar com esse algoritmo para emitir este certificado.
+This is the deliberate design of Step 3.1 (mixing a classical issuer with
+a post-quantum subject key is ordinary X.509 — the two fields are
+independent): only the subject's identity migrates to PQC, while the CA
+remains unchanged and classically verifiable by any pre-existing software.
+This differs from the hybrid certificate (`artifacts/hybrid/`), which
+preserves the original RSA signature AND adds a second ML-DSA-65 signature
+over the same certificate — here there is no second signature: the
+subject's key simply IS ML-DSA-65, period, and the CA never needed to
+learn how to sign with this algorithm to issue this certificate.
 
-### Referência ao código
+### Code reference
 
 `mock-service-os/certs/main.go`:
-- `generateClientCertPQC()`, linhas 358–432 — gera a chave ML-DSA-65
-  (`mldsa.GenerateKey(mldsa.MLDSA65())`, linha 371) e cria o certificado
-  assinando com `caKey` **RSA** (`x509.CreateCertificate(..., key.Public(),
-  caKey)`, linha 411–417) — o parâmetro de chave pública é a nova chave
-  ML-DSA-65, o parâmetro de chave assinante continua sendo a CA RSA
-  existente. O comentário da própria função (linhas 358–361) documenta essa
-  escolha explicitamente.
-- `verifyPQCCert()`, adicionada para este artefato (mesmo arquivo) — a
-  verificação da Seção acima: assina um desafio com a chave privada do
-  disco e verifica contra a `SubjectPublicKeyInfo` que `x509.ParseCertificate`
-  já decodificou nativamente (o parser do Go 1.27rc2 reconhece o OID
-  ML-DSA-65 e retorna `*mldsa.PublicKey` diretamente em `cert.PublicKey`).
+- `generateClientCertPQC()`, lines 358–432 — generates the ML-DSA-65 key
+  (`mldsa.GenerateKey(mldsa.MLDSA65())`, line 371) and creates the
+  certificate signing with the **RSA** `caKey` (`x509.CreateCertificate(...,
+  key.Public(), caKey)`, line 411–417) — the public-key parameter is the
+  new ML-DSA-65 key, while the signing-key parameter remains the existing
+  RSA CA. The function's own comment (lines 358–361) documents this choice
+  explicitly.
+- `verifyPQCCert()`, added for this artifact (same file) — the
+  verification from the Section above: signs a challenge with the private
+  key from disk and verifies it against the `SubjectPublicKeyInfo` that
+  `x509.ParseCertificate` has already natively decoded (the Go 1.27rc2
+  parser recognizes the ML-DSA-65 OID and returns a `*mldsa.PublicKey`
+  directly in `cert.PublicKey`).
 
 ---
 
-## 2. JWT real, decodificado (resposta do RS, `GET .../premium`) — ML-DSA-65 puro
+## 2. Real, decoded JWT (RS response, `GET .../premium`) — pure ML-DSA-65
 
-### O artefato real
+### The real artifact
 
-Token completo: [`example_jwt_premium_compact.txt`](example_jwt_premium_compact.txt)
-/ [`example_jwt_premium.txt`](example_jwt_premium.txt) (decodificado).
+Full token: [`example_jwt_premium_compact.txt`](example_jwt_premium_compact.txt)
+/ [`example_jwt_premium.txt`](example_jwt_premium.txt) (decoded).
 
 **Header:**
 ```json
 {"alg": "ML-DSA-65", "kid": "5226750c-4adb-4d00-be74-c6a38845622d", "typ": "JWT"}
 ```
 
-**Payload (chaves de topo):** `data`, `links`, `meta` — sem nenhum
-componente RSA/clássico embutido (nem uma segunda assinatura, nem um claim
-extra como o `pqc` do esquema híbrido). Total: 5.559 caracteres; segmento de
-assinatura sozinho tem 4.412 caracteres (3.309 bytes decodificados) — o
-grosso do tamanho do token é a assinatura ML-DSA-65 em si.
+**Payload (top-level keys):** `data`, `links`, `meta` — with no embedded
+RSA/classical component whatsoever (neither a second signature nor an
+extra claim like the `pqc` claim in the hybrid scheme). Total: 5.559
+characters; the signature segment alone is 4.412 characters (3.309 bytes
+decoded) — most of the token's size is the ML-DSA-65 signature itself.
 
-### A prova que realmente importa: a assinatura ML-DSA-65 verifica de verdade, sozinha
+### The proof that actually matters: the ML-DSA-65 signature genuinely verifies, on its own
 
 ```
 $ node verify_pqc_jwt.mjs pqc.json example_jwt_premium_compact.txt   # (dentro do container `auth`)
@@ -166,115 +169,117 @@ VERIFICATION RESULT: {
 }
 ```
 
-Saída completa em [`verify_jwt_output.txt`](verify_jwt_output.txt). O
-script (`thesis/scripts/verify_hybrid_jwt/verify_pqc_jwt.mjs`, escrito para
-este perfil) usa a API nativa `webcrypto.subtle.verify({name:'ML-DSA-65'})`
-do Node 24 — a mesma primitiva que
-`payloadExtensionVerification.js` usa para a metade PQC do esquema híbrido
-(`artifacts/hybrid/README.md`, Seção 2) — sobre a entrada de assinatura
-padrão de um JWS (`header_b64 + "." + payload_b64`, 1.146 bytes ASCII neste
-token), verificando contra a chave pública derivada diretamente do arquivo
-de material de chave do RS (`crypto-profiles/pqc.json`). Ao contrário do
-Híbrido, não há aqui nenhum "AND gate" de duas assinaturas: uma única
-assinatura ML-DSA-65 cobre o token inteiro, e é exatamente isso que a
-verificação confirma (`hasClassicComponent: false`).
+Full output in [`verify_jwt_output.txt`](verify_jwt_output.txt). The
+script (`thesis/scripts/verify_hybrid_jwt/verify_pqc_jwt.mjs`, written for
+this profile) uses Node 24's native
+`webcrypto.subtle.verify({name:'ML-DSA-65'})` API — the same primitive
+`payloadExtensionVerification.js` uses for the PQC half of the hybrid
+scheme (`artifacts/hybrid/README.md`, Section 2) — over the standard JWS
+signing input (`header_b64 + "." + payload_b64`, 1.146 ASCII bytes in this
+token), verifying against the public key derived directly from the RS's
+key-material file (`crypto-profiles/pqc.json`). Unlike Hybrid, there is no
+two-signature "AND gate" here: a single ML-DSA-65 signature covers the
+entire token, and that is exactly what the verification confirms
+(`hasClassicComponent: false`).
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-`ResponseSigningService.sign()` monta o JWS da forma mais comum possível —
-header + payload + `signingInput = headerB64 + "." + payloadB64` — e assina
-esse `signingInput` uma única vez com `loadMlDsa65Signer()`. Não há
-`preparePayload()` sobrescrito com lógica especial (esse mecanismo existe
-só no signer híbrido, para o claim `pqc`): o `default` da interface
-devolve os claims inalterados, então este é estruturalmente o JWS mais
-simples dos três perfis — só o algoritmo do header muda.
+`ResponseSigningService.sign()` assembles the JWS in the most ordinary way
+possible — header + payload + `signingInput = headerB64 + "." +
+payloadB64` — and signs that `signingInput` once with
+`loadMlDsa65Signer()`. There is no `preparePayload()` override with special
+logic (that mechanism exists only in the hybrid signer, for the `pqc`
+claim): the interface's `default` returns the claims unchanged, so this is
+structurally the simplest JWS among the three profiles — only the header's
+algorithm changes.
 
-### Referência ao código
+### Code reference
 
 `insurance-server-lambdas/.../crypto/ResponseSigningService.java`:
-- `sign()`, linhas 112–126 — monta `signingInput` e chama
+- `sign()`, lines 112–126 — assembles `signingInput` and calls
   `signer.signToBase64Url(signingInput)`.
-- `loadMlDsa65Signer()`, linhas 164–197 — carrega `pqc.json`, assina via
+- `loadMlDsa65Signer()`, lines 164–197 — loads `pqc.json`, signs via
   `Signature.getInstance("ML-DSA", "BC")` (BouncyCastle).
-- `thesis/scripts/verify_hybrid_jwt/verify_pqc_jwt.mjs` — a verificação
-  rodada acima.
+- `thesis/scripts/verify_hybrid_jwt/verify_pqc_jwt.mjs` — the verification
+  run above.
 
 ---
 
-## 3. Entrada real no JWKS — duas identidades PQC distintas (AS e RS), a mesma que assinou
+## 3. Real JWKS entry — two distinct PQC identities (AS and RS), the same one that signed
 
-### O artefato real
+### The real artifact
 
-**Do AS** — captura completa: [`jwks_auth.json`](jwks_auth.json), resposta
-real de `GET https://auth.local/jwks` (perfil PQC, via `tls_kem_proxy`):
-entrada `kty: "AKP"`/`alg: "ML-DSA-65"` de assinatura (`kid`
-`QiYeUNBZXaKsrgR_...`), mais a entrada `kty: "RSA"`/`RSA-OAEP` de cifragem
-(inalterada entre perfis, como já visto em Clássico/Híbrido). Este `kid` é
-**diferente** do `kid` do JWT da Seção 2 — esperado: o AS e o RS são dois
-serviços com material de chave PQC independente (o AS assina seus próprios
-artefatos, como `id_token`; o RS assina as respostas de API que este
-documento usa como exemplo). Publicar essa chave aqui não fecha o ciclo do
-JWT da Seção 2 — só confirma que o AS também publica sua própria chave
-ML-DSA-65 no formato JWKS (`kty: "AKP"`) que a IANA/JOSE registra para
-ML-DSA.
+**From the AS** — full capture: [`jwks_auth.json`](jwks_auth.json), the
+real response to `GET https://auth.local/jwks` (PQC profile, via
+`tls_kem_proxy`): the signing entry `kty: "AKP"`/`alg: "ML-DSA-65"` (`kid`
+`QiYeUNBZXaKsrgR_...`), plus the encryption entry `kty: "RSA"`/`RSA-OAEP`
+(unchanged across profiles, as already seen in Classic/Hybrid). This `kid`
+is **different** from the `kid` of the JWT in Section 2 — as expected: the
+AS and the RS are two services with independent PQC key material (the AS
+signs its own artifacts, such as the `id_token`; the RS signs the API
+responses this document uses as an example). Publishing this key here does
+not close the loop for the JWT in Section 2 — it only confirms that the AS
+also publishes its own ML-DSA-65 key in the JWKS format (`kty: "AKP"`)
+that IANA/JOSE registers for ML-DSA.
 
-**Do RS** — [`jwks_rs_derived.json`](jwks_rs_derived.json): a entrada que
-`GET /jwks` do RS publicaria, derivada do MESMO arquivo de material de
-chave (`pqc.json`) usado para verificar o JWT na Seção 2 (busca ao vivo bateu
-em `401`, mesmo motivo não diagnosticado já registrado em
-`artifacts/hybrid/README.md`, Seção 2):
+**From the RS** — [`jwks_rs_derived.json`](jwks_rs_derived.json): the
+entry the RS's `GET /jwks` would publish, derived from the SAME
+key-material file (`pqc.json`) used to verify the JWT in Section 2 (the
+live fetch hit a `401`, the same undiagnosed cause already recorded in
+`artifacts/hybrid/README.md`, Section 2):
 
 ```json
 {"kty": "AKP", "alg": "ML-DSA-65", "use": "sig", "kid": "5226750c-4adb-4d00-be74-c6a38845622d", "pub": "nRsKrNTf1cz2CJiG7ZwUiUpu...(truncado)"}
 ```
 
-### A prova que realmente importa: o kid e a chave batem exatamente com o que assinou
+### The proof that actually matters: the kid and the key match exactly what signed
 
-Duas checagens diretas, nenhuma delas por inspeção visual:
+Two direct checks, neither of them by visual inspection:
 
-1. **`kid` idêntico**: `5226750c-4adb-4d00-be74-c6a38845622d` — o mesmo
-   valor exato do header do JWT verificado na Seção 2, não uma coincidência
-   de formato, um valor UUID literal batendo byte a byte.
-2. **`pub` é a mesma chave que verificou**: `jwks_rs_derived.json` e
-   `verify_pqc_jwt.mjs` (Seção 2) derivam o campo `pub` do mesmo arquivo
-   (`pqc.json`), com o mesmo código de extração
-   (`createPublicKey({key: spkiDer, format:'der', type:'spki'})`) — a
-   verificação da Seção 2 já retornou `valid: true` usando exatamente esta
-   chave; se a chave publicada aqui fosse diferente da que assinou, aquela
-   verificação teria falhado, não passado.
+1. **Identical `kid`**: `5226750c-4adb-4d00-be74-c6a38845622d` — the exact
+   same value as the header of the JWT verified in Section 2, not a
+   format coincidence, a literal UUID value matching byte for byte.
+2. **`pub` is the same key that verified**: `jwks_rs_derived.json` and
+   `verify_pqc_jwt.mjs` (Section 2) derive the `pub` field from the same
+   file (`pqc.json`), with the same extraction code
+   (`createPublicKey({key: spkiDer, format:'der', type:'spki'})`) — the
+   verification in Section 2 already returned `valid: true` using exactly
+   this key; if the key published here were different from the one that
+   signed, that verification would have failed, not passed.
 
-Fechar o ciclo aqui é mais direto do que no Híbrido (Seção 3 de
-`artifacts/hybrid/`): não há um hash composto (`SHA-256(classicPk‖pqcPk)`)
-a recalcular — o `kid` é copiado verbatim de `pqc.json`, e é o mesmo em
-ambos os lados (assinatura e publicação) por construção.
+Closing the loop here is more direct than in Hybrid (Section 3 of
+`artifacts/hybrid/`): there is no composite hash
+(`SHA-256(classicPk‖pqcPk)`) to recompute — the `kid` is copied verbatim
+from `pqc.json`, and it is the same on both sides (signing and
+publication) by construction.
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-`loadMlDsa65Signer()` usa a MESMA variável `kid` (lida uma vez de
-`pqc.json`) tanto para assinar (`kid()`, usado no header do JWT) quanto
-para publicar (`publicJwk()`, usado no JWKS) — não há dois lugares
-independentes que poderiam divergir; é literalmente a mesma referência de
-string dentro do mesmo objeto `JwsSigner`.
+`loadMlDsa65Signer()` uses the SAME `kid` variable (read once from
+`pqc.json`) both to sign (`kid()`, used in the JWT header) and to publish
+(`publicJwk()`, used in the JWKS) — there are no two independent places
+that could diverge; it is literally the same string reference inside the
+same `JwsSigner` object.
 
-### Referência ao código
+### Code reference
 
 `insurance-server-lambdas/.../crypto/ResponseSigningService.java`:
-- Linha 166: `String kid = (String) json.get("kid")` — lido uma vez de
+- Line 166: `String kid = (String) json.get("kid")` — read once from
   `pqc.json`.
-- Linha 180: `public String kid() { return kid; }` — usado no header do JWT
-  (via `sign()`, linha 119).
-- Linhas 189–196: `publicJwk()` — usa a MESMA variável `kid` (linha 193) ao
-  montar a entrada JWKS.
-- `thesis/scripts/verify_hybrid_jwt/derive_pqc_jwks.mjs` — deriva
-  `jwks_rs_derived.json` acima.
+- Line 180: `public String kid() { return kid; }` — used in the JWT header
+  (via `sign()`, line 119).
+- Lines 189–196: `publicJwk()` — uses the SAME `kid` variable (line 193)
+  when assembling the JWKS entry.
+- `thesis/scripts/verify_hybrid_jwt/derive_pqc_jwks.mjs` — derives
+  `jwks_rs_derived.json` above.
 
 ---
 
-## 4. Evidência do handshake TLS — MLKEM1024 puro no tráfego externo, com uma exceção interna deliberada e documentada
+## 4. TLS handshake evidence — pure MLKEM1024 on external traffic, with a deliberate, documented internal exception
 
-### O artefato real
+### The real artifact
 
-Linha de log real do gateway, perfil PQC, via `tls_kem_proxy`:
+Real gateway log line, PQC profile, via `tls_kem_proxy`:
 [`handshake_log.json`](handshake_log.json).
 
 ```json
@@ -289,11 +294,11 @@ Linha de log real do gateway, perfil PQC, via `tls_kem_proxy`:
 }
 ```
 
-`clientCertBytes: 2953` bate exatamente com o DER do certificado da Seção 1
-(2.953 bytes) — confirma que esta linha de log corresponde à conexão real
-que apresentou `client_one_pqc.crt`.
+`clientCertBytes: 2953` matches exactly the DER of the certificate from
+Section 1 (2.953 bytes) — confirming that this log line corresponds to the
+real connection that presented `client_one_pqc.crt`.
 
-### A prova que realmente importa: confirmar que NENHUM componente clássico entrou no grupo negociado, e que a sessão é fresca
+### The proof that actually matters: confirming that NO classical component entered the negotiated group, and that the session is fresh
 
 ```
 $ docker run --rm --network insurance-server-lambdas_default \
@@ -308,77 +313,79 @@ exportado (RFC 5705) e DIFERENTE entre as duas -- confirma que o segredo de sess
 de uma troca de chave nova a cada conexao, nao um valor fixo ou decorativo.
 ```
 
-Saída completa em
-[`verify_kem_export_output.txt`](verify_kem_export_output.txt). A mesma
-ferramenta usada em Híbrido e Clássico roda aqui com o argumento
-`mlkem1024`: ela exige que o `curveID` negociado seja EXATAMENTE
-`"MLKEM1024"` nas duas conexões — se o handshake tivesse negociado
-`X25519MLKEM768` (o grupo híbrido clássico+PQC do perfil Híbrido) ou
-qualquer curva puramente clássica, o programa teria terminado em `RESULT:
-FAIL`, não com sucesso. `MLKEM1024`, ao contrário de `X25519MLKEM768`, não
-tem NENHUM componente ECDHE misturado no próprio nome do grupo (definido no Internet-Draft `draft-ietf-tls-mlkem`, IETF TLS WG, ainda não publicado como RFC) —
-não é um "híbrido com metade PQC", é o KEM puro. A exportação de material de
-chave (RFC 5705) confirma adicionalmente que o segredo de sessão é
-genuinamente novo a cada conexão, via KEM efêmero, não um valor fixo.
+Full output in
+[`verify_kem_export_output.txt`](verify_kem_export_output.txt). The same
+tool used for Hybrid and Classic runs here with the `mlkem1024` argument:
+it requires the negotiated `curveID` to be EXACTLY `"MLKEM1024"` on both
+connections — if the handshake had negotiated `X25519MLKEM768` (the
+classical+PQC hybrid group of the Hybrid profile) or any purely classical
+curve, the program would have ended in `RESULT: FAIL`, not succeeded.
+`MLKEM1024`, unlike `X25519MLKEM768`, has NO ECDHE component mixed into
+the group's name itself (defined in the Internet-Draft
+`draft-ietf-tls-mlkem`, IETF TLS WG, not yet published as an RFC) — it is
+not a "hybrid with half PQC," it is the pure KEM. The key-material export
+(RFC 5705) additionally confirms that the session secret is genuinely new
+for each connection, via an ephemeral KEM, not a fixed value.
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-`CRYPTO_PROFILE=pqc` faz `mock_mtls`'s `init()` sobrescrever
-`serverCurvePreferences` para conter apenas `tls.MLKEM1024` — nenhuma curva
-clássica aparece na lista padrão de preferências do servidor. O
-`tls_kem_proxy` (Decision 1 do v7) pede exatamente esse grupo do lado do
-cliente via `-curve mlkem1024`, usando o suporte nativo do Go 1.27rc2 a
-MLKEM1024 (que a stack TLS/OpenSSL do Python, usada pelo resto de
-`opin_flow.py`, ainda não negocia — daí o proxy existir).
+`CRYPTO_PROFILE=pqc` makes `mock_mtls`'s `init()` override
+`serverCurvePreferences` to contain only `tls.MLKEM1024` — no classical
+curve appears in the server's default preference list. The
+`tls_kem_proxy` (v7 Decision 1) requests exactly this group on the client
+side via `-curve mlkem1024`, using Go 1.27rc2's native support for
+MLKEM1024 (which Python's TLS/OpenSSL stack, used by the rest of
+`opin_flow.py`, still does not negotiate — hence the proxy's existence).
 
-**Ressalva verificada, não uma suposição**: essa restrição não é absoluta
-para 100% do tráfego que toca este gateway — existe uma exceção interna,
-deliberada e pré-existente a este trabalho, para exatamente uma chamada:
-`GetConfigForClient` (`mock_mtls/main.go`) intercepta o `ClientHelloInfo` de
-toda conexão e, quando `hello.ServerName == "matls-api.local"`, devolve um
-`tls.Config` separado com `CurvePreferences` fixado em curvas clássicas —
-essa é a rota que `auth`'s `InsurerAdapter.getConsent()` usa para checar o
-consentimento junto ao RS (Node não negocia MLKEM1024/X25519MLKEM768),
-estendendo o mesmo carve-out de certificado clássico já registrado na
-Decision 5 (`thesis/results/v5/size/DECISIONS.md`) para a dimensão de troca
-de chave também. **Confirmado ao vivo**, não suposto: instrumentei
-`GetConfigForClient` com um log (`slog.Info`, printando `hello.ServerName` +
-`remoteAddr`) e cruzei, conexão por conexão, contra as linhas `"mTLS
-handshake complete"` do mesmo período — **as 35 aplicações do carve-out e
-os 35 handshakes `curveID=CurveP256` capturados coincidem 1:1, mesmo
-`remoteAddr`, sem nenhum handshake clássico sobrando sem explicação**. Ou
-seja: sob `CRYPTO_PROFILE=pqc`/`hybrid`, a ÚNICA fonte de troca de chave
-clássica neste gateway é essa rota interna, especificamente amarrada a esse
-SNI — não uma falha de aplicação da política, e não algo que afete o
-tráfego cliente↔gateway que este artefato mede (SNI diferente,
-`AUTH_CONNECT_HOST`/`API_CONNECT_HOST` via `tls_kem_proxy`, nunca
-`matls-api.local` diretamente).
+**A verified caveat, not an assumption**: this restriction is not
+absolute for 100% of the traffic that touches this gateway — there is an
+internal exception, deliberate and pre-existing to this work, for exactly
+one call: `GetConfigForClient` (`mock_mtls/main.go`) intercepts every
+connection's `ClientHelloInfo` and, when `hello.ServerName ==
+"matls-api.local"`, returns a separate `tls.Config` with
+`CurvePreferences` fixed to classical curves — this is the route
+`auth`'s `InsurerAdapter.getConsent()` uses to check consent with the RS
+(Node does not negotiate MLKEM1024/X25519MLKEM768), extending the same
+classical-certificate carve-out already recorded in Decision 5
+(`thesis/results/v5/size/DECISIONS.md`) to the key-exchange dimension as
+well. **Confirmed live**, not assumed: I instrumented
+`GetConfigForClient` with a log (`slog.Info`, printing `hello.ServerName` +
+`remoteAddr`) and cross-checked, connection by connection, against the
+`"mTLS handshake complete"` lines from the same period — **the 35
+applications of the carve-out and the 35 captured `curveID=CurveP256`
+handshakes match 1:1, same `remoteAddr`, with no classical handshake left
+unaccounted for**. In other words: under `CRYPTO_PROFILE=pqc`/`hybrid`,
+the ONLY source of classical key exchange on this gateway is this internal
+route, specifically tied to that SNI — not a policy-enforcement failure,
+and not something that affects the client↔gateway traffic this artifact
+measures (a different SNI, `AUTH_CONNECT_HOST`/`API_CONNECT_HOST` via
+`tls_kem_proxy`, never `matls-api.local` directly).
 
-### Referência ao código
+### Code reference
 
-- `mock-service-os/mock_mtls/main.go`, linha ~114: `init()` sobrescrevendo
-  `serverCurvePreferences` para `[]tls.CurveID{tls.MLKEM1024}` sob
+- `mock-service-os/mock_mtls/main.go`, line ~114: `init()` overriding
+  `serverCurvePreferences` to `[]tls.CurveID{tls.MLKEM1024}` under
   `CRYPTO_PROFILE=pqc`.
 - `thesis/scripts/opin_flow.py`: `TLS_KEM_PROXY_CURVE_BY_PROFILE = {"pqc":
-  "mlkem1024", ...}` — mapeia o perfil ao argumento `-curve` do proxy.
-- `thesis/scripts/tls_kem_proxy/main.go`, caso `"mlkem1024"` do `switch` de
-  curvas.
-- `thesis/scripts/verify_kem_export/main.go` — a ferramenta usada acima,
-  aqui invocada com `mlkem1024`.
-- `mock-service-os/mock_mtls/main.go`, `GetConfigForClient` — a exceção
-  interna por SNI documentada na ressalva acima, com o comentário do código
-  atualizado para deixá-la explícita ao lado da política "no silent
-  fallback" que ela recorta.
+  "mlkem1024", ...}` — maps the profile to the proxy's `-curve` argument.
+- `thesis/scripts/tls_kem_proxy/main.go`, the `"mlkem1024"` case of the
+  curve `switch`.
+- `thesis/scripts/verify_kem_export/main.go` — the tool used above, here
+  invoked with `mlkem1024`.
+- `mock-service-os/mock_mtls/main.go`, `GetConfigForClient` — the internal
+  SNI-based exception documented in the caveat above, with the code
+  comment updated to make it explicit alongside the "no silent fallback"
+  policy it carves an exception into.
 
 ---
 
-## 5. `id_token` real, decodificado — assinatura ML-DSA-65 pura, criptografia da mensagem ainda clássica, confirmado impossível de migrar hoje
+## 5. Real, decoded `id_token` — pure ML-DSA-65 signature, message encryption still classical, confirmed impossible to migrate today
 
-### O artefato real
+### The real artifact
 
-Capturado ao vivo do campo `id_token` de uma resposta real `POST /token`
-(fluxo completo, perfil PQC): [`id_token_raw.txt`](id_token_raw.txt) — um
-JWE de 5 segmentos, não um JWS de 3 (diferente dos artefatos das Seções
+Captured live from the `id_token` field of a real `POST /token` response
+(full flow, PQC profile): [`id_token_raw.txt`](id_token_raw.txt) — a
+5-segment JWE, not a 3-segment JWS (unlike the artifacts in Sections
 1–4):
 
 ```
@@ -401,81 +408,83 @@ Inner JWS signature length (bytes): 3309
 VERIFICATION RESULT: {"valid": true, "reason": "ML-DSA-65 verified"}
 ```
 
-Saída completa em
+Full output in
 [`verify_id_token_output.txt`](verify_id_token_output.txt).
 
-### A prova que realmente importa: a assinatura interna é genuinamente ML-DSA-65 pura; a cifra externa continua RSA-OAEP, e nenhum dos dois fatos deve ser suavizado
+### The proof that actually matters: the inner signature is genuinely pure ML-DSA-65; the outer cipher remains RSA-OAEP, and neither fact should be softened
 
-**A parte que migrou, migrou de verdade**: a assinatura interna do
-`id_token`, uma vez decifrado o JWE, é ML-DSA-65 puro (3.309 bytes,
-verificado por `webcrypto.subtle.verify`) — sem nenhum componente RSA
-misturado, exatamente como o JWT da Seção 2 e o certificado da Seção 1
-deste mesmo perfil.
+**The part that migrated, genuinely migrated**: the inner signature of
+the `id_token`, once the JWE is decrypted, is pure ML-DSA-65 (3.309 bytes,
+verified via `webcrypto.subtle.verify`) — with no RSA component mixed in,
+exactly like the JWT in Section 2 and the certificate in Section 1 of this
+same profile.
 
-**A parte que não migrou, e não pode migrar hoje, é a cifragem do JWE**:
-`alg: "RSA-OAEP"` — a mesma que aparece em Clássico e Híbrido, sem exceção.
-Isso não é uma lacuna deste protótipo especificamente sob PQC — é um
-limite real do estado da arte: não existe hoje nenhum padrão JOSE/COSE para
-cifragem pós-quântica (ML-KEM) de tokens; o rascunho que existia foi
-retirado do grupo de trabalho do IETF, e bibliotecas como `jose` não têm
-suporte algum a isso. **Esta é a evidência mais direta e concreta desse
-achado em toda a pasta `artifacts/`**: um `id_token` genuinamente PQC do
-pescoço para baixo (assinatura), ainda inteiramente clássico na camada que
-o envolve (cifragem) — não por escolha de design deste projeto, mas porque
-não há alternativa disponível para escolher. Ver
-`thesis/docs/Cruzamento_SAD_vs_Experimentos.md` para o levantamento
-completo desse ponto contra o SAD.
+**The part that did not migrate, and cannot migrate today, is the JWE's
+encryption**: `alg: "RSA-OAEP"` — the same one that appears in Classic and
+Hybrid, without exception. This is not a gap specific to this prototype
+under PQC — it is a real limit of the state of the art: there is currently
+no JOSE/COSE standard for post-quantum (ML-KEM) encryption of tokens; the
+draft that existed was withdrawn from the IETF working group, and
+libraries such as `jose` have no support for it at all. **This is the
+most direct and concrete evidence of this finding in the entire
+`artifacts/` folder**: an `id_token` genuinely PQC from the neck down
+(signature), yet still entirely classical in the layer that wraps it
+(encryption) — not by this project's design choice, but because there is
+no available alternative to choose. See
+`thesis/docs/Cruzamento_SAD_vs_Experimentos.md` for the complete survey of
+this point against the SAD.
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-Assim como no Clássico, o `oidc-provider` monta e assina o `id_token`
-internamente e o cifra (RSA-OAEP + AES-256-GCM) antes de a resposta sair do
-processo. Sob `CRYPTO_PROFILE=pqc`, `internalSigningAlgs`/
-`internalSigningKey` apontam para a chave ML-DSA-65 do perfil
-(`pqc.json`'s `signingKey`, `kty: "AKP"`) — e, diferente do Híbrido (Seção
-5 do README daquele perfil), **não precisa de nenhum mecanismo de
-`ExternalSigningKey`**: o `jose`/`oidc-provider` deste ambiente já
-reconhece `"ML-DSA-65"` como um algoritmo de assinatura válido nativamente
-(o mesmo suporte nativo do Node 24 já usado nas Seções 2 desta pasta e da
-pasta `hybrid/`) — só a combinação de DOIS algoritmos num único `alg`
-string (o caso do Híbrido) exige o desvio.
+Just as in Classic, `oidc-provider` assembles and signs the `id_token`
+internally and encrypts it (RSA-OAEP + AES-256-GCM) before the response
+leaves the process. Under `CRYPTO_PROFILE=pqc`, `internalSigningAlgs`/
+`internalSigningKey` point to the profile's ML-DSA-65 key (`pqc.json`'s
+`signingKey`, `kty: "AKP"`) — and, unlike Hybrid (Section 5 of that
+profile's README), **it needs no `ExternalSigningKey` mechanism at all**:
+this environment's `jose`/`oidc-provider` already recognizes
+`"ML-DSA-65"` as a valid signing algorithm natively (the same native Node
+24 support already used in Section 2 of this folder and of the `hybrid/`
+folder) — only the combination of TWO algorithms into a single `alg`
+string (Hybrid's case) requires the workaround.
 
-A chave pública de cifragem usada aqui é a que `client_one_pqc.jwks`
-registra (`kid` diferente do Clássico/Híbrido — cada perfil tem sua própria
-chave de cifragem registrada para o cliente, confirmado comparando os
-`kid`s dos três `id_token`s capturados nesta pasta).
+The encryption public key used here is the one `client_one_pqc.jwks`
+registers (a `kid` different from Classic/Hybrid — each profile has its
+own encryption key registered for the client, confirmed by comparing the
+`kid`s of the three `id_token`s captured in this folder).
 
-### Referência ao código
+### Code reference
 
-- `mock-service-os/mock_as/utils/opin/configuration.js`, linha 43:
+- `mock-service-os/mock_as/utils/opin/configuration.js`, line 43:
   `internalSigningAlgs = isHybrid ? ['PS256'] : cryptoProfile.signingAlgs`
-  — para `pqc`, resolve para `['ML-DSA-65']`, lido de `pqc.json`.
-- `mock-service-os/mock_as/utils/opin/configuration.js`, linha 330:
-  `idTokenEncryptionAlgValues: ['RSA-OAEP']` — mesma cifragem clássica,
-  qualquer perfil.
-- `mock-service-os/certs/client_one_pqc.jwks`: par de chaves RSA-OAEP do
-  cliente para este perfil (`use: "enc"`).
-- `thesis/scripts/verify_hybrid_jwt/decrypt_and_verify_id_token.mjs` — a
-  verificação rodada acima.
+  — for `pqc`, resolves to `['ML-DSA-65']`, read from `pqc.json`.
+- `mock-service-os/mock_as/utils/opin/configuration.js`, line 330:
+  `idTokenEncryptionAlgValues: ['RSA-OAEP']` — the same classical
+  encryption, for any profile.
+- `mock-service-os/certs/client_one_pqc.jwks`: the client's RSA-OAEP key
+  pair for this profile (`use: "enc"`).
+- `thesis/scripts/verify_hybrid_jwt/decrypt_and_verify_id_token.mjs` — the
+  verification run above.
 
 ---
 
-## 6. `client_assertion` real — ML-DSA-65 puro autenticando o cliente
+## 6. Real `client_assertion` — pure ML-DSA-65 authenticating the client
 
-### Por que este artefato existe
+### Why this artifact exists
 
-O passo 8 do SAD ("Token de acesso") não é assinado — o `access_token`
-capturado ao vivo é uma string opaca, sem estrutura JWT
-(`certificateBoundAccessTokens: true`, sem `formats.AccessToken`
-configurado). A assinatura ML-DSA-65 real que autentica o cliente PQC ao
-pedir um token vive no `client_assertion`, não no `access_token` em si —
-ver `thesis/docs/Cruzamento_SAD_vs_Experimentos.md` para a correção
-completa dessa classificação.
+SAD step 8 ("Access token") is not signed — the `access_token` captured
+live is an opaque string, with no JWT structure
+(`certificateBoundAccessTokens: true`, with no `formats.AccessToken`
+configured). The real ML-DSA-65 signature that authenticates the PQC
+client when requesting a token lives in the `client_assertion`, not in the
+`access_token` itself — see
+`thesis/docs/Cruzamento_SAD_vs_Experimentos.md` for the complete
+correction of this classification.
 
-### O artefato real
+### The real artifact
 
-Capturado ao vivo do corpo de uma requisição real `POST /token` (perfil
-PQC): [`client_assertion_raw.txt`](client_assertion_raw.txt).
+Captured live from the body of a real `POST /token` request (PQC
+profile): [`client_assertion_raw.txt`](client_assertion_raw.txt).
 
 ```
 $ node verify_client_assertion.mjs pqc client_assertion_raw.txt   # (dentro do container `auth`)
@@ -493,86 +502,86 @@ Signature length (bytes): 3309
 VERIFICATION RESULT: {"valid": true, "reason": "ML-DSA-65 verified"}
 ```
 
-Saída completa em
+Full output in
 [`verify_client_assertion_output.txt`](verify_client_assertion_output.txt).
-Assinatura ML-DSA-65 pura (3.309 bytes, mesmo tamanho já visto nas Seções 2
-e 5 deste perfil), sem componente RSA — o cliente PQC autentica com o
-mesmo algoritmo que assina tudo o mais nesse perfil.
+Pure ML-DSA-65 signature (3.309 bytes, the same size already seen in
+Sections 2 and 5 of this profile), with no RSA component — the PQC client
+authenticates with the same algorithm that signs everything else in this
+profile.
 
-### A prova que realmente importa
+### The proof that actually matters
 
-Verificação ML-DSA-65 real (`webcrypto.subtle.verify`) contra a chave
-pública publicada em `client_one_pqc_pub.jwks` — `valid: true`. Mesma
-estrutura do `client_assertion` do Clássico (Seção 6 daquele README), só o
-algoritmo muda — o `_run_pqc_signer()` docker helper assina exatamente como
-assina qualquer outro payload PQC neste projeto (Seção 2).
+Real ML-DSA-65 verification (`webcrypto.subtle.verify`) against the
+public key published in `client_one_pqc_pub.jwks` — `valid: true`. Same
+structure as Classic's `client_assertion` (Section 6 of that README), only
+the algorithm changes — the `_run_pqc_signer()` Docker helper signs
+exactly as it signs any other PQC payload in this project (Section 2).
 
-### Explicação do mecanismo
+### Mechanism explanation
 
-`sign_jwt()`'s branch `alg == "ML-DSA-65"` (`thesis/scripts/opin_flow.py`)
-serializa a chave privada + header + claims e invoca `_run_pqc_signer()` —
-o mesmo container Docker efêmero usado para qualquer assinatura ML-DSA-65
-do lado do cliente neste projeto.
+`sign_jwt()`'s `alg == "ML-DSA-65"` branch (`thesis/scripts/opin_flow.py`)
+serializes the private key + header + claims and invokes
+`_run_pqc_signer()` — the same ephemeral Docker container used for any
+client-side ML-DSA-65 signature in this project.
 
-### Referência ao código
+### Code reference
 
-- `thesis/scripts/opin_flow.py`, `sign_jwt()`, branch `alg == "ML-DSA-65"`
-  (linhas 581–584); `_run_pqc_signer()` (linha 386).
-- `mock-service-os/certs/client_one_pqc_pub.jwks` — chave pública usada na
-  verificação.
-- `thesis/scripts/verify_hybrid_jwt/verify_client_assertion.mjs` — a
-  verificação rodada acima.
+- `thesis/scripts/opin_flow.py`, `sign_jwt()`, `alg == "ML-DSA-65"` branch
+  (lines 581–584); `_run_pqc_signer()` (line 386).
+- `mock-service-os/certs/client_one_pqc_pub.jwks` — public key used in the
+  verification.
+- `thesis/scripts/verify_hybrid_jwt/verify_client_assertion.mjs` — the
+  verification run above.
 
 ---
 
-## Nota metodológica: como este lote foi coletado, e uma ameaça de reprodutibilidade real que isso revelou
+## Methodological note: how this batch was collected, and a real reproducibility threat it revealed
 
-Capturar um fluxo PQC real ao vivo expôs um problema que inicialmente
-pareceu específico deste script de captura, mas **não era**: a stack TLS do
-Python (`opin_flow.py`) tenta carregar localmente o par de chaves de
-`client_one_pqc.crt/.key` mesmo na perna Python→`tls_kem_proxy` (que nunca
-exige certificado de cliente — ver `tls_kem_proxy/main.go`, o listener
-local não define `ClientAuth`), e o OpenSSL 3.0 padrão deste host não
-consegue analisar uma chave ML-DSA-65 nativa (`EE_KEY_TOO_SMALL`/
-`X509_LIB`, confirmado isoladamente, sem qualquer atividade de rede
-envolvida). A perna real que autentica com o gateway (Go→gateway, dentro do
-`tls_kem_proxy`) usa o Go 1.27rc2 nativo e funciona sem problema — é só a
-perna local, cosmética, que não consegue carregar o arquivo.
+Capturing a real PQC flow live exposed a problem that initially seemed
+specific to this capture script, but **was not**: Python's TLS stack
+(`opin_flow.py`) tries to locally load the `client_one_pqc.crt/.key` key
+pair even on the Python→`tls_kem_proxy` leg (which never requires a client
+certificate — see `tls_kem_proxy/main.go`, the local listener does not set
+`ClientAuth`), and this host's default OpenSSL 3.0 cannot parse a native
+ML-DSA-65 key (`EE_KEY_TOO_SMALL`/`X509_LIB`, confirmed in isolation, with
+no network activity involved at all). The real leg that authenticates with
+the gateway (Go→gateway, inside `tls_kem_proxy`) uses native Go 1.27rc2
+and works without issue — it is only the local, cosmetic leg that fails to
+load the file.
 
-**Teste direto confirmou que isso não é uma particularidade do script de
-captura**: rodar `median_automation.run_once("pqc", 0)` chamando
-`opin_flow.run_insurance_flow()`/`run_person_flow()` **sem nenhuma
-modificação** — o mesmo caminho de código exato que gerou os dados PQC já
-commitados desta v7 (2026-09-12) — falhou nesta máquina, agora, com o
-mesmo `EE_KEY_TOO_SMALL`, na mesma chamada (`do_call()` →
-`session.request(cert=cert, ...)`). Ou seja: **o pipeline oficial de
-medição também está quebrado nesta máquina no momento em que este artefato
-foi escrito**, não só a ferramenta de captura auxiliar. A causa é uma
-mudança de ambiente externa (OpenSSL/Windows, não determinada com
-precisão) entre 2026-09-12 e 2026-09-13 — os arquivos de certificado/chave
-no repositório não mudaram (confirmado via `git status`/timestamps).
+**A direct test confirmed this is not a peculiarity of the capture
+script**: running `median_automation.run_once("pqc", 0)`, calling
+`opin_flow.run_insurance_flow()`/`run_person_flow()` **with no
+modification whatsoever** — the exact same code path that generated this
+v7's already-committed PQC data (2026-09-12) — failed on this machine, now,
+with the same `EE_KEY_TOO_SMALL`, at the same call (`do_call()` →
+`session.request(cert=cert, ...)`). In other words: **the official
+measurement pipeline is also broken on this machine at the time this
+artifact was written**, not just the auxiliary capture tool. The cause is
+an external environment change (OpenSSL/Windows, not precisely
+determined) between 2026-09-12 and 2026-09-13 — the certificate/key files
+in the repository did not change (confirmed via `git status`/timestamps).
 
-Essa falha foi corrigida em `opin_flow.py` (ver Decision 5,
-`thesis/results/v7/DECISIONS.md`): a perna local Python→`tls_kem_proxy`
-para de apresentar qualquer certificado de cliente sob os perfis `pqc`/
-`hybrid`, já que essa apresentação nunca teve efeito real (o listener local
-nunca a exige) — é puramente cosmética, e removê-la restaura a
-reprodutibilidade sem alterar nenhum dado já medido. Após a correção, o
-mesmo teste (`median_automation.run_once("pqc", 0)`, pipeline oficial
-inalterado fora dessa remoção) foi re-executado com sucesso.
+This failure was fixed in `opin_flow.py` (see Decision 5,
+`thesis/results/v7/DECISIONS.md`): the local Python→`tls_kem_proxy` leg
+stops presenting any client certificate under the `pqc`/`hybrid` profiles,
+since that presentation never had any real effect (the local listener
+never requires it) — it is purely cosmetic, and removing it restores
+reproducibility without altering any already-measured data. After the
+fix, the same test (`median_automation.run_once("pqc", 0)`, official
+pipeline unchanged apart from this removal) was re-run successfully.
 
-O script de captura usado para gerar os exemplos deste README
-(`thesis/scripts/_capture_pqc_artifacts.py`, descartável) usou, antes da
-correção acima existir, um contorno equivalente só para essa mesma perna
-cosmética — substituindo o certificado local por `client_one.crt` (RSA,
-carregável) depois de o `tls_kem_proxy` já ter sido iniciado com o
-certificado PQC real, então a autenticação real contra o gateway usou
-`client_one_pqc.crt/.key` sem alteração nenhuma. Com a correção do
-`opin_flow.py` já aplicada, esse contorno do script de captura tornou-se
-redundante (o próprio `opin_flow.py` já não apresenta certificado ali), mas
-foi mantido no arquivo por não ser necessário removê-lo.
+The capture script used to generate this README's examples
+(`thesis/scripts/_capture_pqc_artifacts.py`, disposable) used, before the
+fix above existed, an equivalent workaround for that same cosmetic leg
+only — substituting the local certificate with `client_one.crt` (RSA,
+loadable) after `tls_kem_proxy` had already been started with the real PQC
+certificate, so the real authentication against the gateway used
+`client_one_pqc.crt/.key` completely unchanged. With the `opin_flow.py`
+fix already applied, this capture-script workaround became redundant
+(`opin_flow.py` itself no longer presents a certificate there), but it was
+left in the file since removing it was not necessary.
 
-O dado já commitado do lote de tamanho/latência (2026-09-12) continua
-válido e não foi re-coletado — a correção documentada aqui existe apenas
-para garantir que uma nova coleta PQC nesta máquina, no futuro, volte a
-funcionar.
+The already-committed size/latency batch data (2026-09-12) remains valid
+and was not re-collected — the fix documented here exists only to ensure
+that a future PQC collection on this machine will work again.

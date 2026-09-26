@@ -1,90 +1,91 @@
-# Artefatos reais — perfil Híbrido
+# Real artifacts — Hybrid profile
 
-Esta pasta (e suas irmãs `artifacts/classico/` e `artifacts/pqc/`) existe como
-**prova de implementação verificável**: para cada afirmação deste projeto de
-que "isso foi feito" — um certificado híbrido gerado nesta ordem específica,
-um JWT assinado com essa composição, uma chave publicada daquele jeito, um
-grupo de troca de chave negociado nesse handshake — há aqui o artefato real
-capturado ao vivo do sistema rodando (não um exemplo fabricado), a explicação
-do mecanismo, e o ponto exato do código-fonte que implementa isso. 
+This folder (and its sibling folders `artifacts/classic/` and
+`artifacts/pqc/`) exists as **verifiable proof of implementation**: for
+every claim this project makes that "this was actually done" — a hybrid
+certificate generated in this specific order, a JWT signed with this exact
+composition, a key published in that particular way, a key-exchange group
+negotiated in that handshake — there is, here, the real artifact captured
+live from the running system (not a fabricated example), the explanation of
+the mechanism, and the exact point in the source code that implements it.
 
-Todo dado abaixo foi capturado ao vivo em `CRYPTO_PROFILE=hybrid`, no mesmo
-sistema e pipeline (`tls_kem_proxy`, v7) usados para o lote de tamanho e
-latência — não é uma amostra estatística (não são 10 execuções), é uma
-fotografia única de cada artefato, exatamente como ele existe em produção
-neste projeto.
+All the data below was captured live under `CRYPTO_PROFILE=hybrid`, on the
+same system and pipeline (`tls_kem_proxy`, v7) used for the size and
+latency batches — this is not a statistical sample (these are not 10 runs),
+it is a single snapshot of each artifact, exactly as it exists in
+production in this project.
 
 ---
 
-## 1. Certificado híbrido (`client_one_hybrid.crt`)
+## 1. Hybrid certificate (`client_one_hybrid.crt`)
 
-### O artefato real
+### The real artifact
 
-Arquivo bruto: [`client_one_hybrid.crt`](client_one_hybrid.crt) (PEM, o mesmo
-arquivo usado pelo cliente em toda execução do perfil Híbrido). Versão
-decodificada: [`client_one_hybrid.crt.txt`](client_one_hybrid.crt.txt)
-(`openssl x509 -text -noout`, capturado ao vivo do arquivo em uso).
+Raw file: [`client_one_hybrid.crt`](client_one_hybrid.crt) (PEM, the same
+file used by the client throughout every run of the Hybrid profile).
+Decoded version: [`client_one_hybrid.crt.txt`](client_one_hybrid.crt.txt)
+(`openssl x509 -text -noout`, captured live from the file in use).
 
-Trecho relevante da decodificação — os três campos que carregam o material
-pós-quântico:
+Relevant excerpt from the decoding — the three fields that carry the
+post-quantum material:
 
 ```
 X509v3 Subject Alternative Public Key Info:
-    <binário: chave pública ML-DSA-65>
+    <binary: ML-DSA-65 public key>
 X509v3 Alternative Signature Algorithm:
-    <binário: identificador do algoritmo alternativo>
+    <binary: alternative algorithm identifier>
 X509v3 Alternative Signature Value:
-    <binário: assinatura ML-DSA-65>
+    <binary: ML-DSA-65 signature>
 Signature Algorithm: sha256WithRSAEncryption
 Signature Value:
     c7:f7:74:60:62:ed:df:fa:30:16:23:0f:5f:b6:fd:6f:...
 ```
 
-**Por que o OpenSSL mostra binário bruto aqui, e por que isso é o
-comportamento correto, não uma lacuna de prova.** O OpenSSL reconhece essas
-três extensões pelo nome (são extensões X.509 padrão, OIDs `2.5.29.72/73/74`)
-mas não decodifica seu conteúdo interno, porque este build não tem suporte
-nativo a ML-DSA-65. Isso não é um problema a esconder — é a **evidência viva
-de que a retrocompatibilidade está funcionando exatamente como desenhado**:
-as três extensões são deliberadamente marcadas **não-críticas**
-(`critical=false`, visível na extração de tamanhos abaixo), o que por
-definição em X.509 (RFC 5280) instrui qualquer verificador que não reconheça
-uma extensão a **ignorar seu conteúdo e continuar validando o certificado
-normalmente**. Um OpenSSL comum, sem qualquer patch ou plugin PQC, aceita
-este certificado inteiro — porque a assinatura que ele sabe checar (RSA,
-`Signature Value`) cobre o certificado completo, extensões PQC incluídas,
-mesmo sem entender o que elas significam. O OpenSSL "não entender" o binário
-é precisamente o comportamento que prova que um verificador legado consegue
-usar este certificado sem adaptação nenhuma. A prova de que o conteúdo
-*em si* é criptograficamente válido — não só do tamanho certo — vem a
-seguir, com verificação real, não com decodificação por um verificador que
-nunca teve motivo para entender ML-DSA-65.
+**Why OpenSSL shows raw binary here, and why this is the correct behavior,
+not a gap in the proof.** OpenSSL recognizes these three extensions by name
+(they are standard X.509 extensions, OIDs `2.5.29.72/73/74`) but does not
+decode their internal content, because this build has no native support
+for ML-DSA-65. This is not a problem to hide — it is **live evidence that
+backward compatibility is working exactly as designed**: the three
+extensions are deliberately marked **non-critical** (`critical=false`,
+visible in the size extraction below), which, by X.509 definition (RFC
+5280), instructs any verifier that does not recognize an extension to
+**ignore its content and continue validating the certificate normally**. A
+plain OpenSSL, with no PQC patch or plugin whatsoever, accepts this entire
+certificate — because the signature it does know how to check (RSA,
+`Signature Value`) covers the complete certificate, PQC extensions
+included, even without understanding what they mean. OpenSSL's "not
+understanding" the binary is precisely the behavior that proves a legacy
+verifier can use this certificate with no adaptation at all. The proof
+that the content *itself* is cryptographically valid — not just the right
+size — comes next, through real verification, not through decoding by a
+verifier that never had any reason to understand ML-DSA-65.
 
-Tamanhos exatos de cada campo, extraídos via `cryptography` (Python) sobre o
-mesmo arquivo, confirmando os três OIDs, se são críticos, e seus tamanhos em
-bytes:
+Exact sizes of each field, extracted via `cryptography` (Python) from the
+same file, confirming the three OIDs, whether they are critical, and their
+sizes in bytes:
 
-| Campo (OID) | Crítico? | Tamanho | O que é |
+| Field (OID) | Critical? | Size | What it is |
 |---|---|---|---|
-| `subjectAltPublicKeyInfo` (2.5.29.72) | não | 1.974 bytes | Chave pública ML-DSA-65 do titular |
-| `altSignatureAlgorithm` (2.5.29.73) | não | 13 bytes | Identificador do algoritmo alternativo |
-| `altSignatureValue` (2.5.29.74) | não | 3.314 bytes | Assinatura ML-DSA-65 |
-| Assinatura RSA final (`Signature Value`) | — | 512 bytes | RSA-4096, `sha256WithRSAEncryption` |
-| **Certificado completo (DER)** | — | **6.859 bytes** | Confirma o `client_cert_der_bytes` medido em todo o lote v7 |
+| `subjectAltPublicKeyInfo` (2.5.29.72) | no | 1.974 bytes | Subject's ML-DSA-65 public key |
+| `altSignatureAlgorithm` (2.5.29.73) | no | 13 bytes | Alternative algorithm identifier |
+| `altSignatureValue` (2.5.29.74) | no | 3.314 bytes | ML-DSA-65 signature |
+| Final RSA signature (`Signature Value`) | — | 512 bytes | RSA-4096, `sha256WithRSAEncryption` |
+| **Complete certificate (DER)** | — | **6.859 bytes** | Confirms the `client_cert_der_bytes` measured across the whole v7 batch |
 
-### A prova que realmente importa: a segunda assinatura é verificável de verdade
+### The proof that actually matters: the second signature is genuinely verifiable
 
-Um campo do tamanho certo, sozinho, não prova nada — poderia ser qualquer
-sequência de 3.309 bytes. A prova de que este certificado é **híbrido de
-verdade**, não um certificado clássico com um campo decorativo do tamanho
-certo, é: **essa segunda assinatura passa numa verificação criptográfica
-real, feita por um algoritmo diferente (ML-DSA-65), sobre o mesmo conteúdo
-que a assinatura RSA cobre.**
+A field of the right size, on its own, proves nothing — it could be any
+sequence of 3.309 bytes. The proof that this certificate is **genuinely
+hybrid**, not a classical certificate with a decorative field of the right
+size, is: **this second signature passes a real cryptographic
+verification, performed by a different algorithm (ML-DSA-65), over the
+same content that the RSA signature covers.**
 
-Escrevi e rodei uma verificação independente que faz exatamente isso —
-extrai a chave e a assinatura de dentro do certificado, reconstrói os bytes
-exatos que foram assinados, e verifica a assinatura de verdade contra a
-chave pública ML-DSA-65 correspondente:
+I wrote and ran an independent verification that does exactly this — it
+extracts the key and the signature from inside the certificate,
+reconstructs the exact bytes that were signed, and genuinely verifies the
+signature against the corresponding ML-DSA-65 public key:
 
 ```
 $ docker run --rm -v "<repo>/mock-service-os/certs:/src" -w /src golang:1.27-rc-alpine \
@@ -96,132 +97,137 @@ Reconstructed preTBS: 2996 bytes (original final TBS was 6323 bytes -- the diffe
 RESULT: verificado -- a assinatura ML-DSA-65 (AltSignatureValue) e valida para a chave ML-DSA-65 da CA emissora (issuer_ca_pqc.crt) sobre o preTBS reconstruido de /src/client_one_hybrid.crt.
 ```
 
-Saída completa salva em
-[`verify_hybrid_cert_output.txt`](verify_hybrid_cert_output.txt) — comando
-reproduzível, roda em qualquer máquina com Docker a partir do repositório.
+Full output saved in
+[`verify_hybrid_cert_output.txt`](verify_hybrid_cert_output.txt) —
+reproducible command, runs on any machine with Docker from the repository.
 
-O que esse comando faz, passo a passo (é o mesmo algoritmo que qualquer
-verificador real deste esquema híbrido precisaria implementar, não um atalho
-de teste):
+What this command does, step by step (this is the same algorithm any real
+verifier of this hybrid scheme would need to implement, not a testing
+shortcut):
 
-1. Extrai a chave pública ML-DSA-65 do titular (`SubjectAltPublicKeyInfo`,
-   1.952 bytes de chave real — não só o tamanho, o conteúdo, mostrado em hex).
-2. Extrai a assinatura ML-DSA-65 (`AltSignatureValue`, 3.309 bytes de
-   assinatura real).
-3. Reconstrói o **preTBS** — os bytes exatos do certificado como existiam
-   *antes* da assinatura ML-DSA-65 ser adicionada (removendo só a extensão
-   `AltSignatureValue`, mantendo tudo mais idêntico) — a mesma reconstrução
-   que a Fase 3 do Nível 1 já validou para a prova criptográfica standalone.
-   2.996 bytes contra 6.323 do TBS final: a diferença bate exatamente com o
-   tamanho da extensão removida.
-4. Verifica a assinatura com `crypto/mldsa` (suporte nativo a ML-DSA-65 do Go
-   1.27rc2, FIPS 204) contra a chave pública ML-DSA-65 **da CA emissora**
-   (`issuer_ca_pqc.crt`) — não contra a chave do próprio titular.
-   `SubjectAltPublicKeyInfo` (extraída no passo 1) é a chave pública
-   ML-DSA-65 **do titular deste certificado** (`client_one`), e ela é
-   certificada pela assinatura da CA pelo mesmo motivo que a chave RSA do
-   titular também é certificada pela assinatura RSA da CA (passo 4 acima):
-   é a CA quem atesta a identidade do titular, nos dois algoritmos — a
-   verificação usa a chave da CA porque é a CA que assina, exatamente como
-   no lado clássico.
+1. Extracts the subject's ML-DSA-65 public key (`SubjectAltPublicKeyInfo`,
+   1.952 bytes of real key — not just the size, the content, shown in
+   hex).
+2. Extracts the ML-DSA-65 signature (`AltSignatureValue`, 3.309 bytes of
+   real signature).
+3. Reconstructs the **preTBS** — the exact bytes of the certificate as
+   they existed *before* the ML-DSA-65 signature was added (removing only
+   the `AltSignatureValue` extension, keeping everything else identical) —
+   the same reconstruction that Phase 3 of Level 1 already validated for
+   the standalone cryptographic proof. 2.996 bytes against 6.323 for the
+   final TBS: the difference matches exactly the size of the removed
+   extension.
+4. Verifies the signature with `crypto/mldsa` (native ML-DSA-65 support in
+   Go 1.27rc2, FIPS 204) against the ML-DSA-65 public key **of the issuing
+   CA** (`issuer_ca_pqc.crt`) — not against the subject's own key.
+   `SubjectAltPublicKeyInfo` (extracted in step 1) is the ML-DSA-65 public
+   key **of this certificate's subject** (`client_one`), and it is
+   certified by the CA's signature for the same reason the subject's RSA
+   key is also certified by the CA's RSA signature (step 4 above): it is
+   the CA that attests to the subject's identity, in both algorithms — the
+   verification uses the CA's key because it is the CA that signs, exactly
+   as on the classical side.
 
-**Resultado: verificado.** A assinatura ML-DSA-65 é criptograficamente
-válida para essa chave sobre esse certificado — não é uma suposição baseada
-em tamanho de campo, é uma verificação de assinatura real que passou.
+**Result: verified.** The ML-DSA-65 signature is cryptographically valid
+for this key over this certificate — this is not an assumption based on
+field size, it is a real signature verification that passed.
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-Um certificado X.509 híbrido carrega duas assinaturas independentes sobre o
-mesmo conteúdo, mas **na ordem ML-DSA-65-primeiro/RSA-por-último**, não o
-contrário:
+A hybrid X.509 certificate carries two independent signatures over the
+same content, but **in the order ML-DSA-65-first/RSA-last**, not the other
+way around:
 
-1. Um "pré-TBS" é montado com a chave pública RSA do titular e as extensões
-   híbridas de chave/algoritmo (mas ainda sem a assinatura alternativa), e
-   assinado uma vez com RSA só para obter bytes DER bem formados a partir dos
-   quais extrair o TBS (`extractTBSBytes`).
-2. A chave privada ML-DSA-65 da CA assina esse TBS pré-existente — esta é a
-   assinatura alternativa (`AltSignatureValue`), verificada acima.
-3. A assinatura ML-DSA-65 é inserida como uma extensão do certificado, e **só
-   então** a chave privada RSA da CA assina o certificado final —
-   `sha256WithRSAEncryption`, a assinatura que aparece no campo padrão
-   `Signature Value`, cobrindo agora o TBS completo, **incluindo** a
-   assinatura ML-DSA-65 que acabou de ser adicionada.
+1. A "pre-TBS" is assembled with the subject's RSA public key and the
+   hybrid key/algorithm extensions (but still without the alternative
+   signature), and signed once with RSA merely to obtain well-formed DER
+   bytes from which to extract the TBS (`extractTBSBytes`).
+2. The CA's ML-DSA-65 private key signs this pre-existing TBS — this is
+   the alternative signature (`AltSignatureValue`), verified above.
+3. The ML-DSA-65 signature is inserted as a certificate extension, and
+   **only then** does the CA's RSA private key sign the final certificate
+   — `sha256WithRSAEncryption`, the signature that appears in the standard
+   `Signature Value` field, now covering the complete TBS, **including**
+   the ML-DSA-65 signature that was just added.
 
-Por essa ordem, a assinatura RSA (a que qualquer verificador X.509 comum já
-sabe checar) cobre transitivamente a assinatura ML-DSA-65 também — adulterar
-o campo pós-quântico invalida a assinatura clássica igualmente, mesmo que o
-verificador nunca olhe para dentro dela. É a mesma lógica de composição
-descrita em **Bindel, Braun, Gladiator, Stebila & Wiggers (2019),
-"X.509-Compliant Hybrid Certificates for the Post-Quantum Transition"**,
-Journal of Open Source Software (JOSS) — o mecanismo de três extensões
-(`SubjectAltPublicKeyInfo`/`AltSignatureAlgorithm`/`AltSignatureValue`), a
-marcação não-crítica, e a ordem de assinatura vêm diretamente desse artigo.
+By this ordering, the RSA signature (the one any ordinary X.509 verifier
+already knows how to check) transitively covers the ML-DSA-65 signature as
+well — tampering with the post-quantum field invalidates the classical
+signature too, even though the verifier never looks inside it. This is the
+same composition logic described in **Bindel, Braun, Gladiator, Stebila &
+Wiggers (2019), "X.509-Compliant Hybrid Certificates for the Post-Quantum
+Transition"**, Journal of Open Source Software (JOSS) — the three-extension
+mechanism (`SubjectAltPublicKeyInfo`/`AltSignatureAlgorithm`/
+`AltSignatureValue`), the non-critical marking, and the signing order all
+come directly from that paper.
 
-### Referência ao código
+### Code reference
 
 `mock-service-os/certs/main.go`:
 
-- `generateHybridCert()`, linhas 338–402 — geração do certificado:
-  - Linhas 372–376: monta o pré-TBS e extrai seus bytes (`extractTBSBytes`,
-    linha 109).
-  - Linha 378: `caKeyMLDSA.Sign(nil, preTBS, nil)` — a assinatura ML-DSA-65,
-    computada **primeiro**, sobre o pré-TBS.
-  - Linhas 383–384: a assinatura ML-DSA-65 entra como extensão
-    (`altSignatureValueExtension`, linha 94), e o certificado final é
-    criado — é **esta** chamada a `x509.CreateCertificate` que produz a
-    assinatura RSA final, por último, sobre tudo.
-  - `hybridExtensions()` (linhas 72–91) constrói as duas primeiras extensões
-    (`SubjectAltPublicKeyInfo`/`AltSignatureAlgorithm`), ambas marcadas
-    `Critical: false` explicitamente; os OIDs estão declarados nas linhas
-    38–39 (`oidAltSignatureAlgorithm`/`oidAltSignatureValue`, `2.5.29.73`/
-    `74`).
-- `verifyHybridCert()` — a verificação independente rodada acima: extrai as
-  extensões, reconstrói o preTBS removendo só `AltSignatureValue`
-  (`tbs.Raw = nil` antes de re-serializar é o detalhe que garante que a
-  reconstrução reflita a remoção, não reuse os bytes originais), e chama
-  `mldsa.Verify()` contra a chave pública de `issuer_ca_pqc.crt`. Invocável
-  via `go run . -verify-hybrid <nome>` em qualquer certificado
-  `<nome>_hybrid.crt` deste projeto.
+- `generateHybridCert()`, lines 338–402 — certificate generation:
+  - Lines 372–376: assembles the pre-TBS and extracts its bytes
+    (`extractTBSBytes`, line 109).
+  - Line 378: `caKeyMLDSA.Sign(nil, preTBS, nil)` — the ML-DSA-65
+    signature, computed **first**, over the pre-TBS.
+  - Lines 383–384: the ML-DSA-65 signature is inserted as an extension
+    (`altSignatureValueExtension`, line 94), and the final certificate is
+    created — it is **this** call to `x509.CreateCertificate` that
+    produces the final RSA signature, last, over everything.
+  - `hybridExtensions()` (lines 72–91) builds the first two extensions
+    (`SubjectAltPublicKeyInfo`/`AltSignatureAlgorithm`), both explicitly
+    marked `Critical: false`; the OIDs are declared on lines 38–39
+    (`oidAltSignatureAlgorithm`/`oidAltSignatureValue`, `2.5.29.73`/`74`).
+- `verifyHybridCert()` — the independent verification run above: extracts
+  the extensions, reconstructs the preTBS by removing only
+  `AltSignatureValue` (`tbs.Raw = nil` before re-serializing is the detail
+  that guarantees the reconstruction reflects the removal, rather than
+  reusing the original bytes), and calls `mldsa.Verify()` against the
+  public key from `issuer_ca_pqc.crt`. Callable via `go run .
+  -verify-hybrid <name>` on any `<name>_hybrid.crt` certificate in this
+  project.
 
 ---
 
-## 2. JWT real, decodificado (resposta do RS, `GET .../premium`)
+## 2. Real JWT, decoded (RS response, `GET .../premium`)
 
-### O artefato real
+### The real artifact
 
-Token completo capturado ao vivo:
-[`example_jwt_premium.txt`](example_jwt_premium.txt) — uma resposta real do
-Resource Server (`GET .../insurance-person/{id}/premium`) durante uma
-execução do fluxo de seguro, perfil Híbrido.
+Complete token captured live:
+[`example_jwt_premium.txt`](example_jwt_premium.txt) — a real response from
+the Resource Server (`GET .../insurance-person/{id}/premium`) during a run
+of the insurance flow, Hybrid profile.
 
-**Header decodificado:**
+**Decoded header:**
 ```json
 {"alg": "RS256", "kid": "mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ", "typ": "JWT"}
 ```
-Nada aqui indica que este não é um JWT RS256 comum — esse é o ponto central
-do mecanismo (ver abaixo).
+Nothing here indicates that this is anything other than an ordinary RS256
+JWT — that is the central point of the mechanism (see below).
 
-**Payload decodificado (chaves de topo):** `data`, `links`, `meta`, `pqc` —
-o campo `pqc` carrega `{"alg": "ML-DSA-65", "signature": "<4.412 caracteres
+**Decoded payload (top-level keys):** `data`, `links`, `meta`, `pqc` — the
+`pqc` field carries `{"alg": "ML-DSA-65", "signature": "<4.412 characters
 base64url>"}`.
 
-**Números exatos desta captura**, todos conferidos diretamente no token:
+**Exact numbers for this capture**, all checked directly against the
+token:
 
-| Métrica | Valor |
+| Metric | Value |
 |---|---|
-| Token completo | 7.430 caracteres |
-| Segmento de assinatura RS256 | 342 caracteres → decodifica para 256 bytes (RSA-2048) |
-| `pqc.signature` (ML-DSA-65) | 4.412 caracteres base64url (59% do token) |
+| Complete token | 7.430 characters |
+| RS256 signature segment | 342 characters → decodes to 256 bytes (RSA-2048) |
+| `pqc.signature` (ML-DSA-65) | 4.412 base64url characters (59% of the token) |
 
-### A prova que realmente importa: as duas assinaturas passam de verdade, porta AND incluída
+### The proof that actually matters: both signatures genuinely pass, AND gate included
 
-Decodificar o token mostra a *estrutura* — dois campos do tamanho e formato
-certos. Não prova que qualquer um dos dois realmente verifica. A prova real
-é rodar a **mesma função de verificação que este projeto já usa em produção**
-(`mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js` — não
-uma reimplementação para esta pasta) contra o token acima e as chaves
-públicas reais do RS, e confirmar que RS256 passa, ML-DSA-65 passa, e a
-porta AND das duas aceita o token:
+Decoding the token shows the *structure* — two fields of the right size
+and format. It does not prove that either one actually verifies. The real
+proof is running the **same verification function this project already
+uses in production** (`mock-service-os/mock_as/utils/opin/
+payloadExtensionVerification.js` — not a reimplementation for this folder)
+against the token above and the RS's real public keys, and confirming that
+RS256 passes, ML-DSA-65 passes, and the AND gate over the two accepts the
+token:
 
 ```
 $ docker cp insurance-server-lambdas/src/main/resources/crypto-profiles/hybrid.json auth:/tmp/hybrid.json
@@ -236,85 +242,88 @@ VERIFICATION RESULT: {
 }
 ```
 
-Saída completa (incluindo as duas chaves públicas derivadas, mostradas em
-claro) em [`verify_jwt_output.txt`](verify_jwt_output.txt).
+Full output (including the two derived public keys, shown in the clear) in
+[`verify_jwt_output.txt`](verify_jwt_output.txt).
 
-O script (`thesis/scripts/verify_hybrid_jwt/verify_jwt.mjs`) deriva as duas
-chaves públicas necessárias diretamente do arquivo de material de chave do
-RS (`crypto-profiles/hybrid.json` — o mesmo arquivo que
-`ResponseSigningService.java` carrega para assinar), e chama
-`verifyPayloadExtension(jwt, classicPublicJwk, pqcPublicJwk)` — a função
-real, não um mock. **Por que derivar do arquivo de chaves em vez de buscar
-`/jwks` do RS ao vivo**: tentei — `GET /jwks` no RS devolveu `401
-Unauthorized` de algum filtro de segurança do Micronaut não diagnosticado
-(fora do escopo desta tarefa, apesar do endpoint estar marcado
-`@Secured(IS_ANONYMOUS)` no código). Derivar do arquivo de chaves é
-metodologicamente equivalente — é a mesma computação que o endpoint faria —
-e, no aspecto que importa aqui, mais rigoroso: confirma que a chave usada na
-verificação é exatamente a que assinou este token específico, não apenas
-"uma resposta que deveria ser a mesma".
+The script (`thesis/scripts/verify_hybrid_jwt/verify_jwt.mjs`) derives the
+two public keys it needs directly from the RS's key-material file
+(`crypto-profiles/hybrid.json` — the same file `ResponseSigningService.java`
+loads to sign), and calls `verifyPayloadExtension(jwt, classicPublicJwk,
+pqcPublicJwk)` — the real function, not a mock. **Why derive from the key
+file instead of fetching the RS's live `/jwks`**: I tried — `GET /jwks` on
+the RS returned `401 Unauthorized` from some undiagnosed Micronaut
+security filter (out of scope for this task, despite the endpoint being
+marked `@Secured(IS_ANONYMOUS)` in the code). Deriving from the key file is
+methodologically equivalent — it is the same computation the endpoint
+would perform — and, in the respect that matters here, stricter: it
+confirms that the key used in verification is exactly the one that signed
+this specific token, not merely "a response that should be the same."
 
-**Um segundo fechamento independente do ciclo, sem eu ter pedido**: computei
-separadamente o `kid` que a entrada JWKS do RS teria
-(`SHA-256(classicPk‖pqcPk)`, ver Seção 3) a partir desse mesmo arquivo de
-chaves — o resultado, `mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ`, é
-**byte-idêntico** ao `kid` que já está no header deste JWT (linha acima).
-Ou seja: não só as chaves verificam a assinatura, o identificador que um
-verificador real usaria para *descobrir* essa chave via JWKS também bate
-exatamente.
+**A second, independent closing of the loop, unprompted**: I separately
+computed the `kid` that the RS's JWKS entry would have
+(`SHA-256(classicPk‖pqcPk)`, see Section 3) from this same key file — the
+result, `mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ`, is **byte-identical**
+to the `kid` already present in this JWT's header (line above). In other
+words: not only do the keys verify the signature, the identifier a real
+verifier would use to *discover* this key via JWKS also matches exactly.
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-Ao contrário do certificado (onde as duas assinaturas vivem em extensões
-X.509 separadas), o JWT híbrido usa **extensão por payload**: a assinatura
-RS256 é a única coisa no segmento de assinatura do JWS, computada **por
-último**, sobre `base64url(header) + "." + base64url(payload)` — e o
-`payload` já contém a assinatura ML-DSA-65 como um claim comum (`pqc`). A
-assinatura ML-DSA-65, por sua vez, é computada **primeiro**, sobre a forma
-canônica RFC 8785 (JCS) dos claims **sem** o campo `pqc` ainda.
+Unlike the certificate (where the two signatures live in separate X.509
+extensions), the hybrid JWT uses **payload extension**: the RS256
+signature is the only thing in the JWS signature segment, computed
+**last**, over `base64url(header) + "." + base64url(payload)` — and the
+`payload` already contains the ML-DSA-65 signature as an ordinary claim
+(`pqc`). The ML-DSA-65 signature, in turn, is computed **first**, over the
+RFC 8785 (JCS) canonical form of the claims **without** the `pqc` field
+yet.
 
-Isso significa que um verificador RS256 comum, que nunca ouviu falar de
-ML-DSA-65, aceita o token normalmente — `pqc` é só mais um claim que ele não
-reconhece e ignora. Essa é a razão explícita da escolha desta ordem (ao
-contrário do certificado, que usa Strong Nesting nas extensões X.509): o
-orientador pediu compatibilidade retroativa total como prioridade sobre a
-garantia de segurança mais forte (SUF-CMA) que a ordem inversa daria — ver
-`thesis/results/v4/JWT_Hybrid_Architecture.md` para a análise completa da
-troca SUF-CMA/EUF-CMA e as referências (Bindel et al. 2017; Brendel, Cremers,
-Jackson & Zhao 2021). Este mesmo documento já mostra, passo a passo, a
-reconstrução dos bytes JCS-canônicos que o ML-DSA-65 realmente assinou.
+This means an ordinary RS256 verifier, one that has never heard of
+ML-DSA-65, accepts the token normally — `pqc` is just another claim it
+does not recognize and ignores. This is the explicit reason for this
+ordering (unlike the certificate, which uses Strong Nesting in its X.509
+extensions): the advisor requested full backward compatibility as a
+priority over the stronger security guarantee (SUF-CMA) that the reverse
+order would give — see `thesis/results/v4/JWT_Hybrid_Architecture.md` for
+the complete SUF-CMA/EUF-CMA trade-off analysis and references (Bindel et
+al. 2017; Brendel, Cremers, Jackson & Zhao 2021). That same document
+already shows, step by step, the reconstruction of the JCS-canonical bytes
+that ML-DSA-65 actually signed.
 
-### Referência ao código
+### Code reference
 
 `insurance-server-lambdas/src/main/java/com/raidiam/trustframework/
 mockinsurance/crypto/ResponseSigningService.java`:
 
-- `sign()`, linha 112: monta header + payload e assina — `signer.
-  preparePayload(claims)` (linha 115) é onde a injeção do campo `pqc`
-  acontece **antes** da assinatura RS256 final ser computada (linha 124).
-- `loadHybridSigner()`, linha 212, e sua implementação de `preparePayload()`,
-  linha 275: onde o claim `pqc` é construído (assinatura ML-DSA-65 sobre a
-  forma JCS-canônica dos claims, via BouncyCastle) e inserido no payload
-  antes de retornar.
-- `mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js`, função
-  `verifyPayloadExtension()` (linhas 29–86) — a verificação real rodada
-  acima: RS256 primeiro (linhas 44–55, `crypto.verify` nativo do Node), remove
-  `pqc` e reconstrói os bytes JCS-canônicos (linhas 76–77, pacote
-  `canonicalize`, RFC 8785), verifica ML-DSA-65 sobre eles (linhas 79–80,
-  `webcrypto.subtle.verify` nativo do Node 24 — suporte experimental mas
-  real, não um polyfill), e só então retorna `valid: true` — a porta AND
-  (linhas 53–55 e 81–83 cada uma podendo reprovar sozinha).
-- `thesis/scripts/verify_hybrid_jwt/verify_jwt.mjs` — o script desta pasta
-  que invoca a função acima com as chaves reais do RS.
+- `sign()`, line 112: assembles header + payload and signs —
+  `signer.preparePayload(claims)` (line 115) is where the injection of the
+  `pqc` field happens **before** the final RS256 signature is computed
+  (line 124).
+- `loadHybridSigner()`, line 212, and its `preparePayload()`
+  implementation, line 275: where the `pqc` claim is built (ML-DSA-65
+  signature over the JCS-canonical form of the claims, via BouncyCastle)
+  and inserted into the payload before returning.
+- `mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js`,
+  function `verifyPayloadExtension()` (lines 29–86) — the real
+  verification run above: RS256 first (lines 44–55, Node's native
+  `crypto.verify`), removes `pqc` and reconstructs the JCS-canonical bytes
+  (lines 76–77, the `canonicalize` package, RFC 8785), verifies ML-DSA-65
+  over them (lines 79–80, Node 24's native `webcrypto.subtle.verify` —
+  experimental but real support, not a polyfill), and only then returns
+  `valid: true` — the AND gate (lines 53–55 and 81–83, either one able to
+  fail on its own).
+- `thesis/scripts/verify_hybrid_jwt/verify_jwt.mjs` — the script in this
+  folder that invokes the function above with the RS's real keys.
 
 ---
 
-## 3. Entrada real no JWKS (Authorization Server e Resource Server)
+## 3. Real JWKS entry (Authorization Server and Resource Server)
 
-### O artefato real
+### The real artifact
 
-**Do AS** — captura completa: [`jwks_auth.json`](jwks_auth.json), resposta
-real de `GET https://auth.local/jwks` (perfil Híbrido, via `tls_kem_proxy`):
+**From the AS** — full capture: [`jwks_auth.json`](jwks_auth.json), a real
+response from `GET https://auth.local/jwks` (Hybrid profile, via
+`tls_kem_proxy`):
 
 ```json
 {
@@ -322,92 +331,94 @@ real de `GET https://auth.local/jwks` (perfil Híbrido, via `tls_kem_proxy`):
   "use": "sig",
   "alg": "MLDSA65-RSA2048-PSS-SHA256",
   "kid": "I4SZA4ycHOiCgSV7jKQEwgGmhsX3aV0KnTEF372by2A",
-  "pk_hybrid": "pu8AVLEIfYppnbU0r2M1PNhCvYpGnVXbSXj-OxRX72e...(truncado)"
+  "pk_hybrid": "pu8AVLEIfYppnbU0r2M1PNhCvYpGnVXbSXj-OxRX72e...(truncated)"
 }
 ```
 
-`pk_hybrid` é a concatenação bruta das duas chaves públicas (clássica +
-ML-DSA-65) — não duas entradas separadas, uma única chave composta, porque
-este JWKS é o do AS (assina `id_token`/JARM, que continuam em Strong
-Nesting, não em extensão por payload — ver Seção 5 de
+`pk_hybrid` is the raw concatenation of the two public keys (classical +
+ML-DSA-65) — not two separate entries, a single composite key, because
+this is the AS's JWKS (it signs the `id_token`/JARM, which remain on
+Strong Nesting, not payload extension — see Section 5 of
 `JWT_Hybrid_Architecture.md`).
 
-**Do RS** — [`jwks_rs_derived.json`](jwks_rs_derived.json): as duas entradas
-que `GET /jwks` do RS publicaria (`ResponseSigningService.getPublicJwks()`),
-derivadas do mesmo arquivo de material de chave usado na Seção 2 (busca ao
-vivo bateu em `401`, não diagnosticado — ver Seção 2 para o porquê isso não
-enfraquece a prova):
+**From the RS** — [`jwks_rs_derived.json`](jwks_rs_derived.json): the two
+entries the RS's `GET /jwks` would publish
+(`ResponseSigningService.getPublicJwks()`), derived from the same
+key-material file used in Section 2 (the live fetch hit a `401`,
+undiagnosed — see Section 2 for why this does not weaken the proof):
 
 ```json
 {
   "kty": "RSA", "use": "sig", "alg": "RS256",
   "kid": "mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ",
-  "n": "1KEH2RKcHf2dRKmVcfNB_6vV...(truncado)", "e": "AQAB"
+  "n": "1KEH2RKcHf2dRKmVcfNB_6vV...(truncated)", "e": "AQAB"
 }
 ```
 
-### A prova que realmente importa: a chave publicada é a chave que assinou, fechando o ciclo
+### The proof that actually matters: the published key is the key that signed, closing the loop
 
-Uma entrada JWKS do tamanho e formato certos não prova que ela corresponde
-à chave real usada para assinar — poderia ser qualquer chave RSA/ML-DSA-65
-válida, sem relação nenhuma com o token. O fechamento do ciclo está inteiro
-na Seção 2: **a verificação que deu `valid: true` usou exatamente estas
-duas chaves** (a derivação em `verify_jwt.mjs` e a construção deste JWKS
-partem do mesmo `hybrid.json`, com a mesma lógica de composição de
-`ResponseSigningService.java`) — se a chave publicada aqui não fosse a que
-assinou, a verificação da Seção 2 teria retornado `valid: false`, não
-`true`. Adicionalmente, o `kid` `RSA` acima
-(`mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ`) — computado
-independentemente como `SHA-256(classicPk‖pqcPk)`, nunca copiado do token —
-é byte-idêntico ao `kid` que o JWT da Seção 2 carrega no header: um
-verificador real, fazendo descoberta por `kid`+`kty` como a Seção 6 de
-`JWT_Hybrid_Architecture.md` já demonstra, encontraria exatamente esta
-entrada para este token.
+A JWKS entry of the right size and format does not prove that it
+corresponds to the actual key used to sign — it could be any valid
+RSA/ML-DSA-65 key, unrelated to the token. The closing of the loop lies
+entirely in Section 2: **the verification that returned `valid: true` used
+exactly these two keys** (the derivation in `verify_jwt.mjs` and the
+construction of this JWKS both start from the same `hybrid.json`, with the
+same composition logic as `ResponseSigningService.java`) — if the key
+published here were not the one that signed, Section 2's verification
+would have returned `valid: false`, not `true`. Additionally, the `RSA`
+`kid` above (`mZi6awCMmw-lTxi5N3k9d6i_Wa5veP2IZyMvNolkcvQ`) — computed
+independently as `SHA-256(classicPk‖pqcPk)`, never copied from the token —
+is byte-identical to the `kid` carried in the header of the Section 2 JWT:
+a real verifier, performing discovery by `kid`+`kty` as Section 6 of
+`JWT_Hybrid_Architecture.md` already demonstrates, would find exactly this
+entry for this token.
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-O AS publica uma única entrada `kty: "HYBRID"`, com um `alg` não-padrão
-(`MLDSA65-RSA2048-PSS-SHA256`) que sinaliza explicitamente a um verificador
-que essa chave não é uma RSA ou EC comum — é assim, deliberadamente, porque
-os artefatos que o AS assina com Strong Nesting (`id_token`, JARM) não
-pretendem ser aceitos por um verificador legado sem adaptação, ao contrário
-dos artefatos assinados por extensão de payload (Seção 2 acima), cujo RS
-correspondente publica **duas** entradas sob o mesmo `kid` — uma `HYBRID`
-completa e uma `RSA`/`RS256` só com a metade clássica — justamente para que
-um verificador comum encontre a entrada que reconhece. Essa diferença de
-publicação entre AS e RS é intencional, não uma inconsistência: reflete a
-diferença de objetivo entre Strong Nesting (sem pretensão de compatibilidade
-legada) e extensão por payload (compatibilidade legada é o objetivo
-central) — ver `JWT_Hybrid_Architecture.md`, Seções 5 e 6, para o
-levantamento completo de por que cada artefato usa o esquema que usa.
+The AS publishes a single `kty: "HYBRID"` entry, with a non-standard `alg`
+(`MLDSA65-RSA2048-PSS-SHA256`) that explicitly signals to a verifier that
+this key is not an ordinary RSA or EC key — this is deliberate, because
+the artifacts the AS signs with Strong Nesting (`id_token`, JARM) are not
+intended to be accepted by a legacy verifier without adaptation, unlike
+the artifacts signed via payload extension (Section 2 above), whose
+corresponding RS publishes **two** entries under the same `kid` — a
+complete `HYBRID` one and an `RSA`/`RS256` one containing only the
+classical half — precisely so that an ordinary verifier can find the
+entry it recognizes. This difference in publication between the AS and
+the RS is intentional, not an inconsistency: it reflects the difference in
+goals between Strong Nesting (with no aim of legacy compatibility) and
+payload extension (legacy compatibility is the central goal) — see
+`JWT_Hybrid_Architecture.md`, Sections 5 and 6, for the full account of
+why each artifact uses the scheme it uses.
 
-### Referência ao código
+### Code reference
 
 `mock-service-os/mock_as/utils/opin/hybridSigning.js`:
-- Linha 24: `HYBRID_ALG = 'MLDSA65-RSA2048-PSS-SHA256'` — a string de
-  algoritmo publicada.
-- Linha 36 em diante: composição de `pk_hybrid` como a concatenação das
-  chaves clássica e pós-quântica.
+- Line 24: `HYBRID_ALG = 'MLDSA65-RSA2048-PSS-SHA256'` — the published
+  algorithm string.
+- Line 36 onward: composition of `pk_hybrid` as the concatenation of the
+  classical and post-quantum keys.
 
-Para o lado RS: `insurance-server-lambdas/src/main/java/com/raidiam/
+For the RS side: `insurance-server-lambdas/src/main/java/com/raidiam/
 trustframework/mockinsurance/crypto/ResponseSigningService.java`,
-`loadHybridSigner()`'s `publicJwks()` (linhas 318–327) — monta a entrada
-`RSA`/`RS256` a partir de `classicJwk.get("n"/"e")` (as mesmas usadas para
-assinar, não uma re-derivação) e retorna `List.of(publicJwk(), plainRsaJwk)`,
-as duas entradas sob o mesmo `kid`; `hybridKid` (linhas 244–248) é onde
-`SHA-256(classicPk‖pqcPk)` é computado — a mesma fórmula que
-`jwks_rs_derived.json` reproduz e que bate com o `kid` do JWT (Seção 2). O
-relato completo da descoberta/correção que motivou publicar as duas
-entradas está em `thesis/results/v4/DECISIONS.md`, Decision 13, Seção 6.
+`loadHybridSigner()`'s `publicJwks()` (lines 318–327) — builds the
+`RSA`/`RS256` entry from `classicJwk.get("n"/"e")` (the same values used
+for signing, not a re-derivation) and returns `List.of(publicJwk(),
+plainRsaJwk)`, the two entries under the same `kid`; `hybridKid` (lines
+244–248) is where `SHA-256(classicPk‖pqcPk)` is computed — the same
+formula `jwks_rs_derived.json` reproduces and which matches the JWT's
+`kid` (Section 2). The full account of the discovery/fix that motivated
+publishing the two entries is in `thesis/results/v4/DECISIONS.md`,
+Decision 13, Section 6.
 
 ---
 
-## 4. Evidência do handshake TLS — grupo de troca de chave negociado
+## 4. TLS handshake evidence — negotiated key-exchange group
 
-### O artefato real
+### The real artifact
 
-Linha de log real do próprio gateway (`mock_mtls`), capturada ao vivo
-durante uma conexão do perfil Híbrido através do `tls_kem_proxy`:
+Real log line from the gateway itself (`mock_mtls`), captured live during
+a Hybrid-profile connection through `tls_kem_proxy`:
 [`handshake_log.json`](handshake_log.json).
 
 ```json
@@ -422,38 +433,41 @@ durante uma conexão do perfil Híbrido através do `tls_kem_proxy`:
 }
 ```
 
-`curveID: "X25519MLKEM768"` confirma diretamente, na própria negociação TLS
-ao vivo, que o grupo híbrido de troca de chave foi de fato usado — não é uma
-configuração assumida, é o valor que o handshake realmente negociou,
-registrado pelo próprio processo Go que terminou a conexão.
+`curveID: "X25519MLKEM768"` directly confirms, in the live TLS negotiation
+itself, that the hybrid key-exchange group was in fact used — this is not
+an assumed configuration, it is the value the handshake actually
+negotiated, recorded by the very Go process that terminated the
+connection.
 
-**Tamanho da chave pública do KEM (extensão `key_share` do `ClientHello`)**:
-medido e documentado anteriormente neste mesmo projeto, com a mesma
-implementação de cliente Go ainda em uso — `thesis/results/v6/Level 1/
-DECISIONS.md`, Decision 2 — via decomposição byte-a-byte do `ClientHello`
-real: **1.226 bytes** para `X25519MLKEM768` (a chave efêmera X25519 de 32
-bytes mais a chave pública ML-KEM-768 de 1.184 bytes, mais overhead de
-codificação da extensão). Não refeito aqui porque exige captura de pacote
-bruto (fora do escopo desta pasta) e o cliente/mecanismo não mudou desde
-aquela medição. O tamanho do ciphertext (enviado pelo servidor, dentro do
-`ServerHello`/`EncryptedExtensions`, já cifrado no nível de registro TLS
-antes do `Finished`) **não foi extraído** — não há instrumentação neste
-projeto que o exponha sem captura de pacote bruto no nível TLS, diferente do
-`key_share` do `ClientHello`, que aquela investigação decompôs diretamente.
+**KEM public-key size (`key_share` extension of the `ClientHello`)**:
+measured and documented earlier in this same project, with the same Go
+client implementation still in use — `thesis/results/v6/Level 1/
+DECISIONS.md`, Decision 2 — via byte-by-byte decomposition of a real
+`ClientHello`: **1.226 bytes** for `X25519MLKEM768` (the 32-byte ephemeral
+X25519 key plus the 1.184-byte ML-KEM-768 public key, plus extension
+encoding overhead). Not redone here because it requires raw packet capture
+(out of scope for this folder) and the client/mechanism has not changed
+since that measurement. The ciphertext size (sent by the server, inside
+the `ServerHello`/`EncryptedExtensions`, already encrypted at the TLS
+record level before `Finished`) **was not extracted** — there is no
+instrumentation in this project that exposes it without raw TLS-level
+packet capture, unlike the `ClientHello`'s `key_share`, which that earlier
+investigation decomposed directly.
 
-### A prova que realmente importa: a chave de sessão foi de fato derivada do KEM, não é decorativa
+### The proof that actually matters: the session key was genuinely derived from the KEM, not decorative
 
-`curveID: "X25519MLKEM768"` no log prova que o *nome* do grupo negociado é
-esse. Não prova, sozinho, que o segredo de sessão realmente resultante
-depende de uma troca de chave nova a cada conexão — em tese, um log poderia
-dizer isso mesmo se o segredo fosse fixo por algum bug. A prova real: abrir
-duas conexões TLS independentes, ambas forçadas a `X25519MLKEM768`, e
-exportar material de chave de cada uma via **RFC 5705**
-(`tls.ConnectionState.ExportKeyingMaterial` — o mesmo mecanismo padrão que
-TLS usa para channel binding). Se as duas exportações vierem diferentes,
-o segredo de sessão foi genuinamente re-derivado do zero em cada handshake
-— exatamente o que uma troca de chave efêmera (KEM ou ECDHE) garante; um
-segredo fixo ou cacheado exportaria o mesmo valor sempre.
+`curveID: "X25519MLKEM768"` in the log proves that the *name* of the
+negotiated group is this one. It does not, by itself, prove that the
+resulting session secret genuinely depends on a fresh key exchange on
+every connection — in theory, a log could say this even if the secret
+were fixed due to some bug. The real proof: open two independent TLS
+connections, both forced to `X25519MLKEM768`, and export key material from
+each via **RFC 5705** (`tls.ConnectionState.ExportKeyingMaterial` — the
+same standard mechanism TLS uses for channel binding). If the two exports
+come out different, the session secret was genuinely re-derived from
+scratch on each handshake — exactly what an ephemeral key exchange (KEM or
+ECDHE) guarantees; a fixed or cached secret would export the same value
+every time.
 
 ```
 $ docker run --rm --network insurance-server-lambdas_default \
@@ -468,69 +482,72 @@ e DIFERENTE entre as duas -- confirma que o segredo de sessao foi de fato deriva
 a cada conexao (o mecanismo KEM/ECDHE efemero real), nao um valor fixo ou decorativo.
 ```
 
-Saída completa em
-[`verify_kem_export_output.txt`](verify_kem_export_output.txt). As duas
-exportações de 32 bytes acima são visivelmente distintas byte a byte, e
-ambas as conexões, checado no código, negociaram o mesmo grupo híbrido —
-isso é o mais perto que dá de "abrir a caixa" do segredo de sessão sem
-comprometer a segurança da própria conexão (o segredo mestre em si nunca é
-exposto por design do TLS 1.3; o exportador é o mecanismo padrão que existe
-justamente para permitir este tipo de verificação externa sem violar isso).
+Full output in
+[`verify_kem_export_output.txt`](verify_kem_export_output.txt). The two
+32-byte exports above are visibly distinct byte for byte, and both
+connections, checked in the code, negotiated the same hybrid group — this
+is as close as it gets to "opening the box" on the session secret without
+compromising the security of the connection itself (the master secret
+itself is never exposed, by TLS 1.3 design; the exporter is the standard
+mechanism that exists precisely to allow this kind of external
+verification without violating that).
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-O Clássico usa curvas ECDHE puras (P-521/P-384/P-256); o Híbrido combina uma
-troca de chave clássica (X25519) com uma pós-quântica (ML-KEM-768) no mesmo
-grupo `X25519MLKEM768` — a mesma escolha que Chrome e Cloudflare já usam por
-padrão em produção (ver `thesis/results/v7/DECISIONS.md`, Decision 1, e
-`thesis/results/v6/Level 1/ARCHITECTURE.md`, Fase 1, para o raciocínio
-completo de por que esse grupo específico foi escolhido para o Híbrido, e
-`MLKEM1024` — sem componente clássico — para o PQC). Desde a unificação da
-v7 (Decision 1), o mesmo cliente Go (`tls_kem_proxy`) negocia esse grupo
-para os três perfis, variando só a curva solicitada — o Clássico pede
-curvas ECDHE puras pelo mesmo processo.
+Classic uses pure ECDHE curves (P-521/P-384/P-256); Hybrid combines a
+classical key exchange (X25519) with a post-quantum one (ML-KEM-768) in
+the same `X25519MLKEM768` group — the same choice Chrome and Cloudflare
+already use by default in production (see `thesis/results/v7/
+DECISIONS.md`, Decision 1, and `thesis/results/v6/Level 1/ARCHITECTURE.md`,
+Phase 1, for the complete reasoning behind why this specific group was
+chosen for Hybrid, and `MLKEM1024` — with no classical component — for
+PQC). Since the v7 unification (Decision 1), the same Go client
+(`tls_kem_proxy`) negotiates this group for all three profiles, varying
+only the requested curve — Classic requests pure ECDHE curves through the
+same process.
 
-### Referência ao código
+### Code reference
 
-- `mock-service-os/mock_mtls/main.go`, função `init()`, linhas 136–138: para
-  `CRYPTO_PROFILE=hybrid`, `serverCurvePreferences = []tls.CurveID{tls.
-  X25519MLKEM768}` — essa é a política padrão do gateway para esse perfil
-  (sem downgrade silencioso para clássico). **Ressalva verificada, não
-  suposição**: existe uma exceção única, deliberada e pré-existente a este
-  trabalho — `GetConfigForClient` (mesmo arquivo) reserva curvas clássicas
-  exclusivamente para conexões cujo SNI seja `"matls-api.local"` (a chamada
-  interna `auth`→RS, `InsurerAdapter.getConsent()`, cujo cliente Node.js não
-  negocia X25519MLKEM768 — estende o carve-out de certificado da Decision 5,
-  `thesis/results/v5/size/DECISIONS.md`, à troca de chave). Confirmado ao
-  vivo: instrumentando esse ponto com log e cruzando com os handshakes
-  `curveID=CurveP256` capturados no mesmo período, a correspondência foi
-  1:1 (35 de cada, mesmo `remoteAddr`) — nenhum handshake clássico sem essa
-  explicação. Não afeta o tráfego cliente↔gateway que este artefato mede
-  (SNI diferente, via `tls_kem_proxy`).
-- `thesis/scripts/tls_kem_proxy/main.go`, função `runRelay()`, caso
-  `"x25519mlkem768"` do `switch` de curvas — o cliente que efetivamente
-  negocia esse grupo do lado do `tls_kem_proxy`.
-- O campo `curveID` do log acima vem de `handshakeInfo.curveID`,
-  preenchido a partir de `cs.CurveID.String()` (`ConnectionState` do próprio
-  handshake TLS) em `mock_mtls/main.go` — não é uma suposição de
-  configuração, é lido de volta do handshake que de fato aconteceu.
-- `thesis/scripts/verify_kem_export/main.go` — a prova de exportação de
-  chave rodada acima (generalizada para os três perfis via o argumento
-  `-group`/primeiro argumento posicional): curva forçada em
-  `CurvePreferences` (linha 62), `state.ExportKeyingMaterial(
-  "EXPORTER-artifact-proof", nil, 32)` (linha 72, a API pública do Go que
-  implementa RFC 5705) em cada uma das duas conexões, comparação byte a
-  byte das duas saídas (linha 95).
+- `mock-service-os/mock_mtls/main.go`, function `init()`, lines 136–138:
+  for `CRYPTO_PROFILE=hybrid`, `serverCurvePreferences = []tls.CurveID{tls.
+  X25519MLKEM768}` — this is the gateway's default policy for this profile
+  (no silent downgrade to classical). **Verified caveat, not an
+  assumption**: there is a single, deliberate exception that predates this
+  work — `GetConfigForClient` (same file) reserves classical curves
+  exclusively for connections whose SNI is `"matls-api.local"` (the
+  internal `auth`→RS call, `InsurerAdapter.getConsent()`, whose Node.js
+  client does not negotiate X25519MLKEM768 — extending the certificate
+  carve-out from Decision 5, `thesis/results/v5/size/DECISIONS.md`, to the
+  key exchange). Confirmed live: instrumenting this point with logging and
+  cross-checking against the `curveID=CurveP256` handshakes captured in
+  the same period, the correspondence was 1:1 (35 of each, same
+  `remoteAddr`) — no classical handshake without this explanation. Does
+  not affect the client↔gateway traffic this artifact measures (different
+  SNI, via `tls_kem_proxy`).
+- `thesis/scripts/tls_kem_proxy/main.go`, function `runRelay()`, the
+  `"x25519mlkem768"` case of the curve `switch` — the client that actually
+  negotiates this group on the `tls_kem_proxy` side.
+- The `curveID` field in the log above comes from `handshakeInfo.curveID`,
+  populated from `cs.CurveID.String()` (the handshake's own
+  `ConnectionState`) in `mock_mtls/main.go` — this is not a configuration
+  assumption, it is read back from the handshake that actually took
+  place.
+- `thesis/scripts/verify_kem_export/main.go` — the key-export proof run
+  above (generalized to all three profiles via the `-group`/first
+  positional argument): curve forced in `CurvePreferences` (line 62),
+  `state.ExportKeyingMaterial("EXPORTER-artifact-proof", nil, 32)` (line
+  72, Go's public API implementing RFC 5705) on each of the two
+  connections, byte-by-byte comparison of the two outputs (line 95).
 
 ---
 
-## 5. `id_token` real, decodificado — Strong Nesting de verdade (sigma1||sigma2), criptografia da mensagem ainda clássica
+## 5. Real `id_token`, decoded — genuine Strong Nesting (sigma1||sigma2), message encryption still classical
 
-### O artefato real
+### The real artifact
 
-Capturado ao vivo do campo `id_token` de uma resposta real `POST /token`
-(fluxo completo, perfil Híbrido): [`id_token_raw.txt`](id_token_raw.txt) —
-um JWE de 5 segmentos (diferente dos JWS de 3 segmentos das Seções 1–4):
+Captured live from the `id_token` field of a real `POST /token` response
+(complete flow, Hybrid profile): [`id_token_raw.txt`](id_token_raw.txt) —
+a 5-segment JWE (unlike the 3-segment JWS's of Sections 1–4):
 
 ```
 $ node decrypt_and_verify_id_token.mjs hybrid id_token_raw.txt   # (dentro do container `auth`)
@@ -552,93 +569,95 @@ Inner JWS signature length (bytes): 3565
 VERIFICATION RESULT: {"valid": true, "reason": "both sigma1 and sigma2 verified"}
 ```
 
-Saída completa em
-[`verify_id_token_output.txt`](verify_id_token_output.txt). O `kid` do JWE
-(`92297d36-...`) é **byte-idêntico ao do id_token do Clássico** (Seção 5 do
-README daquele perfil) — o Híbrido reaproveita a mesma chave de cifragem do
-cliente que o Clássico, consistente com o padrão já confirmado nesta pasta
-de que o Híbrido reaproveita a identidade RSA clássica em toda parte, não
-apenas no certificado (Seção 1).
+Full output in
+[`verify_id_token_output.txt`](verify_id_token_output.txt). The JWE's
+`kid` (`92297d36-...`) is **byte-identical to the Classic id_token's**
+(Section 5 of that profile's README) — Hybrid reuses the same client
+encryption key as Classic, consistent with the pattern already confirmed
+in this folder that Hybrid reuses the classical RSA identity throughout,
+not only in the certificate (Section 1).
 
-### A prova que realmente importa: as DUAS assinaturas internas verificam, com o AND gate real — a cifra externa continua clássica
+### The proof that actually matters: BOTH inner signatures verify, with the real AND gate — the outer cipher remains classical
 
-**A camada de dentro é genuinamente Strong Nesting, não uma assinatura
-simples do tamanho certo**: 3.565 bytes de assinatura decompostos em sigma1
-(256 bytes, PS256/RSA) + sigma2 (3.309 bytes, ML-DSA-65) — a mesma
-verificação usada em toda a tese (`verifyHybrid()`,
-`mock_as/utils/opin/hybridVerification.js`, a função de produção real, não
-uma reimplementação para este artefato): sigma1 verificado contra a chave
-RSA clássica sobre `header.payload`; sigma2 verificado contra a chave
-ML-DSA-65 sobre `header.payload || sigma1`; **AND gate — os dois passaram**
-(`"both sigma1 and sigma2 verified"`). O header externo continua dizendo
-`alg: "PS256"`, por design (Decision 10, `thesis/results/v4/DECISIONS.md`)
-— só o tamanho decodificado da assinatura denuncia que é Strong Nesting, o
-mesmo padrão de "header comum, assinatura maior" já visto no
-`client_assertion`.
+**The inner layer is genuinely Strong Nesting, not a plain signature of
+the right size**: 3.565 bytes of signature decompose into sigma1 (256
+bytes, PS256/RSA) + sigma2 (3.309 bytes, ML-DSA-65) — the same
+verification used throughout this thesis (`verifyHybrid()`,
+`mock_as/utils/opin/hybridVerification.js`, the real production function,
+not a reimplementation for this artifact): sigma1 verified against the
+classical RSA key over `header.payload`; sigma2 verified against the
+ML-DSA-65 key over `header.payload || sigma1`; **AND gate — both passed**
+(`"both sigma1 and sigma2 verified"`). The outer header still says
+`alg: "PS256"`, by design (Decision 10, `thesis/results/v4/DECISIONS.md`)
+— only the decoded signature's size gives away that this is Strong
+Nesting, the same "ordinary header, larger signature" pattern already
+seen in the `client_assertion`.
 
-**A camada de fora (a cifragem do JWE) continua `RSA-OAEP`, igual em todos
-os três perfis** — a mesma limitação genuína documentada nas Seções 5 de
-`artifacts/classico/` e `artifacts/pqc/`: não existe hoje padrão JOSE/COSE
-para cifragem pós-quântica. O Híbrido não muda isso — a metade
-pós-quântica deste perfil vive inteiramente na assinatura, nunca na
-cifragem.
+**The outer layer (the JWE encryption) remains `RSA-OAEP`, the same
+across all three profiles** — the same genuine limitation documented in
+Sections 5 of `artifacts/classic/` and `artifacts/pqc/`: no JOSE/COSE
+standard for post-quantum encryption exists today. Hybrid does not change
+this — this profile's post-quantum half lives entirely in the signature,
+never in the encryption.
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-Sob `CRYPTO_PROFILE=hybrid`, o `oidc-provider` é mantido completamente
-alheio ao modo híbrido — configurado como se fosse Clássico puro
+Under `CRYPTO_PROFILE=hybrid`, the `oidc-provider` is kept entirely
+unaware of hybrid mode — configured as if it were pure Classic
 (`internalSigningAlgs = ['PS256']`, `internalSigningKey =
-cryptoProfile.classicSigningKey`) — porque `"MLDSA65-RSA2048-PSS-SHA256"`
-não é um algoritmo JOSE real que `jose`/`oidc-provider` reconheçam. A
-diferença crucial em relação ao Clássico está em UMA peça: a classe
-`HybridIdTokenSigningKey` (`idTokenExternalSigningKey.js`), registrada como
-a chave de assinatura via o mecanismo oficial `ExternalSigningKey` do
-`oidc-provider`. Quando o `oidc-provider` monta e assina o `id_token`
-internamente, ele entrega os bytes exatos de `header.payload` a essa
-classe, que devolve `signStrongNesting(bytes)` — sigma1||sigma2 reais — no
-lugar do que seria uma assinatura PS256 comum. O `oidc-provider` nunca sabe
-que recebeu algo diferente de uma assinatura PS256 válida; ele só repassa o
-que a classe devolveu. Depois disso, a cifragem RSA-OAEP+AES-256-GCM
-acontece exatamente como no Clássico — cega ao que está cifrando.
+cryptoProfile.classicSigningKey`) — because `"MLDSA65-RSA2048-PSS-SHA256"`
+is not a real JOSE algorithm that `jose`/`oidc-provider` recognize. The
+crucial difference from Classic lies in ONE piece: the
+`HybridIdTokenSigningKey` class (`idTokenExternalSigningKey.js`),
+registered as the signing key via the `oidc-provider`'s official
+`ExternalSigningKey` mechanism. When the `oidc-provider` assembles and
+internally signs the `id_token`, it hands the exact `header.payload` bytes
+to this class, which returns `signStrongNesting(bytes)` — a genuine
+sigma1||sigma2 — in place of what would be an ordinary PS256 signature.
+The `oidc-provider` never knows it received anything other than a valid
+PS256 signature; it simply passes along whatever the class returned.
+After that, RSA-OAEP+AES-256-GCM encryption happens exactly as in Classic
+— blind to what it is encrypting.
 
-### Referência ao código
+### Code reference
 
-- `mock-service-os/mock_as/utils/opin/idTokenExternalSigningKey.js`: classe
-  `HybridIdTokenSigningKey` completa — `sign()` (linha 63) chama
-  `signStrongNesting()`; o comentário no topo do arquivo (linhas 1–41)
-  documenta em detalhe por que esse desvio via `ExternalSigningKey` é
-  necessário e por que o header tem que continuar dizendo `"PS256"`.
-- `mock-service-os/mock_as/utils/opin/configuration.js`, linha 11 (import)
-  e a troca de `internalSigningKey`/`internalSigningAlgs` para o modo
-  híbrido (linhas 42–44).
-- `mock-service-os/mock_as/utils/opin/hybridVerification.js`, função
-  `verifyHybrid()` (linha 33) — a verificação real, de produção, rodada
-  acima sem nenhuma modificação.
-- `mock-service-os/mock_as/utils/opin/configuration.js`, linha 330:
-  `idTokenEncryptionAlgValues: ['RSA-OAEP']` — mesma cifragem clássica de
-  sempre, inclusive aqui.
-- `thesis/scripts/verify_hybrid_jwt/decrypt_and_verify_id_token.mjs` — a
-  verificação rodada acima.
+- `mock-service-os/mock_as/utils/opin/idTokenExternalSigningKey.js`: the
+  complete `HybridIdTokenSigningKey` class — `sign()` (line 63) calls
+  `signStrongNesting()`; the comment at the top of the file (lines 1–41)
+  documents in detail why this detour through `ExternalSigningKey` is
+  necessary and why the header must keep saying `"PS256"`.
+- `mock-service-os/mock_as/utils/opin/configuration.js`, line 11 (import)
+  and the swap of `internalSigningKey`/`internalSigningAlgs` for hybrid
+  mode (lines 42–44).
+- `mock-service-os/mock_as/utils/opin/hybridVerification.js`, function
+  `verifyHybrid()` (line 33) — the real, production verification run
+  above with no modification whatsoever.
+- `mock-service-os/mock_as/utils/opin/configuration.js`, line 330:
+  `idTokenEncryptionAlgValues: ['RSA-OAEP']` — the same classical
+  encryption as always, here too.
+- `thesis/scripts/verify_hybrid_jwt/decrypt_and_verify_id_token.mjs` — the
+  verification run above.
 
 ---
 
-## 6. `client_assertion` real — payload-extension (RS256 + `pqc`), o AND gate de produção
+## 6. Real `client_assertion` — payload-extension (RS256 + `pqc`), the production AND gate
 
-### Por que este artefato existe
+### Why this artifact exists
 
-O passo 8 do SAD ("Token de acesso") não tem assinatura nenhuma — o
-`access_token` capturado ao vivo é uma string opaca. A "assinatura
-híbrida" que uma versão anterior de `thesis/docs/
-Cruzamento_SAD_vs_Experimentos.md` atribuía a esse passo é, na prática, o
-`client_assertion` que o cliente assina para autenticar `POST /token` —
-exatamente o artefato capturado abaixo, com o mesmo esquema payload-
-extension (Decision 13) já visto na Seção 2 deste README, aqui na direção
-oposta (cliente → AS, não AS/RS → cliente).
+Step 8 of the SAD ("Access token") carries no signature at all — the
+`access_token` captured live is an opaque string. The "hybrid signature"
+that an earlier version of `thesis/docs/
+Cruzamento_SAD_vs_Experimentos.md` attributed to this step is, in
+practice, the `client_assertion` the client signs to authenticate `POST
+/token` — exactly the artifact captured below, using the same
+payload-extension scheme (Decision 13) already seen in Section 2 of this
+README, here in the opposite direction (client → AS, rather than AS/RS →
+client).
 
-### O artefato real
+### The real artifact
 
-Capturado ao vivo do corpo de uma requisição real `POST /token` (perfil
-Híbrido): [`client_assertion_raw.txt`](client_assertion_raw.txt).
+Captured live from the body of a real `POST /token` request (Hybrid
+profile): [`client_assertion_raw.txt`](client_assertion_raw.txt).
 
 ```
 $ node verify_client_assertion.mjs hybrid client_assertion_raw.txt   # (dentro do container `auth`)
@@ -657,45 +676,46 @@ Signature length (bytes): 512
 VERIFICATION RESULT: {"valid": true, "reason": "both RS256 and ML-DSA-65 verified", "hybridShaped": true}
 ```
 
-Saída completa (com o `pqc.signature` integral) em
+Full output (with the complete `pqc.signature`) in
 [`verify_client_assertion_output.txt`](verify_client_assertion_output.txt).
-Header `alg: "RS256"` — não `PS256` como o Clássico — por design (Decision
-13: o cliente assina sob um header comum desde o início, para que um
-verificador RS256 legado aceite este `client_assertion` sem nenhuma
-adaptação, exatamente como o JWT da Seção 2 do lado do RS). Assinatura
-externa: 512 bytes (RSA-4096 do cliente, mesma chave do Clássico); a
-assinatura ML-DSA-65 real vive dentro do claim `pqc`, não no segmento de
-assinatura do JWS.
+Header `alg: "RS256"` — not `PS256` as in Classic — by design (Decision
+13: the client signs under an ordinary header from the start, so that a
+legacy RS256 verifier accepts this `client_assertion` with no adaptation
+whatsoever, exactly like the Section 2 JWT on the RS side). External
+signature: 512 bytes (the client's RSA-4096, the same key as Classic); the
+real ML-DSA-65 signature lives inside the `pqc` claim, not in the JWS
+signature segment.
 
-### A prova que realmente importa: o AND gate de produção passou, nas duas direções
+### The proof that actually matters: the production AND gate passed, in both directions
 
-Esta é a MESMA função de produção (`verifyPayloadExtension()`,
-`payloadExtensionVerification.js`) já usada na Seção 2 — aqui invocada
-pelo lado que `clientHybridAuth.js` realmente chama em produção (a AS
-verificando um `client_assertion` de entrada), com as chaves públicas do
-CLIENTE (`client_one_hybrid_pub.jwks` + `client_one_pqc_pub.jwks`), não as
-do RS. `hybridShaped: true` confirma que o verificador detectou
-corretamente o formato estendido; `"both RS256 and ML-DSA-65 verified"`
-confirma o AND gate completo, não apenas a metade RS256 que um verificador
-legado enxergaria.
+This is the SAME production function (`verifyPayloadExtension()`,
+`payloadExtensionVerification.js`) already used in Section 2 — here
+invoked from the side `clientHybridAuth.js` actually calls in production
+(the AS verifying an incoming `client_assertion`), with the CLIENT's
+public keys (`client_one_hybrid_pub.jwks` + `client_one_pqc_pub.jwks`),
+not the RS's. `hybridShaped: true` confirms the verifier correctly
+detected the extended format; `"both RS256 and ML-DSA-65 verified"`
+confirms the complete AND gate, not just the RS256 half a legacy verifier
+would see.
 
-### Explicação do mecanismo
+### Explanation of the mechanism
 
-`opin_flow.py`'s `_sign_jwt_hybrid()` implementa o lado cliente do mesmo
-esquema Decision 13 já documentado na Seção 2: ML-DSA-65 assina primeiro
-(RFC 8785/JCS, claims sem `pqc`), o resultado vira o claim `pqc`, e RS256
-assina por último sobre `header.payload` já com `pqc` embutido — um JWS
-RS256 inteiramente comum do ponto de vista de qualquer verificador que não
-conheça o claim extra.
+`opin_flow.py`'s `_sign_jwt_hybrid()` implements the client side of the
+same Decision 13 scheme already documented in Section 2: ML-DSA-65 signs
+first (RFC 8785/JCS, claims without `pqc`), the result becomes the `pqc`
+claim, and RS256 signs last over `header.payload` with `pqc` already
+embedded — an entirely ordinary RS256 JWS from the point of view of any
+verifier unaware of the extra claim.
 
-### Referência ao código
+### Code reference
 
-- `thesis/scripts/opin_flow.py`, `_sign_jwt_hybrid()` (linha 590) — o lado
-  cliente do esquema.
-- `mock-service-os/mock_as/utils/opin/clientHybridAuth.js` — o middleware
-  de produção que chama `verifyPayloadExtension()` sobre todo
-  `client_assertion`/objeto de requisição PAR de entrada.
+- `thesis/scripts/opin_flow.py`, `_sign_jwt_hybrid()` (line 590) — the
+  client side of the scheme.
+- `mock-service-os/mock_as/utils/opin/clientHybridAuth.js` — the
+  production middleware that calls `verifyPayloadExtension()` on every
+  incoming `client_assertion`/PAR request object.
 - `mock-service-os/certs/client_one_hybrid_pub.jwks` +
-  `client_one_pqc_pub.jwks` — as chaves públicas usadas na verificação.
-- `thesis/scripts/verify_hybrid_jwt/verify_client_assertion.mjs` — a
-  verificação rodada acima.
+  `client_one_pqc_pub.jwks` — the public keys used in the verification.
+- `thesis/scripts/verify_hybrid_jwt/verify_client_assertion.mjs` — the
+  verification run above.
+</content>

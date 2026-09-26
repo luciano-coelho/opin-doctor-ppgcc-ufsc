@@ -48,7 +48,7 @@ def run_once(profile: str) -> dict:
             "-v", f"{PROBE_SRC_DIR}:/src",
             "-v", f"{of.CERTS_DIR}:/certs:ro",
             "-w", "/src",
-            "golang:1.27-rc-alpine",
+            of.TLS_KEM_PROXY_GO_IMAGE,  # pinned by digest, not the floating tag
             "go", "run", ".",
             "-target", "mtls:443",
             "-sni", "matls-api.local",

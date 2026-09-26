@@ -1,10 +1,11 @@
 """
 One-shot capture script -- NOT part of the official measurement pipeline.
 Captures a real client_assertion (private_key_jwt) sent by opin_flow.py to
-POST /token, for thesis/results/v7/artifacts/{classico,pqc,hybrid}/README.md's
+POST /token, for thesis/results/v7/artifacts/{classic,pqc,hybrid}/README.md's
 client_assertion section -- proving the real client-side signature that
-backs the "token de acesso" step of the SAD (step 8, corrected: the access
-token itself is opaque; the real hybrid/PQC signature lives here).
+backs the "access token" step of the SAD (Security Architecture Document,
+step 8, corrected: the access token itself is opaque; the real hybrid/PQC
+signature lives here).
 
 Usage: python thesis/scripts/_capture_client_assertion.py classic|pqc|hybrid
 """
@@ -13,7 +14,7 @@ import sys
 from urllib.parse import parse_qs
 
 profile = sys.argv[1]
-profile_dir = {"classic": "classico", "pqc": "pqc", "hybrid": "hybrid"}[profile]
+profile_dir = {"classic": "classic", "pqc": "pqc", "hybrid": "hybrid"}[profile]
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 os.environ["CRYPTO_PROFILE"] = profile
@@ -37,11 +38,13 @@ def _capturing_do_call(session, method, url, **kwargs):
 of.do_call = _capturing_do_call
 
 proc = of.start_tls_kem_proxy(profile)
+pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
 try:
     of.set_latency(0)
     calls = of.run_insurance_flow(profile)
     print(f"flow completed, {len(calls)} calls")
 finally:
+    of.stop_pqc_signer_service(pqc_signer_started)
     of.stop_tls_kem_proxy(proc)
 
 assertion = None

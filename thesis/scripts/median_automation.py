@@ -232,6 +232,10 @@ def main():
     # (thesis/results/v7/DECISIONS.md, Decision 1), classic also goes
     # through the proxy -- see start_tls_kem_proxy().
     tls_kem_proxy_proc = of.start_tls_kem_proxy(crypto_profile)
+    # Same "start once for the whole scenario" lifecycle as
+    # tls_kem_proxy_proc above, for the persistent ML-DSA-65 signer -- see
+    # of.start_pqc_signer_service().
+    pqc_signer_started = of.start_pqc_signer_service(crypto_profile)
     try:
         runs = []
         retry_log = []
@@ -267,6 +271,7 @@ def main():
                 f"client_cert_der_bytes={metrics['client_cert_der_bytes']}"
             )
     finally:
+        of.stop_pqc_signer_service(pqc_signer_started)
         of.stop_tls_kem_proxy(tls_kem_proxy_proc)
 
     summary = summarize(runs)

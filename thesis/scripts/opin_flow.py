@@ -345,33 +345,61 @@ def get_local_leg_cert_paths(crypto_profile: str):
     real mTLS connection to the gateway, loaded natively by Go's crypto/tls
     + crypto/mldsa when the proxy process starts.
 
-    For pqc/hybrid, this returns None: tls_kem_proxy's local-facing
-    listener (thesis/scripts/tls_kem_proxy/main.go,
-    generateLocalListenerCert()) never sets ClientAuth, so it never asks
-    for or checks a client certificate on this leg at all. Whatever Python
-    presented here was always cosmetic and discarded -- the real mTLS
-    identity is established entirely by the proxy's own far-side
-    connection. Presenting one anyway happened to keep working for hybrid
-    (client_one_hybrid.key is an ordinary loadable RSA key) but was never
-    *necessary*; for pqc it stopped working outright on this host (Decision
-    5: stock OpenSSL 3.0 cannot parse client_one_pqc.key's native ML-DSA-65
-    PKCS8 structure at all -- confirmed independent of any network
-    activity -- which is not something this project's own code or cert
-    files caused). Dropping the pointless local presentation removes a
-    dependency on a check that never had any real effect on which identity
-    reaches the gateway, restoring reproducibility without changing
-    anything that was ever actually measured or verified.
+    tls_kem_proxy's local-facing listener (thesis/scripts/tls_kem_proxy/
+    main.go, generateLocalListenerCert()) never sets ClientAuth, so it
+    never asks for or checks a client certificate on this leg at all for
+    ANY profile -- whatever Python presents here is always cosmetic and
+    discarded; the real mTLS identity is established entirely by the
+    proxy's own far-side connection.
 
-    classic is left untouched (still presents client_one.crt on this leg,
-    via get_client_cert_paths()) -- it was never broken, and this fix is
-    scoped to the two profiles that were.
+    v7 Decision 5 made this return None for pqc/hybrid, since presenting
+    the real client_one_pqc.key on this leg fails outright on this host
+    (stock OpenSSL 3.0 cannot parse its native ML-DSA-65 PKCS8 structure --
+    confirmed independent of any network activity). That fix was correct
+    for what it targeted, but had an unaudited side effect: requests/urllib3
+    key connection pools by (host, port, cert_file,
+    key_file) among other fields. The directory lookup call (do_call() call
+    site inside run_insurance_flow/run_person_flow, hardcoded
+    `cert=None` unconditionally for every profile) therefore shares its
+    pool key with pqc/hybrid's main-flow calls once THOSE also became
+    `cert=None` -- collapsing what should be 2 distinct connections per
+    sub-flow into 1, and dropping this project's own documented N_mTLS
+    from 6 to 4 for pqc/hybrid only. classic never regressed because its
+    main-flow calls keep presenting a real, distinct cert, which never
+    collides with the directory call's None.
+
+    Fix: give pqc/hybrid a valid-but-unrelated placeholder cert here
+    instead of None -- classic's own ordinary RSA client_one.crt/.key,
+    which loads fine under stock OpenSSL and is never actually validated
+    by the proxy's local listener for pqc/hybrid either way (see above),
+    so this remains exactly as cosmetic as the None it replaces. It only
+    needs to differ from the directory call's None to restore pool
+    separation. Verified live for both pqc and hybrid: restores exactly 6
+    "upstream handshake complete" lines per full flow (matching classic and
+    matching v7, which never exhibited this bug because
+    get_local_leg_cert_paths did not exist yet when v7's data was
+    collected -- Decision 5/get_local_leg_cert_paths was only introduced
+    2026-09-14, after v7's raw run files were already generated on
+    2026-09-12).
     """
     if crypto_profile in ("pqc", "hybrid"):
-        return None
+        return get_client_cert_paths("classic")
     return get_client_cert_paths(crypto_profile)
 
 
 PQC_SIGNER_IMAGE = "mockopin-pqc-signer"
+PQC_SIGNER_SERVICE_CONTAINER_NAME = "pqc_signer_service_run"
+PQC_SIGNER_SERVICE_PORT = 8901
+
+# Set by start_pqc_signer_service(), cleared by stop_pqc_signer_service();
+# None means "no persistent service in this process" -- _run_pqc_signer()
+# falls back to the one-shot docker-run-per-call path in that case. Module
+# global, not a return value threaded through every caller, because
+# sign_jwt()/_run_pqc_signer() are called many frames deep inside
+# run_insurance_flow()/run_person_flow() with no natural place to pass a
+# service handle through -- same shape as _wait_for_tls_kem_proxy_ready()
+# reading module state rather than everything being parameterized.
+_PQC_SIGNER_SERVICE_URL: str | None = None
 
 
 def load_client_signing_key(crypto_profile: str):
@@ -421,8 +449,44 @@ def load_client_signing_key(crypto_profile: str):
 
 def _run_pqc_signer(payload: str) -> str:
     """
+    If start_pqc_signer_service() is up for this process, every call goes
+    through the persistent HTTP service instead of spawning a container --
+    see that function's docstring for why (measured ~0.79s/call spawn cost,
+    ~94% of the PQC/Híbrido latency delta over Clássico). Falls
+    back to the original one-shot `docker run --rm -i` path, unchanged,
+    when no service was started in this process (hybrid_verify.py, the
+    artifacts/ capture scripts run standalone, or anyone invoking this
+    module without going through the hot statistical loop) -- same
+    algorithm, same container image, either way; only the invocation
+    mechanism differs.
+    """
+    if _PQC_SIGNER_SERVICE_URL is not None:
+        return _run_pqc_signer_service(payload)
+    return _run_pqc_signer_oneshot(payload)
+
+
+def _run_pqc_signer_service(payload: str) -> str:
+    """
+    POSTs to the persistent server (server.mjs) started by
+    start_pqc_signer_service(). No retry: a healthy, already-proven-up
+    Node process answering a plain HTTP POST is not expected to time out
+    the way a fresh `docker run` competing for scheduling under sustained
+    ephemeral-container load was (see _run_pqc_signer_oneshot's docstring)
+    -- a failure here is treated as a real one, surfaced immediately
+    rather than silently retried.
+    """
+    resp = requests.post(_PQC_SIGNER_SERVICE_URL, data=payload, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"pqc-signer service returned {resp.status_code}: {resp.text}")
+    return resp.text.strip()
+
+
+def _run_pqc_signer_oneshot(payload: str) -> str:
+    """
     Spawns a fresh `docker run --rm -i` container per call (no long-lived
-    signer process) -- see PQC_SIGNER_IMAGE's own README for why. Observed
+    signer process) -- see PQC_SIGNER_IMAGE's own README for why this
+    still exists (kept as the image's default CMD; used by
+    everything that doesn't opt into start_pqc_signer_service()). Observed
     live during the v5 median-automation batch (PQC, 140ms, run 9/10): a
     single invocation exceeded the original 30s timeout even though the
     Docker daemon itself was otherwise healthy (a fresh manual `docker run`
@@ -452,7 +516,23 @@ def _run_pqc_signer(payload: str) -> str:
 
 TLS_KEM_PROXY_SRC_DIR = THESIS_DIR / "scripts" / "tls_kem_proxy"
 TLS_KEM_PROXY_CONTAINER_NAME = "tls_kem_proxy_run"
-TLS_KEM_PROXY_CURVE_BY_PROFILE = {"classic": "classic", "pqc": "mlkem1024", "hybrid": "x25519mlkem768"}
+# Pinned by digest, not a floating "golang:1.27-rc-alpine" tag. This
+# container is started fresh (`go run .`, compiled cold) on every single
+# profile switch across the whole 6-scenario x 10-run x 3-profile protocol
+# -- a floating RC tag can resolve to a different actual image on any of
+# those starts if upstream publishes a new build mid-collection, which
+# would be silent, undetected drift in the exact TLS stack producing
+# handshake_bytes. Confirmed this isn't hypothetical: rebuilding mock_mtls
+# (below) produced a small but real handshake_bytes shift for PQC
+# (unchanged code, unchanged curve) purely from a newer golang:1.27-rc pull
+# between collection sessions.
+TLS_KEM_PROXY_GO_IMAGE = "golang:1.27-rc-alpine@sha256:c5aca77a4d16cb6688dbf3ccade67eff6f05ee208bc854d060e6947f5c27e23c"
+# Clássico pinned to a single classical curve (secp384r1, P-384) and
+# Híbrido uses secp384r1mlkem1024 -- see tls_kem_proxy/main.go's own switch
+# statement for what each name maps to and why. The legacy v7 mapping
+# ("classic" / "x25519mlkem768") is preserved there for reference, unused
+# by this dict.
+TLS_KEM_PROXY_CURVE_BY_PROFILE = {"classic": "secp384r1", "pqc": "mlkem1024", "hybrid": "secp384r1mlkem1024"}
 
 
 def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
@@ -505,7 +585,7 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
             "-v", f"{TLS_KEM_PROXY_SRC_DIR}:/src",
             "-v", f"{CERTS_DIR}:/certs:ro",
             "-w", "/src",
-            "golang:1.27-rc-alpine",
+            TLS_KEM_PROXY_GO_IMAGE,
             "go", "run", ".",
             "-listen", f":{TLS_KEM_PROXY_PORT}",
             "-target", "mtls:443",
@@ -573,6 +653,95 @@ def stop_tls_kem_proxy(proc: subprocess.Popen | None) -> None:
     except subprocess.TimeoutExpired:
         print(f"  [tls_kem_proxy] docker stop succeeded but the CLI process handle "
               f"didn't join within 30s -- container is stopped either way, continuing.")
+
+
+def start_pqc_signer_service(crypto_profile: str) -> bool:
+    """
+    Starts server.mjs (thesis/scripts/pqc-signer/) as a long-lived
+    background container for the duration of one run/batch, exactly
+    mirroring start_tls_kem_proxy()'s own lifecycle -- started once per
+    profile (or once per single `main()` invocation), reused for every
+    ML-DSA-65 signature that profile's flow makes (8 per full flow
+    execution: client_assertion + PAR object in each of the 2 sub-flows,
+    plus response-signature verification calls in hybrid mode), torn down
+    afterwards. No-op (returns False, leaves _PQC_SIGNER_SERVICE_URL unset)
+    for classic, which never signs with ML-DSA-65 at all.
+
+    Why this exists: previously, _run_pqc_signer_oneshot() spawned a fresh
+    `docker run --rm -i` container per signature. Measured in isolation:
+    ~0.79s/spawn, ~94% of the whole PQC/Híbrido latency delta over
+    Clássico -- a cost of *how* the
+    signer was invoked, not of ML-DSA-65 itself. server.mjs wraps the exact
+    same signing code (signer_core.mjs, shared with sign.mjs's still-used
+    one-shot mode) behind a persistent HTTP server; this function starts
+    that server once and _run_pqc_signer() then talks HTTP to it for the
+    rest of the run.
+
+    A fixed container name (not --rm's auto-generated one), same reasoning
+    as TLS_KEM_PROXY_CONTAINER_NAME: stop_pqc_signer_service() can
+    `docker stop` it reliably even if this return value were ever lost.
+    """
+    if crypto_profile not in ("pqc", "hybrid"):
+        return False
+
+    global _PQC_SIGNER_SERVICE_URL
+    subprocess.run(
+        ["docker", "rm", "-f", PQC_SIGNER_SERVICE_CONTAINER_NAME],
+        capture_output=True, text=True,
+    )  # clean up a stale container from a prior crashed run, if any
+
+    subprocess.run(
+        [
+            "docker", "run", "-d",
+            "--name", PQC_SIGNER_SERVICE_CONTAINER_NAME,
+            "-p", f"127.0.0.1:{PQC_SIGNER_SERVICE_PORT}:{PQC_SIGNER_SERVICE_PORT}",
+            PQC_SIGNER_IMAGE, "node", "server.mjs",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    _PQC_SIGNER_SERVICE_URL = f"http://127.0.0.1:{PQC_SIGNER_SERVICE_PORT}/"
+    _wait_for_pqc_signer_service_ready()
+    return True
+
+
+def _wait_for_pqc_signer_service_ready(timeout_seconds: int = 30) -> None:
+    """
+    Polls GET /healthz -- same reasoning as _wait_for_tls_kem_proxy_ready():
+    a real HTTP round trip proves the Node process is actually accepting
+    requests, not just that the container/port exists.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        status = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", PQC_SIGNER_SERVICE_CONTAINER_NAME],
+            capture_output=True, text=True,
+        )
+        if status.returncode == 0 and status.stdout.strip() != "true":
+            logs = subprocess.run(
+                ["docker", "logs", PQC_SIGNER_SERVICE_CONTAINER_NAME],
+                capture_output=True, text=True,
+            )
+            raise RuntimeError(f"pqc-signer service exited early:\n{logs.stdout}{logs.stderr}")
+        try:
+            resp = requests.get(f"http://127.0.0.1:{PQC_SIGNER_SERVICE_PORT}/healthz", timeout=1)
+            if resp.status_code == 200:
+                return
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(0.2)
+    raise RuntimeError(f"pqc-signer service did not answer /healthz within {timeout_seconds}s")
+
+
+def stop_pqc_signer_service(started: bool) -> None:
+    """Mirrors stop_tls_kem_proxy(): `docker stop` is what actually matters."""
+    global _PQC_SIGNER_SERVICE_URL
+    if not started:
+        return
+    subprocess.run(
+        ["docker", "stop", PQC_SIGNER_SERVICE_CONTAINER_NAME],
+        capture_output=True, text=True, timeout=30,
+    )
+    _PQC_SIGNER_SERVICE_URL = None
 
 
 def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
@@ -1381,6 +1550,9 @@ def main():
     # leaves a stray long-lived container behind. No-op (returns None) for
     # classic -- see start_tls_kem_proxy().
     tls_kem_proxy_proc = start_tls_kem_proxy(crypto_profile)
+    # Same lifecycle as tls_kem_proxy_proc above, for the persistent
+    # ML-DSA-65 signer -- see start_pqc_signer_service().
+    pqc_signer_started = start_pqc_signer_service(crypto_profile)
     try:
         run_start = datetime.now(timezone.utc)
 
@@ -1392,6 +1564,7 @@ def main():
 
         run_end = datetime.now(timezone.utc)
     finally:
+        stop_pqc_signer_service(pqc_signer_started)
         stop_tls_kem_proxy(tls_kem_proxy_proc)
     calls = insurance_calls + person_calls
 

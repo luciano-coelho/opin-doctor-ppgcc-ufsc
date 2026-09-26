@@ -1,42 +1,42 @@
 # Latency Report (classic, 320ms, 10 runs)
 
-Experimento (perfil): **classic**
-Latência aplicada (cenário): **320ms**
+Experiment (profile): **classic**
+Applied latency (scenario): **320ms**
 
-Warmup (execução 0, descartada, não entra em nenhuma estatística): T_fluxo = 54.0186s, sem retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 54.0186s, no retry.
 
-## As 10 execuções -- valores individuais (ordem coletada)
+## The 10 runs -- individual values (collection order)
 
-| # | T_fluxo (s) | Desvio absoluto da mediana (s) | Retry? |
+| # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 53.720716 | 0.051141 | não |
-| 2 | 53.636480 | 0.033095 | não |
-| 3 | 53.661080 | 0.008495 | não |
-| 4 | 53.691098 | 0.021523 | não |
-| 5 | 53.673268 | 0.003693 | não |
-| 6 | 53.692116 | 0.022541 | não |
-| 7 | 53.611204 | 0.058371 | não |
-| 8 | 53.606035 | 0.063540 | não |
-| 9 | 53.677687 | 0.008112 | não |
-| 10 | 53.665882 | 0.003693 | não |
+| 1 | 53.720716 | 0.051141 | no |
+| 2 | 53.636480 | 0.033095 | no |
+| 3 | 53.661080 | 0.008495 | no |
+| 4 | 53.691098 | 0.021523 | no |
+| 5 | 53.673268 | 0.003693 | no |
+| 6 | 53.692116 | 0.022541 | no |
+| 7 | 53.611204 | 0.058371 | no |
+| 8 | 53.606035 | 0.063540 | no |
+| 9 | 53.677687 | 0.008112 | no |
+| 10 | 53.665882 | 0.003693 | no |
 
-## Valores ordenados (ordem crescente)
+## Sorted values (ascending order)
 
 53.606035, 53.611204, 53.636480, 53.661080, 53.665882, 53.673268, 53.677687, 53.691098, 53.692116, 53.720716
 
-## Mediana e dispersão
+## Median and dispersion
 
-- Mediana: **53.669575s**
-- Mínimo: 53.606035s
-- Máximo: 53.720716s
-- Média: 53.663557s
-- Desvio padrão (amostral): 0.036408s
+- Median: **53.669575s**
+- Minimum: 53.606035s
+- Maximum: 53.720716s
+- Mean: 53.663557s
+- Standard deviation (sample): 0.036408s
 - Spread (min/max): 0.2139%
 
-## Anomalias
+## Anomalies
 
-Nenhuma execução precisou de retry (PAR TTL ou login race) neste cenário.
+No run needed a retry (PAR TTL or login race) in this scenario.
 
-## Observações
+## Observations
 
-Spread de 0.2139% entre as 10 execuções. Dentro do esperado para medição de tempo real (rede/SO), não achatado artificialmente -- nenhum outlier foi removido do cálculo da mediana.
+Spread of 0.2139% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.

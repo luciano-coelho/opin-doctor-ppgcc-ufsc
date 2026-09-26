@@ -7,13 +7,15 @@
 // genuinely re-derived from a fresh ephemeral exchange each time (as KEM/
 // ECDHE guarantees) -- a fixed/cached "fake" key would export identical
 // bytes every time regardless of which connection asked. Works for all
-// three profiles (thesis/results/v7/artifacts/{classico,pqc,hybrid}/):
-// -group classic|mlkem1024|x25519mlkem768.
+// three profiles. Legacy v7 groups (thesis/results/v7/artifacts/{classic,pqc,hybrid}/,
+// kept for historical reproducibility, not used by default):
+// -group classic|mlkem1024|x25519mlkem768. Current groups (the realigned
+// comparison chain): -group secp384r1|mlkem1024|secp384r1mlkem1024.
 //
 // -classical-only additionally asserts the negotiated curveID is NOT any
-// of the ML-KEM-containing group names -- the PQC/Classico artifacts use
+// of the ML-KEM-containing group names -- the PQC/Classic artifacts use
 // this to confirm no post-quantum component silently crept in (PQC) or
-// that the connection is purely classical with zero KEM at all (Classico).
+// that the connection is purely classical with zero KEM at all (Classic).
 package main
 
 import (
@@ -46,8 +48,14 @@ func main() {
 	case "x25519mlkem768":
 		curvePreferences = []tls.CurveID{tls.X25519MLKEM768}
 		wantCurveID = "X25519MLKEM768"
+	case "secp384r1":
+		curvePreferences = []tls.CurveID{tls.CurveP384}
+		wantCurveID = "" // any classical curve is acceptable; checked separately below
+	case "secp384r1mlkem1024":
+		curvePreferences = []tls.CurveID{tls.SecP384r1MLKEM1024}
+		wantCurveID = "SecP384r1MLKEM1024"
 	default:
-		fmt.Println("unknown group:", group, "(want classic, mlkem1024, or x25519mlkem768)")
+		fmt.Println("unknown group:", group, "(want classic, mlkem1024, x25519mlkem768, secp384r1, or secp384r1mlkem1024)")
 		os.Exit(1)
 	}
 	classicalNames := map[string]bool{"CurveP256": true, "CurveP384": true, "CurveP521": true}
@@ -82,7 +90,7 @@ func main() {
 
 	fmt.Println()
 	for _, c := range curves {
-		if group == "classic" {
+		if group == "classic" || group == "secp384r1" {
 			if !classicalNames[c] {
 				fmt.Printf("RESULT: FAIL -- negotiated %q, not a classical curve (P256/P384/P521)\n", c)
 				os.Exit(1)
@@ -97,7 +105,7 @@ func main() {
 			"(would indicate a fixed/non-fresh session secret, not a real per-connection key exchange)")
 		os.Exit(1)
 	}
-	fmt.Printf("RESULT: verificado -- ambas as conexoes negociaram %s (grupo=%s), e o material de chave "+
-		"exportado (RFC 5705) e DIFERENTE entre as duas -- confirma que o segredo de sessao foi de fato "+
-		"derivado de uma troca de chave nova a cada conexao, nao um valor fixo ou decorativo.\n", curves[0], group)
+	fmt.Printf("RESULT: verified -- both connections negotiated %s (group=%s), and the exported "+
+		"key material (RFC 5705) is DIFFERENT between the two -- confirms the session secret was "+
+		"genuinely derived from a fresh key exchange on each connection, not a fixed or decorative value.\n", curves[0], group)
 }

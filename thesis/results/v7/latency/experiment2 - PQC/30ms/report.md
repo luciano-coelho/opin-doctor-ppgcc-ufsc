@@ -1,42 +1,42 @@
 # Latency Report (pqc, 30ms, 10 runs)
 
-Experimento (perfil): **pqc**
-Latência aplicada (cenário): **30ms**
+Experiment (profile): **pqc**
+Applied latency (scenario): **30ms**
 
-Warmup (execução 0, descartada, não entra em nenhuma estatística): T_fluxo = 13.2478s, sem retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 13.2478s, no retry.
 
-## As 10 execuções -- valores individuais (ordem coletada)
+## The 10 runs -- individual values (collection order)
 
-| # | T_fluxo (s) | Desvio absoluto da mediana (s) | Retry? |
+| # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 14.436291 | 1.090477 | não |
-| 2 | 12.947549 | 0.398265 | não |
-| 3 | 12.883945 | 0.461869 | não |
-| 4 | 12.912497 | 0.433317 | não |
-| 5 | 12.952632 | 0.393182 | não |
-| 6 | 12.932884 | 0.412930 | não |
-| 7 | 13.754654 | 0.408840 | não |
-| 8 | 15.571856 | 2.226042 | não |
-| 9 | 14.115930 | 0.770116 | não |
-| 10 | 13.738996 | 0.393182 | não |
+| 1 | 14.436291 | 1.090477 | no |
+| 2 | 12.947549 | 0.398265 | no |
+| 3 | 12.883945 | 0.461869 | no |
+| 4 | 12.912497 | 0.433317 | no |
+| 5 | 12.952632 | 0.393182 | no |
+| 6 | 12.932884 | 0.412930 | no |
+| 7 | 13.754654 | 0.408840 | no |
+| 8 | 15.571856 | 2.226042 | no |
+| 9 | 14.115930 | 0.770116 | no |
+| 10 | 13.738996 | 0.393182 | no |
 
-## Valores ordenados (ordem crescente)
+## Sorted values (ascending order)
 
 12.883945, 12.912497, 12.932884, 12.947549, 12.952632, 13.738996, 13.754654, 14.115930, 14.436291, 15.571856
 
-## Mediana e dispersão
+## Median and dispersion
 
-- Mediana: **13.345814s**
-- Mínimo: 12.883945s
-- Máximo: 15.571856s
-- Média: 13.624723s
-- Desvio padrão (amostral): 0.892321s
+- Median: **13.345814s**
+- Minimum: 12.883945s
+- Maximum: 15.571856s
+- Mean: 13.624723s
+- Standard deviation (sample): 0.892321s
 - Spread (min/max): 20.8625%
 
-## Anomalias
+## Anomalies
 
-Nenhuma execução precisou de retry (PAR TTL ou login race) neste cenário.
+No run needed a retry (PAR TTL or login race) in this scenario.
 
-## Observações
+## Observations
 
-Spread de 20.8625% entre as 10 execuções. **Spread elevado -- investigar antes de aceitar este cenário como concluído.**
+Spread of 20.8625% among the 10 runs. **Elevated spread -- investigate before accepting this scenario as complete.**

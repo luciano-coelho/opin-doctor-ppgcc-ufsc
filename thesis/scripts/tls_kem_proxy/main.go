@@ -68,7 +68,7 @@ func main() {
 	target := flag.String("target", "mtls:443", "gateway address to relay to, host:port (ignored in -stub mode)")
 	certPath := flag.String("cert", "", "client certificate PEM path (ignored in -stub mode)")
 	keyPath := flag.String("key", "", "client key PEM path (ignored in -stub mode)")
-	curveName := flag.String("curve", "", "one of: mlkem1024, x25519mlkem768 (ignored in -stub mode)")
+	curveName := flag.String("curve", "", "one of: secp384r1, mlkem1024, secp384r1mlkem1024; classic, classical, x25519mlkem768 (v7, kept for reference) (ignored in -stub mode)")
 	stub := flag.Bool("stub", false, "stub/echo mode -- answer directly, never touch the gateway (Fase 4 calibration)")
 	flag.Parse()
 
@@ -159,6 +159,32 @@ func runRelay(listen, target, certPath, keyPath, curveName string, localTLSConfi
 	var curvePreferences []tls.CurveID
 	minVersion := uint16(tls.VersionTLS13)
 	switch curveName {
+	case "secp384r1":
+		// Clássico pinned to exactly one classical curve, P-384 -- unlike
+		// "classic" below (a 3-curve list, v7's real-world-default framing),
+		// this exists so Clássico, PQC, and Híbrido form a clean,
+		// one-variable-at-a-time comparison chain: Clássico shares its only
+		// curve (P-384) with the classical half of Híbrido's group below,
+		// and PQC shares its only KEM (ML-KEM-1024) with the post-quantum
+		// half of that same group. No curve this profile could fall back to
+		// if P-384 weren't offered -- same "fail visibly, not silently
+		// downgrade" principle the mlkem1024/secp384r1mlkem1024 cases
+		// already apply.
+		curvePreferences = []tls.CurveID{tls.CurveP384}
+		minVersion = tls.VersionTLS12 // matches the gateway's own Clássico floor; still negotiates 1.3 in practice
+	case "secp384r1mlkem1024":
+		// Híbrido's group -- SecP384r1MLKEM1024, combining the same
+		// classical curve Clássico pins (P-384) with the same ML-KEM
+		// parameter set PQC uses (ML-KEM-1024). Replaces v7's
+		// X25519MLKEM768 (kept below, not deleted, purely as historical
+		// reference -- v7's own already-collected data still reflects it
+		// and is not being remeasured). This is a deliberate trade:
+		// X25519MLKEM768 is the group real-world deployments actually use
+		// (Chrome, Cloudflare); SecP384r1MLKEM1024 is not
+		// market-representative in the same way, but it is the only choice
+		// that lets Clássico and PQC each share exactly one component with
+		// Híbrido.
+		curvePreferences = []tls.CurveID{tls.SecP384r1MLKEM1024}
 	case "classic":
 		curvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}
 		minVersion = tls.VersionTLS12
@@ -170,7 +196,7 @@ func runRelay(listen, target, certPath, keyPath, curveName string, localTLSConfi
 	case "x25519mlkem768":
 		curvePreferences = []tls.CurveID{tls.X25519MLKEM768}
 	default:
-		log.Fatalf("tls_kem_proxy: unknown -curve %q (want classic, classical, mlkem1024, or x25519mlkem768)", curveName)
+		log.Fatalf("tls_kem_proxy: unknown -curve %q (want secp384r1, mlkem1024, secp384r1mlkem1024; classic, classical, or x25519mlkem768 (v7))", curveName)
 	}
 
 	// InsecureSkipVerify: this lab's gateway presents a self-signed chain

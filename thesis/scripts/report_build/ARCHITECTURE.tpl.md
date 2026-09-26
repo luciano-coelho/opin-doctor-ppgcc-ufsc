@@ -1,259 +1,259 @@
-# Arquitetura da v7 — Fluxo OPIN com três perfis criptográficos e a equação OPINsize estendida
+# v7 Architecture — OPIN Flow with Three Cryptographic Profiles and the Extended OPINsize Equation
 
-Este documento descreve, de forma independente, a arquitetura do experimento final (v7): o sistema medido, os três perfis criptográficos, como cada primitiva atua no fluxo, como as métricas são coletadas e a equação de tamanho (OPINsize) com a extensão para certificados de CA. Os resultados numéricos estão em [`CONSOLIDATED_REPORT.md`](CONSOLIDATED_REPORT.md); aqui, os números servem apenas para ilustrar o desenho.
-
----
-
-## 1. Propósito e escopo
-
-**Pergunta do experimento.** Quanto custa, em bytes trafegados e em tempo de fluxo, migrar o fluxo de consentimento do Open Insurance Brasil (OPIN) de criptografia clássica para pós-quântica (PQC) e para uma combinação híbrida?
-
-**O que a v7 cobre**, num único conjunto de medições:
-
-- **Nível 2 (assinaturas)**: certificados de cliente, tokens (JWT), chaves públicas publicadas (JWKS) e a autenticação do cliente (`client_assertion`).
-- **Nível 1 (troca de chave)**: a troca de chave do handshake TLS, a parte exposta ao ataque "colher agora, decifrar depois".
-
-**O que fica fora**: a cifragem dos tokens (JWE com RSA-OAEP), para a qual não existe hoje padrão JOSE/COSE pós-quântico; o registro dinâmico de clientes (SSA/DCR); a trilha de auditoria com hash; a revogação de certificados. A cobertura completa em relação ao documento de arquitetura de segurança (SAD) está em `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`.
-
-**Histórico.** A v7 substitui a v5 (só assinaturas migradas) e a v6 (troca de chave medida isoladamente, com um cliente TLS diferente do da v5). A fusão dos dois níveis num só lote, com um único cliente TLS para os três perfis, é a decisão central da v7 (`DECISIONS.md`, Decision 1 e 2). A extensão da equação de tamanho está na Decision 7.
+This document describes, independently, the architecture of the final experiment (v7): the system measured, the three cryptographic profiles, how each primitive acts in the flow, how the metrics are collected, and the size equation (OPINsize) with the extension for CA certificates. The numerical results are in [`CONSOLIDATED_REPORT.md`](CONSOLIDATED_REPORT.md); here, the numbers serve only to illustrate the design.
 
 ---
 
-## 2. Visão geral do sistema
+## 1. Purpose and Scope
+
+**Experiment question.** How much does it cost, in bytes transferred and flow time, to migrate the Open Insurance Brasil (OPIN) consent flow from classical cryptography to post-quantum (PQC) and to a hybrid combination?
+
+**What v7 covers**, in a single set of measurements:
+
+- **Level 2 (signatures)**: client certificates, tokens (JWT), published public keys (JWKS), and client authentication (`client_assertion`).
+- **Level 1 (key exchange)**: the TLS handshake key exchange, the part exposed to the "harvest now, decrypt later" attack.
+
+**What is left out**: token encryption (JWE with RSA-OAEP), for which there is currently no post-quantum JOSE/COSE standard; dynamic client registration (SSA/DCR); the hash-based audit trail; certificate revocation. Full coverage relative to the security architecture document (SAD) is in `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`.
+
+**History.** v7 replaces v5 (signatures-only migration) and v6 (key exchange measured in isolation, with a different TLS client than v5's). Merging the two levels into a single batch, with a single TLS client for all three profiles, is v7's central decision (`DECISIONS.md`, Decision 1 and 2). The size equation extension is in Decision 7.
+
+---
+
+## 2. System Overview
 
 ```
-  máquina do experimento (Docker Desktop, um único host)
+  experiment machine (Docker Desktop, a single host)
 
-  ┌──────────────────────┐   TLS local        ┌──────────────────┐   mTLS real, grupo do perfil
-  │ opin_flow.py         │  127.0.0.1:8443    │  tls_kem_proxy   │  (ECDHE | MLKEM1024 | X25519MLKEM768)
-  │ (cliente de teste,   │ ─────────────────► │  (cliente TLS    │ ─────────────────────────────┐
-  │  Python)             │ ◄───────────────── │   em Go)         │                              │
+  ┌──────────────────────┐   local TLS        ┌──────────────────┐   real mTLS, profile group
+  │ opin_flow.py          │  127.0.0.1:8443    │  tls_kem_proxy    │  (ECDHE | MLKEM1024 | X25519MLKEM768)
+  │ (test client,         │ ─────────────────► │  (TLS client      │ ─────────────────────────────┐
+  │  Python)              │ ◄───────────────── │   in Go)          │                              │
   └──────┬───────────────┘                    └──────────────────┘                              ▼
-         │ assina JWTs PQC                                                     ┌───────────────────────────┐
-         ▼                                                                     │ gateway mTLS (mock_mtls)  │
-  ┌──────────────────────┐                                                     │  Go, porta 443            │
-  │ pqc-signer           │                                                     │  roteia por Host          │
-  │ (contêiner efêmero,  │                                                     └───┬────────┬──────────┬───┘
-  │  Go, ML-DSA-65)      │                                                         │        │          │
+         │ signs PQC JWTs                                                       ┌───────────────────────────┐
+         ▼                                                                     │ mTLS gateway (mock_mtls)  │
+  ┌──────────────────────┐                                                     │  Go, port 443             │
+  │ pqc-signer            │                                                     │  routes by Host           │
+  │ (ephemeral container, │                                                     └───┬────────┬──────────┬───┘
+  │  Go, ML-DSA-65)       │                                                         │        │          │
   └──────────────────────┘                                              auth.local  │        │ api.local │ directory
                                                                      ┌─────────────▼┐  ┌────▼───────┐ ┌─▼────────────┐
-                                                                     │ AS (auth)    │  │ RS (mockapi)│ │ Diretório/PKI│
-                                                                     │ Node.js,     │  │ Java,       │ │ (no gateway) │
+                                                                     │ AS (auth)    │  │ RS (mockapi)│ │ Directory/PKI│
+                                                                     │ Node.js,     │  │ Java,       │ │ (on gateway) │
                                                                      │ oidc-provider│  │ BouncyCastle│ └──────────────┘
                                                                      └──────┬───────┘  └──────┬──────┘
                                                                             │  matls-api.local │
-                                                                            └── auth → RS (interno, sempre clássico)
+                                                                            └── auth → RS (internal, always classical)
 ```
 
-**O que a tabela abaixo mostra.** O diagrama acima é o mapa; a tabela dá, para cada caixa dele, o papel que cumpre no fluxo e a tecnologia em que foi implementada — útil para localizar rapidamente onde procurar código ou logs de um componente específico.
+**What the table below shows.** The diagram above is the map; the table gives, for each box in it, the role it plays in the flow and the technology it was built in — useful for quickly locating where to look for the code or logs of a specific component.
 
-| Componente | Papel | Tecnologia |
+| Component | Role | Technology |
 |---|---|---|
-| **`opin_flow.py`** | Cliente de teste: executa o fluxo OPIN completo e mede o tempo de cada execução | Python |
-| **`tls_kem_proxy`** | Cliente TLS em Go que negocia os grupos de troca de chave que o Python não suporta; um por execução | Go (`crypto/tls`) |
-| **`pqc-signer`** | Assina os JWTs ML-DSA-65 do lado do cliente; um contêiner efêmero por assinatura | Go (`crypto/mldsa`) |
-| **Gateway mTLS** (`mock_mtls`) | Termina o mTLS, valida o certificado do cliente, roteia por `Host` para AS, RS e Diretório e registra métricas por conexão | Go |
-| **AS** (`auth`) | Servidor de autorização: consentimento, PAR, tokens, `id_token`, JWKS | Node.js, `oidc-provider` |
-| **RS** (`mockapi`) | Servidor de recursos: responde as consultas de seguros com JWT assinado | Java, BouncyCastle |
-| **Diretório/PKI** | Serve os certificados de CA (`root-ca.pem`, `issuer-ca.pem`) | Gateway (`directoryHandler`) |
+| **`opin_flow.py`** | Test client: runs the complete OPIN flow and measures the time of each run | Python |
+| **`tls_kem_proxy`** | TLS client in Go that negotiates the key-exchange groups Python doesn't support; one per run | Go (`crypto/tls`) |
+| **`pqc-signer`** | Signs the client-side ML-DSA-65 JWTs; one ephemeral container per signature | Go (`crypto/mldsa`) |
+| **mTLS Gateway** (`mock_mtls`) | Terminates mTLS, validates the client certificate, routes by `Host` to AS, RS, and Directory, and logs per-connection metrics | Go |
+| **AS** (`auth`) | Authorization server: consent, PAR, tokens, `id_token`, JWKS | Node.js, `oidc-provider` |
+| **RS** (`mockapi`) | Resource server: responds to insurance queries with a signed JWT | Java, BouncyCastle |
+| **Directory/PKI** | Serves the CA certificates (`root-ca.pem`, `issuer-ca.pem`) | Gateway (`directoryHandler`) |
 
-O perfil ativo é escolhido por uma única variável, `CRYPTO_PROFILE` (`classic`, `pqc` ou `hybrid`), lida por todos os componentes; a troca é feita por `switch_crypto_profile.py`, que também espera o ambiente assentar.
+The active profile is selected by a single variable, `CRYPTO_PROFILE` (`classic`, `pqc`, or `hybrid`), read by all components; the switch is performed by `switch_crypto_profile.py`, which also waits for the environment to settle.
 
-**A conexão interna `auth`→RS.** Para exibir o consentimento, o AS consulta o RS pelo mesmo gateway (`matls-api.local`) com um certificado de transporte próprio, fixo e clássico. O cliente HTTPS do Node.js não negocia os grupos pós-quânticos, então essa única conexão é mantida clássica por uma exceção deliberada por SNI no gateway (Seção 5.1). Ela não faz parte do fluxo medido: não entra em N_mTLS nem em nenhuma métrica de tamanho ou de handshake.
+**The internal `auth`→RS connection.** To display the consent screen, the AS queries the RS through the same gateway (`matls-api.local`) with its own fixed, classical transport certificate. Node.js's HTTPS client doesn't negotiate the post-quantum groups, so this single connection is kept classical via a deliberate SNI-based exception in the gateway (Section 5.1). It is not part of the measured flow: it doesn't enter N_mTLS nor any size or handshake metric.
 
 ---
 
-## 3. O fluxo OPIN medido
+## 3. The Measured OPIN Flow
 
-Cada execução tem dois sub-fluxos executados em sequência, num total de **28 requisições**:
+Each run has two sub-flows executed in sequence, for a total of **28 requests**:
 
-**O que a tabela abaixo mostra.** Cada linha é um dos dois sub-fluxos do OPIN (obter consentimento para dados de seguros, depois para dados de pessoas); a coluna "Requisições" conta quantas chamadas HTTP/TLS aquele sub-fluxo faz, e "Etapas" lista, na ordem em que acontecem, o que cada uma dessas chamadas é.
+**What the table below shows.** Each row is one of the two OPIN sub-flows (obtaining consent for insurance data, then for personal data); the "Requests" column counts how many HTTP/TLS calls that sub-flow makes, and "Steps" lists, in the order they occur, what each of those calls is.
 
-| Sub-fluxo | Requisições | Etapas |
+| Sub-flow | Requests | Steps |
 |---|---:|---|
-| Consentimentos de seguros | 12 | `GET /jwks` · `GET root-ca.pem` · `GET issuer-ca.pem` · `POST /token` (client_credentials) · `POST` consentimento · `GET` consentimento ×3 · `POST /request` (PAR) · [login automatizado] · `POST /token` (authorization_code) · `GET` consentimento ×2 |
-| Dados de seguro de pessoas | 16 | as mesmas 8 primeiras etapas de identificação e autorização (1 `GET` de consentimento) · consulta da apólice ×2 · sinistro ×2 · informações da apólice ×2 · prêmio ×2 |
+| Insurance consents | 12 | `GET /jwks` · `GET root-ca.pem` · `GET issuer-ca.pem` · `POST /token` (client_credentials) · `POST` consent · `GET` consent ×3 · `POST /request` (PAR) · [automated login] · `POST /token` (authorization_code) · `GET` consent ×2 |
+| Personal insurance data | 16 | the same first 8 identification and authorization steps (1 consent `GET`) · policy lookup ×2 · claim ×2 · policy information ×2 · premium ×2 |
 
-O login é automatizado e usa um pool de conexão separado (como um navegador faria), o que dá **três pools de conexão por sub-fluxo** (AS, RS e login) e, nos dois sub-fluxos, as **6 conexões mTLS** que a equação de tamanho usa como N_mTLS. Cada conexão é reaproveitada (keep-alive) por todas as chamadas do seu pool. O fluxo trafega **26 JWTs**, busca o JWKS do AS **2 vezes** (uma por sub-fluxo) e baixa **4 certificados de CA** (raiz e emissora, em cada sub-fluxo).
+The login is automated and uses a separate connection pool (as a browser would), which gives **three connection pools per sub-flow** (AS, RS, and login) and, across the two sub-flows, the **6 mTLS connections** that the size equation uses as N_mTLS. Each connection is reused (keep-alive) by all calls in its pool. The flow carries **26 JWTs**, fetches the AS's JWKS **2 times** (once per sub-flow), and downloads **4 CA certificates** (root and issuer, in each sub-flow).
 
 ---
 
-## 4. Os três perfis criptográficos
+## 4. The Three Cryptographic Profiles
 
-### 4.1. Onde cada primitiva atua
+### 4.1. Where Each Primitive Acts
 
-**O que a tabela abaixo mostra.** Cada linha é um artefato criptográfico do fluxo (um certificado, um token, uma chave publicada); as três colunas mostram, lado a lado, qual algoritmo ou esquema aquele artefato usa em cada perfil. É a referência central para responder "o que muda, exatamente, quando o perfil muda?" para cada peça do sistema.
+**What the table below shows.** Each row is a cryptographic artifact in the flow (a certificate, a token, a published key); the three columns show, side by side, which algorithm or scheme that artifact uses in each profile. This is the central reference for answering "what exactly changes when the profile changes?" for each piece of the system.
 
-| Artefato | Clássico | PQC | Híbrido |
+| Artifact | Classic | PQC | Hybrid |
 |---|---|---|---|
-| **Troca de chave TLS** | ECDHE clássico (P-521, P-384, P-256) | **MLKEM1024** puro | **X25519MLKEM768** |
-| **Certificado de cliente** (mTLS) | RSA-4096, assinado por CA RSA | Chave do titular ML-DSA-65; CA continua RSA | RSA-4096 + três extensões X.509 não críticas com o material ML-DSA-65, assinado duas vezes (RSA e ML-DSA-65) |
-| **JWT de resposta do RS** | PS256 | ML-DSA-65 | RS256 com extensão de payload (`pqc`) |
-| **`id_token` e JARM do AS** | PS256 | ML-DSA-65 | Strong Nesting (σ1‖σ2) |
-| **`client_assertion` e objeto PAR** | PS256 | ML-DSA-65 | RS256 com extensão de payload (`pqc`) |
-| **Chave pública de assinatura do AS (JWKS)** | RSA (256 bytes) | `kty: AKP`, ML-DSA-65 (1.952 bytes) | `kty: HYBRID`, chave composta (2.208 bytes) |
-| **Cifragem do `id_token`** | RSA-OAEP + AES-256-GCM | igual (clássica) | igual (clássica) |
-| **Token de acesso** | opaco, ligado ao certificado do cliente | igual | igual |
+| **TLS key exchange** | Classical ECDHE (P-521, P-384, P-256) | Pure **MLKEM1024** | **X25519MLKEM768** |
+| **Client certificate** (mTLS) | RSA-4096, signed by an RSA CA | ML-DSA-65 subject key; CA remains RSA | RSA-4096 + three non-critical X.509 extensions carrying the ML-DSA-65 material, signed twice (RSA and ML-DSA-65) |
+| **RS response JWT** | PS256 | ML-DSA-65 | RS256 with payload extension (`pqc`) |
+| **AS `id_token` and JARM** | PS256 | ML-DSA-65 | Strong Nesting (σ1‖σ2) |
+| **`client_assertion` and PAR object** | PS256 | ML-DSA-65 | RS256 with payload extension (`pqc`) |
+| **AS signing public key (JWKS)** | RSA (256 bytes) | `kty: AKP`, ML-DSA-65 (1,952 bytes) | `kty: HYBRID`, composite key (2,208 bytes) |
+| **`id_token` encryption** | RSA-OAEP + AES-256-GCM | same (classical) | same (classical) |
+| **Access token** | opaque, bound to the client certificate | same | same |
 
-O token de acesso é uma cadeia opaca, sem assinatura: a assinatura que autentica o cliente nesse passo é a do `client_assertion`.
+The access token is an opaque, unsigned string: the signature that authenticates the client at that step is the `client_assertion`'s.
 
-Tamanhos resultantes por fluxo (idênticos em todos os cenários de latência): certificado de cliente de {{cert_classic}}, {{cert_pqc}} e {{cert_hybrid}} bytes; JWT médio de {{jwtmean_classic}}, {{jwtmean_pqc}} e {{jwtmean_hybrid}} bytes; handshake de {{hs_classic}}, {{hs_pqc}} e {{hs_hybrid}} bytes (Clássico, PQC, Híbrido).
+Resulting sizes per flow (identical across all latency scenarios): client certificate of {{cert_classic}}, {{cert_pqc}}, and {{cert_hybrid}} bytes; average JWT of {{jwtmean_classic}}, {{jwtmean_pqc}}, and {{jwtmean_hybrid}} bytes; handshake of {{hs_classic}}, {{hs_pqc}}, and {{hs_hybrid}} bytes (Classic, PQC, Hybrid).
 
-### 4.2. Por que os perfis fazem escolhas diferentes
+### 4.2. Why the Profiles Make Different Choices
 
-**PQC — filosofia "só pós-quântico".** Assinatura e troca de chave sem nenhum componente clássico. A única exceção é o certificado de cliente, cuja emissão pela CA continua RSA (a chave do titular é ML-DSA-65, mas a CA não migra): é o desenho deliberado de migrar primeiro a identidade do participante, sem exigir que a CA aprenda a assinar com ML-DSA-65.
+**PQC — "post-quantum only" philosophy.** Signature and key exchange with no classical component whatsoever. The only exception is the client certificate, whose issuance by the CA remains RSA (the subject key is ML-DSA-65, but the CA doesn't migrate): this is the deliberate design of migrating the participant's identity first, without requiring the CA to learn to sign with ML-DSA-65.
 
-**Híbrido — filosofia "porta AND".** Comprometer o resultado exige quebrar os dois algoritmos ao mesmo tempo. Cada artefato usa o esquema de combinação mais adequado ao seu papel:
+**Hybrid — "AND gate" philosophy.** Compromising the result requires breaking both algorithms at the same time. Each artifact uses the combination scheme best suited to its role:
 
-**O que a tabela abaixo mostra.** O perfil Híbrido não usa um único jeito de combinar clássico e pós-quântico — usa três, cada um escolhido para o tipo de artefato em questão. A tabela lista os três esquemas, onde cada um é aplicado, como funciona por dentro (em que ordem se assina, o que entra em cada assinatura) e a propriedade de segurança que ele garante.
+**What the table below shows.** The Hybrid profile doesn't use a single way of combining classical and post-quantum — it uses three, each chosen for the type of artifact involved. The table lists the three schemes, where each is applied, how it works internally (the signing order, what goes into each signature), and the security property it guarantees.
 
-| Esquema | Onde | Como funciona | Propriedade |
+| Scheme | Where | How it works | Property |
 |---|---|---|---|
-| **Extensões X.509 duplamente assinadas** (Bindel et al., 2019) | Certificados | O ML-DSA-65 assina primeiro, sobre o certificado ainda sem a assinatura alternativa; o RSA assina por último, sobre o certificado completo. As extensões (`SubjectAltPublicKeyInfo`, `AltSignatureAlgorithm`, `AltSignatureValue`) são marcadas como não críticas, então um verificador clássico as ignora | Compatibilidade com verificadores legados |
-| **Extensão de payload** | JWT do RS; `client_assertion`; objeto PAR | O ML-DSA-65 assina primeiro, sobre os claims canonicalizados (RFC 8785), e o resultado entra como o claim `pqc`; o RS256 assina por último, cobrindo esse claim. O cabeçalho continua um `RS256` comum | Um verificador RS256 comum aceita o token ignorando `pqc` |
-| **Strong Nesting** | `id_token`, JARM | σ1 = PS256(mensagem); σ2 = ML-DSA-65(mensagem ‖ σ1); assinatura = σ1 ‖ σ2 (256 + 3.309 = 3.565 bytes). O cabeçalho continua `PS256` | Não é possível recombinar uma assinatura clássica com outra pós-quântica (propriedade SUF-CMA) |
-| **Grupo híbrido de troca de chave** | TLS | `X25519MLKEM768`: a chave da sessão deriva do X25519 e do ML-KEM-768 juntos | Confidencialidade preservada se apenas um dos dois for quebrado |
+| **Doubly-signed X.509 extensions** (Bindel et al., 2019) | Certificates | ML-DSA-65 signs first, over the certificate still without the alternative signature; RSA signs last, over the complete certificate. The extensions (`SubjectAltPublicKeyInfo`, `AltSignatureAlgorithm`, `AltSignatureValue`) are marked non-critical, so a classical verifier ignores them | Compatibility with legacy verifiers |
+| **Payload extension** | RS JWT; `client_assertion`; PAR object | ML-DSA-65 signs first, over the canonicalized claims (RFC 8785), and the result becomes the `pqc` claim; RS256 signs last, covering that claim. The header remains a plain `RS256` | A plain RS256 verifier accepts the token by ignoring `pqc` |
+| **Strong Nesting** | `id_token`, JARM | σ1 = PS256(message); σ2 = ML-DSA-65(message ‖ σ1); signature = σ1 ‖ σ2 (256 + 3,309 = 3,565 bytes). The header remains `PS256` | A classical signature cannot be recombined with a post-quantum one (SUF-CMA property) |
+| **Hybrid key-exchange group** | TLS | `X25519MLKEM768`: the session key is derived from X25519 and ML-KEM-768 together | Confidentiality preserved if only one of the two is broken |
 
-A extensão de payload abre mão parcialmente da propriedade SUF-CMA do Strong Nesting em troca de compatibilidade com verificadores legados; o raciocínio completo e as referências estão em `thesis/results/v4/JWT_Hybrid_Architecture.md`.
+The payload extension partially gives up Strong Nesting's SUF-CMA property in exchange for compatibility with legacy verifiers; the complete reasoning and references are in `thesis/results/v4/JWT_Hybrid_Architecture.md`.
 
-**Clássico — a linha de base.** Nada muda em relação ao que já era o padrão do sistema.
+**Classic — the baseline.** Nothing changes relative to what was already the system's standard.
 
-### 4.3. Prova de implementação
+### 4.3. Implementation Proof
 
-Para cada perfil, `artifacts/` traz uma captura real de cada artefato acima (certificado, JWT do RS, entrada de JWKS, evidência do handshake, `id_token`, `client_assertion`) com uma **verificação criptográfica reproduzível** (por exemplo, a assinatura ML-DSA-65 do certificado híbrido é reconstruída e verificada, e a chave de sessão do handshake é comprovada nova a cada conexão por exportação de material de chave, RFC 5705): [Clássico](artifacts/classico/README.md), [PQC](artifacts/pqc/README.md), [Híbrido](artifacts/hybrid/README.md).
-
----
-
-## 5. Camada de transporte
-
-Os três perfis foram medidos sob a mesma arquitetura de cliente TLS (`tls_kem_proxy`), eliminando variáveis de confusão entre eles — cada perfil pede exatamente um grupo de troca de chave, sem fallback: se o servidor não o oferecer, a conexão falha de forma visível, em vez de recuar silenciosamente para clássico. Descrição completa, histórico de problemas e referências de código em [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md).
-
-### 5.1. A política do gateway e sua única exceção
-
-O gateway define a lista de grupos aceitos por `CRYPTO_PROFILE`: curvas clássicas no Clássico, somente `MLKEM1024` no PQC, somente `X25519MLKEM768` no Híbrido (com TLS 1.3 obrigatório nos dois últimos). Existe **uma exceção, deliberada e restrita por SNI**: toda conexão cujo `ServerName` seja `matls-api.local` (a chamada interna `auth`→RS) recebe a configuração clássica. Foi confirmado, conexão a conexão, que **todo** handshake clássico observado sob PQC/Híbrido tem esse SNI e que nenhum outro o tem (35 aplicações da exceção, 35 handshakes clássicos, mesmo endereço de origem em cada par; `DECISIONS.md`, Decision 6).
+For each profile, `artifacts/` provides a real capture of every artifact above (certificate, RS JWT, JWKS entry, handshake evidence, `id_token`, `client_assertion`) with **reproducible cryptographic verification** (for example, the hybrid certificate's ML-DSA-65 signature is reconstructed and verified, and the handshake session key is proven fresh on every connection via key-material export, RFC 5705): [Classic](artifacts/classic/README.md), [PQC](artifacts/pqc/README.md), [Hybrid](artifacts/hybrid/README.md).
 
 ---
 
-## 6. Camada de assinatura
+## 5. Transport Layer
 
-### 6.1. Certificados
+All three profiles were measured under the same TLS client architecture (`tls_kem_proxy`), eliminating confounding variables between them — each profile requests exactly one key-exchange group, with no fallback: if the server doesn't offer it, the connection fails visibly, instead of silently falling back to classical. Full description, issue history, and code references in [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md).
 
-`mock-service-os/certs/main.go` gera os certificados de cada perfil. O certificado híbrido reutiliza a chave RSA do Clássico e acrescenta o material ML-DSA-65 em extensões não críticas; a verificação independente reconstrói o conteúdo que o ML-DSA-65 assinou (o certificado sem a extensão de assinatura alternativa) e o confere contra a chave da CA. No gateway, a validação do certificado de cliente híbrido aplica a porta AND (as duas assinaturas devem verificar).
+### 5.1. The Gateway Policy and Its Only Exception
 
-### 6.2. Tokens e chaves publicadas
-
-O RS assina cada resposta conforme o perfil (`ResponseSigningService`); o AS assina `id_token` e JARM (`oidc-provider` com uma chave de assinatura externa no perfil híbrido, para produzir o Strong Nesting sem que a biblioteca reconheça um algoritmo novo); o cliente assina `client_assertion` e objeto PAR (`opin_flow.py`). Os JWKS publicam a chave de cada perfil (no Híbrido, uma entrada composta no AS e, no RS, duas entradas sob o mesmo `kid`: a composta e uma só com a metade clássica, para que um verificador comum encontre a que reconhece).
-
-### 6.3. O limite: a cifragem
-
-O `id_token` é cifrado (JWE, RSA-OAEP com AES-256-GCM) para a chave que o cliente registrou, em **todos** os perfis. Não existe hoje padrão JOSE/COSE para representar uma chave ML-KEM num JWE e a biblioteca usada não o suporta. Um `id_token` do perfil PQC capturado ao vivo mostra o resultado: por dentro, uma assinatura ML-DSA-65 pura verificada; por fora, uma cifragem RSA-OAEP idêntica à do Clássico.
+The gateway defines the list of accepted groups by `CRYPTO_PROFILE`: classical curves in Classic, only `MLKEM1024` in PQC, only `X25519MLKEM768` in Hybrid (with TLS 1.3 mandatory in the latter two). There is **one exception, deliberate and restricted by SNI**: every connection whose `ServerName` is `matls-api.local` (the internal `auth`→RS call) gets the classical configuration. It was confirmed, connection by connection, that **every** classical handshake observed under PQC/Hybrid has this SNI and that no other connection does (35 applications of the exception, 35 classical handshakes, matching source address in every pair; `DECISIONS.md`, Decision 6).
 
 ---
 
-## 7. A equação OPINsize: a extensão proposta por esta tese
+## 6. Signature Layer
 
-A equação original de tamanho do fluxo (equivalente à Eq. 3.1 de Schardong et al., 2022) soma três termos — o custo do handshake mTLS, dos tokens trafegados e das chaves públicas publicadas:
+### 6.1. Certificates
+
+`mock-service-os/certs/main.go` generates the certificates for each profile. The hybrid certificate reuses Classic's RSA key and adds the ML-DSA-65 material in non-critical extensions; independent verification reconstructs the content that ML-DSA-65 signed (the certificate without the alternative-signature extension) and checks it against the CA key. At the gateway, hybrid client-certificate validation applies the AND gate (both signatures must verify).
+
+### 6.2. Tokens and Published Keys
+
+The RS signs each response according to the profile (`ResponseSigningService`); the AS signs `id_token` and JARM (`oidc-provider` with an external signing key in the hybrid profile, to produce the Strong Nesting without the library recognizing a new algorithm); the client signs `client_assertion` and the PAR object (`opin_flow.py`). The JWKS publish each profile's key (in Hybrid, one composite entry on the AS and, on the RS, two entries under the same `kid`: the composite one and one with just the classical half, so that a common verifier finds the one it recognizes).
+
+### 6.3. The Limit: Encryption
+
+The `id_token` is encrypted (JWE, RSA-OAEP with AES-256-GCM) to the key the client registered, in **all** profiles. There is currently no JOSE/COSE standard for representing an ML-KEM key in a JWE, and the library used doesn't support it. A live-captured `id_token` from the PQC profile shows the result: on the inside, a verified pure ML-DSA-65 signature; on the outside, an RSA-OAEP encryption identical to Classic's.
+
+---
+
+## 7. The OPINsize Equation: The Extension Proposed by This Thesis
+
+The original flow-size equation (equivalent to Eq. 3.1 of Schardong et al., 2022) sums three terms — the cost of the mTLS handshake, of the tokens transferred, and of the published public keys:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size
 ```
 
-Esta tese a estende com um quarto termo, para os certificados de Autoridade Certificadora que o fluxo baixa e que já eram medidos, mas nunca entravam na soma. A partir daqui, **OPINsize refere-se sempre à fórmula estendida** — a de três termos não volta a aparecer como resultado, só serviu para justificar a extensão:
+This thesis extends it with a fourth term, for the Certificate Authority certificates that the flow downloads and that were already measured but never entered the sum. From here on, **OPINsize always refers to the extended formula** — the three-term version does not reappear as a result; it only served to justify the extension:
 
 ```
 OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes
 ```
 
-com N_mTLS = {{n_mtls}}, N_JWT = {{n_jwt}}, N_JWK = {{n_jwk}} e N_PKI = {{n_pki}} ({{n_root}} da raiz + {{n_issuer}} da emissora). `PKI_bytes` é o tamanho médio, em bytes, dos dois certificados de CA servidos, **no formato em que trafegam (PEM)**; como raiz e emissora têm tamanhos ligeiramente diferentes, N_PKI × PKI_bytes é a soma exata das {{n_pki}} transferências. Cada termo é um tamanho de material criptográfico, não de tráfego HTTP — o tamanho do JWT é o comprimento do token, o da chave é o tamanho da chave, sem cabeçalhos. Com N_PKI = 0 a equação se reduz à original, o que preserva a comparabilidade com a literatura.
+with N_mTLS = {{n_mtls}}, N_JWT = {{n_jwt}}, N_JWK = {{n_jwk}}, and N_PKI = {{n_pki}} ({{n_root}} for the root + {{n_issuer}} for the issuer). `PKI_bytes` is the average size, in bytes, of the two CA certificates served, **in the format they travel in (PEM)**; since root and issuer have slightly different sizes, N_PKI × PKI_bytes is the exact sum of the {{n_pki}} transfers. Each term is a size of cryptographic material, not of HTTP traffic — the JWT size is the token's length, the key's size is the key's size, without headers. With N_PKI = 0 the equation reduces to the original, which preserves comparability with the literature.
 
-### 7.1. Por que o termo de PKI é necessário
+### 7.1. Why the PKI Term Is Necessary
 
-O fluxo baixa dois certificados de CA (`root-ca.pem`, `issuer-ca.pem`) no início de cada sub-fluxo, {{n_pki}} transferências por execução completa. Esses certificados **não são handshake** (trafegam por HTTP, fora da negociação TLS), **não são JWT** e **não são chave de JWKS**; nenhum dos três termos originais os inclui, embora o custo já fosse medido — os arquivos brutos o registram sob o participante "PKI/CRL". Não há dupla contagem com o handshake: os certificados que trafegam **dentro** dele (servidor e cliente) são contados no termo de handshake; os de CA baixados por HTTP são transferências distintas.
+The flow downloads two CA certificates (`root-ca.pem`, `issuer-ca.pem`) at the start of each sub-flow, {{n_pki}} transfers per complete run. These certificates **are not handshake** (they travel over HTTP, outside the TLS negotiation), **are not JWT**, and **are not a JWKS key**; none of the three original terms includes them, even though the cost was already measured — the raw files record it under the "PKI/CRL" participant. There is no double-counting with the handshake: the certificates that travel **inside** it (server and client) are counted in the handshake term; the CA ones downloaded over HTTP are distinct transfers.
 
-**Origem dos dados, sem nova medição.** Os tamanhos dos certificados vêm dos arquivos PEM que o gateway serve (`mock-service-os/certs/`) e foram validados contra o volume de resposta HTTP já registrado nos dados brutos: o volume medido menos o corpo dos {{n_pki}} certificados dá um enquadramento HTTP de exatamente {{frame_each}} bytes por resposta, idêntico nos três perfis, o que só ocorre se o corpo servido for o arquivo usado no cálculo.
+**Data origin, no new measurement.** The certificate sizes come from the PEM files the gateway serves (`mock-service-os/certs/`) and were validated against the HTTP response volume already recorded in the raw data: the measured volume minus the body of the {{n_pki}} certificates gives an HTTP framing of exactly {{frame_each}} bytes per response, identical across all three profiles — which can only happen if the body served is the file used in the calculation.
 
-**O que a tabela abaixo mostra.** Para cada perfil, o tamanho em bytes do certificado raiz e do certificado da emissora (no formato PEM, como trafegam), e a soma dos {{n_pki}} downloads que compõem o termo de PKI da equação — a base numérica de tudo que a Seção 7.2 discute.
+**What the table below shows.** For each profile, the size in bytes of the root certificate and the issuer certificate (in PEM format, as they travel), and the sum of the {{n_pki}} downloads that make up the equation's PKI term — the numerical basis for everything discussed in Section 7.2.
 
 {{table:pki_detail}}
 
-### 7.2. Por que isso importa especificamente no cenário híbrido
+### 7.2. Why This Matters Specifically in the Hybrid Scenario
 
-No Híbrido, cada certificado de CA carrega, além da estrutura RSA, o material ML-DSA-65 completo (chave pública e assinatura alternativa) nas três extensões: cada um ocupa cerca de {{root_hybrid}} bytes em PEM, contra {{root_classic}} no Clássico e {{root_pqc}} no PQC. Em termos absolutos:
+In Hybrid, each CA certificate carries, in addition to the RSA structure, the complete ML-DSA-65 material (public key and alternative signature) in the three extensions: each one takes up about {{root_hybrid}} bytes in PEM, versus {{root_classic}} in Classic and {{root_pqc}} in PQC. In absolute terms:
 
-- O termo de PKI do Híbrido é de **{{t_pki_hybrid}} bytes** — **{{hyb_pki_over_jwk}} o termo de chave pública JWK** ({{t_jwk_hybrid}} bytes) e equivalente a {{hyb_pki_over_hs}} do termo de handshake ({{t_hs_hybrid}} bytes): maior que um dos outros três termos da própria equação.
-- É **{{pki_ratio_hybrid_classic}} o termo de PKI do Clássico** e {{pki_ratio_hybrid_pqc}} o do PQC: o crescimento do material de CA é a parcela do custo mais sensível ao esquema de combinação escolhido, porque o Híbrido é o único perfil cujos certificados de CA carregam as duas assinaturas.
-- O termo de PKI não altera a ordem dos perfis nem o peso dominante dos JWTs ({{t_jwt_hybrid}} bytes no Híbrido) — sua participação no OPINsize de cada perfil está na Seção 7.3.
+- Hybrid's PKI term is **{{t_pki_hybrid}} bytes** — **{{hyb_pki_over_jwk}} the JWK public-key term** ({{t_jwk_hybrid}} bytes) and equivalent to {{hyb_pki_over_hs}} of the handshake term ({{t_hs_hybrid}} bytes): larger than one of the equation's other three terms.
+- It is **{{pki_ratio_hybrid_classic}} Classic's PKI term** and {{pki_ratio_hybrid_pqc}} PQC's: the growth of the CA material is the portion of the cost most sensitive to the combination scheme chosen, because Hybrid is the only profile whose CA certificates carry both signatures.
+- The PKI term doesn't change the order of the profiles nor the dominant weight of the JWTs ({{t_jwt_hybrid}} bytes in Hybrid) — its share of each profile's OPINsize is in Section 7.3.
 
-### 7.3. Impacto numérico
+### 7.3. Numerical Impact
 
-**O que a tabela abaixo mostra.** Cada linha é um termo da equação estendida; as colunas de perfil dão o valor de N (quantas vezes o termo ocorre no fluxo) e o resultado em bytes de cada termo, por perfil. A linha **OPINsize** é a soma dos quatro termos — o resultado final da equação — e a linha seguinte mostra que fração desse total o termo de PKI (o novo, desta tese) representa.
+**What the table below shows.** Each row is a term of the extended equation; the profile columns give the value of N (how many times the term occurs in the flow) and the result in bytes of each term, per profile. The **OPINsize** row is the sum of the four terms — the equation's final result — and the following row shows what fraction of that total the PKI term (the new one, from this thesis) represents.
 
 {{table:opin}}
 
-**Como ler a tabela de razões abaixo.** Cada linha divide o OPINsize de um perfil pelo de outro, para responder diretamente "quantas vezes maior/mais pesado é X em relação a Y" — o mesmo tipo de razão usado nas tabelas de tamanho de `CONSOLIDATED_REPORT.md`, Seção 3.1.
+**How to read the ratio table below.** Each row divides one profile's OPINsize by another's, to directly answer "how many times larger/heavier is X relative to Y" — the same kind of ratio used in the size tables of `CONSOLIDATED_REPORT.md`, Section 3.1.
 
 {{table:opin_ratios}}
 
-- O termo de PKI representa {{share_classic}} do OPINsize do Clássico, {{share_pqc}} do PQC e {{share_hybrid}} do Híbrido — no Híbrido, o segundo maior componente da soma, atrás só do termo de JWT.
-- Pelo OPINsize, o Híbrido é {{opin1_ratio_hybrid_pqc}} o PQC e {{opin1_ratio_hybrid_classic}} o Clássico; o PQC é {{opin1_ratio_pqc_classic}} o Clássico.
-- O PQC tem a menor participação relativa do termo de PKI porque, neste protótipo, seus certificados de CA têm chave de titular ML-DSA-65 mas continuam assinados por uma CA RSA (desenho deliberado da Etapa 3.1); no Híbrido, os certificados de CA carregam as duas assinaturas.
+- The PKI term represents {{share_classic}} of Classic's OPINsize, {{share_pqc}} of PQC's, and {{share_hybrid}} of Hybrid's — in Hybrid, the second-largest component of the sum, behind only the JWT term.
+- By OPINsize, Hybrid is {{opin1_ratio_hybrid_pqc}} PQC and {{opin1_ratio_hybrid_classic}} Classic; PQC is {{opin1_ratio_pqc_classic}} Classic.
+- PQC has the smallest relative share of the PKI term because, in this prototype, its CA certificates have an ML-DSA-65 subject key but remain signed by an RSA CA (deliberate design of Stage 3.1); in Hybrid, the CA certificates carry both signatures.
 
-### 7.4. Sensibilidade e limites do termo
+### 7.4. Sensitivity and Limits of the Term
 
-- **Formato do certificado.** O PEM (base64 com quebras de linha) ocupa cerca de 36–39% mais que o DER; PEM é o formato que efetivamente trafega. Em DER, o termo seria (a tabela abaixo recalcula o OPINsize com o termo de PKI em DER, e mostra a variação percentual em relação ao OPINsize oficial em PEM):
+- **Certificate format.** PEM (base64 with line breaks) takes up about 36–39% more than DER; PEM is the format that actually travels on the wire. In DER, the term would be (the table below recalculates OPINsize with the PKI term in DER, and shows the percentage variation relative to the official OPINsize in PEM):
 
 {{table:sens_der}}
 
-- **Enquadramento HTTP.** Usando diretamente o volume de resposta medido (corpo + {{frame_each}} bytes por certificado), o OPINsize muda em menos de 1 ponto percentual — a tabela abaixo é a mesma comparação, agora com o termo de PKI medido pelo tráfego HTTP real em vez do tamanho do arquivo PEM:
+- **HTTP framing.** Using the measured response volume directly (body + {{frame_each}} bytes per certificate), OPINsize changes by less than 1 percentage point — the table below is the same comparison, now with the PKI term measured by actual HTTP traffic instead of the PEM file size:
 
 {{table:sens}}
 
-- **N_PKI é uma propriedade do fluxo implementado.** O cliente de teste baixa os certificados de CA no início de cada sub-fluxo, sem cache; um cliente real com cache pagaria menos. A fórmula mantém N_PKI explícito para permitir outros valores, do mesmo modo que N_JWK.
-- **Escopo.** O OPINsize modela o custo dos artefatos criptográficos; não inclui cabeçalhos HTTP, sobrecarga de TLS/TCP/IP nem o tráfego de aplicação total (`total_bytes_exchanged`), que é outra métrica.
+- **N_PKI is a property of the implemented flow.** The test client downloads the CA certificates at the start of each sub-flow, with no cache; a real client with caching would pay less. The formula keeps N_PKI explicit to allow other values, the same way as N_JWK.
+- **Scope.** OPINsize models the cost of the cryptographic artifacts; it does not include HTTP headers, TLS/TCP/IP overhead, or the total application traffic (`total_bytes_exchanged`), which is a separate metric.
 
 ---
 
-## 8. Como as métricas são coletadas
+## 8. How the Metrics Are Collected
 
-**O que a tabela abaixo mostra.** Para cada métrica usada nos resultados, de onde exatamente o valor sai (qual componente a registra) e o mecanismo de medição — útil para auditar a origem de qualquer número deste relatório ou de `CONSOLIDATED_REPORT.md`.
+**What the table below shows.** For each metric used in the results, exactly where the value comes from (which component records it) and the measurement mechanism — useful for auditing the origin of any number in this report or in `CONSOLIDATED_REPORT.md`.
 
-| Métrica | Onde é medida | Como |
+| Metric | Where it's measured | How |
 |---|---|---|
-| `handshake_bytes` | Gateway | Um contador na conexão TCP bruta (abaixo do TLS) soma os bytes lidos e escritos; o valor é lido quando o servidor começa a ler a primeira requisição, isto é, logo após o handshake terminar |
-| Grupo de troca de chave negociado | Gateway | Registrado do estado da conexão TLS (`curveID`), não da configuração |
-| `client_cert_der_bytes` | Cliente | Tamanho DER do certificado apresentado |
-| JWT e chave JWK | Cliente | Extraídos das respostas e requisições (comprimento do token; tamanho da chave pública de cada entrada do JWKS) |
-| Bytes por participante | Cliente | Cabeçalhos + corpo de cada requisição e resposta, atribuídos a Cliente, "Outros" (AS + RS) ou PKI/CRL |
-| `T_fluxo` | Cliente | Relógio monotônico, do início ao fim do fluxo completo; tentativas descartadas por falhas conhecidas não contam |
+| `handshake_bytes` | Gateway | A counter on the raw TCP connection (below TLS) sums the bytes read and written; the value is read when the server starts reading the first request, i.e., right after the handshake finishes |
+| Negotiated key-exchange group | Gateway | Recorded from the TLS connection state (`curveID`), not from the configuration |
+| `client_cert_der_bytes` | Client | DER size of the presented certificate |
+| JWT and JWK key | Client | Extracted from responses and requests (token length; public-key size of each JWKS entry) |
+| Bytes per participant | Client | Headers + body of each request and response, attributed to Client, "Other" (AS + RS), or PKI/CRL |
+| `T_fluxo` | Client | Monotonic clock, from the start to the end of the complete flow; attempts discarded due to known failures don't count |
 
-O gateway registra todas as conexões que vê, inclusive a interna `auth`→RS; por isso as estatísticas do gateway são filtradas pelo tamanho do certificado de cliente do perfil ativo, que identifica com segurança as conexões do cliente de teste.
+The gateway logs every connection it sees, including the internal `auth`→RS one; that's why the gateway statistics are filtered by the active profile's client-certificate size, which reliably identifies the test client's connections.
 
-**Resolução AS/RS.** O participante de cada chamada é atribuído pelo endereço da URL, e na v7 as chamadas dos três perfis passam pelo proxy local — por isso o AS e o RS apareciam ambos como "Outros" nos dados brutos oficiais. Fechado com uma captura pontual (uma execução por perfil, fora do protocolo estatístico, mesma categoria de `artifacts/`) que usa o cabeçalho `Host` real de cada chamada (nunca reescrito pelo proxy) para reclassificar; válido para as 180 execuções já coletadas porque o tamanho é comprovadamente determinístico (0,00% de spread). Ver `DECISIONS.md`, Decision 10, para a metodologia completa e para um problema de ambiente real encontrado no processo.
+**AS/RS resolution.** Each call's participant is assigned by the URL address, and in v7 the calls for all three profiles go through the local proxy — that's why the AS and RS both showed up as "Other" in the official raw data. Closed with a one-off capture (one run per profile, outside the statistical protocol, same category as `artifacts/`) that uses each call's real `Host` header (never rewritten by the proxy) to reclassify; valid for the 180 runs already collected because size is provably deterministic (0.00% spread). See `DECISIONS.md`, Decision 10, for the complete methodology and for a real environment issue found along the way.
 
-**Limitação que permanece.** O gateway registra os bytes do handshake como uma soma de leitura+escrita, sem direção — essa decomposição exigiria instrumentar o gateway e não foi feita (`CONSOLIDATED_REPORT.md`, Seção 3.3).
+**Remaining limitation.** The gateway records handshake bytes as a read+write sum, with no direction — this breakdown would require instrumenting the gateway and was not done (`CONSOLIDATED_REPORT.md`, Section 3.3).
 
-**Protocolo**: 6 cenários de latência × 10 execuções × 3 perfis, para tamanho e para latência; uma execução de aquecimento descartada por cenário de latência; sem remoção de valores atípicos; aquecimento do ambiente após cada troca de perfil; convenção "JSON é a fonte, Markdown é derivado". As estatísticas foram recalculadas dos arquivos brutos numa auditoria independente antes da consolidação (`CONSOLIDATED_REPORT.md`, Seção 7).
-
----
-
-## 9. Limites conhecidos da arquitetura
-
-1. A cifragem dos tokens permanece clássica nos três perfis (Seção 6.3).
-2. A conexão interna `auth`→RS permanece clássica por desenho (Seção 5.1).
-3. PQC usa ML-KEM-1024 (categoria NIST 5) e Híbrido, ML-KEM-768 (categoria 3): o Go só oferece ML-KEM-1024 sem componente clássico.
-4. O componente RSA do Híbrido é de 2.048 bits nos JWTs emitidos pelo AS e RS, por continuidade com o que já havia sido medido.
-5. O assinador ML-DSA-65 do cliente de teste usa um contêiner efêmero por assinatura, o que tem custo de tempo próprio e afeta o T_fluxo dos perfis PQC e Híbrido (`CONSOLIDATED_REPORT.md`, Seção 6).
-6. Ferramentas em versão de pré-lançamento ou experimental (Go 1.27 candidata a lançamento; ML-DSA-65 do WebCrypto do Node 24).
-7. Não cobertos: SSA, DCR, trilha de auditoria com hash e revogação (CRL/OCSP).
+**Protocol**: 6 latency scenarios × 10 runs × 3 profiles, for size and for latency; one warm-up run discarded per latency scenario; no outlier removal; environment warm-up after every profile switch; "JSON is the source, Markdown is derived" convention. The statistics were recalculated from the raw files in an independent audit before consolidation (`CONSOLIDATED_REPORT.md`, Section 7).
 
 ---
 
-## Referências
+## 9. Known Limitations of the Architecture
 
-- Bindel, N., Herath, U., McKague, M., & Stebila, D. (2017). *Transitioning to a Quantum-Resistant Public Key Infrastructure.* PQCrypto 2017 (origem do Strong Nesting e da propriedade SUF-CMA).
+1. Token encryption remains classical in all three profiles (Section 6.3).
+2. The internal `auth`→RS connection remains classical by design (Section 5.1).
+3. PQC uses ML-KEM-1024 (NIST category 5) and Hybrid uses ML-KEM-768 (category 3): Go only offers ML-KEM-1024 without a classical component.
+4. Hybrid's RSA component is 2,048 bits in the JWTs issued by the AS and RS, for continuity with what had already been measured.
+5. The test client's ML-DSA-65 signer uses an ephemeral container per signature, which has its own time cost and affects the T_fluxo of the PQC and Hybrid profiles (`CONSOLIDATED_REPORT.md`, Section 6).
+6. Pre-release or experimental-version tooling (Go 1.27 release candidate; Node 24's WebCrypto ML-DSA-65).
+7. Not covered: SSA, DCR, hash-based audit trail, and revocation (CRL/OCSP).
+
+---
+
+## References
+
+- Bindel, N., Herath, U., McKague, M., & Stebila, D. (2017). *Transitioning to a Quantum-Resistant Public Key Infrastructure.* PQCrypto 2017 (origin of Strong Nesting and the SUF-CMA property).
 - Bindel, N., Braun, J., Gladiator, L., Stebila, D., & Wiggers, T. (2019). *X.509-Compliant Hybrid Certificates for the Post-Quantum Transition.* Journal of Open Source Software, 4(40), 1606.
-- Schardong et al. (2022), Eq. 3.1 (equação de tamanho do fluxo original). *Entrada bibliográfica completa a ser inserida pelo autor.*
-- NIST FIPS 203 (ML-KEM) e FIPS 204 (ML-DSA).
-- IETF TLS WG: `draft-ietf-tls-mlkem` (ML-KEM puro em TLS 1.3) e `draft-ietf-tls-ecdhe-mlkem` (grupos híbridos ECDHE-MLKEM, incluindo X25519MLKEM768), ainda em elaboração.
-- RFC 8446 (TLS 1.3); RFC 5705 (exportadores de material de chave); RFC 8785 (JSON Canonicalization Scheme); RFC 7523 (autenticação de cliente por JWT).
-- Documentos do projeto: [`CONSOLIDATED_REPORT.md`](CONSOLIDATED_REPORT.md), [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md), [`DECISIONS.md`](DECISIONS.md), `artifacts/`, `thesis/results/v4/JWT_Hybrid_Architecture.md`, `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`.
+- Schardong et al. (2022), Eq. 3.1 (original flow-size equation). *Full bibliographic entry to be inserted by the author.*
+- NIST FIPS 203 (ML-KEM) and FIPS 204 (ML-DSA).
+- IETF TLS WG: `draft-ietf-tls-mlkem` (pure ML-KEM in TLS 1.3) and `draft-ietf-tls-ecdhe-mlkem` (hybrid ECDHE-MLKEM groups, including X25519MLKEM768), still in draft.
+- RFC 8446 (TLS 1.3); RFC 5705 (key-material exporters); RFC 8785 (JSON Canonicalization Scheme); RFC 7523 (JWT client authentication).
+- Project documents: [`CONSOLIDATED_REPORT.md`](CONSOLIDATED_REPORT.md), [`TLS_KEM_Proxy_Architecture.md`](TLS_KEM_Proxy_Architecture.md), [`DECISIONS.md`](DECISIONS.md), `artifacts/`, `thesis/results/v4/JWT_Hybrid_Architecture.md`, `thesis/docs/Cruzamento_SAD_vs_Experimentos.md`.

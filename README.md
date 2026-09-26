@@ -1,8 +1,25 @@
-# Mock Insurance Open Source
+# MockOPIN
 
-This repository provides a fully local instance of **Mock Open Insurance**, including all components required to comply with Open Insurance (OPIN) standards and API specifications.
+This repository provides a fully local instance of **Mock Open Insurance**,
+including all components required to comply with Open Insurance (OPIN)
+standards and API specifications. It is also the test bed for a doctoral
+thesis on migrating the OPIN consent flow from classical to post-quantum
+(PQC) and hybrid cryptography.
+
+**Looking for the thesis results?** Start at
+[`thesis/README.md`](thesis/README.md) — the final, official numbers are in
+[`thesis/results/v7/`](thesis/results/v7/).
 
 Certificates for the Certificate Authority and mTLS clients are located in [`mock-service-os/certs`](./mock-service-os/certs).
+
+## Repository structure
+
+| Path | What it is |
+|---|---|
+| [`mock-service-os/`](mock-service-os/) | The mock AS, RS gateway (mTLS), and their certificates/keys — the environment the thesis measures |
+| [`insurance-server-lambdas/`](insurance-server-lambdas/) | The Resource Server (RS), implemented in Java/Micronaut |
+| [`insurance-swagger/`](insurance-swagger/) | OpenAPI/Swagger definitions and codegen templates for the RS |
+| [`thesis/`](thesis/) | Thesis automation, experiment data, and results (`v1`–`v7`, with `v7` as the final one) |
 
 ---
 
@@ -13,6 +30,8 @@ Certificates for the Certificate Authority and mTLS clients are located in [`moc
 - [Instructions for Windows](#instructions-for-windows)
 - [Resuming After a Reboot (already set up)](#resuming-after-a-reboot-already-set-up)
 - [Obtaining a Token Using Certificates](#obtaining-a-token-using-certificates)
+- [Architecture Design](#architecture-design)
+- [Thesis: Post-Quantum Migration](#thesis-post-quantum-migration)
 
 ---
 
@@ -396,3 +415,21 @@ In the current implementation, configuration is fetched from AWS SSM Parameter S
 For local development, this behavior is replicated using LocalStack, provisioned via `mock-service-os/setup_ssm.sh`.
 
 When deploying to another cloud provider, the only required adjustment is replacing the SSM parameter-loading logic with that provider’s equivalent service (e.g., Azure App Configuration, GCP Secret Manager, or simple environment variables).
+
+---
+
+## Thesis: Post-Quantum Migration
+
+This environment is also the test bed for a doctoral thesis measuring the
+cost of migrating the OPIN consent flow above to post-quantum (PQC) and
+hybrid cryptography — the same gateway, AS, and RS described above, run
+under three cryptographic profiles (Classic, PQC, Hybrid) that vary only
+the TLS key exchange and the signature/certificate scheme.
+
+- **Start here:** [`thesis/README.md`](thesis/README.md)
+- **Final, official results:** [`thesis/results/v7/`](thesis/results/v7/) —
+  see `Consolidated_Metrics_Report_FINAL.md` for the numbers,
+  `ARCHITECTURE.md` for the measured system and methodology, and
+  `DECISIONS.md` for the engineering decisions behind the final setup.
+- **Real, cryptographically verified artifacts** (certificates, tokens,
+  handshake evidence) per profile: [`thesis/results/v7/artifacts/`](thesis/results/v7/artifacts/)
