@@ -955,7 +955,7 @@ class InteractionSessionLostError(RuntimeError):
     """
 
 
-def simulate_login(auth_url: str, cert) -> None:
+def simulate_login(auth_url: str, cert, jarm_calls: list) -> None:
     """
     Drives the login+consent interaction over plain HTTP, exactly like a
     browser submitting mock_as's forms would -- no CSRF token or JS-driven
@@ -971,6 +971,25 @@ def simulate_login(auth_url: str, cert) -> None:
     pattern this produces at the gateway matches what was already validated
     under CRYPTO_PROFILE=pqc: a third, separate connection pool per flow,
     alongside the AS and RS pools -- see DECISIONS.md for the reasoning.
+
+    jarm_calls: this whole login/consent sequence (GET /auth, POST /login,
+    POST /confirm and every redirect hop requests follows for each) never
+    goes through do_call(), so none of it was ever counted in total_bytes,
+    bytes_by_participant, or jwt_sizes -- confirmed live that the final
+    "resume" redirect specifically (POST /confirm's last hop before the
+    local callback server) carries a real signed JARM response (FAPI
+    Advanced) in its own Location header's `response=` query parameter,
+    completely invisible to extract_jwts() (which only scans body +
+    Authorization header, never Location). That JARM is real, signed with
+    the profile's own scheme (confirmed: PS256 for classic, pure ML-DSA-65
+    for pqc, MLDSA65-RSA2048-PSS-SHA256/Strong Nesting for hybrid, sizes
+    621/4696/5061 bytes respectively), and belongs in the same JWT
+    accounting as every other token this flow signs -- it just never was.
+    A response hook on the /confirm POST below captures it (and its real
+    request+response byte cost, same header_bytes()/body-length formula
+    do_call() itself uses) into jarm_calls, a call-shaped dict the caller
+    appends into the shared `calls` list -- same treatment as any other
+    tracked call, not a separate accounting path.
     """
     session = requests.Session()
     session.cert = cert
@@ -1027,10 +1046,43 @@ def simulate_login(auth_url: str, cert) -> None:
     for name, value in HIDDEN_ACCOUNTS_RE.findall(resp.text):
         confirm_fields.setdefault(name, []).append(value)
 
+    def _capture_jarm_hop(resp, *_a, **_kw):
+        loc = resp.headers.get("Location", "")
+        if "callback?response=" not in loc:
+            return
+        token = parse_qs(urlparse(loc).query).get("response", [None])[0]
+        if not token:
+            return
+        req_headers = dict(resp.request.headers)
+        req_body = resp.request.body or ""
+        if isinstance(req_body, bytes):
+            req_body = req_body.decode("utf-8", errors="replace")
+        resp_headers = dict(resp.headers)
+        resp_body = resp.text or ""
+        req_bytes = ba.header_bytes(req_headers) + len(req_body.encode("utf-8"))
+        resp_bytes = ba.header_bytes(resp_headers) + len(resp_body.encode("utf-8"))
+        jarm_calls.append({
+            "endpoint": urlparse(resp.url).path or resp.url,
+            "full_uri": resp.url,
+            "method": resp.request.method,
+            "src": "JARM",
+            "participant": ba.classify_participant(resp.url),
+            "request_bytes": req_bytes,
+            "response_bytes": resp_bytes,
+            "total_bytes": req_bytes + resp_bytes,
+            "latency_ms": 0.0,  # not independently timed; folded into the /confirm call's own latency
+            "authorization_header": None,
+            "jwts": [token],
+            "jwt_sizes": [len(token)],
+            "jwk_sizes": [],
+            "status_code": f"{resp.status_code} {resp.reason}",
+        })
+
     try:
         session.post(
             f"https://{AUTH_HOST}/interaction/{uid}/confirm",
             data=confirm_fields, allow_redirects=True, timeout=60,
+            hooks={"response": [_capture_jarm_hop]},
         )
     except requests.exceptions.RequestException:
         pass  # server-side callback already recorded before this response finishes streaming back
@@ -1038,7 +1090,7 @@ def simulate_login(auth_url: str, cert) -> None:
 
 def wait_for_authorization_code(
     auth_url: str, cert, timeout_seconds: int = 600, attempt_timeout_seconds: int = 20, max_attempts: int = 3,
-    timing: dict | None = None,
+    timing: dict | None = None, calls: list | None = None,
 ) -> str:
     """
     Runs simulate_login() up to max_attempts times against the SAME local
@@ -1080,6 +1132,12 @@ def wait_for_authorization_code(
     discarded attempt is measurement-environment noise, not real flow
     cost (same principle already applied to bytes: a discarded call was
     never added to `calls` either).
+
+    calls, when given: the JARM call captured by simulate_login() (see its
+    own docstring) is collected per-attempt and only extended into this
+    list once an attempt actually succeeds -- a discarded/retried attempt's
+    JARM capture (if any) is thrown away with it, same discard rule as
+    every other byte/time accounting on a failed attempt.
     """
     cert_path, key_path = _generate_callback_tls_cert()
     try:
@@ -1095,7 +1153,8 @@ def wait_for_authorization_code(
         try:
             overall_started = time.time()
             for attempt in range(1, max_attempts + 1):
-                simulate_login(auth_url, cert)
+                attempt_jarm_calls: list = []
+                simulate_login(auth_url, cert, attempt_jarm_calls)
 
                 attempt_started = time.time()
                 while server.captured_params is None:  # type: ignore[attr-defined]
@@ -1112,9 +1171,11 @@ def wait_for_authorization_code(
                             timing.setdefault("retries", []).append(
                                 {"step": "login_race", "attempt": attempt, "wasted_seconds": round(wasted, 3)}
                             )
-                        break  # give up this attempt, retry simulate_login() from scratch
+                        break  # give up this attempt, retry simulate_login() from scratch -- attempt_jarm_calls discarded
                     time.sleep(0.5)
                 else:
+                    if calls is not None:
+                        calls.extend(attempt_jarm_calls)
                     break  # captured_params was set -- success, stop retrying
             else:
                 raise TimeoutError(f"No callback received after {max_attempts} simulated login attempts")
@@ -1363,7 +1424,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
 
         auth_url = f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
         try:
-            code = wait_for_authorization_code(auth_url, cert, timing=timing)
+            code = wait_for_authorization_code(auth_url, cert, timing=timing, calls=calls)
             break
         except (RequestUriExpiredError, InteractionSessionLostError) as e:
             step_name = "par_ttl" if isinstance(e, RequestUriExpiredError) else "interaction_session_lost"

@@ -464,3 +464,35 @@ connection error -- restarted before any capture; no data depended on this.
 updated with the decomposed table; the limitation recorded in Decision 8 is
 now closed for the AS/RS part -- decomposing the handshake by direction
 remains open, with no equivalent solution available in the existing data.
+
+---
+
+## 11. A real signed artifact (JARM) missing from N_JWT and from every byte total -- found via external review, fixed at the source, corrected analytically in the existing dataset
+
+**Context.** An independent technical review of the consolidated report raised two questions this project could not answer from the published numbers alone: (1) why the login/consent interaction, on a flow the report describes as 28 HTTP requests over 6 reused connections, implies far more round trips than that when back-calculated from the measured latency deltas; (2) whether the reported byte totals reflect the flow's true application-layer traffic. Investigated directly against the code, not just the numbers, both led to the same root cause.
+
+**Root cause, confirmed live.** `simulate_login()` (the code that drives the automated login/consent interaction, standing in for a browser) makes its own real HTTP requests with `allow_redirects=True`, entirely outside `do_call()` -- the function every other tracked call in this project goes through. Instrumenting a live run and counting every request `requests` actually makes (including every redirect hop, via response hooks) found **at least 40 real HTTP requests per flow, not 28** -- and at least 75,943 bytes of real traffic (headers + body, measured with the exact same formula `do_call()` uses) that never entered `total_bytes_exchanged` or `bytes_by_participant`, confirmed identical across all three profiles for the login/consent HTML pages themselves (they don't depend on the crypto scheme).
+
+**But one of those untracked responses is not profile-independent.** The final "resume" redirect of the `POST /confirm` chain -- the one immediately before the local callback server -- carries a real, signed **JARM (FAPI Advanced authorization response)** token in the `Location` header's `response=` query parameter, one per sub-flow (2 per complete flow). `extract_jwts()` (`baseline_automation.py`) only ever scanned request/response bodies and the `Authorization` header -- never `Location` -- so this JWT was invisible to it even on calls that *do* go through `do_call()`; combined with `simulate_login()` never calling `do_call()` at all, the JARM was doubly unreachable. Measured live, once per profile (deterministic -- JARM content depends only on the fixed claims and the profile's own signing scheme, the same reason every other size metric in this dataset already shows 0.00% spread), each verified by decoding the token's own `alg` header field:
+
+| Profile | JARM size (bytes) | `alg` |
+|---|---:|---|
+| Classic | 621 | `PS256` |
+| PQC | 4,696 | `ML-DSA-65` |
+| Hybrid | 5,061 | `MLDSA65-RSA2048-PSS-SHA256` (Strong Nesting) |
+
+This is exactly the artifact `ARCHITECTURE.md`'s own primitive table already names as migrated ("`id_token` and JARM from the AS," Strong Nesting for Hybrid) -- the report's own narrative already claimed this token exists and is migrated; it was just never actually counted.
+
+**Fixed at the source.** `simulate_login()` now takes a `jarm_calls` list and captures this response via a `hooks={"response": [...]}` callback on the `/confirm` POST, building a call-shaped dict with the same `header_bytes()`/body-length formula `do_call()` itself uses, classified and byte-counted identically to any other tracked call. `wait_for_authorization_code()` threads this through per login attempt, only keeping a successful attempt's capture (a discarded/retried attempt's JARM, like its bytes and time, is thrown away with it) -- `create_and_authorize_consent()` passes its own `calls` list straight through. Verified end-to-end through the unmodified official pipeline (`opin_flow.py`, not a scratch script), fresh single runs, all three profiles: `jwt_count` is now 28 (was 26), `total_requests` is now 30 (28 tracked API calls + the 2 JARM captures), and the new `jwt_sizes_bytes` list visibly includes two values matching each profile's measured JARM size exactly.
+
+**Correction applied to the already-collected v7 dataset, without re-collecting.** The 180 already-committed raw run files predate this fix and have no field to retroactively recover the JARM from -- there is no raw-file-level correction possible. Because the missing quantity is deterministic (confirmed 0% spread on every other size metric already in this dataset, and the JARM's own live measurement was taken from three fresh, isolated single runs, one per profile), a full statistical re-collection is not needed either: `thesis/scripts/apply_jarm_correction.py` adds `N_JWT_correction = 2` and each profile's measured JARM size directly into `report_data_v7.json`'s existing `size`/`opinsize` fields, alongside (not replacing) the original numbers, so the correction's provenance stays traceable.
+
+| | OPINsize (as published) | OPINsize (JARM-corrected) | Δ |
+|---|---:|---:|---:|
+| Classic | 75,687 | 76,929 | +1,242 (+1.64%) |
+| PQC | 261,663 | 271,055 | +9,392 (+3.59%) |
+| Hybrid | 340,355 | 350,477 | +10,122 (+2.97%) |
+
+Corrected ratios: PQC/Classic 3.52× (was 3.46×); Hybrid/Classic 4.56× (was 4.50×); Hybrid/PQC 1.29× (was 1.30×, essentially unchanged, since PQC's and Hybrid's JARM sizes are close to each other). `CONSOLIDATED_REPORT.md`/`Consolidated_Metrics_Report_FINAL.md` updated to the corrected numbers as the reported ones, with this decision cited as the source of the correction.
+
+**What remains open, reported honestly.** The untracked-bytes finding also means `total_bytes_exchanged` and `bytes_by_participant` (Section 2/3.3 of the consolidated report) undercount the flow's true total by the login/consent HTML traffic (≈75,943 bytes/flow, profile-independent, not yet folded into those specific tables) -- OPINsize itself is unaffected (none of its four terms are derived from those two fields), but a reader citing "total bytes exchanged" as the flow's full application-layer traffic should not take that number as complete until this second table is corrected the same way. Separately, the same untracked-request investigation confirmed the round-trip count is undercounted (≥40 real requests, not 28) but did not fully close the gap the external review calculated from latency deltas at higher network-delay scenarios -- the remainder is plausibly connection-establishment RTT overhead (new TCP/TLS handshakes cost more than one round trip each), not investigated further here since it is a latency-methodology question, not a size one.

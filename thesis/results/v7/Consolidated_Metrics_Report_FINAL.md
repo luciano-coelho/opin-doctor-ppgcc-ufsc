@@ -17,7 +17,7 @@ Each complete execution has the following structure, identical across all three 
 |---|---:|---|
 | HTTP requests | 28 | distributed across two sub-flows |
 | mTLS connections | 6 | three connection pools per sub-flow (AS/API, Directory, and login), each reused by every call in its pool |
-| JWTs transferred | 26 | |
+| JWTs transferred | 28 | includes 2 JARM tokens per flow, found during external review (Decision 11) |
 | JWKS fetches | 2 | one per sub-flow |
 | CA certificate fetches | 4 | root and issuer, in each sub-flow |
 
@@ -72,11 +72,11 @@ The environment is a lab setup and does not reproduce a real long-distance netwo
 | Metric | Classic | PQC | Hybrid | Note: meaning, decisions, and findings |
 |---|---:|---:|---:|---|
 | **Traffic: OPINsize** | | | | |
-| OPINsize (bytes) | 75.687 | 261.663 | 340.355 | Total cryptographic-material cost of the complete flow, by this thesis's equation (Section 3): N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes. PQC is **3.46× Classic** (+245.72%); Hybrid is **4.50× Classic** (+349.69%) and **1.30× PQC** (+30.07%). Since the flow's structure is the same across all three profiles (N parameters at the end of this table), all of the growth comes from the size of the cryptographic artifacts. Hybrid sits above PQC on every size metric because its signed artifacts carry both signatures and its key exchange combines both mechanisms. |
+| OPINsize (bytes) | 76.929 | 271.055 | 350.477 | Total cryptographic-material cost of the complete flow, by this thesis's equation (Section 3): N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size + N_PKI × PKI_bytes. PQC is **3.52× Classic** (+252.34%); Hybrid is **4.56× Classic** (+355.59%) and **1.29× PQC** (+29.30%). Since the flow's structure is the same across all three profiles (N parameters at the end of this table), all of the growth comes from the size of the cryptographic artifacts. Hybrid sits above PQC on every size metric because its signed artifacts carry both signatures and its key exchange combines both mechanisms. |
 | **mTLS handshake** | | | | |
 | mTLS handshake: bytes (P50) | 5.119 | 16.605 | 18.023 | Size of each mTLS handshake, in bytes (P50 of the 6 connections), over 60 runs per profile (6 scenarios × 10). Spread of 0.00%: the value is deterministic. The number of handshakes is the same (6) across all three profiles; the variation comes only from the size of each one. PQC is 3.24× Classic (+224.38%); Hybrid is 3.52× Classic (+252.08%) and 1.09× PQC (+8.54%). Hybrid adds only 1.418 bytes per handshake over PQC, even though its client certificate is 3.906 bytes larger: in transport, the extra cost of hybrid protection is marginal. |
 | **Cryptographic artifacts** | | | | |
-| Average JWT (bytes) | 1.385,42 | 5.458,81 | 7.324,81 | Average size of the JWTs (header + payload + signature) over the flow's 26 tokens, a number equal across all three profiles. PQC is 3.94× Classic (+294.02%); Hybrid is 5.29× Classic (+428.71%) and 1.34× PQC (+34.18%). The ML-DSA-65 signature (3.309 bytes) replaces PS256 (256 bytes) in PQC; in Hybrid, both coexist in the same token, either via payload extension (RS256 + ML-DSA-65) or via Strong Nesting (PS256 + ML-DSA-65), depending on the artifact. |
+| Average JWT (bytes) | 1.330,82 | 5.404,32 | 7.163,11 | Average size of the JWTs (header + payload + signature) over the flow's 28 tokens, a number equal across all three profiles. Includes the 2 JARM (FAPI Advanced authorization response) tokens per profile, found during external review and fixed at the source (Decision 11): the flow's automated login/consent simulation issued and transmitted these tokens without routing them through the byte- and JWT-accounting path, so the original 26-token figure undercounted them. PQC is 4.06× Classic (+306.09%); Hybrid is 5.38× Classic (+438.25%) and 1.33× PQC (+32.54%). The ML-DSA-65 signature (3.309 bytes) replaces PS256 (256 bytes) in PQC; in Hybrid, both coexist in the same token, either via payload extension (RS256 + ML-DSA-65) or via Strong Nesting (PS256 + ML-DSA-65), depending on the artifact. |
 | Client certificate (DER bytes) | 1.494 | 2.953 | 6.859 | Size of the test client's certificate, presented on the mTLS connection. PQC is 1.98× Classic (+97.66%); Hybrid is 4.59× Classic (+359.10%) and 2.32× PQC (+132.27%). In PQC, only the subject's key changes (ML-DSA-65); the CA still signs with RSA. The hybrid certificate reuses Classic's RSA key and adds, in three non-critical X.509 extensions (Bindel et al., 2019), the ML-DSA-65 public key and an alternate ML-DSA-65 signature from the CA. That's why it exceeds the sum of the two isolated certificates (4.447 bytes): it carries an ML-DSA-65 signature from the CA (3.309 bytes) that doesn't exist in the PQC certificate. |
 | JWK_PK_size: AS public key (bytes) | 256 (RSA-2048) | 1.952 (ML-DSA-65) | 2.208 (composite, `kty: HYBRID`) | Size of the AS's public key published at `/jwks`, used to verify the tokens. PQC is 7.62× Classic (+662.50%); Hybrid is 8.62× Classic (+762.50%) and 1.13× PQC (+13.11%). Since N_JWK is the same (2) across all three profiles, the growth comes only from the key's size; in Hybrid, a composite key carrying the RSA half and the ML-DSA-65 half (256 + 1.952 bytes). |
 | Average PKI_bytes: CA certificate (bytes, PEM body) | 2.110 | 4.050 | 9.339 | Average size of the two CA certificates (root and issuer) in the format they're transferred in (PEM), without HTTP framing. PQC is 1.92× Classic (+91.94%); Hybrid is 4.43× Classic (+342.61%) and 2.31× PQC (+130.59%). Same pattern as the client certificate: in PQC, the CA certificates have an ML-DSA-65 key but an RSA signature; in Hybrid, they carry both signatures. |
@@ -94,7 +94,7 @@ The environment is a lab setup and does not reproduce a real long-distance netwo
 | Directory/PKI (CA certificate download) | 11,81 ms | 10,50 ms | 13,76 ms | Reading a static file. Same pattern as `/jwks`: no consistent direction (PQC −1,31 ms; Hybrid +1,95 ms over Classic), within the noise. Together with `/jwks`, this shows that the extra cost concentrates on endpoints that perform signing or verification, not on delivering larger keys or certificates. |
 | **Fixed parameters of the OPINsize equation** | | | | |
 | N_mTLS: distinct handshakes | 6 | 6 | 6 | Number of mTLS connections in the flow (three connection pools per sub-flow × 2 sub-flows). Equal across all three profiles: the growth in communication cost doesn't come from more connections, but from the size of each one. |
-| N_JWT: tokens in the flow | 26 | 26 | 26 | Number of JWTs transferred. Equal across all three profiles. |
+| N_JWT: tokens in the flow | 28 | 28 | 28 | Number of JWTs transferred, including the 2 JARM tokens per flow (Decision 11). Equal across all three profiles. |
 | N_JWK: `/jwks` fetches | 2 | 2 | 2 | Number of queries to the AS's public keys, one per sub-flow. Equal across all three profiles. |
 | N_PKI: CA certificate fetches | 4 | 4 | 4 | New term from this thesis: number of CA certificate downloads (root and issuer, in each of the 2 sub-flows). Equal across all three profiles. Being explicit in the equation lets the estimate be adjusted to each participant's caching policy. |
 
@@ -112,8 +112,8 @@ OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size 
 |---|---|---:|---:|---:|
 | N_mTLS | Number of distinct mTLS handshakes in the flow | 6 | 6 | 6 |
 | handshake_bytes | Size of the mTLS handshake (P50) | 5.119 bytes | 16.605 bytes | 18.023 bytes |
-| N_JWT | Number of JWT tokens in the flow | 26 | 26 | 26 |
-| JWT_size | Average size of each JWT | 1.385,42 bytes | 5.458,81 bytes | 7.324,81 bytes |
+| N_JWT | Number of JWT tokens in the flow | 28 | 28 | 28 |
+| JWT_size | Average size of each JWT | 1.330,82 bytes | 5.404,32 bytes | 7.163,11 bytes |
 | N_JWK | Number of calls to `/jwks` | 2 | 2 | 2 |
 | JWK_PK_size | Size of the AS's public key | 256 bytes | 1.952 bytes | 2.208 bytes |
 | N_PKI | Number of CA certificate fetches | 4 | 4 | 4 |
@@ -122,49 +122,49 @@ OPINsize = N_mTLS × handshake_bytes + N_JWT × JWT_size + N_JWK × JWK_PK_size 
 ### 3.2 Classic scenario calculation
 
 ```
-OPINsize = (6 × 5.119) + (26 × 1.385,42) + (2 × 256) + (4 × 2.110)
+OPINsize = (6 × 5.119) + (28 × 1.330,82) + (2 × 256) + (4 × 2.110)
 6 × 5.119     = 30.714 bytes
-26 × 1.385,42 = 36.021 bytes
+28 × 1.330,82 = 37.263 bytes
 2 × 256       =    512 bytes
 4 × 2.110     =  8.440 bytes
-OPINsize = 30.714 + 36.021 + 512 + 8.440 = 75.687 bytes
+OPINsize = 30.714 + 37.263 + 512 + 8.440 = 76.929 bytes
 ```
 
 ### 3.3 PQC scenario calculation
 
 ```
-OPINsize = (6 × 16.605) + (26 × 5.458,81) + (2 × 1.952) + (4 × 4.050)
+OPINsize = (6 × 16.605) + (28 × 5.404,32) + (2 × 1.952) + (4 × 4.050)
 6 × 16.605     =  99.630 bytes
-26 × 5.458,81  = 141.929 bytes
+28 × 5.404,32  = 151.321 bytes
 2 × 1.952      =   3.904 bytes
 4 × 4.050      =  16.200 bytes
-OPINsize = 99.630 + 141.929 + 3.904 + 16.200 = 261.663 bytes
+OPINsize = 99.630 + 151.321 + 3.904 + 16.200 = 271.055 bytes
 ```
 
 ### 3.4 Hybrid scenario calculation
 
 ```
-OPINsize = (6 × 18.023) + (26 × 7.324,81) + (2 × 2.208) + (4 × 9.339)
+OPINsize = (6 × 18.023) + (28 × 7.163,11) + (2 × 2.208) + (4 × 9.339)
 6 × 18.023     = 108.138 bytes
-26 × 7.324,81  = 190.445 bytes
+28 × 7.163,11  = 200.567 bytes
 2 × 2.208      =   4.416 bytes
 4 × 9.339      =  37.356 bytes
-OPINsize = 108.138 + 190.445 + 4.416 + 37.356 = 340.355 bytes
+OPINsize = 108.138 + 200.567 + 4.416 + 37.356 = 350.477 bytes
 ```
 
 ### 3.5 Comparison across profiles
 
 | Ratio | OPINsize |
 |---|---:|
-| PQC / Classic | 3,46× (+245,72%) |
-| Hybrid / Classic | 4,50× (+349,69%) |
-| Hybrid / PQC | 1,30× (+30,07%) |
+| PQC / Classic | 3,52× (+252,34%) |
+| Hybrid / Classic | 4,56× (+355,59%) |
+| Hybrid / PQC | 1,29× (+29,30%) |
 
-Migrating the OPIN consent flow to post-quantum cryptography multiplies the volume of cryptographic material transferred by 3,46 in PQC and by 4,50 in Hybrid: each complete flow goes from 75,7 kB to 261,7 kB and 340,4 kB, respectively. This growth requires no change to the flow. The number of connections, tokens, key fetches, and certificates is the same across all three profiles; only the size of each artifact grows. The migration, therefore, swaps out the cryptographic pieces without altering the ecosystem's specifications, and its byte cost can be estimated before adoption.
+Migrating the OPIN consent flow to post-quantum cryptography multiplies the volume of cryptographic material transferred by 3,52 in PQC and by 4,56 in Hybrid: each complete flow goes from 76,9 kB to 271,1 kB and 350,5 kB, respectively. This growth requires no change to the flow. The number of connections, tokens, key fetches, and certificates is the same across all three profiles; only the size of each artifact grows. The migration, therefore, swaps out the cryptographic pieces without altering the ecosystem's specifications, and its byte cost can be estimated before adoption.
 
-Most of this cost lies in the jump from Classic, not in the choice between PQC and Hybrid. Of Hybrid's total increase over Classic, 70% already shows up in pure PQC. Hybrid's additional guarantee — that it remains secure even if only one of the two algorithms is broken — costs 30% more than PQC. This supports Hybrid as a viable transition path.
+Most of this cost lies in the jump from Classic, not in the choice between PQC and Hybrid. Of Hybrid's total increase over Classic, 71% already shows up in pure PQC. Hybrid's additional guarantee — that it remains secure even if only one of the two algorithms is broken — costs 29% more than PQC. This supports Hybrid as a viable transition path.
 
-The PKI term, absent from the original equation, accounts for 11,15% of OPINsize in Classic, 6,19% in PQC, and 10,98% in Hybrid. In every profile it outweighs the public-key (JWK) term, which the original equation already included. A migration plan based only on handshake, tokens, and keys underestimates the real cost, and the error is largest precisely in the hybrid profile, where the gap to PQC rises from 23,44% to 30,07% once the term is included. Since the measured flow downloads the CA certificates without caching, these values represent the worst case; the N_PKI parameter allows the estimate to be adjusted to each participant's actual behavior.
+The PKI term, absent from the original equation, accounts for 10,97% of OPINsize in Classic, 5,98% in PQC, and 10,66% in Hybrid. In every profile it outweighs the public-key (JWK) term, which the original equation already included. A migration plan based only on handshake, tokens, and keys underestimates the real cost, and the error is largest precisely in the hybrid profile, where the gap to PQC rises from 22,87% to 29,30% once the term is included. Since the measured flow downloads the CA certificates without caching, these values represent the worst case; the N_PKI parameter allows the estimate to be adjusted to each participant's actual behavior.
 
 ## 4. Flow Latency Under Different Network Scenarios
 
