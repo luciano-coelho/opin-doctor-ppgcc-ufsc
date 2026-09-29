@@ -265,6 +265,180 @@ func verifyPQCCert(name, sourceDir string) {
 		"do titular migra para PQC, a CA nao.\n", certPath, cert.SignatureAlgorithm.String())
 }
 
+// makeRootAndIssuerCAFullyPostQuantum re-issues root_ca_pqc.crt and
+// issuer_ca_pqc.crt so the PQC profile's CA is genuinely self-contained in
+// ML-DSA-65, instead of an ML-DSA-65 subject key wrapped in a classical-RSA
+// issuer signature (the shape both certs have had since v2's Decision 12,
+// thesis/results/v2/experiment2 - PQC/DECISIONS.md). Closes the external
+// review's "PQC is not end-to-end post-quantum" finding (thesis/results/v7/
+// DECISIONS.md) for these two files specifically.
+//
+// Both certs' existing ML-DSA-65 keys (root_ca_pqc.key/issuer_ca_pqc.key)
+// are reused completely unchanged -- only the certificate wrapper (issuer
+// field, signature algorithm/value) is regenerated. This matters for two
+// reasons: (1) issuer_ca_pqc.key's public component is independently relied
+// on elsewhere -- generateHybridCert() uses it as the Hybrid profile's
+// AltSignatureValue signing key, and thesis/results/v7/artifacts/hybrid's
+// already-committed verify-hybrid output verifies against it -- reusing the
+// same key means neither is affected by this change; (2) it isolates the
+// experiment to the one variable actually being tested (how the CA signs),
+// matching every other single-variable-at-a-time change in this project's
+// history.
+//
+// root_ca_pqc.crt becomes self-signed (root_ca_pqc.key signs its own
+// certificate); issuer_ca_pqc.crt is signed by root_ca_pqc.key -- a genuine
+// two-level ML-DSA-65 chain, mirroring how a real PQC PKI root/issuer pair
+// would be structured. Template fields (Subject shape, DNSNames, KeyUsage,
+// ExtKeyUsage, 5-year validity) match resignMLDSACert()'s exactly, since
+// that is what actually produced both certs' current contents on disk --
+// only the parent certificate/key passed to x509.CreateCertificate differs.
+//
+// Safe to do without touching anything else: root_ca_pqc.crt/issuer_ca_pqc.crt
+// are PKI/CRL simulation stand-ins opin_flow.py downloads purely to measure
+// PEM size (fetch_server_keys_and_ca()) -- they are never presented in a
+// live mTLS handshake and never appear in mock_mtls's trust store (confirmed
+// by that same Decision 12: caCertPool() builds the gateway's trust store
+// from ca.crt alone). client_one_pqc.crt, mtls_pqc.crt, and op_pqc.crt --
+// the certs that DO participate in real handshakes -- are untouched by this
+// function; see makeLiveHandshakeCertsFullyPostQuantum below for those,
+// added once the external review's item 4.3 (thesis/results/v7/DECISIONS.md)
+// turned out to span both this CA-download artifact and the live handshake
+// certs, not just the former.
+func makeRootAndIssuerCAFullyPostQuantum(dir string) {
+	rootKey := loadMLDSAKeyPEM(filepath.Join(dir, "root_ca_pqc.key"))
+	issuerKey := loadMLDSAKeyPEM(filepath.Join(dir, "issuer_ca_pqc.key"))
+
+	mldsaCertTemplate := func(name string) *x509.Certificate {
+		return &x509.Certificate{
+			SerialNumber: big.NewInt(time.Now().UnixNano()),
+			Subject: pkix.Name{
+				CommonName: name,
+				ExtraNames: []pkix.AttributeTypeAndValue{
+					{Type: oidX500UID, Value: name},
+					{Type: oidLDAPUID, Value: uuid.NewString()},
+					{Type: oidOrganizationID, Value: uuid.NewString()},
+				},
+			},
+			DNSNames: []string{
+				"auth.local", "matls-auth.local", "api.local", "matls-api.local",
+				"directory", "directory.local", "keystore",
+			},
+			IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+			NotBefore:   time.Now(),
+			NotAfter:    time.Now().Add(longLivedValidity),
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+	}
+
+	// root_ca_pqc must be marked as an actual CA (IsCA + KeyUsageCertSign +
+	// BasicConstraintsValid), not the leaf-shaped template mldsaCertTemplate
+	// produces -- confirmed live the hard way: without this, mock_mtls's own
+	// chain verification of client_one_pqc.crt (signed by this root, see
+	// makeLiveHandshakeCertsFullyPostQuantum) rejected it outright with
+	// "x509: invalid signature: parent certificate cannot sign this kind of
+	// certificate", since Go's verifier requires any signer in a chain to
+	// carry CA authority, root included. issuer_ca_pqc, below, is never used
+	// to verify anything in this codebase (a PKI/CRL simulation artifact
+	// only) and keeps the ordinary leaf shape.
+	rootTemplate := mldsaCertTemplate("root_ca_pqc")
+	rootTemplate.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+	rootTemplate.ExtKeyUsage = nil
+	rootTemplate.IsCA = true
+	rootTemplate.BasicConstraintsValid = true
+	rootCertDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, rootKey.Public(), rootKey)
+	if err != nil {
+		log.Fatalf("pqc-ca-fully-post-quantum: failed to self-sign root_ca_pqc: %v", err)
+	}
+	rootCert, err := x509.ParseCertificate(rootCertDER)
+	if err != nil {
+		log.Fatalf("pqc-ca-fully-post-quantum: failed to parse freshly self-signed root_ca_pqc: %v", err)
+	}
+	savePEMFile(filepath.Join(dir, "root_ca_pqc.crt"), "CERTIFICATE", rootCertDER)
+	fmt.Printf("Re-issued root_ca_pqc.crt: self-signed, pure ML-DSA-65 (%d bytes DER)\n", len(rootCertDER))
+
+	issuerTemplate := mldsaCertTemplate("issuer_ca_pqc")
+	issuerCertDER, err := x509.CreateCertificate(rand.Reader, issuerTemplate, rootCert, issuerKey.Public(), rootKey)
+	if err != nil {
+		log.Fatalf("pqc-ca-fully-post-quantum: failed to sign issuer_ca_pqc with root_ca_pqc's key: %v", err)
+	}
+	savePEMFile(filepath.Join(dir, "issuer_ca_pqc.crt"), "CERTIFICATE", issuerCertDER)
+	fmt.Printf("Re-issued issuer_ca_pqc.crt: signed by root_ca_pqc's ML-DSA-65 key (%d bytes DER)\n", len(issuerCertDER))
+}
+
+// makeLiveHandshakeCertsFullyPostQuantum re-issues client_one_pqc.crt,
+// mtls_pqc.crt, and op_pqc.crt -- signed directly by root_ca_pqc's ML-DSA-65
+// key instead of the classical ca.crt -- closing the other half of the
+// external review's item 4.3: root_ca_pqc/issuer_ca_pqc (the CA-download
+// simulation artifacts) were made fully post-quantum above, but the
+// certificates that actually participate in the live mTLS handshake were
+// still classically-signed, so the PQC profile was not actually end-to-end
+// post-quantum yet. Requires makeRootAndIssuerCAFullyPostQuantum to have
+// already run (root_ca_pqc.crt/.key must exist and be self-signed).
+//
+// Signed directly by the root, not through issuer_ca_pqc as an
+// intermediate: client_one.crt (classic) and every other leaf this tool
+// issues is a single-level chain (leaf signed directly by the trusted root,
+// no intermediate presented in the handshake) -- matching that shape avoids
+// needing the TLS stack to bundle/serve an intermediate certificate, which
+// this project's client (session.verify = False, no server-cert validation)
+// and gateway (ClientCAs = a flat pool, no chain-building beyond one hop
+// tested) were never built to do.
+//
+// Each cert reuses its own existing ML-DSA-65 key unchanged (client_one_pqc.key/
+// mtls_pqc.key/op_pqc.key) -- no new key material, only a new issuer and
+// signature. client_one_pqc_pub.jwks (the JWK the AS-side clientHybridAuth.js
+// reads) embeds the raw public key, not the certificate or its issuer, so it
+// is unaffected and does not need regenerating.
+//
+// mtls_pqc.crt and op_pqc.crt are server-side certificates the Go/Node
+// processes present but this project's own client never chain-validates
+// (verify=False) -- re-signing them carries no verification risk. The one
+// real risk is client_one_pqc.crt: mock_mtls's caCertPool() must be told to
+// also trust root_ca_pqc.crt for CRYPTO_PROFILE=pqc, or the gateway will
+// reject the handshake outright (see mock_mtls/main.go's own change, same
+// commit). Verified end-to-end by running the real pqc flow after this
+// function and confirming the mTLS handshake still succeeds -- not just
+// that this tool exits 0.
+func makeLiveHandshakeCertsFullyPostQuantum(dir string) {
+	rootCert := loadCertPEM(filepath.Join(dir, "root_ca_pqc.crt"))
+	rootKey := loadMLDSAKeyPEM(filepath.Join(dir, "root_ca_pqc.key"))
+
+	leafTemplate := func(name string) *x509.Certificate {
+		return &x509.Certificate{
+			SerialNumber: big.NewInt(time.Now().UnixNano()),
+			Subject: pkix.Name{
+				CommonName: name,
+				ExtraNames: []pkix.AttributeTypeAndValue{
+					{Type: oidX500UID, Value: name},
+					{Type: oidLDAPUID, Value: uuid.NewString()},
+					{Type: oidOrganizationID, Value: uuid.NewString()},
+				},
+			},
+			DNSNames: []string{
+				"auth.local", "matls-auth.local", "api.local", "matls-api.local",
+				"directory", "directory.local", "keystore",
+			},
+			IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+			NotBefore:   time.Now(),
+			NotAfter:    time.Now().Add(longLivedValidity),
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+	}
+
+	for _, name := range []string{"client_one_pqc", "mtls_pqc", "op_pqc"} {
+		subjectKey := loadMLDSAKeyPEM(filepath.Join(dir, name+".key"))
+		template := leafTemplate(name)
+		certDER, err := x509.CreateCertificate(rand.Reader, template, rootCert, subjectKey.Public(), rootKey)
+		if err != nil {
+			log.Fatalf("pqc-live-certs-fully-post-quantum: failed to sign %s: %v", name, err)
+		}
+		savePEMFile(filepath.Join(dir, name+".crt"), "CERTIFICATE", certDER)
+		fmt.Printf("Re-issued %s.crt: signed by root_ca_pqc's ML-DSA-65 key (%d bytes DER)\n", name, len(certDER))
+	}
+}
+
 // extractTBSBytes parses a Certificate's outer SEQUENCE { tbsCertificate,
 // signatureAlgorithm, signatureValue } and returns the raw encoded bytes of
 // its tbsCertificate field -- exactly the bytes an X.509 signature is
@@ -302,6 +476,8 @@ func main() {
 	classicName := flag.String("classic-name", "", "Generate <name>.crt (ordinary classical RSA leaf cert, no PQC material at all), signed by the existing local CA (ca.crt/ca.key) -- same mechanism as -pqc-name, but reusing an EXISTING RSA key (<name>.key, must already exist on disk) instead of generating a fresh one, since -hybrid-name already needed that same key for root_ca/issuer_ca. Does not touch the CA, the key, or any other cert. See thesis/results/v5/DECISIONS.md.")
 	verifyHybridName := flag.String("verify-hybrid", "", "Re-derive <name>_hybrid.crt's preTBS from the certificate already on disk and independently re-verify its AltSignatureValue (ML-DSA-65) extension against issuer_ca_pqc.crt's public key -- proof the second signature is real and checkable, not just a correctly-sized field. See thesis/results/v7/artifacts/.")
 	verifyPQCName := flag.String("verify-pqc-cert", "", "Sign a fresh challenge with <name>.key (ML-DSA-65) and verify it against <name>.crt's own SubjectPublicKeyInfo, also printing the certificate's (classical RSA) issuer signature algorithm -- proof the PQC leaf keypair is real and functional, not just a correctly-sized/OID-tagged field. See thesis/results/v7/artifacts/pqc/.")
+	pqcCAFullyPostQuantum := flag.Bool("pqc-ca-fully-post-quantum", false, "Re-issues root_ca_pqc.crt (self-signed) and issuer_ca_pqc.crt (signed by root_ca_pqc's own ML-DSA-65 key) as a genuinely self-contained ML-DSA-65 chain, replacing the classical-RSA-signed wrapper both have used since v2's Decision 12. Reuses both certs' existing ML-DSA-65 keys unchanged (root_ca_pqc.key/issuer_ca_pqc.key) -- only the certificate wrapper (issuer field, signature) changes. Does not touch client_one_pqc.crt, mtls_pqc.crt, op_pqc.crt, or any live mTLS trust chain: root_ca_pqc/issuer_ca_pqc are PKI/CRL simulation stand-ins only, downloaded by opin_flow.py purely to measure PEM size, never used to verify a real connection. See thesis/results/v7/DECISIONS.md.")
+	pqcLiveCertsFullyPostQuantum := flag.Bool("pqc-live-certs-fully-post-quantum", false, "Re-issues client_one_pqc.crt, mtls_pqc.crt, and op_pqc.crt signed directly by root_ca_pqc's ML-DSA-65 key instead of the classical ca.crt -- requires -pqc-ca-fully-post-quantum to have already been run. Reuses each cert's existing ML-DSA-65 key unchanged. mock_mtls's caCertPool() must also trust root_ca_pqc.crt under CRYPTO_PROFILE=pqc for the handshake to keep working -- see mock_mtls/main.go. See thesis/results/v7/DECISIONS.md.")
 	flag.Parse()
 
 	if *verifyHybridName != "" {
@@ -311,6 +487,16 @@ func main() {
 
 	if *verifyPQCName != "" {
 		verifyPQCCert(*verifyPQCName, sourceDir)
+		return
+	}
+
+	if *pqcCAFullyPostQuantum {
+		makeRootAndIssuerCAFullyPostQuantum(sourceDir)
+		return
+	}
+
+	if *pqcLiveCertsFullyPostQuantum {
+		makeLiveHandshakeCertsFullyPostQuantum(sourceDir)
 		return
 	}
 
@@ -837,6 +1023,17 @@ const longLivedValidity = 5 * 365 * 24 * time.Hour
 var resignRSANames = []string{"mtls", "op", "client_one", "client_two"}
 var resignMLDSANames = []string{"mtls_pqc", "op_pqc", "client_one_pqc", "root_ca_pqc", "issuer_ca_pqc"}
 
+// resignMLDSAByRootNames: every ML-DSA-65 cert that must chain to
+// root_ca_pqc (itself, self-signed, or a leaf signed by it) after the PQC
+// profile became fully post-quantum -- see makeRootAndIssuerCAFullyPostQuantum
+// and makeLiveHandshakeCertsFullyPostQuantum, thesis/results/v7/DECISIONS.md.
+// root_ca_pqc is handled separately (self-signed, must come first); the
+// other four are all signed BY it. Kept distinct from resignMLDSANames
+// (unused after this change, retained only so any external reference to it
+// still compiles) so -resign-all doesn't silently revert every ML-DSA-65
+// cert back to a classical-RSA issuer on the next CA expiry.
+var resignMLDSAByRootNames = []string{"issuer_ca_pqc", "mtls_pqc", "op_pqc", "client_one_pqc"}
+
 // Regenerates the CA (fresh key, 5-year validity) and re-signs every leaf
 // certificate this tool originally generated, reusing each leaf's existing
 // private key unchanged -- only the certificate wrapper (issuer, validity,
@@ -876,19 +1073,6 @@ func resignEverything(dir, _ string) {
 		BasicConstraintsValid: true,
 	}
 	rawCACert, caKey := generateSelfSignedCert("ca", caTemplate, dir)
-	// generateSelfSignedCert returns the same *x509.Certificate struct that
-	// was passed in as a template -- it never had PublicKey/SubjectKeyId
-	// populated (those exist only in the encoded DER, via rawCACert.Raw).
-	// x509.CreateCertificate needs at least one of those two fields set on
-	// the *parent* struct to emit an AuthorityKeyIdentifier extension on
-	// children signed against it; passing the raw template silently omits
-	// that extension from every child (caught by comparing DER byte lengths
-	// against the previously-committed certs -- see DECISIONS.md). Re-
-	// parsing from the actual DER bytes gives a fully populated struct.
-	parsedCACert, err := x509.ParseCertificate(rawCACert.Raw)
-	if err != nil {
-		log.Fatalf("resign: failed to re-parse freshly generated CA cert: %v", err)
-	}
 	fmt.Println("Regenerated CA (ca.crt/ca.key, fresh key, 5-year validity)")
 
 	// Reproducing an existing asymmetry, not introducing one: the original
@@ -896,18 +1080,17 @@ func resignEverything(dir, _ string) {
 	// generateCACert() -> generateCert(), passing the *raw* (unparsed)
 	// template as parent -- so they never got an AuthorityKeyIdentifier
 	// extension (parent.PublicKey/.SubjectKeyId were empty on that struct).
-	// The ML-DSA-65 certs were each issued later via `-pqc-name`, which
-	// calls loadCACert() -- x509.ParseCertificate on ca.crt from disk,
-	// giving a fully populated struct -- so they DID get one. Matching
-	// each original exactly (confirmed via DER byte-length comparison
-	// against the previously-committed certs) means using rawCACert for
-	// the RSA group and parsedCACert for the ML-DSA-65 group here, not the
-	// same value for both.
+	// Matching that exactly (confirmed via DER byte-length comparison
+	// against the previously-committed certs) means using rawCACert here,
+	// not a re-parsed-from-DER copy. The ML-DSA-65 group no longer chains to
+	// this CA at all (see resignRootCAPQCSelfSigned/resignMLDSACertByRoot
+	// below) -- their own AuthorityKeyIdentifier question is handled there.
 	for _, name := range resignRSANames {
 		resignRSACert(name, originalRSAOrgID, rawCACert, caKey, dir)
 	}
-	for _, name := range resignMLDSANames {
-		resignMLDSACert(name, uuid.NewString(), parsedCACert, caKey, dir)
+	rootPQCCert, rootPQCKey := resignRootCAPQCSelfSigned(uuid.NewString(), dir)
+	for _, name := range resignMLDSAByRootNames {
+		resignMLDSACertByRoot(name, uuid.NewString(), rootPQCCert, rootPQCKey, dir)
 	}
 
 	// client_one/client_two's JWKS embed the certificate (x5c) and its
@@ -922,6 +1105,90 @@ func resignEverything(dir, _ string) {
 
 	fmt.Println("Resign complete for: " + fmt.Sprint(append(append([]string{}, resignRSANames...), resignMLDSANames...)))
 	fmt.Println("NOT touched (not this tool's cert format): mongo.pem, mongo.crt, postgres.crt -- re-sign separately.")
+}
+
+// resignRootCAPQCSelfSigned re-issues root_ca_pqc.crt as a fresh self-signed
+// ML-DSA-65 certificate, reusing its existing key unchanged -- the
+// -resign-all equivalent of makeRootAndIssuerCAFullyPostQuantum's root step,
+// so a future CA expiry (see longLivedValidity's own history) re-issues the
+// PQC profile's root the same way it was originally made fully
+// post-quantum, instead of silently reverting it to a classical-RSA parent.
+func resignRootCAPQCSelfSigned(orgID, dir string) (*x509.Certificate, *mldsa.PrivateKey) {
+	key := loadMLDSAKeyPEM(filepath.Join(dir, "root_ca_pqc.key"))
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: "root_ca_pqc",
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{Type: oidX500UID, Value: "root_ca_pqc"},
+				{Type: oidLDAPUID, Value: uuid.NewString()},
+				{Type: oidOrganizationID, Value: orgID},
+			},
+		},
+		DNSNames: []string{
+			"auth.local", "matls-auth.local", "api.local", "matls-api.local",
+			"directory", "directory.local", "keystore",
+		},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(longLivedValidity),
+		// Must be a real CA (see makeRootAndIssuerCAFullyPostQuantum's own
+		// comment on rootTemplate) -- otherwise mock_mtls rejects
+		// client_one_pqc.crt with "parent certificate cannot sign this kind
+		// of certificate" on the next -resign-all cycle.
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	if err != nil {
+		log.Fatalf("resign root_ca_pqc: failed to self-sign: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		log.Fatalf("resign root_ca_pqc: failed to parse freshly self-signed cert: %v", err)
+	}
+	savePEMFile(filepath.Join(dir, "root_ca_pqc.crt"), "CERTIFICATE", certDER)
+	fmt.Printf("Re-signed root_ca_pqc.crt (same ML-DSA-65 key, self-signed, new validity)\n")
+	return cert, key
+}
+
+// resignMLDSACertByRoot is resignMLDSACert's counterpart for the four certs
+// that now chain to root_ca_pqc instead of the classical CA -- same
+// template, same "reuse the existing key, only the wrapper is new"
+// contract, different parent.
+func resignMLDSACertByRoot(name, orgID string, rootCert *x509.Certificate, rootKey *mldsa.PrivateKey, dir string) {
+	key := loadMLDSAKeyPEM(filepath.Join(dir, name+".key"))
+
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: name,
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{Type: oidX500UID, Value: name},
+				{Type: oidLDAPUID, Value: uuid.NewString()},
+				{Type: oidOrganizationID, Value: orgID},
+			},
+		},
+		DNSNames: []string{
+			"auth.local", "matls-auth.local", "api.local", "matls-api.local",
+			"directory", "directory.local", "keystore",
+		},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(longLivedValidity),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, cert, rootCert, key.Public(), rootKey)
+	if err != nil {
+		log.Fatalf("resign %s: failed to create certificate: %v", name, err)
+	}
+	savePEMFile(filepath.Join(dir, name+".crt"), "CERTIFICATE", certBytes)
+	fmt.Printf("Re-signed %s.crt (same ML-DSA-65 key, signed by root_ca_pqc, new validity)\n", name)
 }
 
 func loadCertPEM(path string) *x509.Certificate {

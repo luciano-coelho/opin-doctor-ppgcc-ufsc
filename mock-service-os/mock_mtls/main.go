@@ -698,27 +698,45 @@ func lookupHandshakeInfo(remoteAddr string) *handshakeInfo {
 	return &info
 }
 
+// caCertPool builds the gateway's ClientCAs trust store. Always trusts the
+// classical ca.crt (classic and hybrid's client certs both still chain to
+// it -- hybrid's ML-DSA-65 alt-signature is verified separately, by
+// VerifyPeerCertificate, not through this pool). Under CRYPTO_PROFILE=pqc,
+// also trusts root_ca_pqc.crt: client_one_pqc.crt now chains to it instead
+// of ca.crt (thesis/results/v7/DECISIONS.md -- the PQC profile's live
+// handshake certs were made fully post-quantum, closing the external
+// review's item 4.3 for the certificates that actually participate in a
+// connection, not just the CA-download simulation artifacts). Without this,
+// tls.VerifyClientCertIfGiven would reject client_one_pqc.crt outright: a
+// presented client cert that fails to chain to any pool entry fails the
+// handshake, it doesn't fall back to unauthenticated.
 func caCertPool() *x509.CertPool {
-	caBytes, err := os.ReadFile(caCertFilePath)
-	if err != nil {
-		slog.Error("unable to read ca.crt", slog.String("err", err.Error()))
-		os.Exit(1)
+	addCertsFromFile := func(pool *x509.CertPool, path string) {
+		certBytes, err := os.ReadFile(path)
+		if err != nil {
+			slog.Error("unable to read CA file", slog.String("path", path), slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		for block, rest := pem.Decode(certBytes); block != nil; block, rest = pem.Decode(rest) {
+			switch block.Type {
+			case "CERTIFICATE":
+				cert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					panic(err)
+				}
+				pool.AddCert(cert)
+				slog.Info("loaded certificate", slog.String("path", path), slog.String("subject", cert.Subject.String()))
+
+			default:
+				panic("unknown block type " + block.Type)
+			}
+		}
 	}
 
 	caCertPool := x509.NewCertPool()
-	for block, rest := pem.Decode(caBytes); block != nil; block, rest = pem.Decode(rest) {
-		switch block.Type {
-		case "CERTIFICATE":
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				panic(err)
-			}
-			caCertPool.AddCert(cert)
-			slog.Info("loaded certificate", slog.String("subject", cert.Subject.String()))
-
-		default:
-			panic("unknown block type " + block.Type)
-		}
+	addCertsFromFile(caCertPool, caCertFilePath)
+	if os.Getenv("CRYPTO_PROFILE") == "pqc" {
+		addCertsFromFile(caCertPool, rootCaPqcFilePath)
 	}
 
 	return caCertPool
