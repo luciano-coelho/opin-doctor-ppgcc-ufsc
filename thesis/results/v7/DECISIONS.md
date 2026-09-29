@@ -517,4 +517,44 @@ Hybrid's delta (+75,943 bytes) matches Decision 11's own preliminary scratch mea
 
 **A real narrative correction, not just a number update.** The consolidated report's AS row (Section 2) previously read 14,188 / 29,570 / 31,058 bytes -- the AS's signed artifacts alone -- and its RS row claimed "the RS accounts for 53.1%/66.4%/63.8% of servers' outbound traffic... the participant that weighs most on the cloud egress bill." With the login/consent and JARM traffic correctly counted, the AS row becomes 68,325 / 100,009 / 102,901 bytes, and the RS's share of AS+RS outbound drops to 27.6% (Classic) / 47.7% (PQC) / 54.1% (Hybrid): **the AS is the larger contributor in Classic and PQC**, and the two participants are close to parity in Hybrid. The earlier "RS weighs most" reading was an artifact of the AS's undercount, not a real property of the flow -- `Consolidated_Metrics_Report_FINAL.md`'s AS/RS rows (Section 2) and the "HTTP requests" count (Section 1.1) are updated to say so plainly, citing this decision.
 
-**What remains open.** The round-trip-count gap the external review calculated from latency deltas at higher network-delay scenarios is still only partially closed (42 real requests confirmed, not 28 -- but see Decision 11 on the remaining gap, plausibly TCP/TLS connection-establishment RTT, not investigated further here). The T_fluxo/latency dataset itself still needs a genuine re-collection under the persistent-signer architecture to remove the container-spawn contamination described elsewhere in this project's history -- an analytical correction is not applicable there, since latency (unlike every byte-size metric in this dataset) is not a deterministic quantity.
+**What remains open.** The round-trip-count gap the external review calculated from latency deltas at higher network-delay scenarios is still only partially closed (42 real requests confirmed, not 28 -- but see Decision 11 on the remaining gap, plausibly TCP/TLS connection-establishment RTT, not investigated further here). The T_fluxo/latency dataset itself still needed a genuine re-collection under the persistent-signer architecture to remove the container-spawn contamination described elsewhere in this project's history -- an analytical correction was not applicable there, since latency (unlike every byte-size metric in this dataset) is not a deterministic quantity. Decision 13 closes this.
+
+---
+
+## 13. Latency dataset re-collected under the persistent-signer architecture -- the container-spawn overhead was masking a much smaller real cost, and inverted a headline conclusion
+
+**Context.** The whole v7 latency dataset (T_fluxo, 10 runs × 6 scenarios × 3 profiles = 180 runs) was collected before the persistent ML-DSA-65 signer replaced the old per-call container-spawn architecture in code. Every PQC/Hybrid signing call in that dataset paid roughly 1.25s of Docker container-startup overhead; at 8 signing calls per flow, this added some 6-10s to every PQC/Hybrid run regardless of network condition -- already known and measured before this session (from now-deleted exploratory work), but never propagated into a re-collection until an external technical review flagged the resulting numbers as implausible on their face.
+
+**Re-collected, not corrected analytically.** Unlike Decisions 11 and 12, this quantity is not deterministic (T_fluxo is wall-clock, subject to real OS/network jitter -- Decision 5's own environment-drift findings already established this), so no single precise measurement can stand in for the original sample the way the JARM/login-traffic bytes did. Ran the full original protocol again -- `thesis/scripts/switch_crypto_profile.py` per profile (including its psql health check and 5 discarded settling runs, Decision 4), then `thesis/scripts/latency_automation.py` per scenario, `thesis/scripts/.venv`'s pinned `requests` version (Decision 10) -- overwriting `thesis/results/v7/latency/experimentN - <Profile>/<ms>ms/` in place. v7 stays the official version; this is a fix to it, using the architecture the project had already committed to, not a new experiment or a new version. Zero whole-run retries across all 198 runs (180 counted + 18 warmups).
+
+**Before/after, T_fluxo median (10 runs), ms:**
+
+| Scenario | Classic (old→new) | PQC (old→new) | Hybrid (old→new) |
+|---|---:|---:|---:|
+| 0 ms | 2,891.26 → 2,613.98 | 9,586.39 → 2,510.39 | 10,269.73 → 2,777.12 |
+| 14 ms | 4,693.21 → 4,992.25 | 11,152.92 → 4,906.41 | 12,275.20 → 5,545.71 |
+| 30 ms | 7,176.65 → 7,930.67 | 13,345.81 → 7,847.35 | 14,492.22 → 8,356.60 |
+| 140 ms | 24,859.26 → 27,856.77 | 30,107.49 → 28,188.37 | 32,358.19 → 29,195.10 |
+| 225 ms | 38,481.78 → 43,384.19 | 44,327.57 → 43,699.64 | 46,416.61 → 45,056.78 |
+| 320 ms | 53,669.58 → 60,852.74 | 59,569.22 → 61,123.44 | 61,437.57 → 63,397.11 |
+
+Classic's own numbers moved too (up, by a few percent) -- expected, since Classic already went through the same unified proxy architecture (Decision 1) and shares the general environment-drift sensitivity Decision 5 documented; the point of interest is the PQC/Hybrid columns collapsing from several seconds above Classic to within a few hundred milliseconds of it.
+
+**Statistical re-test, exact one-sided Mann-Whitney U (`thesis/scripts/compute_v7_report_data.py`, unchanged methodology from the original v7 batch):**
+
+| Scenario | p(PQC > Classic) | Significant (α=0.05)? | p(Hybrid > PQC) | Significant? |
+|---|---:|:---:|---:|:---:|
+| 0 ms | 0.9474 | No | 0.0005 | Yes |
+| 14 ms | 0.9624 | No | 5.4e-06 | Yes |
+| 30 ms | 0.9927 | No | 5.4e-06 | Yes |
+| 140 ms | 0.0116 | Yes | 5.4e-06 | Yes |
+| 225 ms | 2.2e-05 | Yes | 5.4e-06 | Yes |
+| 320 ms | 0.1965 | No | 5.4e-06 | Yes |
+
+**A headline conclusion is overturned, not just its numbers.** The original report claimed "the order Classic < PQC < Hybrid holds under every condition... the distributions don't overlap." That was true of the contaminated data (a ~6-10s fixed gap swamps everything) and is false of the real one: PQC is statistically indistinguishable from Classic at 0, 14, 30, and 320 ms, and only reliably slower at 140 and 225 ms, by roughly 0.4-1.2%. The Classic/PQC run ranges overlap at every single scenario now. Hybrid vs. PQC is the one comparison that remains robustly significant everywhere (p < 0.001 throughout, ranges stop overlapping from 14 ms on) -- doing two signatures instead of one is a reliable, measurable cost; migrating from classical to a single post-quantum scheme, once the measurement artifact is removed, is not clearly slower at all at low-to-moderate network latency in this environment.
+
+**Why this is a better result for the migration case, not a worse one.** The original dataset's "PQC costs 5-7 fixed seconds" finding, if taken at face value, would have been a serious practical objection to migration. The corrected finding -- a few hundred milliseconds, only sometimes statistically distinguishable from classical RSA, dwarfed by ordinary network latency in any real deployment -- is the more defensible and, for the thesis's own migration argument, the more favorable one. It also means the original number was wrong in a way that happened to overstate the cost being investigated, which is exactly the direction of error most worth catching and disclosing plainly rather than the one most convenient to leave uncorrected.
+
+**Updated:** `report_data_v7.json` (`latency`, `latency_deltas`, `hypothesis` fields, regenerated by `compute_v7_report_data.py` and re-merged with Decisions 11/12's analytical corrections via `apply_jarm_correction.py` and `apply_login_traffic_correction.py`, which touch only the `size`/`opinsize`/`participants_decomposed` fields and are unaffected by this re-collection). `Consolidated_Metrics_Report_FINAL.md` Section 4 rewritten with the corrected table, the Mann-Whitney results, and the superseded-claim disclosure, citing this decision.
+
+**What remains open.** This closes every item raised by the external review and by this project's own prior investigation. No further re-collection is planned; a future reviewer questioning a specific number should be pointed at the raw runs under `thesis/results/v7/latency/` and `thesis/results/v7/size/`, both now internally consistent with the architecture actually described in `ARCHITECTURE.md`.

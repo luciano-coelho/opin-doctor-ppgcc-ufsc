@@ -3,35 +3,35 @@
 Experiment (profile): **hybrid**
 Applied latency (scenario): **30ms**
 
-Warmup (run 0, discarded, not included in any statistic): T_fluxo = 14.8292s, no retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 8.6471s, no retry.
 
 ## The 10 runs -- individual values (collection order)
 
 | # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 14.461954 | 0.030264 | no |
-| 2 | 14.229589 | 0.262629 | no |
-| 3 | 14.526915 | 0.034697 | no |
-| 4 | 14.265968 | 0.226250 | no |
-| 5 | 14.662406 | 0.170188 | no |
-| 6 | 14.930001 | 0.437783 | no |
-| 7 | 14.304280 | 0.187938 | no |
-| 8 | 14.522483 | 0.030264 | no |
-| 9 | 14.207280 | 0.284938 | no |
-| 10 | 15.810934 | 1.318715 | no |
+| 1 | 8.196751 | 0.159844 | no |
+| 2 | 8.565925 | 0.209330 | no |
+| 3 | 8.338416 | 0.018179 | no |
+| 4 | 8.379613 | 0.023018 | no |
+| 5 | 8.333809 | 0.022786 | no |
+| 6 | 8.317195 | 0.039400 | no |
+| 7 | 8.374774 | 0.018179 | no |
+| 8 | 8.382831 | 0.026236 | no |
+| 9 | 8.419971 | 0.063376 | no |
+| 10 | 8.225445 | 0.131150 | no |
 
 ## Sorted values (ascending order)
 
-14.207280, 14.229589, 14.265968, 14.304280, 14.461954, 14.522483, 14.526915, 14.662406, 14.930001, 15.810934
+8.196751, 8.225445, 8.317195, 8.333809, 8.338416, 8.374774, 8.379613, 8.382831, 8.419971, 8.565925
 
 ## Median and dispersion
 
-- Median: **14.492218s**
-- Minimum: 14.207280s
-- Maximum: 15.810934s
-- Mean: 14.592181s
-- Standard deviation (sample): 0.482978s
-- Spread (min/max): 11.2876%
+- Median: **8.356595s**
+- Minimum: 8.196751s
+- Maximum: 8.565925s
+- Mean: 8.353473s
+- Standard deviation (sample): 0.102437s
+- Spread (min/max): 4.5039%
 
 ## Anomalies
 
@@ -39,4 +39,4 @@ No run needed a retry (PAR TTL or login race) in this scenario.
 
 ## Observations
 
-Spread of 11.2876% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.
+Spread of 4.5039% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.

@@ -3,35 +3,35 @@
 Experiment (profile): **pqc**
 Applied latency (scenario): **30ms**
 
-Warmup (run 0, discarded, not included in any statistic): T_fluxo = 13.2478s, no retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 7.8528s, no retry.
 
 ## The 10 runs -- individual values (collection order)
 
 | # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 14.436291 | 1.090477 | no |
-| 2 | 12.947549 | 0.398265 | no |
-| 3 | 12.883945 | 0.461869 | no |
-| 4 | 12.912497 | 0.433317 | no |
-| 5 | 12.952632 | 0.393182 | no |
-| 6 | 12.932884 | 0.412930 | no |
-| 7 | 13.754654 | 0.408840 | no |
-| 8 | 15.571856 | 2.226042 | no |
-| 9 | 14.115930 | 0.770116 | no |
-| 10 | 13.738996 | 0.393182 | no |
+| 1 | 6.992727 | 0.854620 | no |
+| 2 | 7.872168 | 0.024821 | no |
+| 3 | 7.869257 | 0.021910 | no |
+| 4 | 7.846379 | 0.000968 | no |
+| 5 | 8.169857 | 0.322510 | no |
+| 6 | 7.848315 | 0.000968 | no |
+| 7 | 7.871707 | 0.024360 | no |
+| 8 | 7.496053 | 0.351294 | no |
+| 9 | 6.930504 | 0.916843 | no |
+| 10 | 7.790140 | 0.057207 | no |
 
 ## Sorted values (ascending order)
 
-12.883945, 12.912497, 12.932884, 12.947549, 12.952632, 13.738996, 13.754654, 14.115930, 14.436291, 15.571856
+6.930504, 6.992727, 7.496053, 7.790140, 7.846379, 7.848315, 7.869257, 7.871707, 7.872168, 8.169857
 
 ## Median and dispersion
 
-- Median: **13.345814s**
-- Minimum: 12.883945s
-- Maximum: 15.571856s
-- Mean: 13.624723s
-- Standard deviation (sample): 0.892321s
-- Spread (min/max): 20.8625%
+- Median: **7.847347s**
+- Minimum: 6.930504s
+- Maximum: 8.169857s
+- Mean: 7.668711s
+- Standard deviation (sample): 0.406100s
+- Spread (min/max): 17.8826%
 
 ## Anomalies
 
@@ -39,4 +39,4 @@ No run needed a retry (PAR TTL or login race) in this scenario.
 
 ## Observations
 
-Spread of 20.8625% among the 10 runs. **Elevated spread -- investigate before accepting this scenario as complete.**
+Spread of 17.8826% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.

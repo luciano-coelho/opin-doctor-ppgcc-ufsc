@@ -3,35 +3,35 @@
 Experiment (profile): **hybrid**
 Applied latency (scenario): **0ms**
 
-Warmup (run 0, discarded, not included in any statistic): T_fluxo = 10.0825s, no retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 3.7473s, no retry.
 
 ## The 10 runs -- individual values (collection order)
 
 | # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 10.043509 | 0.226222 | no |
-| 2 | 10.342141 | 0.072410 | no |
-| 3 | 10.321473 | 0.051742 | no |
-| 4 | 10.375782 | 0.106051 | no |
-| 5 | 10.097896 | 0.171835 | no |
-| 6 | 10.217989 | 0.051742 | no |
-| 7 | 9.824694 | 0.445037 | no |
-| 8 | 10.404311 | 0.134580 | no |
-| 9 | 10.639472 | 0.369741 | no |
-| 10 | 10.125640 | 0.144091 | no |
+| 1 | 2.770516 | 0.006600 | no |
+| 2 | 2.604583 | 0.172534 | no |
+| 3 | 3.185599 | 0.408482 | no |
+| 4 | 3.028109 | 0.250993 | no |
+| 5 | 2.783717 | 0.006601 | no |
+| 6 | 2.714095 | 0.063022 | no |
+| 7 | 3.131946 | 0.354830 | no |
+| 8 | 2.921828 | 0.144712 | no |
+| 9 | 2.699607 | 0.077510 | no |
+| 10 | 2.753402 | 0.023715 | no |
 
 ## Sorted values (ascending order)
 
-9.824694, 10.043509, 10.097896, 10.125640, 10.217989, 10.321473, 10.342141, 10.375782, 10.404311, 10.639472
+2.604583, 2.699607, 2.714095, 2.753402, 2.770516, 2.783717, 2.921828, 3.028109, 3.131946, 3.185599
 
 ## Median and dispersion
 
-- Median: **10.269731s**
-- Minimum: 9.824694s
-- Maximum: 10.639472s
-- Mean: 10.239291s
-- Standard deviation (sample): 0.227772s
-- Spread (min/max): 8.2932%
+- Median: **2.777116s**
+- Minimum: 2.604583s
+- Maximum: 3.185599s
+- Mean: 2.859340s
+- Standard deviation (sample): 0.197059s
+- Spread (min/max): 22.3074%
 
 ## Anomalies
 
@@ -39,4 +39,4 @@ No run needed a retry (PAR TTL or login race) in this scenario.
 
 ## Observations
 
-Spread of 8.2932% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.
+Spread of 22.3074% among the 10 runs. **Elevated spread -- investigate before accepting this scenario as complete.**

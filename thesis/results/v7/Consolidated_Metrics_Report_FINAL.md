@@ -168,26 +168,39 @@ The PKI term, absent from the original equation, accounts for 10,97% of OPINsize
 
 ## 4. Flow Latency Under Different Network Scenarios
 
-The per-endpoint latencies in Section 2 were measured at the 0 ms scenario, with no emulated network delay, to locate where in the flow the post-quantum processing cost shows up. This section answers a complementary question: how does the complete consent flow (the 28 calls, across the two sub-flows) behave under different network conditions?
+The per-endpoint latencies in Section 2 were measured at the 0 ms scenario, with no emulated network delay, to locate where in the flow the post-quantum processing cost shows up. This section answers a complementary question: how does the complete consent flow (the 42 calls, across the two sub-flows -- see Decision 12) behave under different network conditions?
 
 The six scenarios (0, 14, 30, 140, 225, and 320 ms, emulated with `tc`/`netem` at the gateway) reproduce the latency values measured empirically across five AWS geographic regions by Schardong et al. (2022). The two sections complement each other: Section 2 offers a granular, per-component view; this one, an aggregated view, per network condition.
+
+**This dataset was re-collected under the persistent-signer architecture (Decision 13) and supersedes every earlier version of this section.** The original v7 latency runs measured a Python process spawning a fresh Docker container to perform each ML-DSA-65 signature -- roughly 1.25s of container-startup overhead per signing call, 8 calls per flow, contaminating every PQC/Hybrid measurement by some 6-10s regardless of network condition. That architecture was already fixed in code before this report's first draft, but the latency dataset itself was not re-collected until an external technical review raised the resulting numbers as implausible. It was: see Decision 13 for the full before/after and the corrected statistical conclusions below.
 
 ### Total flow latency (T_fluxo, median of 10 runs per scenario and per profile)
 
 | Scenario | Classic | PQC | Hybrid | Δ PQC−Classic | Δ Hybrid−Classic | Δ Hybrid−PQC |
 |---|---:|---:|---:|---:|---:|---:|
-| 0 ms | 2.891,26 ms | 9.586,39 ms | 10.269,73 ms | +6.695,14 ms (+231,56%) | +7.378,47 ms (+255,20%) | +683,34 ms (+7,13%) |
-| 14 ms | 4.693,21 ms | 11.152,92 ms | 12.275,20 ms | +6.459,71 ms (+137,64%) | +7.581,99 ms (+161,55%) | +1.122,28 ms (+10,06%) |
-| 30 ms | 7.176,65 ms | 13.345,81 ms | 14.492,22 ms | +6.169,17 ms (+85,96%) | +7.315,57 ms (+101,94%) | +1.146,40 ms (+8,59%) |
-| 140 ms | 24.859,26 ms | 30.107,49 ms | 32.358,19 ms | +5.248,23 ms (+21,11%) | +7.498,93 ms (+30,17%) | +2.250,70 ms (+7,48%) |
-| 225 ms | 38.481,78 ms | 44.327,57 ms | 46.416,61 ms | +5.845,79 ms (+15,19%) | +7.934,83 ms (+20,62%) | +2.089,04 ms (+4,71%) |
-| 320 ms | 53.669,58 ms | 59.569,22 ms | 61.437,57 ms | +5.899,64 ms (+10,99%) | +7.767,99 ms (+14,47%) | +1.868,35 ms (+3,14%) |
+| 0 ms | 2.613,98 ms | 2.510,39 ms | 2.777,12 ms | -103,59 ms (-3,96%) | +163,14 ms (+6,24%) | +266,73 ms (+10,62%) |
+| 14 ms | 4.992,25 ms | 4.906,41 ms | 5.545,71 ms | -85,84 ms (-1,72%) | +553,46 ms (+11,09%) | +639,29 ms (+13,03%) |
+| 30 ms | 7.930,67 ms | 7.847,35 ms | 8.356,60 ms | -83,33 ms (-1,05%) | +425,92 ms (+5,37%) | +509,25 ms (+6,49%) |
+| 140 ms | 27.856,77 ms | 28.188,37 ms | 29.195,10 ms | +331,60 ms (+1,19%) | +1.338,32 ms (+4,80%) | +1.006,73 ms (+3,57%) |
+| 225 ms | 43.384,19 ms | 43.699,64 ms | 45.056,78 ms | +315,44 ms (+0,73%) | +1.672,58 ms (+3,86%) | +1.357,14 ms (+3,11%) |
+| 320 ms | 60.852,74 ms | 61.123,44 ms | 63.397,11 ms | +270,71 ms (+0,44%) | +2.544,38 ms (+4,18%) | +2.273,67 ms (+3,72%) |
 
-**The post-quantum cost is fixed per flow and does not grow with the network.** The absolute difference from Classic stays practically constant across all scenarios: between 5,2 and 6,7 s in PQC and between 7,3 and 7,9 s in Hybrid, from 0 to 320 ms. Larger handshakes and tokens, therefore, do not generate additional network round trips: the migration's cost is in processing, not in transport.
+**The post-quantum processing cost is real but small -- tens to a few hundred milliseconds per flow, not seconds.** With the container-spawn artifact removed, PQC's own signing/verification overhead sits in the range of a few hundred milliseconds spread across the flow's 8 signing calls, not the several-second gap the earlier (contaminated) dataset showed. At 0-30 ms, PQC's median is statistically indistinguishable from Classic's -- in fact numerically slightly lower in this sample, an artifact of measurement noise at that scale, not a real speed advantage.
 
-**The consequence is a dilution of the relative cost.** With 28 calls, each subject to the same delay, the total time comes to be dominated by network round trips as latency grows. A fixed cost weighs less and less on an ever-larger total: PQC goes from 3,32× Classic at 0 ms to 1,11× at 320 ms, and Hybrid, from 3,55× to 1,14×.
+**One-sided Mann-Whitney U tests (exact, α = 0,05) against the null "PQC/Hybrid is not slower than Classic/PQC", per scenario:**
 
-**The order among the profiles holds under every condition.** In all six scenarios, the medians follow the order Classic < PQC < Hybrid. Between Classic and PQC, the distributions don't overlap: no PQC run is faster than the slowest Classic run. Hybrid's increase over PQC ranges from 3,1% to 10,1%, which confirms, in time as well, that hybrid protection costs little beyond the post-quantum migration itself.
+| Scenario | p (PQC > Classic) | Significant? | p (Hybrid > PQC) | Significant? |
+|---|---:|:---:|---:|:---:|
+| 0 ms | 0,9474 | No | 0,0005 | Yes |
+| 14 ms | 0,9624 | No | <0,0001 | Yes |
+| 30 ms | 0,9927 | No | <0,0001 | Yes |
+| 140 ms | 0,0116 | Yes | <0,0001 | Yes |
+| 225 ms | <0,0001 | Yes | <0,0001 | Yes |
+| 320 ms | 0,1965 | No | <0,0001 | Yes |
+
+**PQC is only reliably slower than Classic at 140 and 225 ms; not at 0, 14, 30, or 320 ms.** This is a real result, not noise glossed over: the Classic/PQC run ranges overlap at every scenario (no clean separation), and the small, fixed PQC signing cost only becomes statistically distinguishable from ordinary run-to-run variation at two of the six scenarios tested. The earlier "order holds under every condition, non-overlapping distributions" claim was entirely an artifact of the container-spawn overhead and does not survive its removal -- reported here as superseded, not quietly dropped.
+
+**Hybrid is reliably slower than PQC at every scenario.** Unlike the Classic/PQC comparison, Hybrid's extra cost over PQC (doing both a classical and a post-quantum signature/verification) is statistically significant in all six scenarios (p < 0,001 throughout), and the PQC/Hybrid run ranges stop overlapping from 14 ms onward. The relative gap narrows as network delay grows (from +10,6% at 0 ms to +3,6-3,7% at 225-320 ms) simply because a fixed processing cost dilutes against a growing, delay-dominated total -- the same dilution effect the original dataset also showed, just at a much smaller absolute scale now.
 
 ## References
 

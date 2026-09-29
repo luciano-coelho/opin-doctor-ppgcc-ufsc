@@ -3,35 +3,35 @@
 Experiment (profile): **classic**
 Applied latency (scenario): **14ms**
 
-Warmup (run 0, discarded, not included in any statistic): T_fluxo = 4.7042s, no retry.
+Warmup (run 0, discarded, not included in any statistic): T_fluxo = 5.1706s, no retry.
 
 ## The 10 runs -- individual values (collection order)
 
 | # | T_fluxo (s) | Absolute deviation from median (s) | Retry? |
 |---|---|---|---|
-| 1 | 4.718007 | 0.024795 | no |
-| 2 | 4.846345 | 0.153133 | no |
-| 3 | 4.670076 | 0.023136 | no |
-| 4 | 4.726420 | 0.033208 | no |
-| 5 | 4.558583 | 0.134629 | no |
-| 6 | 4.665885 | 0.027327 | no |
-| 7 | 4.499482 | 0.193730 | no |
-| 8 | 4.651421 | 0.041791 | no |
-| 9 | 4.716348 | 0.023136 | no |
-| 10 | 4.827919 | 0.134707 | no |
+| 1 | 5.017237 | 0.024986 | no |
+| 2 | 4.912459 | 0.079792 | no |
+| 3 | 4.957433 | 0.034818 | no |
+| 4 | 4.979561 | 0.012690 | no |
+| 5 | 5.185946 | 0.193695 | no |
+| 6 | 5.004940 | 0.012689 | no |
+| 7 | 5.187998 | 0.195747 | no |
+| 8 | 4.977242 | 0.015009 | no |
+| 9 | 5.108448 | 0.116197 | no |
+| 10 | 4.933520 | 0.058731 | no |
 
 ## Sorted values (ascending order)
 
-4.499482, 4.558583, 4.651421, 4.665885, 4.670076, 4.716348, 4.718007, 4.726420, 4.827919, 4.846345
+4.912459, 4.933520, 4.957433, 4.977242, 4.979561, 5.004940, 5.017237, 5.108448, 5.185946, 5.187998
 
 ## Median and dispersion
 
-- Median: **4.693212s**
-- Minimum: 4.499482s
-- Maximum: 4.846345s
-- Mean: 4.688049s
-- Standard deviation (sample): 0.106597s
-- Spread (min/max): 7.7090%
+- Median: **4.992251s**
+- Minimum: 4.912459s
+- Maximum: 5.187998s
+- Mean: 5.026478s
+- Standard deviation (sample): 0.099901s
+- Spread (min/max): 5.6090%
 
 ## Anomalies
 
@@ -39,4 +39,4 @@ No run needed a retry (PAR TTL or login race) in this scenario.
 
 ## Observations
 
-Spread of 7.7090% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.
+Spread of 5.6090% among the 10 runs. Within the expected range for real-time measurement (network/OS), not artificially flattened -- no outlier was removed from the median calculation.
