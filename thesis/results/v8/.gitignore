@@ -1,0 +1,22 @@
+# Terraform local state/cache -- never committed (may contain resource IDs,
+# public IPs; regenerated on every terraform init/apply anyway).
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Runtime-only var files (contain the operator's public IP and SSH public
+# key). Generated locally per README.md, never part of version control.
+*.auto.tfvars.json
+*.auto.tfvars
+
+# SSH keys are never stored in this repo at all (see README.md) -- this
+# entry is defense in depth in case one is ever copied in by mistake.
+ssh/
+*.pem
+id_ed25519*
+id_rsa*
+
+# Python bytecode cache from running the scripts locally.
+__pycache__/
+*.pyc
