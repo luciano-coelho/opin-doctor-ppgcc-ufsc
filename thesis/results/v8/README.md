@@ -33,14 +33,23 @@ v7 remains the thesis's official simulated-latency result; v8 is additive.
       Brazil-data-residency doesn't constrain this experiment at all.
       140ms/225ms/320ms already have confirmed `sa-east-1`-anchored pairs
       with full 3-round data (Decision 16); 14ms/30ms are under
-      investigation via AWS Local Zones (Decision 17, not yet resolved).
-      Instance sizing from real measurement: `m6i.large` server, `t3.small`
-      clients (Decision 18).
+      investigation via AWS Local Zones — Buenos Aires/Santiago/Lima exist
+      but aren't opted in, Terraform for the proposed test is written and
+      `plan`-validated (not applied), waiting on the author (Decision 17,
+      23). Instance sizing from **real peak-load measurement** across all
+      3 crypto profiles (not just idle): `m6i.large` server (confirmed),
+      `c6i.xlarge` clients — revised up from an earlier `t3.small` guess
+      after finding the client-side PQC proxy bursts past 1000% CPU on
+      multiple consecutive samples (Decision 21). **Topology**: the
+      `sa-east-1` server stays up for the whole collection campaign, not
+      rebuilt per scenario — only the ingress rule changes between
+      scenarios (Decision 22).
 - [ ] **Phase 3** — `opin_flow.py` adaptation (`REMOTE_GATEWAY_HOST`).
-- [ ] **Phase 4** — Main experiment Terraform: single `sa-east-1` server +
-      relocating client (below), `m6i.large`/`t3.small`, full measurement
-      battery. Security posture and collection protocol proposed in
-      Decisions 19-20, not yet built.
+- [ ] **Phase 4** — Main experiment Terraform: single persistent
+      `sa-east-1` server + relocating client, `m6i.large`/`c6i.xlarge`,
+      full measurement battery. Security posture and collection protocol
+      proposed in Decisions 19-20 (ingress-rule-per-scenario framing
+      updated by Decision 22), not yet built.
 - [ ] **Phase 5/6** — Teardown verification, results comparison vs. v7.
 
 ## Prerequisites
@@ -322,35 +331,64 @@ deliberate design choice, not because the finding was wrong — see
 `DECISIONS.md`, Decision 15 for the full reasoning, and "Scenario clients"
 below for the current plan.)_
 
-### Scenario clients, all from a single sa-east-1 installation (Decision 15-16)
+### Final Phase 4 topology: 6 scenarios labeled by measured RTT (Decision 30)
 
-Phase 4 runs **one MockOPIN installation, fixed in `sa-east-1`** — only
-the client relocates per scenario. Not a legal requirement (Decision 8
-already found none applies); a deliberate choice for operational
-simplicity and reproducibility (Decision 15).
+**The experiment's focus is application behavior as a function of latency
+level, not of region** — scenarios are labeled only by their measured
+RTT, never by region name or the original nominal target. Region names
+are implementation detail, documented here and in `DECISIONS.md`, not
+part of the scenario's identity (result folders should follow v1-v7's
+own `{latency_ms}ms/` convention with real measured values).
 
-| Scenario | Client | RTT | Data | Status |
-|---|---|---|---|---|
-| 0ms | `sa-east-1` itself | n/a | none needed (self-pairs are never measured) | ✅ no measurement needed |
-| 140ms | `ca-central-1` | 123ms | 3 rounds, 60 samples/direction | ✅ confirmed |
-| 225ms | `eu-north-1` | 219ms | 4 rounds (1+3), 80 samples/direction | ✅ confirmed |
-| 320ms | `ap-southeast-1` | 325ms | 3 rounds, 60 samples/direction | ✅ confirmed |
-| 14ms | _under investigation_ | — | — | 🔍 AWS Local Zones (Decision 17) |
-| 30ms | _under investigation_ | — | — | 🔍 AWS Local Zones (Decision 17) |
+| Label (measured RTT) | Server | Client | Data |
+|---|---|---|---|
+| 0ms | `sa-east-1` | `sa-east-1` (co-located) | none needed (self-pairs are never measured) |
+| 14.7ms | `us-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
+| 33.2ms | `ap-northeast-1` | `ap-northeast-2` | 3 rounds confirmed, ~0.7ms round-to-round variation |
+| 123ms | `sa-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
+| 219ms | `sa-east-1` | `eu-north-1` | 4 rounds (1+3), 80 samples/direction |
+| 325ms | `sa-east-1` | `ap-southeast-1` | 3 rounds, 60 samples/direction |
 
-140/225/320ms already meet (225ms exceeds) this project's 3-round
-sampling standard — no new infrastructure needed for those three. 14ms and
-30ms have no standard-region match from `sa-east-1` (closest is
-`us-east-1` at 111ms) — AWS Local Zones near São Paulo (Buenos Aires,
-Santiago, Lima all exist and are available but not yet opted into; Rio de
-Janeiro doesn't exist as a Local Zone) are being investigated as a
-candidate. See `DECISIONS.md`, Decision 17, for the full findings and the
-proposed (not yet run) measurement.
+**3 server installations, not 1** — `sa-east-1` still covers 4 of 6
+scenarios (Decision 1's thematic rationale remains the dominant choice),
+but 14.7ms and 33.2ms use their own small dedicated installations in
+`us-east-1` and `ap-northeast-1` respectively. This supersedes Decision
+15's single-installation design (kept in `DECISIONS.md`, not deleted) —
+not because that reasoning was wrong, but because the AWS Local Zone path
+to a `sa-east-1`-reachable 14ms/30ms hit a hard account-level blocker
+(below), while 14.7ms and 33.2ms were *already* sitting there as
+real, properly-sampled, unused measurements. Decision 22's "server stays
+up for the whole campaign" rule now applies per installation, not
+globally — see `DECISIONS.md`, Decisions 30, 15, 22 for the full
+reasoning.
 
-Instance type for Phase 4 (not `t4g.micro`, discovery-only), from real
-measured idle footprint of the actual stack (`DECISIONS.md`, Decision 18):
-**`m6i.large`** for the `sa-east-1` server, **`t3.small`** (uniform, x86)
-for clients — both confirmed available in all 4 locked-in regions.
+**AWS Local Zones (Buenos Aires) — investigated, then abandoned.**
+Buenos Aires, Santiago, and Lima all exist near São Paulo (Rio de Janeiro
+doesn't exist as a Local Zone); Buenos Aires was opted into
+(2026-10-12) and its instance catalog confirmed
+(`DECISIONS.md`, Decision 25) — but **none of it is free-tier-eligible
+on this account**, confirmed by an actual failed launch attempt, and this
+account is currently on the free "6 meses" plan. That's a hard blocker,
+not a Terraform bug (`DECISIONS.md`, Decision 29) — resolving it would
+need an account upgrade, which wasn't pursued since 14.7ms/33.2ms already
+cover the same gap. **The measurement was abandoned** (Decision 31); the
+opt-in stays in effect (not self-service to reverse — AWS's own API docs
+say reversing it requires an AWS Support ticket, not a CLI call; see
+[AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyAvailabilityZoneGroup.html)),
+but the zone holds zero resources, verified directly, no ongoing cost.
+
+Instance type for Phase 4: candidates from real peak-load measurement
+(`DECISIONS.md`, Decision 21) were `m6i.large` (server) / `c6i.xlarge`
+(clients) — **neither is free-tier-eligible**, and this account's free
+plan was confirmed (Decision 29) to reject non-free-tier launches, so
+whether these actually work on this account is **still an open
+question**, not yet tested with a real launch. `m7i-flex.large` and
+`c7i-flex.large` are free-tier-eligible alternatives confirmed available
+in all 7 campaign regions (Decision 32) — both offer 40% baseline CPU
+per vCPU with the ability to burst to full performance "the majority of
+the time" ([AWS docs](https://aws.amazon.com/ec2/instance-types/m7i/)),
+which real measurement (Decisions 18, 21) suggests should comfortably
+cover this workload. Not decided which family Phase 4 actually uses.
 
 ## Resuming
 

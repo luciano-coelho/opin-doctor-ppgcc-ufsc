@@ -54,28 +54,6 @@ Candidate regions tested: `us-east-1`, `us-east-2`, `us-west-2`,
 `ca-central-1`, `eu-west-1`, `eu-central-1`, `ap-northeast-1`,
 `ap-southeast-1`, `ap-southeast-2`.
 
-## 8. OPIN's Brazil-data-residency restriction does not apply to this experiment
-
-**Context.** The real OPIN ecosystem (Open Insurance Brasil) restricts
-where participant data may be processed, as a regulatory requirement.
-Since v8 relocates the "client" side of the experiment across 9 AWS
-regions outside Brazil, it's worth stating explicitly why that restriction
-isn't a constraint here.
-
-**Decision.** It isn't, because **MockOPIN uses only synthetic data** —
-there is no real participant, consumer, or account data anywhere in this
-codebase or in any instance this experiment provisions — and because the
-experiment's entire purpose is to measure **network latency's effect on
-the PQC handshake**, not to evaluate OPIN's behavior, compliance, or
-viability in any jurisdiction. Running the mock client in Tokyo or Dublin
-says nothing about whether real OPIN data could lawfully be processed
-there; this thesis makes **no claim, and should be read as suggesting
-none**, about the legal or regulatory viability of operating OPIN (real or
-mock) outside Brazil. Given that, every region in the candidate list
-(Decision 3) remains eligible for all 5 non-zero latency scenarios
-(14/30/140/225/320ms) — region choice is driven purely by which measured
-RTT is closest to each target.
-
 ## 4. Minimal IAM scope: EC2/VPC only, region-restricted, no console access
 
 **Decision.** The dedicated IAM user (`mockopin-pqc-experiment`) has a
@@ -129,6 +107,28 @@ for disposable infrastructure. A throwaway ed25519 keypair is generated
 per run and never stored inside the repo (not even gitignored-in; see
 README.md) -- its public half is passed to Terraform via an untracked
 `*.auto.tfvars.json` file outside the repo tree.
+
+## 8. OPIN's Brazil-data-residency restriction does not apply to this experiment
+
+**Context.** The real OPIN ecosystem (Open Insurance Brasil) restricts
+where participant data may be processed, as a regulatory requirement.
+Since v8 relocates the "client" side of the experiment across 9 AWS
+regions outside Brazil, it's worth stating explicitly why that restriction
+isn't a constraint here.
+
+**Decision.** It isn't, because **MockOPIN uses only synthetic data** --
+there is no real participant, consumer, or account data anywhere in this
+codebase or in any instance this experiment provisions -- and because the
+experiment's entire purpose is to measure **network latency's effect on
+the PQC handshake**, not to evaluate OPIN's behavior, compliance, or
+viability in any jurisdiction. Running the mock client in Tokyo or Dublin
+says nothing about whether real OPIN data could lawfully be processed
+there; this thesis makes **no claim, and should be read as suggesting
+none**, about the legal or regulatory viability of operating OPIN (real or
+mock) outside Brazil. Given that, every region in the candidate list
+(Decision 3) remains eligible for all 5 non-zero latency scenarios
+(14/30/140/225/320ms) -- region choice is driven purely by which measured
+RTT is closest to each target.
 
 ## 9. Discovery sweep results (2026-10-08) and region selection
 
@@ -630,6 +630,16 @@ when Phase 4's Terraform is actually built -- not decided here.
 
 ## 15. Single fixed MockOPIN installation in sa-east-1 -- design choice, not legal restriction
 
+**SUPERSEDED 2026-10-12 (Decision 30) -- partially.** A single installation
+is no longer true for all 6 scenarios: Decision 30 introduces 2 more
+MockOPIN installations (`us-east-1`, `ap-northeast-1`) for the 14.7ms and
+33.2ms scenarios specifically, which this decision's original reasoning
+didn't anticipate (it assumed, incorrectly as it turned out, that a single
+installation could cover every reachable scenario). The reasoning here
+(operational simplicity, `sa-east-1`'s thematic role) still holds for the
+4 scenarios it still covers (0/123/219/325ms) -- see Decision 30 for the
+full picture.
+
 **Context.** Decision 13 Part C concluded Phase 4 should use one
 independent (client, server) region pair per scenario, since no single
 region covers all 5 RTT targets. That conclusion is still factually
@@ -784,6 +794,16 @@ cloud-unreachable.
 
 ## 18. Instance sizing from real local measurement
 
+**Partially superseded 2026-10-11 by Decision 21.** The idle-footprint
+measurement and server recommendation below hold up (Decision 21's peak
+data confirms `m6i.large` independently). **The "manual browser login"
+claim in the caveat below is wrong and retracted** -- `opin_flow.py`'s
+`simulate_login()` already fully automates the login/consent flow over
+plain HTTP (no browser, no manual step at all; confirmed live by actually
+running it -- see Decision 21). The client recommendation (`t3.small`) is
+also superseded -- Decision 21 found a real, large, multi-core CPU burst
+in the client-side crypto proxy that `t3.small`'s 2 vCPUs can't realize.
+
 **Context.** `t4g.micro` was correct for discovery (bare ping, no
 service) but wrong for Phase 4, which runs the real `docker-compose`
 stack under the same PQC handshake load the rest of this thesis measures.
@@ -804,20 +824,17 @@ compose --profile main up`, `CRYPTO_PROFILE=hybrid`) and read
 | `psql` | ~0.03% | 92-93MiB |
 | **Total** | | **~1.1-1.5GiB** |
 
-**Caveat, stated plainly.** This is the stack's **idle/steady-state**
-footprint, not peak load under sustained request handling. A proper
-peak-CPU measurement needs `opin_flow.py`'s full authenticated flow, which
-requires a manual, interactive browser login step (`opin_flow.py`'s own
-design -- see `thesis/scripts/README.md`) that isn't automatable in this
-session. A lightweight HTTP load test against `auth`'s and `mockapi`'s
-plain endpoints (bypassing the mTLS/PQC handshake entirely) didn't
-produce a measurable CPU change -- too fast against idle local endpoints
-to register on coarse `docker stats` sampling, so it isn't reported as a
-load figure. The PQC handshake's CPU cost is not separately isolated by
-this measurement; it's already characterized elsewhere in this thesis
-(the per-profile timing decomposition in `thesis/results/v7/`) and that
-existing data, not a new local benchmark, is the right source for
-handshake-specific CPU reasoning.
+**Caveat (WRONG, retracted -- see Decision 21).** This was originally
+written as: this is the stack's idle/steady-state footprint, not peak
+load, and a proper peak-CPU measurement needs `opin_flow.py`'s full
+authenticated flow, which requires a manual, interactive browser login
+step that isn't automatable. **That's incorrect.** `opin_flow.py` already
+has `simulate_login()`, which drives the entire login/consent interaction
+over plain HTTP, fully automated, no browser involved -- confirmed by
+actually running it (Decision 21). The `thesis/scripts/README.md` text
+this claim was based on was stale documentation describing an earlier,
+pre-automation version of the flow. Peak-load data now exists; see
+Decision 21.
 
 **Recommendation, server (sa-east-1, the one real MockOPIN installation):
 `m6i.large`** (x86, non-burstable, 2 vCPU / 8GiB) -- comfortable headroom
@@ -826,11 +843,15 @@ handshake's CPU burst and concurrent containers, consistent with Decision
 14's original reasoning (kept valid even though Decision 14's broader
 per-scenario-server framing is superseded).
 
-**Recommendation, clients (one single, uniform type across every client
-region): `t3.small`** (x86, burstable, 2 vCPU / 2GiB) -- the client only
-runs `opin_flow.py` + `tls_kem_proxy`, far lighter than the full stack;
-burstable is acceptable here since the client isn't the component under
-CPU test. Kept x86 (not `t4g`/ARM) deliberately, for the same
+**Recommendation, clients -- SUPERSEDED, see Decision 21.** Originally
+`t3.small` (x86, burstable, 2 vCPU/2GiB), reasoned from the client being
+"lighter than the full stack." Decision 21's real measurement found the
+client-side `tls_kem_proxy` alone bursts well past 2 vCPUs' worth of
+parallel CPU during a hybrid handshake -- `t3.small` is too small. The
+x86-over-ARM reasoning below is still valid and carries over to Decision
+21's revised pick:
+
+Kept x86 (not `t4g`/ARM) deliberately, for the same
 confound-avoidance reasoning Decision 1 applied project-wide: an ARM vs.
 x86 architecture difference between client and server could itself affect
 measured crypto performance, which this thesis has repeatedly gone to
@@ -899,3 +920,638 @@ when it's actually built, not a change made now.
 
 Not yet implemented -- proposed shape for Phase 4, to be refined when its
 Terraform and run scripts are actually built.
+
+## 21. Real peak-load measurement, all 3 crypto profiles -- corrected instance recommendations
+
+**Context.** Decision 18's "manual login blocks peak measurement" claim
+was wrong (see the correction there). `opin_flow.py`'s `simulate_login()`
+fully automates the login/consent flow -- confirmed by actually running
+it, no code change needed. This decision replaces Decision 18's idle-only
+data with real peak measurement during actual automated flow execution,
+across all 3 crypto profiles.
+
+**Method.** Brought up the real stack locally via
+`switch_crypto_profile.py` (the project's own canonical tool, which
+itself runs 5 full automated flows per profile switch as a settling
+protocol before any measurement -- Decision 4), then ran one additional
+`opin_flow.py 0` per profile while sampling `docker stats --no-stream`
+every 0.3-0.5s for the duration. Peak (not average) CPU/memory reported
+per container, pooled across whichever profile produced the highest
+reading.
+
+**Server-side containers** (what would run on the Phase 4 `sa-east-1`
+instance):
+
+| Container | Peak CPU (any profile) | Peak memory (any profile) |
+|---|---|---|
+| `mockapi` | 23.4% (classic) | 673MiB (pqc) |
+| `auth` | 12.4% (pqc) | 93MiB (pqc) |
+| `mongodb` | 3.8% (pqc) | 198MiB (classic) |
+| `mtls` (gateway) | 8.1% (pqc) | 19MiB (classic) |
+| `psql` | 1.7% (pqc) | 72MiB (pqc) |
+
+All comfortably light -- `mockapi`'s 23.4% peak is less than a quarter of
+one vCPU (Docker's CPU% is normalized to 100% = one full core), and total
+peak memory across all 5 stays under ~1.1GiB. **`m6i.large` (2 vCPU/8GiB)
+remains the right call for the server** -- now confirmed by real peak
+data, not just idle, with ample headroom either way.
+
+**Client-side crypto tooling** (what would run on whichever instance is
+the client that scenario) -- this is the real finding:
+
+| Container | Peak CPU | Peak memory | Samples (profile: hybrid) |
+|---|---|---|---|
+| `tls_kem_proxy` | **1001.5%** | 281MiB | 687% -> 726% -> **1002%** -> 482% -> 490% -> drops to ~0% |
+| `pqc_signer_service_run` | 1.1% | 24MiB | negligible |
+
+`tls_kem_proxy` (the Go client that negotiates the PQC/hybrid key
+exchange) sustained **multiple consecutive samples above 480%, peaking
+past 1000%**, on a 12-core host -- not a single-sample fluke. This is
+genuine parallel CPU use during the handshake (ML-KEM/X25519 operations
+across the flow's concurrent requests), not an idle-adjacent number like
+everything else measured in this project so far.
+
+**Recommendation, clients -- revised: `c6i.xlarge`** (x86, non-burstable,
+4 vCPU/8GiB), not `t3.small`. Reasoning and an honest limit on it:
+- A 2-vCPU instance (`t3.small`, or `c6i.large`) would simply never reach
+  the parallelism this dev machine's 12 cores allowed -- Go's scheduler
+  uses whatever `GOMAXPROCS` (default: available cores) gives it, so the
+  "1000%" figure is this machine's ceiling, not a hard requirement.
+- But under-provisioning here risks a real confound this thesis has
+  repeatedly worked to avoid: if the client CPU-throttles during the
+  handshake, the *measured* timing reflects CPU contention, not network
+  latency -- exactly the kind of non-network variable Decision 1 and
+  Decision 18's x86-over-ARM reasoning both exist to rule out.
+- `c6i.xlarge` (4 vCPU) is a reasonable middle ground, not a proven
+  sufficient one -- **this should be validated directly** (e.g. compare
+  completion time/variance on a CPU-limited local Docker run approximating
+  2 vs. 4 vCPUs) before Phase 4 locks it in. Not done here.
+
+**Availability confirmed, read-only, no infrastructure created**, for the
+four regions Decision 16 locked in:
+
+| Region | `c6i.xlarge` | `m6i.large` |
+|---|---|---|
+| `sa-east-1` | yes | yes |
+| `ca-central-1` | yes | yes |
+| `eu-north-1` | yes | yes |
+| `ap-southeast-1` | yes | yes |
+
+(Local Zone candidates for 14ms/30ms: see Decision 23 -- `c6i.xlarge`
+availability there is unknown until the zone is opted into, same as every
+other instance-type question about those zones.)
+
+## 22. Topology fix: server persists through the whole collection campaign
+
+**SUPERSEDED 2026-10-12 (Decision 30) -- scope narrowed, not reasoning
+overturned.** With 3 server installations instead of 1 (Decision 30), this
+decision's rule applies **per installation**: each of `sa-east-1`,
+`us-east-1`, and `ap-northeast-1` stays up for its own scenario(s)'
+collection, not rebuilt between them -- `sa-east-1` across its 4
+scenarios, the other two across their 1 scenario each (so the
+"persists across scenarios" framing is most visible for `sa-east-1`,
+trivially true for the other two since they each only ever serve one
+scenario). The underlying reasoning (don't pay container-startup +
+settling cost more than once per installation) is unchanged.
+
+**Context.** Decision 15 fixed the server to a single `sa-east-1`
+installation. Left unspecified: does the server get destroyed and
+recreated between scenarios (matching every discovery run's
+apply-measure-destroy pattern so far), or does it stay up while only the
+client changes? The author clarified this should be the latter.
+
+**Decision.** For Phase 4's actual data-collection campaign:
+- **The `sa-east-1` server instance is created once and stays up for the
+  entire campaign** (all 5 scenarios), not recreated per scenario -- this
+  is a deliberate departure from every discovery run in this project,
+  which tore down and rebuilt everything each time (appropriate there,
+  since discovery instances ran minutes and carried no state; Phase 4's
+  server runs the full stack and benefits from not re-paying container
+  startup + settling cost 5 times).
+- **Between scenarios, only the security group's ingress rule changes**
+  -- narrowed to whichever client region is currently active (Decision 19's
+  security proposal), via Terraform, not a server rebuild.
+- **Crypto profile switches follow the lab's existing settling protocol**
+  (`switch_crypto_profile.py`, Decision 4): 5 discarded full-flow
+  executions after each profile switch, before any measurement run counts
+  -- same procedure already used and reused throughout this thesis, not a
+  new one invented for Phase 4.
+- **Everything is destroyed only at the end of the full campaign** (all 5
+  scenarios collected), with the same region-by-region verification
+  (`aws ec2 describe-instances`/`describe-security-groups`/
+  `describe-key-pairs`, checked directly, not trusted from Terraform state
+  alone) already proven across every discovery run so far.
+
+This updates Decision 19's security proposal's framing slightly: "open
+only for the duration of that scenario's data collection" now means
+*changing the ingress rule* for that duration, not standing up a fresh
+server each time.
+
+## 23. AWS Local Zone instance types, opt-in command, and prepared (not applied) Terraform
+
+**Instance type availability in the 3 candidate Local Zones.** Still
+**unknown** -- re-checked (`describe-instance-type-offerings`,
+`location-type=availability-zone`, both by zone name and by filter) for
+`us-east-1-bue-1a`, `us-east-1-scl-1a`, `us-east-1-lim-1a`: all three
+return an empty offering list. This is consistent with Decision 17's
+earlier finding, not a new problem -- AWS genuinely does not expose a
+non-opted-in zone's instance catalog via this API, confirmed by trying
+multiple query forms. No policy or permission issue; the calls succeed,
+they're just empty. **This can only be resolved by opting in.**
+
+**Exact opt-in command (NOT executed -- for the author to run with an
+admin profile, same pattern as Decision 11's IAM policy change):**
+
+```bash
+aws ec2 modify-availability-zone-group \
+  --profile <admin-profile> \
+  --region us-east-1 \
+  --group-name us-east-1-bue-1 \
+  --opt-in-status opted-in
+```
+
+(`us-east-1-bue-1` is the zone *group* name for Buenos Aires, confirmed
+from Decision 17's `describe-availability-zones` output -- distinct from
+the zone name itself, `us-east-1-bue-1a`.)
+
+**Terraform prepared for the proposed test, plan-only, not applied.** New
+directory: `latency-discovery/terraform-bue-lz-test/`. Topology:
+- One client instance in the Buenos Aires Local Zone (`us-east-1-bue-1a`)
+  -- needs its own subnet + route table + IGW route, since Local Zone
+  subnets aren't created automatically the way standard-AZ default
+  subnets are (confirmed: `172.31.128.0/20` picked as an unused block in
+  the default VPC's `172.31.0.0/16`, verified against existing subnets'
+  CIDRs before writing this). `instance_type` is a **placeholder**
+  (`t3.medium`) -- unconfirmed until the opt-in above happens and the
+  catalog can actually be queried; must be re-verified before applying.
+- Three instances across `sa-east-1`'s existing 3 AZs (`sa-east-1a/b/c`,
+  default subnets already exist there, confirmed), measuring RTT among
+  themselves (same-AZ and cross-AZ) and reachable from the Buenos Aires
+  client. `sa-east-1-a` is the SSH jump host, same minimal-exposure
+  pattern as every other discovery Terraform in this project (Decision 7).
+  `t4g.micro`, consistent with this project's discovery-instance standard.
+- ICMP open (`0.0.0.0/0`) on all instances, same accepted tradeoff as
+  Decision 10 (bare AMI, no service, short-lived).
+
+`terraform init` + `terraform validate` + `terraform plan` all ran
+successfully (read-only AWS calls only -- AMI/VPC/subnet lookups, no
+resources created): **plan: 13 to add, 0 to change, 0 to destroy**. The
+plan succeeding even with Buenos Aires not yet opted in confirms the
+Terraform structure itself is sound (zone-activation is only checked by
+AWS at apply time, not plan time) -- but it is **not applied**.
+
+**Estimated cost and duration.** 4 instances total (1 `t3.medium`-class
+Buenos Aires + 3 `t4g.micro` in `sa-east-1`), same 3-round/~1h-apart
+standard as every other confirmed measurement in this project --
+~2h10min, well under $1 (same order of magnitude as every prior discovery
+run; `t3.medium` is a few cents/hour more than `t4g.micro` but doesn't
+change the order of magnitude). **Not run** -- waiting on the author's
+go-ahead on both the opt-in step and the measurement itself.
+
+## 24. Secret scan confirmed on both pushed commits
+
+Re-scanned the actual committed diffs (not just the pre-commit working
+tree) for `6abc057` (code/infrastructure) and `6ef90f7` (data/docs) --
+`git show <hash> | grep` for: AWS access key pattern (`AKIA[A-Z0-9]{16}`),
+inline secret-key assignment, PEM/SSH private key headers, the AWS account
+ID (`<ID_DA_CONTA>`), and the operator's public IP
+(`<IP_DO_AUTOR>`). **Zero matches in either commit, for any of the five.**
+Confirms the pre-push scan (Decision 11's section on this, and the report
+given when the commits were made) was accurate -- nothing slipped through
+between that scan and the actual push.
+
+## 25. Buenos Aires Local Zone opted in -- instance catalog found, client type left open
+
+**Opt-in completed 2026-10-12.** The author opted into the
+`us-east-1-bue-1` zone group via the AWS Console (Visualização global da
+AWS -> Regiões e zonas -> "Argentina (Buenos Aires)" -> Aceitar). Verified
+from the restricted `mockopin-pqc` profile: `describe-instance-type-
+offerings` for `us-east-1-bue-1a`, empty before the opt-in (Decision 17,
+23), now returns a real catalog. (Note: `describe-availability-zones`'
+own `OptInStatus` field briefly still read `not-opted-in` right after
+accepting -- a metadata-propagation lag, not a sign the opt-in failed;
+the functional signal, the instance-type catalog, is what actually
+confirmed activation. Re-checked again 2026-10-12: `State: available`,
+`OptInStatus: opted-in` -- stable, not a fluke.
+
+**Opting out is NOT self-service, corrected.** An earlier answer in this
+project's conversation said opt-out was reversible via CLI/console once
+resources are cleared -- **that was wrong.** AWS's own API reference for
+`ModifyAvailabilityZoneGroup` states plainly: *"The only valid value is
+`opted-in`. You must contact AWS Support to opt out of a Local Zone or
+Wavelength Zone group."* ([AWS docs -- ModifyAvailabilityZoneGroup, EC2
+API Reference](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyAvailabilityZoneGroup.html),
+confirmed by fetching the page directly, not assumed). Opting in itself
+is still free (no charge for the opt-in action -- only for resources
+actually launched in the zone), but reversing it requires a support
+ticket, not a CLI call. Worth knowing before opting into further zones
+(Santiago, Lima) if either isn't going to be used.
+
+**Instance catalog, `us-east-1-bue-1a`:**
+```
+t3.medium, t3.xlarge, m5.2xlarge, m5.4xlarge, m5.8xlarge, m5.12xlarge,
+r5.xlarge, r5.2xlarge, r5.4xlarge, r5.8xlarge, r5.12xlarge,
+c5.2xlarge, c5.4xlarge, c5.12xlarge, g4dn.2xlarge
+```
+
+**Notable gap: no small non-burstable sizes.** `c5`/`m5` jump straight to
+`2xlarge` (8 vCPU) -- nothing at `large`/`xlarge` size for either
+non-burstable family. The smallest non-burstable option here is 8 vCPUs,
+far more than Decision 21's `c6i.xlarge` (4 vCPU) target; `c6i`/`m6i`
+(the newer generation Decision 21 picked for the other 4 client regions)
+aren't offered in this Local Zone at all -- only up to the `c5`/`m5`/`r5`
+generation. The only size-matched (4 vCPU) non-burstable-*adjacent*
+option is `t3.xlarge`, which is burstable, not non-burstable.
+
+**Client instance type for Buenos Aires: not decided here, deliberately.**
+This is conditioned on the measured RTT, not chosen in advance:
+- If the real Buenos Aires <-> `sa-east-1` RTT lands in the 24-36ms
+  tolerance band (making Buenos Aires the actual 14ms or 30ms client),
+  the author chooses between `t3.xlarge` (size-matched, burstable, same
+  credit-throttling risk Decision 21 tried to avoid) and `c5.2xlarge`
+  (non-burstable, but 8 vCPU -- oversized relative to every other client
+  region's `c6i.xlarge`, breaking the "one uniform type" goal).
+- If the RTT doesn't land in tolerance, this question doesn't arise at
+  all -- Buenos Aires wouldn't be used as a client.
+Not resolved now -- waiting on the actual measurement (still not run; see
+Decision 23's prepared-but-not-applied Terraform, now updated per Decision
+26 below).
+
+**`c5.2xlarge` on-demand pricing, approximate, as of 2026-10-12.** The
+Price List API (`pricing:GetProducts`) is outside this project's IAM
+policy by design -- confirmed denied live (`AccessDeniedException`), not
+worked around. Figures below are general public AWS on-demand pricing
+knowledge as recalled on the date above, **not a live query and not
+re-verified against a current source** -- AWS pricing changes over time,
+so treat as order-of-magnitude only; verify exactly via the AWS Pricing
+Calculator or Billing Console before any cost commitment, especially if
+this decision is read significantly later than 2026-10-12:
+
+| Region | `c5.2xlarge` on-demand (approx., 2026-10-12) |
+|---|---|
+| `sa-east-1` | ~$0.49/hr (São Paulo carries a real premium over US regions) |
+| `ca-central-1` | ~$0.37/hr |
+| `eu-north-1` | ~$0.37/hr |
+| `ap-southeast-1` | ~$0.43/hr |
+
+**T3 "unlimited" credit mode, from AWS's own documented behavior (not a
+live account check -- this is fixed platform behavior, not account
+state).** T3 instances (unlike the older T2 generation) default to
+**"unlimited"** credit specification when launched without an explicit
+override, regardless of launch method (console, CLI, or Terraform).
+Unlimited mode lets the instance burst above its baseline CPU for as long
+as needed without throttling -- but if sustained above-baseline usage
+exceeds the instance's earned credit balance, AWS charges a flat
+surplus-credit rate per vCPU-hour for that excess, on top of the
+instance's normal price. For a single short compile burst (Decision 26
+below), this is very unlikely to exceed the credit balance; across an
+extended Phase 4 campaign running many flows back-to-back, cumulative
+burst time could plausibly exceed it, which is the real-world version of
+the "CPU contention confound" risk Decision 21 raised -- except here it
+would show up as an unexpected cost, not (necessarily) throttling, since
+unlimited mode pays its way out of throttling instead.
+
+## 26. Correction: the tls_kem_proxy CPU spike is compilation, not handshake cost
+
+**Decision 21's attribution was incomplete, corrected here.** The
+1000%+ CPU burst measured for `tls_kem_proxy` was described as happening
+"during the hybrid handshake" -- true only in the sense of overlapping
+with that run, not in the sense of being handshake computation. Checked
+directly: `start_tls_kem_proxy()` (`thesis/scripts/opin_flow.py`) launches
+the proxy via `docker run ... go run .` -- **`go run` compiles the entire
+Go module from source on every single invocation**, before the proxy
+process itself ever calls `ListenAndServe`. The function's own docstring
+confirms this explicitly ("`go run` first compiles the module ... before
+the Go process itself calls ListenAndServe/Accept"), and
+`_wait_for_tls_kem_proxy_ready()`'s docstring independently confirms the
+same thing from the readiness-probe side.
+
+**This matches the measured sample pattern exactly:** a concentrated
+burst cluster right at the start of the run (687% -> 726% -> 1002%,
+consistent with the Go compiler parallelizing across available cores),
+tapering to a second smaller cluster (482%, 490%, likely compilation
+finishing + the first real request), then dropping to near-zero (2.88%,
+0.26%, 0.00%) for the rest of the run -- **one burst per run, not one
+burst per handshake**, which is what a compile-once-at-startup cost looks
+like, not a per-request crypto cost. If the burst were handshake-driven,
+it would recur across the run's many requests, which it doesn't.
+
+**Steady-state (post-compile) consumption is low**: the samples after the
+initial burst cluster show `tls_kem_proxy` under 3% CPU for the remainder
+of the run -- the actual per-request ML-KEM/hybrid handshake computation,
+once the binary is already running, is cheap on this hardware.
+
+**Where the compile sits relative to T_fluxo's clock -- checked directly,
+and it's good news.** My own benchmark (above) ran `opin_flow.py`
+directly, which starts/stops `tls_kem_proxy` fresh inside every single
+invocation -- that's what produced one compile burst per profile in my 3
+runs. But **that is not how this project's actual T_fluxo measurements are
+taken.** `latency_automation.py` (the real driver behind every T_fluxo
+number in `thesis/results/v7/`) starts `tls_kem_proxy` **once per
+scenario**, before the warmup run, *outside* `run_once_timed()`'s
+`t_start = time.monotonic()` / `t_end = time.monotonic()` window entirely
+-- and the project's own existing code comment already explains exactly
+why, verbatim:
+
+> "not inside any timed region, and not restarted per run (`go run .`
+> recompiles cold each start, several real seconds, which would otherwise
+> pollute every single run's own T_fluxo)"
+> -- `thesis/scripts/latency_automation.py`, around the `start_tls_kem_proxy`
+> call in `main()`
+
+So: **the compile does not land inside the timed region, by design, and
+this was already solved in the codebase before this question was ever
+asked.** T_fluxo is not polluted by it. The one proxy process started this
+way is then reused across the warmup run and every one of the scenario's
+`--runs` timed attempts -- meaning the real compile cost is paid **once
+per scenario** (however many regions/latencies Phase 4 runs), not once
+per individual flow execution.
+
+**This revises the client-sizing urgency down, not the finding itself.**
+The 1000%+ burst is real and still something a too-small instance would
+feel -- but only once when a scenario's proxy first starts, not
+repeatedly throughout a long campaign of many runs per scenario, *if*
+Phase 4's own run script follows `latency_automation.py`'s existing
+pattern (start once per scenario, reuse across runs) rather than
+`opin_flow.py`'s standalone per-invocation pattern my benchmark happened
+to use. Decision 21's `c6i.xlarge` recommendation is still reasonable --
+a one-time-per-scenario multi-core compile burst is still worth having
+headroom for -- but it is no longer "every single flow pays this," it's
+"every scenario's setup pays this once."
+
+**Worth surfacing, not deciding or implementing here:** pre-compiling
+`tls_kem_proxy` once (`go build`, ship the binary, run it directly instead
+of `go run .`) would eliminate even the once-per-scenario compile burst,
+on top of `latency_automation.py`'s existing once-per-scenario mitigation
+-- lower-priority now that the burst is already confirmed to not recur
+per-run and to already sit outside T_fluxo's timed window, but still a
+legitimate option if the author wants to shrink the client instance
+further. A change to how the tooling runs, not a Terraform/instance-sizing
+decision -- left for the author, not decided or implemented here.
+
+## 27. Document hygiene: Decision 8 was out of physical order, numbering now sequential
+
+**Found:** Decision 8 ("OPIN's Brazil-data-residency restriction does not
+apply") was physically located between Decision 3 and Decision 4 in the
+file, breaking reading order (it was inserted early, out of its
+chronological turn, in an earlier session). **Fixed:** moved the Decision
+8 section to its correct chronological position, immediately before
+Decision 9 -- its number was never changed, only its physical location,
+so every existing cross-reference to "Decision 8" elsewhere in this file
+remains correct. Verified: `## N.` headings now read 1 through 27 in
+file order with no gaps or out-of-sequence entries.
+
+## 28. Buenos Aires LZ test: private IP within sa-east-1, public IP crossing to Buenos Aires
+
+**Decision.** For `terraform-bue-lz-test`'s RTT measurement, each
+directed pair targets a different address depending on what it's actually
+measuring:
+- **`sa-east-1-*` <-> `sa-east-1-*`** (any of `a`/`a2`/`b`/`c` against each
+  other): pings the destination's **private IP**. All 4 instances share
+  the same default VPC -- there's no reason to route the measured traffic
+  out through the internet gateway and back when a direct private path
+  exists; using the public IP here would measure something closer to
+  "NAT/IGW round-trip," not the region's real internal network latency.
+- **`sa-east-1-*` <-> `buenos-aires`** (either direction): pings the
+  **public IP**. Buenos Aires is a separate zone group in `us-east-1`
+  entirely -- no VPC peering or private connectivity exists between it and
+  `sa-east-1`'s VPC, so the public path is the only one that's actually
+  reachable, and also the only honest measurement of what Phase 4's real
+  client-server traffic would use if Buenos Aires became a scenario's
+  client.
+
+Each measured pair's choice is recorded directly in the output JSON
+(`rounds[].ip_kind_used`, keyed the same way as `rounds[].pairs`) --
+auditable per-pair, not just asserted here. SSH *orchestration* (how the
+operator's machine reaches each instance to run the `ping` command)
+always uses public IPs regardless of this choice -- that's a separate
+concern from what's being measured, and the existing single-jump-host
+pattern (Decision 7) doesn't change.
+
+**Opting out of Buenos Aires requires an AWS Support ticket, not a CLI
+call -- confirmed from AWS's own API documentation, repeated here for
+visibility (see Decision 25 for the first citation).** The
+`ModifyAvailabilityZoneGroup` API reference states: *"The only valid value
+is `opted-in`. You must contact AWS Support to opt out of a Local Zone or
+Wavelength Zone group."* ([AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyAvailabilityZoneGroup.html)).
+Opting in remains free; only resources actually launched in the zone
+cost anything. This is now also noted in `README.md`.
+
+## 29. Hard blocker: this account's Free Tier plan can't launch Buenos Aires's instance catalog at all -- and casts doubt on Decision 14/18/21's bigger-type recommendations too
+
+**Context.** The Buenos Aires apply attempt (Decision 28's fix applied)
+failed again, differently: `InvalidParameterCombination: The specified
+instance type is not eligible for Free Tier.` Everything created up to
+that point (14 resources) was destroyed and verified clean -- same
+region-by-region + Local Zone check as the first failure (Decision 25's
+protocol), zero instances/security groups/subnets/volumes/key pairs left
+in `sa-east-1` or `us-east-1`/Buenos Aires.
+
+**This account was created on the free "6 meses" plan** (Phase 0's own
+record). Querying `describe-instance-types --filters
+free-tier-eligible=true` shows this account can currently only launch:
+`t4g.micro`, `t4g.small`, `t3.micro`, `t3.small`, `c7i-flex.large`,
+`m7i-flex.large`.
+
+**Checked directly: Buenos Aires's entire instance catalog has zero
+overlap with that list.** Every one of the 6 free-tier types was checked
+against `us-east-1-bue-1a`'s offerings individually -- all 6 came back
+"not available." Buenos Aires only offers `t3.medium`/`t3.xlarge`, the
+`m5`/`r5`/`c5` families, and `g4dn.2xlarge` -- none free-tier-eligible.
+**This specific test cannot run on this account's current plan, full
+stop** -- not a bug in this project's Terraform, not something a
+different instance-type choice from Buenos Aires's catalog can route
+around.
+
+**Bigger implication, not yet confirmed either way: Decisions 14/18/21's
+`m6i.large`/`c6i.xlarge`/`c5.2xlarge` recommendations for Phase 4 may have
+the same problem.** Those were confirmed *available* via
+`describe-instance-type-offerings` (which only checks whether the region
+offers the type at all) -- never actually *launched*, so free-tier
+eligibility was never tested for them the way it was just tested, by
+accident, for Buenos Aires's `t3.medium`. None of `m6i.large`,
+`c6i.xlarge`, or `c5.2xlarge` appear on this account's free-tier-eligible
+list either. Whether that means they're *also* blocked, or whether the
+restriction is specific to something else about this particular attempt,
+is **not yet confirmed** -- would need an actual launch attempt (real
+cost, however small) in a standard region to know for sure, which hasn't
+been done.
+
+**Two ways forward, not decided here:**
+1. **Upgrade the account from the free "6 meses" plan to a standard
+   (Pay-As-You-Go) plan** in Billing settings -- resolves this test AND
+   removes the open question about Phase 4's bigger instance types, at
+   the cost of losing the $200 free-tier credit's remaining headroom
+   protection (still pay-as-you-go pricing either way; the main loss is
+   the credit itself and the softer guardrail against a runaway bill that
+   the free-plan structure provides).
+2. **Abandon the Buenos Aires Local Zone measurement** on this account as
+   it stands -- Decision 17's third fallback option (report 14ms/30ms as
+   not reproducible at this precision) becomes the practical default,
+   independent of whether Santiago/Lima's catalogs have the same problem
+   (not checked -- no reason to expect they'd differ, same account-level
+   restriction).
+
+Author's call -- not decided or acted on here.
+
+## 30. Final Phase 4 topology: 6 scenarios, labeled by measured RTT, 3 server installations
+
+**The experiment's focus is application behavior as a function of latency
+level, not of region.** Scenarios are labeled **only by their measured
+RTT** -- not by nominal targets (14/30/140/225/320ms, the original v1-v7
+labels) and not by region names. Region names are implementation detail:
+they appear in `README.md` and `DECISIONS.md` (where the *why* of each
+choice needs to be traceable), but not as the scenario's identity.
+Concretely, Phase 4's result folders should follow the same convention
+v1-v7 already use for `{latency_ms}ms/` -- real measured values
+(`123ms/`, `219ms/`, etc.), not region-named folders -- consistent with
+how this thesis has structured every result set so far, just now applied
+to real-AWS numbers instead of `tc`/`netem` targets.
+
+**Final design -- 6 scenarios, 3 server installations:**
+
+| Label (measured RTT) | Server | Client |
+|---|---|---|
+| 0ms | `sa-east-1` | `sa-east-1` (co-located, no real hop) |
+| 14.7ms | `us-east-1` | `ca-central-1` |
+| 33.2ms | `ap-northeast-1` | `ap-northeast-2` |
+| 123ms | `sa-east-1` | `ca-central-1` |
+| 219ms | `sa-east-1` | `eu-north-1` |
+| 325ms | `sa-east-1` | `ap-southeast-1` |
+
+This supersedes Decision 15's single-installation design (marked above,
+not deleted) and narrows Decision 22's scope to per-installation (marked
+above). **Why not a single installation after all:** Decision 17's search
+for a `sa-east-1`-reachable 14ms/30ms client (Local Zones) hit a hard
+account-level blocker (Decision 29) with no resolution available without
+either an account upgrade or abandoning the measurement (Decision 31
+below) -- but 14.7ms and 33.2ms were *already* confirmed, real, properly
+3-round-sampled measurements sitting unused (Decisions 16 and 13 Part B)
+from region pairs that don't involve `sa-east-1` at all. Rather than
+leave two already-measured, high-quality data points unused while
+chasing a third that this account can't currently produce, Phase 4 uses
+all three: one shared `sa-east-1` installation for the 4 scenarios it
+does reach well, plus two small dedicated installations for the two it
+doesn't.
+
+`sa-east-1` remains the server for 4 of 6 scenarios -- Decision 1's
+thematic rationale (OPIN / Brazilian regulation) stays the dominant
+choice, not abandoned, just no longer exclusive.
+
+## 31. Buenos Aires Local Zone measurement abandoned
+
+**Decision.** Per Decision 29's hard blocker (no instance type in Buenos
+Aires's catalog is free-tier-eligible on this account) and Decision 30's
+resolution (14.7ms and 33.2ms already covered by other, unblocked
+measurements), the Buenos Aires Local Zone measurement is **abandoned**,
+not pursued further. Decision 17's third fallback option ("report as not
+reproducible at this precision") doesn't even apply -- the question these
+two targets were meant to answer already has a better answer (Decision 30)
+than Buenos Aires would have given.
+
+**The opt-in already performed stays in effect.** Per Decision 25/28,
+opting out is not self-service -- it requires an AWS Support ticket, not
+a CLI call ([AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyAvailabilityZoneGroup.html)).
+Opting in itself was free and remains free to leave as-is; no action is
+taken to reverse it, since doing so would cost a support interaction for
+no benefit.
+
+**No resources remain in the zone** -- verified directly (not assumed)
+after both failed apply attempts (Decisions 25 and 29): `describe-
+instances`/`describe-security-groups`/`describe-subnets`/`describe-
+volumes`/`describe-key-pairs` in `us-east-1` scoped to
+`us-east-1-bue-1a`/the `mockopin-pqc-aws` tag all returned zero, both
+times. The zone sits opted-in and empty -- no ongoing cost, nothing to
+clean up later.
+
+## 32. `m7i-flex.large`/`c7i-flex.large` as a Free-Plan-compatible alternative to Decision 21's instance types -- CPU behavior, availability, cost estimate
+
+**Context.** Decision 29 left open whether Decision 14/18/21's
+`m6i.large`/`c6i.xlarge`/`c5.2xlarge` recommendations are actually
+launchable on this account -- none of them are on the confirmed
+free-tier-eligible list, and none has been launch-tested. `m7i-flex.large`
+and `c7i-flex.large` **are** on that list (same list as Decision 29), so
+they're investigated here as a cheaper, almost-certainly-launchable
+alternative -- not yet decided as Phase 4's actual choice.
+
+**CPU behavior** (official AWS docs,
+[m7i-flex product page](https://aws.amazon.com/ec2/instance-types/m7i/),
+checked 2026-10-12): "M7i-flex instances efficiently use compute resources
+with the ability to scale up to the full compute performance a majority
+of the time," with **40% baseline performance per vCPU** and bursts to
+100% on demand. `c7i-flex` documents the same baseline/burst model. No
+credit-surcharge mechanism is documented (unlike T3 "unlimited" mode's
+surplus-credit billing).
+
+**Availability**, confirmed via `describe-instance-type-offerings`: both
+types are offered in all 7 campaign regions (`sa-east-1`, `us-east-1`,
+`ca-central-1`, `ap-northeast-1`, `ap-northeast-2`, `eu-north-1`,
+`ap-southeast-1`).
+
+**Cost -- estimate only, not independently re-confirmed per region,
+checked 2026-10-12:**
+
+| Component | Source | Rate used |
+|---|---|---|
+| Compute | [instances.vantage.sh](https://instances.vantage.sh/aws/ec2/m7i-flex.large) (mirrors AWS on-demand) | `m7i-flex.large` $0.085-0.096/hr, `c7i-flex.large` ~$0.085/hr (us-east-1 baseline); assume up to ~1.5x in pricier regions (`sa-east-1`, `ap-northeast-*`), not independently confirmed |
+| EBS (30GB root, per AMI snapshot minimum) | [aws.amazon.com/ebs/pricing](https://aws.amazon.com/ebs/pricing/) (AWS's own worked examples) | gp3 $0.08/GB-mo, gp2 $0.10/GB-mo |
+| Public IPv4 | [AWS blog, Public IP Insights](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/) | $0.005/hr/address, in effect since 2024-02-01, charged whether idle or attached |
+| Data transfer OUT | [aws.amazon.com/ec2/pricing/on-demand](https://aws.amazon.com/ec2/pricing/on-demand/) | first 100GB/month free account-wide (confirmed); this workload's traffic is small TLS/HTTP flows + header-only pcaps, almost certainly under that allowance |
+
+**Rough estimate for the full campaign** (3 server installations + 6
+client instances, generous multi-day up-time budget, ~276 instance-hours):
+roughly **$30-50 total**, an order of magnitude under the $200 Free Plan
+credit. Still an estimate, not a commitment -- not independently verified
+per-region, and neither type has actually been launch-tested yet (same
+gap Decision 29 flagged for the bigger types -- the free-tier-eligible
+flag is a stronger signal than mere regional availability, but isn't a
+substitute for a real launch).
+
+**Not decided:** whether Phase 4 actually uses `m7i-flex`/`c7i-flex`
+instead of Decision 21's types. A real, brief launch-and-destroy test
+(proposed, not yet run) would close this gap -- see the "launch test"
+proposal recorded alongside Decision 33.
+
+## 33. sa-east-1 intra-region AZ-to-AZ RTT measured (no Buenos Aires) -- proposed lowest scenario
+
+**Measurement.** 4 nodes in `sa-east-1`, all `t4g.micro` (free-tier-
+eligible, Decision 29): `sa-east-1-a` (AZ ID `sae1-az1`, jump host),
+`sa-east-1-a2` (same AZ ID `sae1-az1` -- same-AZ pair), `sa-east-1-b`
+(`sae1-az2`), `sa-east-1-c` (`sae1-az3`). 3 rounds ~1h apart, 20
+pings/pair/round, both directions, 12 directed pairs/round -- same
+sampling standard as every other measurement in this project. 100%
+response rate, all 3 rounds. **Every pair ping targeted the destination's
+private IP** (Decision 28's rule for same-VPC/same-region pairs), not the
+public internet path.
+
+Raw data, unfiltered (including one isolated 18ms spike in round 2's
+`a2->a` pair, kept as measured, not treated as an outlier) is in
+`thesis/results/v8/aws-sa-az-rtt-raw/`, with its own README covering the
+AZ-ID/AZ-name distinction, instance type, and round timestamps.
+
+**Result -- stable across all 3 rounds:**
+
+| Pair | RTT (median, ms) | Pattern |
+|---|---|---|
+| same AZ (`a<->a2`) | ~0.2 | floor -- effectively no network hop |
+| `*<->c` | ~1.1 | cross-AZ |
+| `*<->b` | ~1.4-1.8 | cross-AZ |
+
+**Proposal (not yet decided): the lowest scenario is a client co-located
+in the same zone as the server**, labeled by its own measured RTT
+(~0.2ms, per the AZ-ID same-zone pair above) rather than treated as a
+bare "0ms" placeholder with no real measurement behind it -- consistent
+with Decision 30's rule that every scenario is labeled by what was
+actually measured.
+
+**Caveat, before this label is adopted: this RTT was measured over the
+private IP, not the path a real client actually uses.** A real client in
+Phase 4 reaches the server over its public IP / the real network path
+(NAT, routing out and back in) -- the private-IP figure here is a
+same-VPC floor, not necessarily identical to what the public path adds.
+The region-control proposal (client co-located with each of the 3 server
+regions, to check server region isn't a confound -- reported separately,
+not yet itself a numbered decision here) is the natural place to also
+measure this same pair over the **public** IP path, before the lowest
+scenario's final RTT label is fixed. Not done yet -- proposed only, and
+not to be run without the author present.
