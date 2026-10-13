@@ -10,7 +10,7 @@ real AWS-to-AWS network path, not this machine's local ISP route.
 Runs multiple rounds, spaced by real time gaps, so each region's RTT
 distribution is sampled across more than one time of day rather than a
 single snapshot. All individual per-packet samples are kept (not just an
-average) in aws-region-discovery-raw/latency_samples.json; select_regions.py
+average) in aws-region-discovery-01-single-origin-raw/latency_samples.json; select_regions.py
 computes median/min/max from them.
 """
 import json
@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DISCOVERY_DIR = Path(__file__).resolve().parent.parent / "terraform"
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-raw"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-01-single-origin-raw"
 PING_COUNT = 20
 ROUNDS = int(os.environ.get("MOCKOPIN_DISCOVERY_ROUNDS", "3"))
 ROUND_GAP_SECONDS = int(os.environ.get("MOCKOPIN_DISCOVERY_ROUND_GAP_SECONDS", "3600"))

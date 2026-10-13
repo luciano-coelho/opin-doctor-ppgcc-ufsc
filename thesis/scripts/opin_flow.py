@@ -215,6 +215,41 @@ _CRYPTO_PROFILE_FOR_ROUTING = os.environ.get("CRYPTO_PROFILE", "classic")
 _USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid")
 TLS_KEM_PROXY_PORT = int(os.environ.get("TLS_KEM_PROXY_PORT", "8443"))
 
+# Decision 45/51 (v8): set to run this flow against a real remote MockOPIN
+# installation (a real AWS server) instead of the local docker-compose lab.
+# Read once, at import time, same as every other env-var-driven constant in
+# this file. Unset (the default): every call site below that checks this is
+# a no-op, and behavior is byte-for-byte identical to before this variable
+# existed. Only two things change when it IS set: main() skips set_latency()
+# (there is no local gateway container to `docker exec`/`tc` into from a
+# remote client), and start_tls_kem_proxy() points the proxy's upstream
+# `-target` at this host instead of the lab's "mtls" compose-network alias.
+# opin_flow.py's OWN connection targets (AUTH_CONNECT_HOST etc., above) do
+# NOT change -- they always point at the LOCAL tls_kem_proxy
+# (127.0.0.1:TLS_KEM_PROXY_PORT); the proxy itself is the one that dials the
+# real gateway, local or remote.
+REMOTE_GATEWAY_HOST = os.environ.get("REMOTE_GATEWAY_HOST")
+if REMOTE_GATEWAY_HOST:
+    # Decision 53: host or IP only -- no "https://" scheme, no ":443" port.
+    # Both get appended explicitly wherever this value is actually used
+    # (start_tls_kem_proxy()'s own f"{REMOTE_GATEWAY_HOST}:443"), so a
+    # value that already included either would silently double up and
+    # fail in a confusing way far from this check -- caught here instead,
+    # at import time, with an explicit message.
+    if "://" in REMOTE_GATEWAY_HOST or ":" in REMOTE_GATEWAY_HOST:
+        raise SystemExit(
+            f"REMOTE_GATEWAY_HOST={REMOTE_GATEWAY_HOST!r} must be a bare host or IP "
+            f"only -- no scheme (\"https://\"), no port (\":443\"). Those are added "
+            f"automatically wherever this value is used."
+        )
+    try:
+        ipaddress.ip_address(REMOTE_GATEWAY_HOST)
+    except ValueError:
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*", REMOTE_GATEWAY_HOST):
+            raise SystemExit(
+                f"REMOTE_GATEWAY_HOST={REMOTE_GATEWAY_HOST!r} is not a valid hostname or IP address."
+            )
+
 GATEWAY_SCHEME = "https"
 # "127.0.0.1", never the string "localhost": confirmed live (thesis/results/
 # v6/Level 1/DECISIONS.md, Decision 3) that resolving "localhost" costs
@@ -576,6 +611,14 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
     crt_path, key_path = get_client_cert_paths(crypto_profile)
     curve = os.environ.get("TLS_KEM_PROXY_CURVE_OVERRIDE") or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
 
+    # Decision 45/51: "mtls" is the local lab's compose-network alias for
+    # the gateway container; REMOTE_GATEWAY_HOST overrides this to a real
+    # AWS instance's address. --network is left unchanged either way --
+    # a custom bridge network still NATs to the host's own internet
+    # connection (only `--internal` would block that, which this never
+    # sets), so the container can reach a remote host just as well as it
+    # reaches "mtls" today.
+    proxy_target = f"{REMOTE_GATEWAY_HOST}:443" if REMOTE_GATEWAY_HOST else "mtls:443"
     proc = subprocess.Popen(
         [
             "docker", "run", "--rm", "-i",
@@ -588,7 +631,7 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
             TLS_KEM_PROXY_GO_IMAGE,
             "go", "run", ".",
             "-listen", f":{TLS_KEM_PROXY_PORT}",
-            "-target", "mtls:443",
+            "-target", proxy_target,
             "-cert", f"/certs/{Path(crt_path).name}",
             "-key", f"/certs/{Path(key_path).name}",
             "-curve", curve,
@@ -1629,7 +1672,11 @@ def main():
         f"RESULTS_VERSION={results_version}  latency={args.latency_ms}ms"
     )
 
-    set_latency(args.latency_ms)
+    if REMOTE_GATEWAY_HOST:
+        print(f"REMOTE_GATEWAY_HOST={REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        set_latency(args.latency_ms)
 
     # Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): pqc/hybrid need
     # tls_kem_proxy up before either flow makes its first call, and torn

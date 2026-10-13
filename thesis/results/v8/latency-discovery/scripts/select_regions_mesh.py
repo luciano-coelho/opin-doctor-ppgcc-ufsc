@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze the full 10x10 mesh (aws-region-discovery-mesh-raw/latency_mesh_samples.json):
+"""Analyze the full 10x10 mesh (aws-region-discovery-02-full-mesh-raw/latency_mesh_samples.json):
 
 1. Build the median RTT matrix (every directed pair, pooled across rounds).
 2. Symmetry check: for every unordered pair {A,B}, compare median(A->B) vs
@@ -28,7 +28,7 @@ import statistics
 from pathlib import Path
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / os.environ.get(
-    "MOCKOPIN_RESULTS_DIR", "aws-region-discovery-mesh-raw"
+    "MOCKOPIN_RESULTS_DIR", "aws-region-discovery-02-full-mesh-raw"
 )
 
 # Agreed 2026-10-08: +-20% of each original v1-v7 target.

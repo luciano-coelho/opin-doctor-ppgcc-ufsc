@@ -32,7 +32,7 @@ from pathlib import Path
 
 DISCOVERY_DIR = Path(__file__).resolve().parent.parent / os.environ.get("MOCKOPIN_TERRAFORM_DIR", "terraform")
 RESULTS_DIR = Path(__file__).resolve().parent.parent / os.environ.get(
-    "MOCKOPIN_RESULTS_DIR", "aws-region-discovery-mesh-raw"
+    "MOCKOPIN_RESULTS_DIR", "aws-region-discovery-02-full-mesh-raw"
 )
 PING_COUNT = 20
 ROUNDS = int(os.environ.get("MOCKOPIN_DISCOVERY_ROUNDS", "3"))

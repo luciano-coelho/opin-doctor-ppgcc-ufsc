@@ -212,18 +212,29 @@ func runRelay(listen, target, certPath, keyPath, curveName string, localTLSConfi
 		InsecureSkipVerify: true,
 		MinVersion:         minVersion,
 		CurvePreferences:   curvePreferences,
+		// Explicit, not left to tls.Dial's "defaults to the dial
+		// target" behavior -- Decision 50/51 (REMOTE_GATEWAY_HOST):
+		// once `target` is a real remote host or IP instead of the
+		// local lab's "mtls" compose-network alias, that implicit
+		// default would either send the wrong SNI (a different
+		// hostname) or none at all (dialing a literal IP omits SNI
+		// entirely, per the TLS spec/Go's implementation). Pinning it
+		// to "mtls" here keeps the ClientHello byte-for-byte identical
+		// to the local lab's (same SNI, same extension length)
+		// regardless of where `target` actually points -- required for
+		// the lab-vs-campaign ClientHello size comparison (Decision 51)
+		// to mean anything.
+		ServerName: "mtls",
 	}
 	if curveName == "classical" {
 		// The gateway only accepts classical-only curves while
 		// CRYPTO_PROFILE=pqc/hybrid on the matls-api.local SNI carve-out
 		// (mock_mtls's GetConfigForClient, Decision 1) -- any other SNI
 		// gets the profile's own KEM-only requirement and would reject
-		// this client outright. tls.Dial would otherwise default SNI to
-		// the literal dial target ("mtls"), which does not match. This
-		// only overrides the TLS-layer SNI; the actual HTTP Host header
-		// inside (auth.local/api.local/...) still travels through
-		// unmodified, since this proxy never parses HTTP -- gateway
-		// routing is unaffected.
+		// this client outright. This only overrides the TLS-layer SNI;
+		// the actual HTTP Host header inside (auth.local/api.local/...)
+		// still travels through unmodified, since this proxy never
+		// parses HTTP -- gateway routing is unaffected.
 		upstreamTLSConfig.ServerName = "matls-api.local"
 	}
 

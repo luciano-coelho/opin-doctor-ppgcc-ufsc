@@ -1,0 +1,15 @@
+[Unit]
+Description=mockopin Phase 4 campaign orchestrator (Decision 49)
+After=network-online.target chronyd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/ec2-user/campaign_run.py
+Restart=on-failure
+RestartSec=30
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+
+[Install]
+WantedBy=multi-user.target

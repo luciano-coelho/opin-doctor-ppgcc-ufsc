@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 TERRAFORM_DIR = Path(__file__).resolve().parent.parent / "terraform-sa-az-test"
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-sa-az-raw"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-05-sa-az-raw"
 PING_COUNT = 20
 ROUNDS = int(os.environ.get("MOCKOPIN_DISCOVERY_ROUNDS", "3"))
 ROUND_GAP_SECONDS = int(os.environ.get("MOCKOPIN_DISCOVERY_ROUND_GAP_SECONDS", "3600"))

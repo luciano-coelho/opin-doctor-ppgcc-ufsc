@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Pool all samples (all rounds, all times of day) from
-aws-region-discovery-raw/latency_samples.json, compute median/min/max per
+aws-region-discovery-01-single-origin-raw/latency_samples.json, compute median/min/max per
 region, and pick -- for each v1-v7 simulated-latency target (14/30/140/225/
 320ms) -- the candidate region whose measured median RTT is closest to it.
 
-Output: aws-region-discovery-raw/region_selection.json, plus two Markdown
+Output: aws-region-discovery-01-single-origin-raw/region_selection.json, plus two Markdown
 tables printed to stdout (all regions measured; regions selected per
 scenario) -- paste both into README.md and DECISIONS.md so the choice stays
 transparent and auditable.
@@ -21,7 +21,7 @@ import statistics
 from pathlib import Path
 
 TARGETS_MS = [14, 30, 140, 225, 320]
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-raw"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "aws-region-discovery-01-single-origin-raw"
 
 
 def main():
