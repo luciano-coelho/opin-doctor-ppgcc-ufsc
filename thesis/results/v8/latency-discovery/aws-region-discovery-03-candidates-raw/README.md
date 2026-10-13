@@ -3,7 +3,7 @@
 ## What this is
 
 A small, targeted follow-up to the main mesh discovery
-(`../aws-region-discovery-mesh-raw/`): real ICMP RTT between the two
+(`../aws-region-discovery-02-full-mesh-raw/`): real ICMP RTT between the two
 candidate regions proposed in `DECISIONS.md` (Decision 10) —
 `ap-northeast-2` (Seoul) and `eu-north-1` (Stockholm) — and their proposed
 partners already in the main 10-region set (`ap-northeast-1`, `eu-west-1`,
@@ -70,15 +70,15 @@ terraform apply -var-file=/path/to/your.tfvars.json
 cd ../scripts
 export MOCKOPIN_SSH_KEY=/path/outside/repo/mockopin_pqc_discovery
 export MOCKOPIN_TERRAFORM_DIR=terraform-candidates
-export MOCKOPIN_RESULTS_DIR=../aws-region-discovery-candidates-raw
+export MOCKOPIN_RESULTS_DIR=../aws-region-discovery-03-candidates-raw
 export MOCKOPIN_DISCOVERY_ROUNDS=1   # or 3 for full rigor, matching the other runs
 python discover_latency_mesh.py
 cd ../terraform-candidates
 terraform destroy -var-file=/path/to/your.tfvars.json
 ```
 
-**Note the `MOCKOPIN_RESULTS_DIR` value above is `../aws-region-discovery-candidates-raw`
-relative to `scripts/`** (i.e. `latency-discovery/aws-region-discovery-candidates-raw`) —
+**Note the `MOCKOPIN_RESULTS_DIR` value above is `../aws-region-discovery-03-candidates-raw`
+relative to `scripts/`** (i.e. `latency-discovery/aws-region-discovery-03-candidates-raw`) —
 get this path wrong and the output lands one level too high. Verify
 `candidate_public_ips`/`prober_public_ip` appear in `terraform output`
 before running the Python script, and check where the JSON actually

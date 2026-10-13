@@ -156,14 +156,14 @@ stop and report instead of applying — don't proceed past a failed check.
    python3 ../scripts/select_regions.py
    ```
 
-   This writes `latency-discovery/aws-region-discovery-raw/latency_samples.json`
+   This writes `latency-discovery/aws-region-discovery-01-single-origin-raw/latency_samples.json`
    (every raw RTT sample, by round) and
-   `latency-discovery/aws-region-discovery-raw/region_selection.json`
+   `latency-discovery/aws-region-discovery-01-single-origin-raw/region_selection.json`
    (median/min/max per region + the 5 chosen regions), and prints two
    Markdown tables — paste both into this README's "Region selection
    results" section and into a new `DECISIONS.md` entry once generated, so
    the region choice stays transparent and auditable. See
-   `latency-discovery/aws-region-discovery-raw/README.md` for the data format.
+   `latency-discovery/aws-region-discovery-01-single-origin-raw/README.md` for the data format.
 
 5. **Destroy immediately after** (discovery instances have no reason to
    stay up):
@@ -180,8 +180,8 @@ stop and report instead of applying — don't proceed past a failed check.
 
 Measured 2026-10-08, origin `sa-east-1`, 3 rounds × 20 pings/region spread
 across ~1h gaps (60 samples/region total). Full raw data:
-`latency-discovery/aws-region-discovery-raw/latency_samples.json`; derived stats:
-`latency-discovery/aws-region-discovery-raw/region_selection.json`.
+`latency-discovery/aws-region-discovery-01-single-origin-raw/latency_samples.json`; derived stats:
+`latency-discovery/aws-region-discovery-01-single-origin-raw/region_selection.json`.
 
 ### All regions measured
 
@@ -269,8 +269,8 @@ up throughout.
    ../../scripts/destroy_all.sh /path/to/your.tfvars.json
    ```
 
-   Writes `latency-discovery/aws-region-discovery-mesh-raw/latency_mesh_samples.json`
-   (raw) and `latency-discovery/aws-region-discovery-mesh-raw/region_selection_mesh.json`
+   Writes `latency-discovery/aws-region-discovery-02-full-mesh-raw/latency_mesh_samples.json`
+   (raw) and `latency-discovery/aws-region-discovery-02-full-mesh-raw/region_selection_mesh.json`
    (derived), and prints the 10×10 matrix, the symmetry check, and the
    selection result (or, if no single origin covers all 5 targets within
    tolerance, the best mesh-wide candidates per target, flagged as
@@ -282,7 +282,7 @@ Measured 2026-10-11, 00:27-01:40 UTC, all 10 regions as origin against the
 other 9 (90 directed pairs, 3 rounds, 60 samples/pair). 90/90 pairs
 responded every round — no missing data. Symmetry: max |A→B − B→A| across
 all 45 pairs was 1.0ms. Full data:
-`latency-discovery/aws-region-discovery-mesh-raw/latency_mesh_samples.json`;
+`latency-discovery/aws-region-discovery-02-full-mesh-raw/latency_mesh_samples.json`;
 derived stats: `.../region_selection_mesh.json`. Full matrix and discussion
 in `DECISIONS.md`, Decision 10.
 
@@ -316,7 +316,7 @@ for the exact change and verification). A quick single-round check found
 | `ap-northeast-2` ↔ `ap-northeast-1` (Seoul ↔ Tokyo) | 33.2ms | **yes** |
 | `eu-north-1` ↔ `eu-west-1` (Stockholm ↔ Ireland) | 34.5ms | **yes** |
 
-Full data: `latency-discovery/aws-region-discovery-candidates-raw/`. This
+Full data: `latency-discovery/aws-region-discovery-03-candidates-raw/`. This
 was a fast single-round look, not the full 3-round standard used
 elsewhere — confirmed properly below.
 
@@ -331,36 +331,62 @@ deliberate design choice, not because the finding was wrong — see
 `DECISIONS.md`, Decision 15 for the full reasoning, and "Scenario clients"
 below for the current plan.)_
 
-### Final Phase 4 topology: 6 scenarios labeled by measured RTT (Decision 30)
+### Final Phase 4 topology: 8 scenarios (L0 per server), labeled by measured RTT (Decisions 30, 53)
 
 **The experiment's focus is application behavior as a function of latency
 level, not of region** — scenarios are labeled only by their measured
-RTT, never by region name or the original nominal target. Region names
-are implementation detail, documented here and in `DECISIONS.md`, not
-part of the scenario's identity (result folders should follow v1-v7's
-own `{latency_ms}ms/` convention with real measured values).
+RTT, never by region name or the original nominal target. Internally,
+scenarios use fixed short names (`L0`, `L14`, `L30`, `L123`, `L219`,
+`L325`) — region names are implementation detail, documented here and in
+`DECISIONS.md`, never part of the scenario's identity.
 
-| Label (measured RTT) | Server | Client | Data |
+| Internal name | Server | Client | Notes |
 |---|---|---|---|
-| 0ms | `sa-east-1` | `sa-east-1` (co-located) | none needed (self-pairs are never measured) |
-| 14.7ms | `us-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
-| 33.2ms | `ap-northeast-1` | `ap-northeast-2` | 3 rounds confirmed, ~0.7ms round-to-round variation |
-| 123ms | `sa-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
-| 219ms | `sa-east-1` | `eu-north-1` | 4 rounds (1+3), 80 samples/direction |
-| 325ms | `sa-east-1` | `ap-southeast-1` | 3 rounds, 60 samples/direction |
+| `L0` | `sa-east-1` | same AZ ID, private IP (co-located) | region + same-machine-type control |
+| `L0` | `us-east-1` | same AZ ID, private IP (co-located) | region + same-machine-type control |
+| `L0` | `ap-northeast-1` | same AZ ID, private IP (co-located) | region + same-machine-type control |
+| `L14` (14.7ms) | `us-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
+| `L30` (33.2ms) | `ap-northeast-1` | `ap-northeast-2` | 3 rounds confirmed, ~0.7ms round-to-round variation |
+| `L123` (123ms) | `sa-east-1` | `ca-central-1` | 3 rounds, 60 samples/direction |
+| `L219` (219ms) | `sa-east-1` | `eu-north-1` | 4 rounds (1+3), 80 samples/direction |
+| `L325` (325ms) | `sa-east-1` | `ap-southeast-1` | 3 rounds, 60 samples/direction |
 
-**3 server installations, not 1** — `sa-east-1` still covers 4 of 6
-scenarios (Decision 1's thematic rationale remains the dominant choice),
-but 14.7ms and 33.2ms use their own small dedicated installations in
-`us-east-1` and `ap-northeast-1` respectively. This supersedes Decision
-15's single-installation design (kept in `DECISIONS.md`, not deleted) —
-not because that reasoning was wrong, but because the AWS Local Zone path
-to a `sa-east-1`-reachable 14ms/30ms hit a hard account-level blocker
-(below), while 14.7ms and 33.2ms were *already* sitting there as
-real, properly-sampled, unused measurements. Decision 22's "server stays
-up for the whole campaign" rule now applies per installation, not
-globally — see `DECISIONS.md`, Decisions 30, 15, 22 for the full
-reasoning.
+**3 server installations, not 1, each with its own `L0`** — `sa-east-1`
+covers 4 of 8 scenarios (Decision 1's thematic rationale remains the
+dominant choice), `us-east-1`/`ap-northeast-1` each cover 2 (their own
+`L0` plus `L14`/`L30`). This supersedes Decision 15's single-installation
+design (kept in `DECISIONS.md`, not deleted) — not because that reasoning
+was wrong, but because the AWS Local Zone path to a
+`sa-east-1`-reachable 14ms/30ms hit a hard account-level blocker (below),
+while 14.7ms and 33.2ms were *already* sitting there as real,
+properly-sampled, unused measurements. Decision 22's "server stays up
+for the whole campaign" rule applies per installation, not globally.
+**Each server's own `L0` is not just "the lowest scenario" repeated three
+times** — it doubles as a region control and a same-machine-type control
+(Decision 53), since the region-control *procedure* itself was discarded
+(Decision 39) but these three real measurements answer a similar question
+for free. See `DECISIONS.md`, Decisions 30, 41, 53 for the full
+reasoning, including the pre-registered, descriptive-only comparison
+criterion for the three `L0`s.
+
+**720 executions total** (8 scenarios x 3 profiles x 30 runs), across
+**12 instances** (3 servers + 8 clients + 1 control instance, never a
+client or server itself). Infrastructure for all of this
+(`thesis/results/v8/campaign/`) is prepared and `terraform plan`-clean
+(45 resources) but **not applied** — see `DECISIONS.md`, Decisions
+49-59.
+
+**Within a profile block, executions round-robin across that server's
+scenarios** (run 1 of every scenario, then run 2 of every scenario, …),
+not scenario-by-scenario — spreads any within-block time drift evenly
+across scenarios instead of letting ordering itself become a confound
+(Decision 56, supersedes Decision 40's ordering specifically; the math
+on switch counts/duration is unaffected). `v8/size/` is always
+**derived** from `v8/latency/`'s own raw runs via
+`campaign/scripts/compute_v8_size_report.py` — never collected
+separately, never hand-edited (Decision 58). Pcaps are bundled per
+scenario+window for the commit (`package_pcaps.sh`, Decision 57); image
+delivery (`deliver_images.sh`, Decision 59) is written, not yet run.
 
 **AWS Local Zones (Buenos Aires) — investigated, then abandoned.**
 Buenos Aires, Santiago, and Lima all exist near São Paulo (Rio de Janeiro
@@ -392,20 +418,30 @@ cover this workload. Not decided which family Phase 4 actually uses.
 
 ## Resuming
 
-If you're picking this back up: Phases 0-2b are done, the topology is
-fixed (single `sa-east-1` installation, Decision 15), 3 of 5 scenario
-clients are confirmed (140/225/320ms, "Scenario clients" above), and
-nothing is currently running on AWS (every discovery run tears itself
-down and gets verified clean). Two things can happen next, independently:
-**Phase 3** (`opin_flow.py`'s `REMOTE_GATEWAY_HOST` adaptation — no AWS
-cost, pure code), and **resolving 14ms/30ms** via the Local Zone
-investigation (Decision 17 — next step there is the author's go-ahead on
-opting into the Buenos Aires Local Zone and running a measurement, not yet
-done). Phase 4 itself (the main experiment) is the one with meaningful
-spend ($5-20 estimated, see the original plan) and should be run with
-explicit go-ahead per scenario, not as a single unattended batch — same
-live-presence pattern used for every `terraform apply` so far in this
-project.
+If you're picking this back up: the topology is final (8 scenarios, 3
+server installations each with their own `L0`, Decisions 30/53), all
+RTT discovery is done and nothing is currently running on AWS (every
+discovery run tears itself down and gets verified clean, including the
+sa-east-1 AZ-to-AZ test). `thesis/results/v8/campaign/` has the full
+12-instance Terraform (`terraform plan`-clean, 45 resources) and all 4
+orchestration scripts (`campaign_up.sh`/`campaign_run.py`/
+`campaign_pull.sh`/`campaign_down.sh`) — **none applied yet**.
+`REMOTE_GATEWAY_HOST` is implemented in `opin_flow.py`/`tls_kem_proxy`
+(diff ready, regression-tested across all 3 profiles, **not yet
+committed** — pending the author's review).
+
+**Sequence to the first real execution** (Decision 55's full version,
+with the author's dependencies marked):
+1. Flex launch test (Decision 43) — **author present**.
+2. 12-instance Terraform apply (Decision 54) — **author present**,
+   budget/credit confirmation (Decision 52).
+3. Build `deliver_images.sh` (Decision 50) — not yet built.
+4. Author reviews/approves the `REMOTE_GATEWAY_HOST` diff — then commit.
+5. Pilot (Decision 46) — **author present** — validates `L0`'s
+   public-IP RTT, the ClientHello size/SNI acceptance criterion, tcpdump
+   overhead, written tc/netem confirmation.
+6. Implement `run_one_execution()`/`run_warmup()` for real.
+7. First real campaign execution (window 1).
 
 ## Teardown / cost safety
 

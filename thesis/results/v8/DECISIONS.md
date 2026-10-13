@@ -136,7 +136,7 @@ RTT is closest to each target.
 instances (prober in `sa-east-1` + 9 candidates), 3 ping rounds of 20
 packets/region spread across real ~1h gaps (03:00-05:10 UTC), 60 samples
 per region pooled for median/min/max. Full raw samples:
-`latency-discovery/aws-region-discovery-raw/latency_samples.json`. All 10 instances, their
+`latency-discovery/aws-region-discovery-01-single-origin-raw/latency_samples.json`. All 10 instances, their
 security groups, and the discovery key pair were destroyed immediately
 after, verified clean per-region via `destroy_all.sh`'s own `aws ec2
 describe-instances`/`describe-security-groups`/`describe-key-pairs` checks
@@ -447,7 +447,7 @@ measured the two candidates against their proposed partners from Decision
 (`latency-discovery/terraform-candidates/`, 6 regions: `sa-east-1` as
 jump host + the 5 regions actually being tested) rather than the full
 10-region mesh. Full data and reproduction steps:
-`latency-discovery/aws-region-discovery-candidates-raw/`.
+`latency-discovery/aws-region-discovery-03-candidates-raw/`.
 
 **Results** (single round, 20 pings/pair):
 
@@ -539,7 +539,7 @@ Measured 2026-10-11, 02:42-04:48 UTC, same sampling standard as Decisions
 9 and 10 (3 rounds, ~1h apart, 20 pings/pair/round, both directions).
 Infrastructure (18 resources, 6 regions) destroyed and verified clean
 immediately after. Full data:
-`latency-discovery/aws-region-discovery-candidates-confirm-raw/`.
+`latency-discovery/aws-region-discovery-04-candidates-confirm-raw/`.
 
 | Pair | Round 1 | Round 2 | Round 3 | Pooled median | Round-to-round variation |
 |---|---|---|---|---|---|
@@ -905,6 +905,12 @@ Not yet implemented -- this is the proposed shape for Phase 4's Terraform
 when it's actually built, not a change made now.
 
 ## 20. Proposed Phase 4 data-collection protocol (not yet implemented)
+
+**SUPERSEDED 2026-10-12 (Decision 34) -- the window count/size.** "2-3
+time-of-day windows" is replaced by an exact figure: 3 windows of 10 runs
+each (30 runs/profile/scenario total). The pcap-per-execution proposal
+below is not superseded -- Decision 36/37 carry it forward with more
+detail (header-only, port 443, compressed).
 
 **Proposal:**
 - **Each scenario collected across 2-3 time-of-day windows**, not a single
@@ -1526,7 +1532,8 @@ public internet path.
 
 Raw data, unfiltered (including one isolated 18ms spike in round 2's
 `a2->a` pair, kept as measured, not treated as an outlier) is in
-`thesis/results/v8/aws-sa-az-rtt-raw/`, with its own README covering the
+`thesis/results/v8/latency-discovery/aws-region-discovery-05-sa-az-raw/`,
+with its own README covering the
 AZ-ID/AZ-name distinction, instance type, and round timestamps.
 
 **Result -- stable across all 3 rounds:**
@@ -1555,3 +1562,1507 @@ not yet itself a numbered decision here) is the natural place to also
 measure this same pair over the **public** IP path, before the lowest
 scenario's final RTT label is fixed. Not done yet -- proposed only, and
 not to be run without the author present.
+
+## 34. Final Phase 4 execution protocol: 30 runs/profile/scenario, 3 randomized-order daily windows, 0ms/region controls discarded
+
+**SUPERSEDED 2026-10-12 (Decision 40) -- the switch-counting argument was
+wrong, corrected there.** This decision's "30 runs, 3 windows of 10,
+profile order randomized per window" core design stands. What's
+corrected: the claim here (implicitly) that scenario order didn't need
+its own registered rule, and Decision 39's settling-time estimate, which
+assumed one profile switch per scenario transition -- wrong, a scenario
+change needs no switch at all, only a profile change does. Decision 40
+registers the actual scenario-rotation rule and redoes the math.
+
+**SUPERSEDED again 2026-10-12 (Decision 53) -- the 0ms-control discard,
+reversed.** This decision recorded "0ms control on all three
+installations... discarded by the author's decision." That specific
+call is reversed in Decision 53: each server's own `L0` (co-located
+client, same AZ ID) is now measured after all -- not as the originally
+discarded standalone "0ms control" experiment, but because it turned
+out to double as both a region control and a same-machine-type control
+using real campaign data, at the cost of 2 more instances rather than a
+separate dedicated experiment. The region-control *procedure* (client
+co-located with each server region, Decision 39) is still discarded,
+unchanged -- only the "measure 0ms per installation" half is reversed.
+
+**Decision, author's call.** Supersedes Decision 20's looser "2-3
+time-of-day windows" (marked above, not deleted) with an exact design:
+
+- **30 runs per (profile, scenario) pair**, split into **3 windows of 10
+  runs**, spread across the day (not back-to-back) -- same guard against
+  single-window network-condition artifacts that Decisions 9/10 already
+  established for latency discovery, now applied to the real experiment.
+- **Profile order randomized independently in each window.** Each window
+  runs all 3 profiles as 10-run blocks (to amortize `switch_crypto_profile.py`'s
+  settling cost -- Decision 4's 5 discarded flows per switch -- across 10
+  real runs instead of paying it per run), but the *order* of the 3
+  blocks is re-randomized every window. This guards against time-of-day
+  drift being confounded with profile order (e.g., if Classic always ran
+  first in a day and conditions degrade as the day goes on, that would
+  masquerade as a profile effect).
+- **Lab used N=10; the real campaign uses N=30** -- explicit magnitude
+  change, registered so the two are never conflated when comparing v7's
+  simulated-latency reports against v8's real-latency ones.
+
+**Three-installation design** (confirms Decision 30's table, restated
+with the client detail for each cell):
+
+| Server | Scenario(s) | Client |
+|---|---|---|
+| `sa-east-1` | lowest (co-located) | same zone as the server (Decision 33's proposal) |
+| `sa-east-1` | 123ms | `ca-central-1` |
+| `sa-east-1` | 219ms | `eu-north-1` |
+| `sa-east-1` | 325ms | `ap-southeast-1` |
+| `us-east-1` | 14.7ms | `ca-central-1` |
+| `ap-northeast-1` | 33.2ms | `ap-northeast-2` |
+
+**Sizes measured once, not per scenario.** Artifact sizes (handshake,
+JWT, certificate, JWK, PKI, OPINsize, etc. -- full list in Decision 36)
+are a property of the crypto profile/protocol, not of network latency --
+measuring them again at every scenario would add six-fold redundant data
+for no analytical benefit. Measured **once, in `sa-east-1`, using the
+same `Host`/SNI headers as the local lab** -- keeping the same virtual
+host identity the size measurements have always used (Decision 6's
+SNI-based routing) means these numbers stay comparable to v1-v7's own
+size reports, not a new, incomparable baseline.
+
+**Discarded by the author's explicit decision, not a technical
+finding:**
+- **0ms control on all three installations** (i.e., measuring each
+  installation against a same-region client too, beyond the one already
+  serving as the lowest scenario) -- discarded.
+- **The region-control procedure** proposed earlier (client co-located
+  with each of the 3 server regions, to statistically rule out server
+  region as a confound) -- discarded.
+
+**Limitation to carry into the thesis's own write-up, not just this
+log:** the 14.7ms and 33.2ms scenarios run on **different installations**
+than the 4-scenario `sa-east-1` block. Any difference observed between
+these two scenarios and the other four cannot be cleanly attributed to
+latency alone -- server-region/installation is a confound that was
+deliberately left unresolved once the region-control procedure built to
+address it was discarded. This should be stated as an explicit limitation
+wherever these two scenarios are compared against the `sa-east-1` four,
+not silently treated as equivalent data.
+
+## 35. Pilot: 10 runs/profile at the lowest scenario and 325ms, under the definitive protocol
+
+**SUPERSEDED 2026-10-12 (Decision 46) -- scope extended, not reversed.**
+This decision's core (10 runs/profile, lowest + 325ms, definitive
+protocol, conditional retention rule) stands. Decision 46 adds: public-IP
+validation of the lowest scenario's RTT, a with/without-tcpdump overhead
+comparison, and a written confirmation that nothing on AWS uses
+`tc`/`netem`.
+
+**Decision.** Before the full 30-run campaign, run a **pilot**: 10
+runs/profile (not 30) at exactly 2 scenarios -- the lowest (near-0ms,
+`sa-east-1` co-located) and 325ms (`sa-east-1`/`ap-southeast-1`) -- the
+two extremes of the design. Uses the **definitive protocol** (Decision
+34's windowing/randomization rules, Decision 36's full metrics list,
+Decision 37's raw-data retention), not a throwaway smoke test.
+
+**Conditional retention rule, registered before the pilot runs (so it
+can't be adjusted after seeing the data):**
+- **If the protocol doesn't change afterward**, the pilot's 10 runs/profile
+  count as **window 1** of those two cells (lowest and 325ms, all 3
+  profiles) -- not discarded, not duplicated, not re-run.
+- **If the protocol does change** as a result of what the pilot reveals,
+  the pilot's data is **not discarded either** -- it moves to a clearly
+  separate, labeled folder, kept for the record. Same "never discard,
+  always relocate" practice this project already applies to settling
+  runs and the abandoned Buenos Aires Terraform (Decision 31).
+
+## 36. Campaign measurement list -- what every run must capture
+
+**Decision, registered as the source of truth for Phase 4's actual
+collection code (not yet built).** Every execution captures:
+
+**Core timing.** T_fluxo per execution; per-endpoint latency (P50 and
+P95) at every level; T_fluxo decomposition (handshake / server / rest)
+from the same batch; isolated sign/verify time measured on-instance;
+per-step timing for each call in the flow; protocol deadline margins
+(PAR TTL and authorization-code TTL) at each level; failure and retry
+rates.
+
+**Sizes and artifacts** (measured once per Decision 34, not per
+scenario): handshake size, JWT, certificate, JWK, PKI material, bytes
+per participant, OPINsize; JWT and JWK captured **both** in raw form and
+in their transmitted form (base64url); the JARM redirect URL's size.
+
+**Counts.** Connections, tokens, lookups ("buscas"); effective round
+trips counted directly from the pcap (not assumed from the protocol
+spec); packets per flow, broken down by profile and by level;
+fragmentation and retransmissions per flow.
+
+**Environment metadata, per execution** (so every run is independently
+reproducible/auditable): instance type, image identified **by digest**
+(not a mutable tag), git commit, AZ IDs involved, and clock
+synchronization state.
+
+**Resource usage.** CPU, steal time, and memory, sampled on **both**
+client and server.
+
+**Network quality.** Packet loss, jitter, and one-way delay (requires
+synchronized clocks -- not just RTT/2); reference RTT measured **before
+and after each block** (not just once at the start), so any drift during
+a block's execution is caught, not assumed away.
+
+**Bytes on the wire by direction** (not just a total).
+
+**Settling runs** (the discarded flows from each profile switch) are
+captured and stored, but kept **separate** from the counted data -- same
+principle as Decision 35's pilot-retention rule and this project's
+standing practice since Decision 4.
+
+## 37. Raw data retention: everything needed to recompute without a new collection, pcap volume estimate, LFS/external-storage contingency
+
+**SUPERSEDED 2026-10-12 (Decision 42) -- the pcap capture detail, not
+the retention principle.** The "capture everything, recompute without a
+new collection" principle and `calls.jsonl`'s existence stand unchanged.
+Decision 42 fixes the snaplen at 128 bytes (this decision's "reduced
+snaplen" was never a specific number), adds `calls.jsonl`'s exact field
+list, SYN/SYN-ACK RTT, clock-sync requirements, and the GRO/GSO offload
+check.
+
+**Decision.** Every calculation in the eventual report must be
+re-derivable from data committed to the repository, without a new AWS
+collection -- same principle v7 already follows (its own
+`audit_recompute_from_raw.txt`/`audit_v7_from_raw.py` exist specifically
+to prove this). Concretely, per run:
+- One JSON per execution (the run's own record, same shape as v7's
+  `run{NN}.json`).
+- One append-only, per-call record: `calls.jsonl` (one line per HTTP/TLS
+  call in the flow, not just the aggregate).
+- The gateway's raw log lines for that run (not just derived numbers).
+- CPU/steal/memory time series (not just peak/average -- the full
+  series, so steal-affected runs can be identified after the fact, per
+  Decision 39's "mark, don't discard" rule).
+- The reference pings taken before/after each block (Decision 36).
+- A **pcap, header-only, port 443 only** (SSH traffic on 22 explicitly
+  excluded -- it's orchestration noise, not experiment data), captured
+  with a reduced snaplen and written compressed. **Per capture, record
+  the kernel's own dropped-packet count** (`tcpdump`'s own summary line,
+  or `/proc/net/dev`'s drop counter) -- a silently-dropped packet would
+  corrupt the round-trip count derived from this pcap without this check.
+
+**Pcap volume -- estimate only, checked 2026-10-12, not yet measured for
+real.** 540 runs in the main campaign (6 scenarios x 3 profiles x 30
+runs; the pilot's 60 runs are not necessarily additive -- see Decision
+35). Reasoning-based estimate, not measured: PQC/Hybrid's larger
+certificate chains mean more TCP segments per handshake -- call it
+500-2000 packets/execution including the full HTTP exchange. At roughly
+80 bytes/packet with a header-only snaplen, that is ~40-160KB/execution
+uncompressed, likely compressing to roughly **15-100KB/execution**.
+Scaled to 540 runs: **roughly 20-60MB compressed for the whole
+campaign's pcaps** -- already in "a few dozen MB" territory.
+
+**Contingency, per the author's own threshold:** if the real figure (to
+be known for certain once the pilot, Decision 35, actually runs) comes
+in above a few dozen MB, propose **Git LFS** (if the hosting platform
+supports it for this repository) or **external storage with a SHA-256
+hash committed in the repo** pointing at the external blob, rather than
+committing large binary pcaps directly. **Not decided which of the two**
+-- deferred until the pilot gives a real number instead of this
+estimate.
+
+## 38. Proposed v8 top-level layout: `size/`, `latency/`, `artifacts/`, `discovery/` -- proposal only, nothing moved
+
+**SUPERSEDED 2026-10-12 (Decision 53) -- a server-level nesting was
+missing.** `artifacts/`/`discovery/` are unaffected. `latency/` and
+`size/` each need one more level than this proposal had: per-server,
+since the campaign now has 3 server installations each with their own
+scenario set, not one flat `{scenario}/` level. Decision 53 has the
+corrected tree.
+
+**Proposal, mirroring v7's own top-level layout exactly** (same shape
+this thesis has used since v5, just applied to real-AWS data instead of
+`tc`/`netem`):
+
+```
+v8/size/experiment{1,2,3} - {Classic,PQC,Hybrid}/
+  runs/run01.json .. runN.json
+  median_metrics.json
+  report.md
+
+v8/latency/experiment{1,2,3} - {Classic,PQC,Hybrid}/{scenario}/
+  runs/
+  median_metrics.json
+  report.md
+
+v8/artifacts/{classico,pqc,hybrid}/
+  README.md
+  <files>
+
+v8/discovery/
+  (everything already in latency-discovery/, see below)
+```
+
+**Scenario folders use fixed internal names -- `L0`, `L14`, `L30`,
+`L123`, `L219`, `L325`** -- the same short labels v1-v7 already use
+internally, kept **even though the real measured RTT differs slightly**
+from the nominal number in the name (`L14` measures 14.7ms, `L30`
+measures 33.2ms) -- this keeps v8 cross-referenceable against v1-v7's
+own folder names without forcing a rename of a well-established
+convention. **The real measured RTT is never silently implied by the
+folder name alone** -- it's recorded explicitly in both the run JSON and
+the scenario's `README.md`, consistent with Decision 30's "label by what
+was actually measured" rule.
+
+**`discovery/` -- proposal only, nothing renamed or moved yet.**
+`latency-discovery/` (its current name) would become `v8/discovery/`,
+sitting alongside `size/`/`latency/`/`artifacts/` the same way v7's flat
+layout has no equivalent discovery folder at all (v7 never needed real
+AWS RTT discovery). Everything already inside it -- the 5 numbered raw
+folders (Decision 33's rename), `scripts/`, and the 4 `terraform*/`
+directories -- would move as a unit, unchanged internally. **Not
+executed.** No files have been moved; this is a proposal for the author
+to approve or amend.
+
+## 39. Campaign plan (not executed): order, randomization, report format, analysis policy, duration/cost estimate
+
+**SUPERSEDED 2026-10-12 (Decision 47) -- the scenario-order question is
+resolved, and the duration estimate was wrong.** The "open question"
+below is answered by Decision 40 (fixed rotation across the 3 windows,
+not left to the author). The duration estimate's settling-time component
+assumed one profile switch per scenario transition; that's wrong (a
+scenario change alone never triggers a switch), so Decision 47 redoes it
+with a materially smaller settling-time figure. Report format and
+analysis-policy content below are not superseded -- Decision 47 restates
+them with two additions (packet-loss upper-bound reporting, the
+10-client/control-instance count) rather than changing them.
+
+**Scenario order across a day.** Not specified by the author's brief
+beyond "profile order randomized per window" -- **this is an open
+question flagged for the author** (see the chat report's "dúvidas"
+section). Proposed default, pending confirmation: cycle through all 6
+scenarios each window in a fixed, non-randomized order (`L0, L14, L30,
+L123, L219, L325`), since scenario order doesn't carry the same
+time-of-day-confound risk profile order does (different scenarios run on
+different installations for `L14`/`L30`, and sequentially on the same
+`sa-east-1` server for the other four -- randomizing *that* sequence adds
+operational complexity, namely extra crypto-profile switches, for a
+confound risk that's already handled by the window-level spread itself).
+
+**Warmup.** Stored, per Decision 36, but always kept in a file separate
+from the counted runs -- same convention as v7's `run00_warmup.json`,
+never mixed into `runN.json`'s numbering.
+
+**Report format.** JSON is the single source of truth; Markdown
+(`report.md`) is always **derived** from it, never hand-edited --
+matching v7's own `latency_automation.py` pattern (`summarize()` reads
+the JSON runs, `format_report()` renders Markdown from that summary, not
+the reverse).
+
+**Analysis policy, descriptive only:** median, quartiles (Q1/Q3), min,
+max, and a bootstrap confidence interval. **No execution is ever
+removed** from the dataset for any reason. Runs affected by CPU steal
+(Decision 36's steal-time series makes this detectable after the fact)
+are **flagged**, not dropped -- visible in the report as a marked
+subset, with and without them shown side by side, letting the reader see
+whether steal time actually moved the result.
+
+**Duration estimate -- labeled estimate, checked 2026-10-12, sourced
+from this project's own v7 data** (not a new measurement): v7's
+`report.md` files record real median T_fluxo per (profile, scenario) at
+comparable *nominal* latencies -- e.g. hybrid/0ms median 3.7s
+(`thesis/results/v7/latency/experiment3 - Hybrid/0ms/report.md`),
+hybrid/140ms median 29.2s, hybrid/320ms median 63.4s. Using these as a
+rough proxy (v8's real network path isn't identical to `tc`/`netem`'s
+symmetric injected delay, so this is explicitly an approximation, not a
+re-measurement):
+- Active run time (540 runs, blended across profiles, estimated ~80% of
+  hybrid's cost): roughly **3 hours of pure execution time**.
+- Settling overhead (Decision 4's 5-flow switches, ~9 switches/scenario
+  across 3 windows x 3 profile-blocks): roughly **1.5 hours**.
+- Since `us-east-1` and `ap-northeast-1`'s single scenarios run on
+  **independent installations** from `sa-east-1`'s four-scenario chain,
+  they proceed in parallel -- the **dominant serial chain is `sa-east-1`'s
+  4 scenarios, roughly ~2 hours of active+settling time**.
+- Because the 3 windows are deliberately spread across a day (Decision
+  34), the **campaign's wall-clock span is about 1 calendar day**, even
+  though active execution is only ~2 hours of it -- servers stay up per
+  Decision 22's per-installation persistence rule for that full span, not
+  just the active minutes.
+
+**Cost estimate -- labeled estimate, checked 2026-10-12, same sources as
+Decision 32** (`m7i-flex.large`/`c7i-flex.large` on-demand, EBS, public
+IPv4 pricing pages): assuming 3 server instances + up to 5 client
+instances (one per distinct client region: `sa-east-1` co-located,
+`ca-central-1` -- shared between the 123ms and 14.7ms scenarios, **not
+yet decided** whether as one reused instance or two separate ones --
+`eu-north-1`, `ap-southeast-1`, `ap-northeast-2`) up for roughly 1 day
+(~24h) each: **~192 instance-hours**, at a blended ~$0.10-0.15/hr
+(compute + public IPv4) per instance -> **roughly $20-35** for this
+specific campaign run. Well under the $200 Free Plan credit even
+stacked on top of this project's prior spend (all prior discovery rounds
+combined were under $5).
+
+**Marked as depending on the author's decision, not resolved here:**
+1. Scenario order across a day (proposed default above, needs
+   confirmation).
+2. Whether the `ca-central-1` client is one instance reused for both
+   123ms and 14.7ms, or two separate instances.
+3. Pcap storage mechanism (Git LFS vs. external + hash) -- deferred to
+   the pilot's real volume measurement (Decision 37).
+4. `discovery/` folder rename/reorg (Decision 38) -- proposed, not
+   applied.
+5. Instance type for the campaign (`m7i-flex`/`c7i-flex` vs.
+   `m6i`/`c6i`) -- Decision 29/32's open question, pending the
+   previously-proposed brief launch test (not run, needs the author
+   present).
+6. Exact pcap snaplen value (previously proposed ~96 bytes, not
+   confirmed).
+7. Install automation mechanism (user-data vs. live SSH bootstrap,
+   proposed earlier, not approved).
+
+## 40. Scenario rotation inside each window's profile blocks; the earlier switch-count argument was wrong
+
+**SUPERSEDED 2026-10-12 (Decision 56) -- the scenario-by-scenario
+ordering, not the switch-count correction.** This decision's actual
+correction (switches scale with windows x profiles, not with scenario
+count -- Decision 47/54's duration math still rests on that) stands
+unchanged. What's superseded is the *ordering* of executions within a
+profile block: this decision ran scenario A's full 30 (now 10/window)
+before moving to scenario B; Decision 56 replaces that with round-robin
+(run 1 of every scenario, then run 2 of every scenario, ...) to spread
+within-block time drift evenly across scenarios. The 4-item/2-item
+rotation PATTERNS registered below (increasing/decreasing/rotated) are
+not superseded -- they still decide which scenarios are in a given
+window's block and in what order round-robin itself cycles through
+them each pass.
+
+**Decision, registered before any run happens.** A window is not "10 runs
+of one (profile, scenario) pair" -- it is **3 profile-blocks** (order
+randomized, Decision 34), and **inside each profile-block, the
+installation's own scenarios are visited in a rotating order specific to
+that window.** A crypto-profile switch (Decision 4's 5-flow settling
+protocol) happens only when moving from one profile-block to the next --
+**never when moving between scenarios within a block**, because which
+client/scenario is being measured has nothing to do with the server's
+crypto-profile configuration.
+
+**Registered per-window scenario order** (`sa-east-1`'s 4-scenario chain
+-- the only installation with more than one scenario to rotate):
+
+| Window | Order | Rule |
+|---|---|---|
+| 1 | L0, L123, L219, L325 | increasing by RTT |
+| 2 | L325, L219, L123, L0 | decreasing by RTT |
+| 3 | L219, L325, L0, L123 | rotated (cyclic shift of window 1's order by 2 positions) |
+
+`us-east-1` (L14 only) and `ap-northeast-1` (L30 only) have a single
+scenario each -- rotation is moot with one item, noted explicitly so
+it's never mistaken for an oversight later.
+
+**The earlier argument was wrong, corrected here.** Decision 34/39
+reasoned that randomizing scenario order "would add extra profile
+switches," and used that to justify leaving scenario order unregistered.
+This design itself disproves that: switch count is driven purely by
+(windows x profiles) = 3 x 3 = 9 switches per installation, **regardless
+of how many scenarios that installation serves or in what order** --
+`sa-east-1`'s 4-scenario chain costs the *same* 9 switches as
+`us-east-1`'s or `ap-northeast-1`'s single-scenario chains, not 4x more.
+Decision 47 redoes the settling-time estimate with this corrected model
+(materially smaller than Decision 39's original figure).
+
+**Profile order's randomization mechanism, registered so it's
+reproducible after the fact:** a seeded PRNG draws the order at the start
+of each window; both the seed and the resulting order are logged into
+that window's own metadata. Unlike the scenario rotation above (a fixed,
+pre-registered pattern), profile order is genuinely randomized at
+execution time, not pre-committed -- "sorteada" means drawn, not a fixed
+rotation.
+
+## 41. Ten-instance campaign topology; scenario labels come from the campaign's own pcap, not the discovery-phase pings
+
+**SUPERSEDED 2026-10-12 (Decision 53) -- topology count and size-sourcing
+both changed.** The 10-instance count is now 12 (2 more `L0` clients,
+one each for `us-east-1`/`ap-northeast-1`). The "sizes measured once, 10
+runs/profile, `sa-east-1` only" rule (Decision 34, restated in the "sizes"
+paragraph below) is also superseded: sizes are now derived from the byte
+fields already present in **every** latency execution's own JSON --
+`sa-east-1`'s data (all 4 of its scenarios pooled) is official, the other
+two servers' `L0` data is a complementary cross-machine check -- not a
+separate 10-run size-only collection phase. The scenario-label-from-pcap
+rule below is unchanged, now applied per server's own `L0` too (Decision
+53), not just assumed identical to `sa-east-1`'s.
+
+**Topology, final count: 3 servers + 6 clients + 1 control instance =
+10.**
+
+| Server | Scenario | Client | Notes |
+|---|---|---|---|
+| `sa-east-1` | L0 | same zone, by AZ ID (Decision 33) | co-located |
+| `sa-east-1` | L123 | `ca-central-1` (instance A) | |
+| `sa-east-1` | L219 | `eu-north-1` | |
+| `sa-east-1` | L325 | `ap-southeast-1` | |
+| `us-east-1` | L14 | `ca-central-1` (instance B) | **separate** from instance A |
+| `ap-northeast-1` | L30 | `ap-northeast-2` | |
+| (none -- `sa-east-1`) | n/a | control instance | outside every measured path |
+
+**`ca-central-1` is explicitly duplicated, not shared.** Resolves
+Decision 39's open question in favor of **two separate instances** (one
+per server it talks to) -- avoids tying one client instance's lifecycle,
+security-group rules, and scheduling to two different installations'
+campaigns at once, at the cost of one extra always-small, free-tier-type
+instance. Simpler to reason about and tear down independently.
+
+**Scenario labels: sourced from the campaign's own pcap, not the
+discovery-phase pings.** Every scenario's *final* RTT label (used in the
+JSON and README, Decision 38) comes from the **real SYN-to-SYN-ACK RTT
+measured in that scenario's own campaign pcap** (Decision 42) -- not
+from the earlier discovery-phase ICMP measurements (Decisions 9, 10, 12,
+13, 33) that produced 0.2/14.7/33.2/123/219/325ms in the first place.
+Each block's own reference ping (Decision 36/47) is a **cross-check**
+against the pcap-derived figure -- a drift indicator, not the primary
+source. This matters because every figure used so far is ICMP- and (for
+the lowest scenario) private-IP-based; Decision 10 already flagged that
+ICMP and real TCP/TLS RTT aren't guaranteed identical, and this is where
+that caveat finally gets resolved with real data instead of carried
+forward as a caveat.
+
+**Sizes: measured once, `sa-east-1`, 10 runs/profile (not 30).** Sizes
+are deterministic by this project's own established pattern (v7
+Decisions 10-12: 0% spread across 180 runs) -- 10 runs is enough to
+confirm that pattern holds here too, 30 would be redundant. Same
+`Host`/SNI headers as the local lab (Decision 34). **Any byte-count
+difference from the lab's own numbers is a finding to explain, not
+assumed away** -- and explicitly, **no claim is made that artifact sizes
+are identical across different machines**, because that was never
+tested; a difference would be investigated, not dismissed as noise.
+
+**Lab-vs-campaign non-comparability, registered explicitly.** v1-v7's
+lab paid its emulated `tc`/`netem` delay **twice** on every proxied call
+(v7 DECISIONS.md, Decision 15, "Mechanism 1: doubled delay on proxied
+requests" -- confirmed there with real numbers, not a new claim here).
+On AWS, calls between containers on the *same* installation (gateway to
+AS/RS) are **local** -- no real network hop between them at all, so
+there is nothing to pay twice. **v8's T_fluxo totals are therefore not
+comparable 1:1 against v7's, even at a matching nominal latency.** The
+lab remains the source for two things only: the **size** measurements
+above, and the **relative ordering between crypto profiles**
+(Classic < PQC < Hybrid, consistent across all of v1-v7) -- not for
+absolute T_fluxo magnitudes, which v8 measures fresh.
+
+**Buenos Aires opt-in -- reconfirmed, unchanged.** Per Decision 31: the
+opt-in stays in effect on the account, reversible only via an AWS Support
+ticket, zero resources currently in the zone. Nothing new to add.
+
+## 42. Pcap capture and clock-synchronization specifics
+
+**Snaplen fixed at 128 bytes** (Decision 37's "reduced snaplen" language
+is now a specific number) -- enough for Ethernet+IP+TCP headers plus the
+visible start of the TLS record (e.g. `ClientHello`/`ServerHello`'s
+first bytes), still far short of carrying any payload.
+
+**Port 443 only; port 22 (the operator's own SSH) is explicitly excluded**
+from the capture filter -- SSH is orchestration noise, not experiment
+data, and leaving it out also means the operator's own traffic pattern
+is never incidentally captured.
+
+**Captured on both the client and the server, written compressed**
+(unchanged from Decision 37). **Per capture, the kernel's own
+dropped-packet counter is recorded** (`tcpdump`'s own summary line) into
+that run's environment-metadata JSON (Decision 36) -- a silent kernel
+drop would otherwise corrupt every packet-count-derived metric from that
+run without any visible symptom.
+
+**`calls.jsonl`'s exact per-line fields** (one line per call): endpoint,
+bytes sent, bytes received, per-step timing, connection identifier, HTTP
+status, and whether the call needed a retry.
+
+**SYN-to-SYN-ACK RTT, measured at one capture point** (the server side,
+where `tcpdump` already runs) -- this is the figure that resolves each
+scenario's final RTT label (Decision 41).
+
+**Jitter and one-way delay require synchronized clocks on both sides --
+RTT/2 is not a substitute** (an asymmetric path makes that assumption
+unsafe). Mechanism: **Amazon Time Sync**, the NTP service built into the
+AWS hypervisor and reachable at the link-local address `169.254.169.123`
+on every EC2 instance with no extra configuration -- Amazon Linux 2023
+ships `chronyd` already pointed at it by default. Every instance's sync
+status is checked, and the **clock state is recorded per execution**
+(via `chronyc tracking`'s own offset / last-offset / leap-status fields),
+not assumed good just because the service exists.
+
+**GRO/GSO offload risk, flagged, check proposed for the pilot.**
+Generic Receive/Segment Offload can merge multiple real wire packets
+into fewer packets as seen by the capturing process -- this would
+corrupt any packet-*count*-based metric (packets/flow, fragmentation
+counts) without necessarily changing byte counts, and would do so
+silently. **Proposed for Decision 46's pilot** (not yet done): capture
+the same flow once with offload on (the default) and once with it
+disabled (`ethtool -K eth0 gro off gso off` on the capturing interface),
+compare packet-count and size distribution between the two runs. If they
+differ, every packet-count metric in the real campaign needs either
+offload disabled during capture, or an explicit note that counts reflect
+post-offload packets, not wire packets -- **not yet known which**,
+pending that comparison.
+
+## 43. Flex-type criterion revised (steal + performance drop, no 40% threshold); launch-test plan prepared, not executed
+
+**Correction, not a new finding.** Two turns ago, a criterion for "the
+flex type is inadequate" was stated **only in chat, never written into
+this log** -- checked directly (`grep` across this file) before this
+decision was written, confirming it was never actually registered. That
+chat-only version used a "CPU sustained above the 40%-baseline threshold
+without recovering" clause, which the author asked to drop.
+
+**Revised criterion, registered here for the first time:**
+- **Steal time** persistently above a **pre-registered 5% threshold**
+  during synthetic load, **or**
+- A **clear performance drop under load relative to the type's own idle
+  baseline** -- judged against what the launch test itself measures, not
+  against AWS's generic "40% baseline" marketing figure (Decision 32),
+  which describes a *guaranteed floor*, not a *failure threshold*, and
+  was the wrong thing to test against.
+
+**If the launch test passes** (steal below 5% in every region tested, no
+clear load-induced drop): **use one instance type uniformly across all
+10 instances** (Decision 41) -- not a per-role mix -- consistent with
+Decision 45's "same instance type across every installation" mitigation
+for the cross-installation confound (Decision 34's registered
+limitation).
+
+**Launch-test plan -- prepared, not executed, not applied.** Terraform +
+script to launch `m7i-flex.large` and `c7i-flex.large` in every server
+region (`sa-east-1`, `us-east-1`, `ap-northeast-1`) and every client
+region (`ca-central-1`, `eu-north-1`, `ap-southeast-1`,
+`ap-northeast-2`) -- 7 regions x 2 types = 14 instances, up for a few
+minutes each under synthetic load (`stress-ng`, a labeled proxy for
+`tls_kem_proxy`'s real shape, not the real cryptographic workload
+itself), steal/CPU sampled from `/proc/stat` throughout, then destroyed
+with direct-API verification. Lives at
+`latency-discovery/terraform-flex-launch-test/`. **`terraform plan`'s
+output is in the chat report; `apply` is not run -- requires the author
+present, same standing rule as every other apply in this project.**
+
+## 44. AWS account findings: public-IP same-region data transfer is billed; credit balance isn't queryable by this project's IAM profile
+
+**Public-IP, same-region data transfer: confirmed, there is a charge.**
+AWS's documented behavior: traffic routed over a public or Elastic IP --
+even between two resources in the same region, even the same AZ --
+leaves the VPC, crosses the public network border, and comes back in,
+billed as Data Transfer OUT. The same traffic over a **private** IP in
+the same AZ is free. This directly validates Decision 28's choice
+(private IP for every `sa-east-1`<->`sa-east-1` pair in the AZ-to-AZ
+test) on cost grounds, independent of that decision's original
+measurement rationale. The exact per-GB rate (commonly cited around
+$0.01/GB per direction) comes from secondary sources corroborating each
+other, not from an independently re-fetched AWS pricing table (AWS's own
+live tables are JS-rendered and didn't return the number through a
+direct fetch, same limitation noted in Decision 32) -- **the existence
+of the charge is the well-confirmed part; the exact rate is a
+secondary-sourced estimate.**
+
+**Credit balance / validity: attempted directly, not queryable by this
+project's restricted IAM profile.** Three API calls tried, from the
+actual `mockopin-pqc-experiment` profile this project always uses (never
+an admin credential):
+
+| API | Result |
+|---|---|
+| `freetier:GetFreeTierUsage` | `AccessDeniedException` |
+| `ce:GetCostAndUsage` | `AccessDeniedException` |
+| `account:GetContactInformation` | `AccessDeniedException` |
+
+Consistent with Decision 11's policy, which grants only `ec2:*` and
+`sts:GetCallerIdentity` -- nothing billing-related was ever added, so
+this result is expected, not a bug. **Console path for the author to
+check directly:** AWS Billing and Cost Management console ->
+"Credits" (left-hand nav) for balance and expiration, or the Billing
+Dashboard's "Free Tier" card for usage against the plan's allowances.
+
+## 45. Installation design: user-data only, image-pull-by-digest, precompiled proxy proposal, `REMOTE_GATEWAY_HOST`, control instance, security posture
+
+**No `curl | bash`, no live SSH bootstrap -- correction to an earlier,
+chat-only proposal.** Every instance's setup runs from **user-data,
+versioned in this repository, pinned to a specific commit** -- one
+command per region to launch; the user-data script itself is identical
+everywhere, only region/role parameters differ. This retracts a prior
+proposal (chat-only, never committed to this log) that suggested a live
+`curl | bash` SSH bootstrap -- the user-data approach is reproducible
+and auditable from the repository alone, the live-bootstrap approach
+was not.
+
+**Image strategy, answered: build once, pull by digest.** MockOPIN's
+images are built **once**, pushed to a registry, and every server
+**pulls by digest** -- not built independently on each of the 3 server
+installations, even with locked dependency versions. Reasoning:
+independent per-server builds leave room for silent drift (different
+regions can resolve base-image/package-mirror CDNs differently) even
+with identical lockfiles; pulling one identical digest everywhere
+removes that variable by construction. This is also what makes Decision
+36's "image identified by digest" metadata requirement actually mean
+something, rather than recording a digest that's merely hoped to match
+across installations.
+
+**`tls_kem_proxy` as a precompiled binary -- proposed, not
+implemented.** Decision 26 already found the proxy's 1000%+ CPU spike
+was `go run .`'s fresh compile every invocation, not handshake cost.
+Proposal: `go build` the binary once, ship the binary itself (not source
++ `go run`) to every client instance via the same digest-pinned
+mechanism as the server images. This removes the compile-cost variable
+from the client instance's resource usage entirely -- not just from
+T_fluxo's own timing window, which `latency_automation.py` already
+protects (Decision 26), but from every CPU/steal sample taken throughout
+the run.
+
+**`REMOTE_GATEWAY_HOST` in `opin_flow.py` -- described, not
+implemented.** Minimal, additive change: a new environment variable read
+once at startup. When set: (a) skip the `set_latency()` call entirely
+(there is no local Docker gateway container to `docker exec` into from a
+remote client), and (b) use its value as the connection target instead of
+`127.0.0.1`. When unset (today's default): behavior is byte-for-byte
+identical to the current local-lab path -- nothing already validated
+changes. Not implemented this turn.
+
+**Control instance.** Small, free-tier-eligible type, `sa-east-1`,
+**outside every measured path** (never a client or server for any
+scenario). Holds the campaign's schedule; runs under `tmux` or
+`systemd` (survives an SSH disconnect, resumes unattended); each
+execution writes its own JSON immediately (no in-memory state a crash
+could lose); syncs collected data back at the end. **Goes into the
+eventual campaign Terraform** as its own resource -- that Terraform
+isn't built this turn; this is the requirement registered for when it
+is.
+
+**Exposed server, security posture.** The security group opens only the
+*currently active* client's IP, only for that scenario's collection
+window -- never a standing allowlist for every client region
+simultaneously. No credential and no real OPIN data ever touches any
+instance (MockOPIN is synthetic-data-only by design, Decision 8 -- this
+restates that specifically for the campaign instances, not a new
+finding).
+
+**Teardown verification scope, campaign-wide:** instances, security
+groups, key pairs, volumes, Elastic IPs, **and the control instance
+specifically** (easy to overlook since it's deliberately outside the
+"measured path" framing) -- region by region, direct API check, same
+standard as every prior teardown (Decisions 25, 29, 33).
+
+## 46. Pilot, extended: public-IP RTT validation, tcpdump overhead check, written tc/netem confirmation
+
+**Extends Decision 35, doesn't replace it.** Same 10 runs/profile at the
+lowest scenario and 325ms, same conditional retention rule. Adds three
+things:
+
+1. **Validates the lowest scenario's RTT over the real path** -- public
+   IP, TCP -- not ICMP over the private IP, which is what Decision 33's
+   0.2ms figure actually measured. Closes the exact gap Decision 33
+   flagged as pending before that scenario's label could be trusted.
+2. **tcpdump overhead check.** A subset of pilot executions run with
+   `tcpdump` active and a subset without, comparing T_fluxo and CPU
+   between the two -- quantifies the capture's own overhead before
+   trusting that it doesn't bias the full campaign's numbers.
+3. **Written confirmation, registered here:** nothing in this AWS
+   campaign uses `tc` or `netem` at any layer. Every millisecond of
+   latency in v8 is real network RTT; `tcpdump` is a passive observer
+   only. Consistent with everything built so far -- no Terraform in this
+   project has ever provisioned a `netem` qdisc, and `set_latency()`
+   (v1-v7's local lab-only mechanism) is explicitly skipped whenever
+   `REMOTE_GATEWAY_HOST` is set (Decision 45).
+
+## 47. Campaign plan, redone: corrected settling-time math, 10-instance cost, packet-loss upper-bound reporting
+
+**SUPERSEDED 2026-10-12 (Decision 55) -- the instance/execution count
+changed, duration/cost redone again.** 720 executions (8 scenarios, not
+6) and 12 instances (not 10) now. Order/report-format/analysis-policy
+content below is NOT superseded -- Decision 55 restates it unchanged,
+only the numbers depending on instance/execution count are redone.
+
+**Order, report format, analysis policy -- restated, not changed from
+Decision 39**, now citing Decision 40's scenario rotation and Decision
+41's 10-instance topology: JSON is the single source of truth, Markdown
+is always derived; median/quartiles/min/max/bootstrap CI; no execution
+is ever removed; steal-affected runs are flagged and shown with/without,
+side by side.
+
+**Packet loss, with an upper bound when zero events are observed.** A
+flat "0%" with zero observed loss events overstates precision -- instead,
+report an upper confidence bound from the number of packets actually
+observed (a rule-of-three-style bound: with `n` packets and zero losses
+seen, the true loss rate's upper ~95% bound is roughly `3/n`) -- so a
+scenario with few packets and zero losses is reported as "no losses
+observed, upper bound ~X%," not as a false "0.00%."
+
+**Duration estimate -- corrected, labeled estimate, checked 2026-10-12,
+same v7 sources as Decision 39** (hybrid/0ms 3.7s, hybrid/140ms 29.2s,
+hybrid/320ms 63.4s): Decision 40's corrected switch-count model changes
+the settling-time component materially --
+- Active run time (540 runs, unchanged): ~3 hours.
+- Settling, recomputed as (windows x profiles) per installation, **not**
+  per scenario: `sa-east-1`'s chain needs 9 switches total (not 36) --
+  roughly 21 minutes of settling for its entire 4-scenario chain, not
+  the ~60 minutes Decision 39 wrongly estimated. `us-east-1`/
+  `ap-northeast-1` each need their own 9 switches too (~4-6 minutes
+  each).
+- `sa-east-1`'s chain remains the dominant serial path (the other two
+  installations run in parallel, independent infrastructure): roughly
+  **55 minutes of active runs + ~21 minutes of settling =~ 1.25 hours**,
+  down from Decision 39's ~1.9-hour estimate.
+- Wall-clock span is still **about 1 calendar day**, unchanged -- the 3
+  windows are deliberately spread across the day regardless of how
+  little active time they actually need; servers stay up the full span
+  per Decision 22's per-installation persistence rule.
+
+**Cost estimate -- corrected for the 10-instance topology (Decision
+41), labeled estimate, checked 2026-10-12, same sources as Decision 32/44:**
+3 servers + 6 clients + 1 control instance, up roughly 24h each: **~240
+instance-hours**, at a blended ~$0.10-0.15/hr (compute + public IPv4) ->
+**roughly $25-40** for this specific campaign run. Still an order of
+magnitude under the $200 Free Plan credit.
+
+## 48. `latency-discovery/` and its raw-data subfolders: current locations confirmed, nothing to move
+
+**Confirmed by direct listing, not assumed.** `latency-discovery/` keeps
+its name and location: `thesis/results/v8/latency-discovery/`. All three
+folders asked about are **already inside it** -- none is outside, so no
+move and no author confirmation is needed this time:
+
+| Asked-about folder | Current path |
+|---|---|
+| `aws-region-discovery-raw` | `latency-discovery/aws-region-discovery-01-single-origin-raw/` (renamed, Decision 33's sequence-numbering pass) |
+| `aws-region-discovery-mesh-raw` | `latency-discovery/aws-region-discovery-02-full-mesh-raw/` (renamed, same pass) |
+| `aws-sa-az-rtt-raw` | `latency-discovery/aws-region-discovery-05-sa-az-raw/` (moved into `latency-discovery/` and renamed in the same pass) |
+
+Decision 38's proposed `v8/discovery/` rename (from `latency-discovery/`)
+remains a **proposal only** -- not applied, not superseded, just
+restated as still pending the author's approval.
+
+## 49. Campaign control-plane infrastructure: networking, control instance, four scripts, safety timer -- prepared, not applied
+
+**Scope.** `thesis/results/v8/campaign/` -- the actual Phase 4 campaign's
+Terraform and orchestration scripts, as distinct from
+`latency-discovery/`'s exploratory discovery tests. `terraform plan`:
+**39 resources to add** (10 instances + 10 Elastic IPs + 10 security
+groups + 8 key pairs + 1 generated SSH key), 0 to change, 0 to destroy,
+no errors. **Not applied.**
+
+**Networking.**
+- **Elastic IP on all 10 instances.** Confirmed, not assumed: an
+  Elastic IP costs the same as a plain auto-assigned public IP while
+  in use -- AWS's own announcement (already cited, Decision 44) states
+  the $0.005/hr charge applies to "in-use Public IPv4 address
+  (including Amazon provided public IPv4 and Elastic IP)," the same
+  rate either way. EIPs were chosen over auto-assigned public IPs
+  specifically because they're stable across a stop/start (the safety
+  timer below can shut an instance down without losing its address),
+  which a plain auto-assigned public IP would not survive.
+- **Elastic IP quota checked directly** (not assumed): `describe-account-attributes`
+  in all 7 regions returned the default limit of 5 EIPs/region, 0 in
+  use anywhere. The campaign's peak per-region need is 3 (`sa-east-1`:
+  server + L0 client + control) -- comfortably inside the default,
+  no quota increase request needed.
+- **Each server opens port 443 only to its own clients' /32s, one
+  ingress rule per client, created once by Terraform and left in place
+  for the whole campaign** -- not toggled per-scenario at runtime. This
+  revises Decision 45's earlier "open only during the active scenario's
+  window" language (dynamic/temporal) in favor of a static-but-scoped
+  design: simpler (no runtime security-group mutation, itself a source
+  of risk), and no less restrictive -- each server still only ever
+  allows its own clients, never a blanket range or another server's
+  clients. The one exception: `sa-east-1`'s L0 client is co-located
+  (same AZ ID as the server) and is allowed by its **private** IP, not
+  its public one -- Decision 28's existing private-IP-within-sa-east-1
+  rule, applied here for the first time to campaign (not discovery)
+  infrastructure.
+- **SSH on every server/client instance accepts connections only from
+  the control instance's own Elastic IP.** The control instance itself
+  accepts SSH only from the operator's own /32, discovered fresh at
+  apply time (`curl -s https://checkip.amazonaws.com`, same mechanism
+  as every prior apply in this project) and passed to Terraform as an
+  environment variable (`TF_VAR_operator_ip_cidr`) -- never written to
+  any file this repository tracks.
+
+**Control instance.**
+- **No AWS credential, no IAM role** -- no `iam_instance_profile` is
+  set anywhere in `modules/campaign_instance`, and no access key is
+  ever placed in user-data (this project has never done that for any
+  instance, campaign or discovery). The control instance has zero AWS
+  API access of its own; it cannot `terraform destroy` anything itself.
+- **A campaign-exclusive SSH key, generated by Terraform
+  (`tls_private_key`), never written to user-data or to this
+  repository.** The private half exists only in Terraform state (local,
+  gitignored, and now explicitly checked by `scan_secrets.sh` -- see
+  below) and briefly in memory during `campaign_up.sh`, which reads it
+  via `terraform output -raw campaign_private_key` and `scp`s it onto
+  the control instance over a **separate** connection authenticated
+  with the **operator's own, pre-existing discovery key** (not this
+  one) -- the two keys serve different purposes and are never
+  conflated. The local temp copy is `shred`-ed immediately after the
+  `scp` (`campaign_up.sh`'s `trap ... EXIT`).
+- **Inventory (hosts/IPs/roles) is generated by Terraform**
+  (the `inventory` output) and copied to the control instance the same
+  way, right after the key.
+- **IMDSv2 mandatory** (`metadata_options { http_tokens = "required" }`)
+  on every instance, campaign-wide -- the documented AWS baseline
+  hardening, applied uniformly even though no instance here carries a
+  credential IMDSv2 would otherwise protect.
+- **Terraform state is local only, already gitignored** (pre-existing
+  `.gitignore` rule, unchanged) -- `scripts/scan_secrets.sh` now also
+  explicitly checks that no `*.tfstate*` file is tracked, right now or
+  at any point in history (a new check, not inferred from the
+  `.gitignore` rule alone, which is a convention `git add -f` could
+  bypass).
+
+**Four scripts, plus an example vars file** (`thesis/results/v8/campaign/scripts/`):
+- `campaign_up.sh` -- discovers the operator's IP fresh, runs `terraform
+  apply` (behind an explicit typed confirmation, not `-auto-approve`
+  blindly), distributes the campaign key and inventory to the control
+  instance, then verifies SSH connectivity and `chronyc tracking`'s
+  sync status on every host, proxied through control -- fails loudly
+  (non-zero exit, explicit message) on the first mismatch rather than
+  continuing past it.
+- `campaign_run.py` -- NOT run locally; `campaign_up.sh` installs it on
+  the control instance under `systemd` (`campaign_run.service`, same
+  directory). Implements the parameterized window schedule, Decision
+  40's fixed per-window scenario rotation, a randomized-per-window
+  profile order (seed logged), automatic resume (each run's own JSON is
+  its resume marker -- already-written runs are never re-run or
+  overwritten), and the three pre-block checks (negotiated
+  key-exchange group, image digest, disk space). **Its actual
+  per-execution step (`run_one_execution()`) deliberately raises
+  `NotImplementedError`** -- it depends on `opin_flow.py`'s
+  `REMOTE_GATEWAY_HOST` flag (Decision 45), described but not yet
+  added to that script; wiring a call to a flag that doesn't exist
+  would be fabricated, not prepared.
+- `campaign_pull.sh` -- idempotent (`rsync`, safe to re-run), pulls
+  campaign data to the operator's own machine, regenerates a sha256
+  manifest on the control instance first, then verifies every pulled
+  file against it locally, writing a `.pull-verified` marker only on
+  success.
+- `campaign_down.sh` -- **refuses to `terraform destroy`** unless
+  `campaign_pull.sh`'s `.pull-verified` marker exists (bypassable with
+  an explicit `--force`, which prints a loud warning first), then
+  verifies the teardown directly via the AWS API, region by region:
+  instances, security groups, key pairs, volumes, Elastic IPs, **and
+  the control instance specifically** (called out by name in the
+  script's own output, not just folded into `sa-east-1`'s generic
+  count).
+- `campaign.vars.example.sh` -- the tracked template; the real copy
+  (`campaign.vars.local.sh`, with real local key paths) is gitignored,
+  never committed.
+
+**Safety timer, servers and clients only -- not a teardown.** Each
+server/client instance runs a `systemd` timer (installed via
+user-data, `modules/campaign_instance`'s `templates/safety_timer.sh.tftpl`)
+checking a deadline file every 5 minutes; past it, the instance shuts
+itself down. Default 48h, renewable by the orchestrator overwriting the
+deadline file. **Documented explicitly, here and in `campaign/README.md`:**
+this does not release the instance's Elastic IP (still billed) and does
+not run any of `campaign_down.sh`'s verification -- it exists so a
+crashed orchestrator doesn't leave a billed instance running forever,
+not so the operator can skip `campaign_down.sh`. **The control instance
+is exempt** (`self_terminate_hours = 0`) -- it must stay up to run
+`campaign_pull.sh`/`campaign_down.sh` against.
+
+**Reproducibility.** Pinned provider versions (`~> 5.0` for `aws`, `~>
+4.0` for `tls`); `.terraform.lock.hcl` is tracked (not excluded by
+`.gitignore`, confirmed by the same pattern already working for every
+prior Terraform root in this project). `campaign/README.md` documents
+the four commands and their order. No real OPIN data touches any
+instance -- MockOPIN is synthetic-data-only by design (Decision 8),
+restated here for the campaign instances specifically.
+
+**Caveats, registered explicitly (not just implied by the design):**
+state and the campaign's own SSH key are local-only; the control
+instance has no power to destroy anything; collected data sits on the
+control instance's disk until a verified pull; the safety timer is a
+crash net, not a substitute for verified teardown.
+
+## 50. Image delivery: tarball over SCP from the control instance, not a public registry
+
+**Context.** No instance has an AWS credential or an IAM role (Decision
+49) -- images still need to reach the 3 servers somehow, without an
+ECR/any AWS-authenticated pull. Two options compared, neither needing an
+AWS credential at all (neither is an AWS API call -- one is a plain
+HTTPS pull, the other is SSH/SCP):
+
+| | Public registry (Docker Hub/GHCR, pull by digest) | Tarball over SCP from control, sha256-verified |
+|---|---|---|
+| Needs | an explicit secret-scan of the image before every push | nothing new -- reuses the campaign key + the manifest-verification pattern `campaign_pull.sh` already has |
+| Exposure | image layers (dependency versions, build structure) visible to anyone, indefinitely | stays entirely inside this project's own private control plane |
+| Simplicity | one pull command per instance | a few more manual hops (build -> scp to control -> scp to each server -> load) |
+
+**Decision: tarball over SCP, recommended and chosen.** This project's
+posture has consistently been minimal exposure even where the data
+itself is synthetic and harmless (Decision 8) -- Decision 45's
+"open only to the active client" server posture and Decision 49's
+"SSH only from control" rule both already reflect the same instinct.
+A public registry, even verified secret-free, still publishes this
+thesis's internal implementation details indefinitely for a 3-server,
+~1-day-campaign scale that gets nothing in return for that exposure.
+
+**Mechanism, described -- not yet built (a separate, bounded task):**
+1. Build each image once (`docker build --pull --no-cache`), tag by digest.
+2. **Secret-scan the built image before any distribution** -- `docker save` it, extract the layers, and run `scan_secrets.sh`'s own 5 patterns (AWS key, PEM header, account ID, operator IP -- reused, not reinvented) against the extracted content.
+3. `docker save | gzip`, compute sha256 locally.
+4. `scp` the tarball + its sha256 to the control instance, over the operator's own key (the same connection `campaign_up.sh` already opens).
+5. From control, `scp` the tarball to each server over the campaign key (the same connection direction `campaign_pull.sh`'s manifest pattern already establishes, just reversed).
+6. On each server: verify sha256, `docker load`, then `docker inspect --format='{{.Id}}'` and compare across all 3 servers -- this is the actual "identical everywhere" guarantee Decision 45 wanted from "pull by digest," now concretely checkable.
+
+Not built this turn -- a `deliver_images.sh` implementing this is the natural next piece.
+
+## 51. `REMOTE_GATEWAY_HOST` implemented in `opin_flow.py` and `tls_kem_proxy`; regression-tested live across all 3 profiles
+
+**Two things found by direct inspection, not assumed, before writing any
+code:**
+1. `opin_flow.py`'s own connection targets (`AUTH_CONNECT_HOST` etc.)
+   always point at the **local** `tls_kem_proxy`
+   (`127.0.0.1:TLS_KEM_PROXY_PORT`) -- what actually has to change for a
+   remote gateway is the **proxy's own** upstream `-target` flag
+   (hardcoded `"mtls:443"`, the lab's compose-network alias), not
+   `opin_flow.py`'s HTTP target. Decision 45's original description
+   ("use its value as the connection target instead of 127.0.0.1") was
+   imprecise on this point -- corrected here.
+2. **A real gap, not a style issue:** `tls_kem_proxy/main.go` only
+   explicitly set the upstream TLS `ServerName` (SNI) for the
+   `"classical"` baseline curve (`= "matls-api.local"`); for the 3 real
+   profile curves (classic->`secp384r1`, pqc->`mlkem1024`,
+   hybrid->`secp384r1mlkem1024`) it left `ServerName` unset, relying on
+   Go's "defaults to the dial target" behavior. That default breaks the
+   moment `target` isn't literally `"mtls"` -- a real IP gets no SNI at
+   all (Go omits SNI for literal IP targets, per the TLS spec), and a
+   real hostname would send the wrong one. **Fixed:** `ServerName:
+   "mtls"` is now set unconditionally on the base config, with the
+   existing `"classical"` branch still overriding it to
+   `"matls-api.local"` as before -- identical to today's *implicit*
+   value when `target` is `"mtls"` (confirmed by the regression test
+   below), and the *same explicit* value regardless of what `target`
+   becomes.
+
+**Implemented** (diff only, not committed -- left for the author's review):
+- `REMOTE_GATEWAY_HOST` (`opin_flow.py`): read once from the
+  environment at import time. Unset -- zero behavior change anywhere.
+  Set -- (a) `main()` skips `set_latency()` (prints why, instead of
+  calling it -- there is no local gateway container to `docker
+  exec`/`tc` into from a remote client), (b) `start_tls_kem_proxy()`
+  passes `-target {REMOTE_GATEWAY_HOST}:443` instead of `-target
+  mtls:443`. `--network insurance-server-lambdas_default` is left
+  unchanged either way -- a custom bridge network still NATs to the
+  host's own internet connection unless `--internal` is set, which it
+  never is here.
+- `tls_kem_proxy/main.go`: the `ServerName: "mtls"` fix above.
+- `git diff --stat`: `opin_flow.py` +31/-2 (net), `tls_kem_proxy/main.go`
+  +23/-8 (net) lines changed.
+
+**Regression test -- run live against the real local lab stack, not
+simulated.** Brought up `docker compose --profile main up` (it was not
+running before this test; brought back down afterward). For each of the
+3 crypto profiles: ran `opin_flow.py 0` once with the ORIGINAL code
+(`git stash`-ed the diff) and once with the EDITED code
+(`REMOTE_GATEWAY_HOST` unset in both runs), comparing every byte-relevant
+field -- `total_bytes_exchanged`, `total_requests`, JWT size/count
+fields, `bytes_by_participant`, and `gateway_metrics.handshake_bytes`
+(count/mean/p50/p95/p99).
+
+| Profile | All byte fields identical before vs. after? |
+|---|---|
+| classic | yes |
+| pqc | yes |
+| hybrid | yes |
+
+Only the live timing fields (`handshake_ms`, `opin_processing_ms`)
+differed slightly between runs -- ordinary run-to-run jitter on a live
+local stack, unrelated to and unaffected by this change (nothing in the
+diff touches a timing-critical path when the env var is unset). The
+ad-hoc result files this test wrote (`thesis/results/v3/experiment2 -
+PQC/0ms/`) were reverted to their committed state afterward (`git
+restore`) -- not left as spurious diffs.
+
+**Not done this turn, flagged rather than silently claimed:** a direct
+packet-capture confirmation that the ClientHello itself is
+byte-for-byte identical (same SNI, same size) was **not** independently
+run -- no sniffer was invoked. The byte-level equality above (identical
+`handshake_bytes` count and percentiles) is consistent with an unchanged
+ClientHello, but isn't the same evidence a real pcap would give.
+Decision 42's pilot-stage capture is the place that actually closes this
+with a real packet trace.
+
+**Not affected, by construction:** the "same Host headers" requirement
+is unaffected by this diff -- the proxy never parses HTTP at all
+(confirmed by `main.go`'s own package comment), so there is no HTTP
+Host-header code path this change could touch even in principle.
+
+## 52. Campaign script revisions: mandatory budget/credit confirmation, no instance-type default, fixed UTC windows, operator-IP-update command, post-teardown cleanup prompt; L0's private-vs-public-IP asymmetry registered as a limitation
+
+**`campaign_up.sh`:**
+- **Mandatory confirmation, before apply, that the operator personally
+  checked -- in the console, just now, not from memory -- the billing
+  budget alert and the Free Plan credit balance/expiration.** Decision
+  44 already found the restricted IAM profile can't read either value
+  via the API -- this has to be a human gate, and it's enforced as a
+  typed confirmation (`checked`), separate from the existing `apply`
+  confirmation.
+- `terraform/variables.tf`'s `server_client_instance_type` **no longer
+  has a default** -- `terraform plan`/`apply`/`destroy` now fail
+  outright if it isn't set, confirmed live (`terraform plan` without it:
+  `Error: No value for required variable`; with `t3.micro` passed
+  explicitly: plans cleanly, still 39 resources). Deliberate: Decision
+  43's launch test hasn't resolved this yet, and a silent placeholder
+  default risked getting used by accident before it does.
+  `campaign_up.sh`/`campaign_down.sh` both now require
+  `MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE` in the vars file.
+- **Windows default to fixed UTC clock times, not a relative offset:**
+  19:00 UTC (today, or tomorrow if 19:00 has already passed), 03:00 UTC
+  the day after that, 11:00 UTC that same day -- registered into
+  `campaign_schedule.json` exactly as before, still overridable via
+  `MOCKOPIN_WINDOW{1,2,3}_START_UTC`.
+- **New `--update-operator-ip` mode**: re-discovers the operator's IP
+  and re-applies *only* `module.control.aws_security_group.this`
+  (`terraform apply -target=...`) -- for when the operator's IP changes
+  between sessions and a full re-apply of all 39 resources isn't needed
+  or wanted.
+- **Fixed a pre-existing gap while touching this file**:
+  `campaign_down.sh` runs `terraform destroy`, which re-evaluates the
+  whole configuration the same way `apply` does -- it needs the same
+  variable values, not just the AWS profile. It previously exported
+  none of them (`operator_ip_cidr`, `operator_ssh_public_key`,
+  `server_client_instance_type`), which would have failed non-
+  interactively the first time anyone actually ran it. Now exports all
+  three (IP re-discovered fresh, same as `campaign_up.sh`).
+
+**`campaign_down.sh`:** after the teardown is verified clean, **proposes
+deleting the local Terraform state and cache**, behind an explicit typed
+confirmation (`delete`) -- reasoned here, not just coded: once nothing
+remains in AWS, the local state and the campaign's own SSH key material
+(both already gitignored, never committed, Decision 49) no longer
+protect anything real. The campaign's SSH private key itself isn't a
+separate file to delete -- it only ever existed in Terraform state and
+in the (now-destroyed) control instance's own `~/.ssh/campaign_key`;
+deleting the state is what actually removes its only remaining copy.
+
+**Limitation, registered explicitly (not just implied by Decision 41's
+topology table):** the lowest-latency scenario's client (`L0`) reaches
+its server over the server's **private** IP (co-located, same AZ ID,
+Decision 28/33), while every other scenario's client reaches its server
+over the server's **public** IP, the only path available cross-region.
+This is a structural, not just magnitude, difference between `L0` and
+every other scenario: no NAT, no public-internet routing, potentially
+different MTU/offload behavior (Decision 42's GRO/GSO check is directly
+relevant here too). **`L0`'s results should be read as a different kind
+of network path, not simply "the lowest-latency sample" on a continuum
+with the other five** -- this should be stated as an explicit limitation
+wherever `L0` is compared against the rest, consistent with Decision
+34's limitation note for the 14.7ms/33.2ms installations.
+
+## 53. Eight scenarios (L0 per server), 720 executions, repository-mirroring data structure, region+machine control via the three L0s
+
+**Context.** Every server now gets its own `L0` (co-located client, same
+AZ ID, Decision 28/41's private-IP rule) in addition to its other
+levels: `sa-east-1` -> L0, L123, L219, L325; `us-east-1` -> L0, L14;
+`ap-northeast-1` -> L0, L30. 8 scenarios x 3 profiles x 30 runs = **720
+executions**. 3 servers + 8 clients + 1 control = **12 instances**.
+
+**Current state, checked directly before redesigning (not assumed):**
+`campaign/`'s only existing data-path logic was `campaign_run.py`'s
+`run_dir_for()`, writing run JSONs to an ad-hoc
+`/home/ec2-user/campaign-data/{installation}/{scenario}/{profile}/
+window{NN}/run{NN}.json`, plus window metadata under a nested
+`_window_meta/` -- and `campaign_pull.sh` rsynced that whole tree into
+`$DEST/data/`, a flat mirror that did **not** match any eventual repo
+structure. Every other data type the thesis needs -- `calls.jsonl`, raw
+gateway lines, CPU/steal/memory series, reference pings, pcap, warmup --
+had **no defined location at all**: `run_one_execution()` was (and
+remains) an unimplemented seam, so nothing had ever actually written
+any of them.
+
+**Structure adopted, mirrored identically on the control instance, in
+`campaign-data-pulled/`, and in the repository itself** (Decision
+53 -- `campaign_run.py`/`campaign_pull.sh` updated accordingly, see
+their own diffs):
+
+```
+v8/latency/experiment{1,2,3} - {Classic,PQC,Hybrid}/{sa-east-1,us-east-1,ap-northeast-1}/{scenario}/
+  runs/run{NN}.json            (window, server, client, instance type)
+  runs/run{NN}.calls.jsonl     (per-call record, one file per execution)
+  run00_warmup_window{NN}.json (separate per block, never mixed into runs/)
+  server/run{NN}_gateway.log, run{NN}_cpu.jsonl, run{NN}.pcap.gz
+  client/run{NN}_cpu.jsonl, run{NN}_ping.json, run{NN}.pcap.gz
+  median_metrics.json, report.md   (local post-processing, not written on the control instance)
+
+v8/latency/_campaign-control/
+  schedule.json                       (the schedule this run actually used)
+  windows/{server}/window{NN}.json    (seed, profile order, scenario rotation)
+  orchestrator.log
+
+v8/size/experiment{1,2,3} - {Classic,PQC,Hybrid}/{sa-east-1,us-east-1,ap-northeast-1}/
+  median_metrics.json, report.md
+```
+
+`v8/artifacts/` and `latency-discovery/` are unchanged -- **nothing
+moved out of either.**
+
+**The hash manifest uses the same relative paths as the repository,
+not a separate scheme.** `campaign_run.py` now writes under
+`/home/ec2-user/campaign-data/v8/...` (the exact relative layout above);
+`campaign_pull.sh` generates its sha256 manifest with `cd campaign-data
+&& find v8 ...` (relative paths, e.g. `v8/latency/experiment1 -
+Classic/sa-east-1/L0/runs/run01.json`) and rsyncs
+`campaign-data/v8/` -> `$DEST/v8/` directly -- `$DEST` is now a literal
+mirror of `thesis/results/v8/`, not a translated copy.
+
+**Sizes: derived from every latency execution, not a separate batch.**
+Supersedes Decision 34/41's "measured once, 10 runs/profile,
+`sa-east-1` only." The byte fields every run already records (Decision
+36) are pooled after the fact: `sa-east-1`'s number is **official**
+(all 4 of its scenarios' executions pooled -- more samples, and
+Decision's own v7 precedent already found 0% spread across profiles'
+deterministic byte fields, so pooling across scenarios costs nothing).
+`us-east-1`/`ap-northeast-1`'s `L0` data is a **complementary,
+cross-machine verification** -- deliberately scoped to just `L0` (not
+their other scenario too), keeping the 3-way comparison clean and
+symmetric. **Any byte-count difference from `sa-east-1`'s official
+number is a finding to explain, not assumed away** -- Decision 41
+already flagged that cross-machine size identity was never tested; this
+is where it actually gets tested, for the first time, with real data.
+
+**Each `L0`'s RTT label comes from that server's own pcap + reference
+ping -- never copied from another server's.** `sa-east-1`'s 0.2ms
+(Decision 33) does **not** carry over to `us-east-1`/`ap-northeast-1`'s
+`L0` -- each gets its own measured value once the real campaign pcap
+exists (Decision 41's "pcap, not discovery ping" rule, applied
+per-server now, not assumed identical across servers just because the
+co-location mechanism is the same).
+
+**The three `L0`s serve two purposes at once, not just "the lowest
+scenario" three times over:** a **region control** (the region-control
+*procedure* was discarded, Decision 39, but these three numbers, using
+real campaign data instead of a dedicated experiment, let the same
+question be asked for free) and a **same-machine-type control**
+(confirms -- or doesn't -- that nominally identical instance
+type/image behaves identically across 3 physically different hosts).
+
+**Analysis for the 3-way `L0` comparison, fixed before any measurement
+(same discipline as every other pre-registered criterion in this
+project):** compare the three medians' pairwise differences against
+**each one's own internal noise** (IQR or a bootstrap CI) --
+**descriptive only, no hypothesis test**, consistent with this
+project's standing analysis policy (Decision 47/55). **Nothing is
+removed.** A divergence that exceeds a server's own internal noise is
+**registered as a limitation**, not explained away or hidden.
+
+**Pcap granularity: per execution by default.** One pcap per run
+(client and server sides both), consistent with every other per-run
+data type above -- **the author may decide per-block capture instead**
+(one pcap covering all 10 runs in a window's block), trading
+per-execution isolation for less storage/fewer files; not decided here,
+flagged as the author's call.
+
+## 54. Infrastructure for the three `L0`s: 12-instance Terraform, AZ-specific availability, EIP quota, re-estimated duration/cost
+
+**Terraform (`campaign/terraform/`), prepared, not applied.** Two new
+client modules, `client_l0_us_east_1` and `client_l0_ap_northeast_1`,
+same `campaign_instance` module, same instance type and same image as
+every other campaign instance (Decision 53's explicit requirement --
+nothing special about these two beyond their subnet). Each co-located
+with its server via a new AZ-ID-specific subnet lookup
+(`use1-az1`/`apne1-az1`, confirmed live via `describe-availability-
+zones`, same mechanism as `sa-east-1`'s `sae1-az1`, Decision 33).
+`server_us_east_1`/`server_ap_northeast_1` moved onto these same
+AZ-specific subnets (previously the generic default-VPC subnet, which
+wasn't guaranteed to share an AZ with anything) and now carry **one more
+gateway-ingress rule each**, for their own `L0` client's **private** IP
+-- same rule as `sa-east-1`'s `L0`.
+
+**Availability of the candidate instance types, checked in the exact
+AZ IDs now used (not just "somewhere in the region," Decision 32's
+coarser check):** `describe-instance-type-offerings` with
+`location-type=availability-zone-id`, confirmed live --
+`m7i-flex.large` and `c7i-flex.large` both available in `sae1-az1`,
+`use1-az1`, and `apne1-az1`.
+
+**Elastic IP quota, rechecked with the new 12-instance total:**
+`describe-account-attributes` in all 7 regions still returns the
+default limit of 5/region, 0 in use. Peak per-region need is now 3
+(`sa-east-1`, `us-east-1`, and `ap-northeast-1` each host a server +
+its own `L0` client, `us-east-1`/`ap-northeast-1` additionally host
+one more scenario's client each -- still 3, not more, since each
+region's extra client is a *different* region's worth of capacity, not
+stacked onto these three). Comfortably inside the default, no quota
+increase needed.
+
+**`terraform plan`: 45 resources to add** (12 instances + 12 Elastic
+IPs + 12 security groups + 7 campaign key pairs + 1 operator key pair +
+1 generated SSH key), 0 to change, 0 to destroy, no errors. Not
+applied.
+
+**Orchestrator (`campaign_run.py`) additions:** every installation's
+`L0` is in the scenario rotation now, not just `sa-east-1`'s 4-item
+list -- `SCENARIO_ROTATION` is keyed per server. Noted explicitly, not
+silently glossed over: `us-east-1`/`ap-northeast-1`'s 2-item scenario
+lists only have 2 distinct orderings, so their "window 3: rotated"
+repeats window 1's order -- a 3rd, genuinely distinct rotation isn't
+possible for a 2-item list, unlike `sa-east-1`'s 4-item one.
+
+**Duration/cost, redone for 720 executions / 12 instances, labeled
+estimate, checked 2026-10-12, same v7 sources as Decision 47:**
+- `sa-east-1` chain (unchanged, 4 scenarios): ~55min active + ~21min
+  settling =~ **1.26h**, still the dominant serial path.
+- `us-east-1` (now L0+L14): ~4min active + ~3min settling =~ **7min**.
+- `ap-northeast-1` (now L0+L30): ~5.4min active + ~3.5min settling =~
+  **9.5min**.
+- These three run in parallel (independent installations) -- campaign
+  wall-clock span is still **about 1-1.5 calendar days** (the fixed
+  windows, Decision 52, span two calendar dates: 19:00 day D through
+  ~12:15 day D+1).
+- Cost: 12 instances up roughly that span (~24-30h each, generous): **~360
+  instance-hours** at the same blended ~$0.10-0.15/hr -> **roughly
+  $35-55** for this specific campaign run. Still an order of magnitude
+  under the $200 Free Plan credit.
+
+## 55. Remote mode and delivery: image-ID comparison, real image-size/transfer/cost estimates, disk sizing confirmed, Docker-dependency audit, `REMOTE_GATEWAY_HOST` validation, pilot acceptance criterion, safety-timer margin confirmed
+
+**Image comparison: loaded image ID, not a registry digest** (Decision
+50's step 6 already specified this -- restated here because there IS no
+registry digest in a local-tarball-load design; `docker image inspect
+--format='{{.Id}}'` after `docker load` on each of the 3 servers is the
+actual comparison). **`--platform linux/amd64` pinned on build/save/
+load** -- prevents an accidental ARM-architecture image if ever built
+on an ARM host (e.g. Apple Silicon), which would otherwise produce a
+different, incompatible image silently.
+
+**Real image sizes, measured directly (not assumed), checked
+2026-10-12:** custom-built images needing this project's own tarball
+delivery -- `mtls` (gateway) 1.51GB, `auth` 542MB, `mockapi`
+(`raidiam-insurance-lambdas`) 607MB, `mongo_seed` 1.3GB -- **~3.96GB per
+server**. The 3 **stock** images (`postgres:16` 642MB,
+`localstack:4.0` 1.83GB, `mongo:latest` 1.3GB) are **not** part of this
+delivery problem at all -- they pull directly from their own public
+registries on each server, same as any other deployment, no custom
+tarball needed.
+
+**Transfer time -- labeled estimate, bottleneck identified:** ~3-4GB
+compressed per server. The bottleneck is almost certainly the
+**operator's own upload** to the control instance (step 4 of Decision
+50's mechanism) -- AWS-internal legs (control -> each server) are far
+faster. Assuming a typical home/office uplink (20-50Mbps): roughly
+**10-25 minutes** for that one upload (done once, not per server);
+control -> servers redistribution at AWS-internal speed is on the order
+of a few minutes per server, in parallel. **Total estimate: roughly
+25-40 minutes**, one-time, before the campaign starts.
+
+**Inter-region transfer cost -- labeled estimate, checked 2026-10-12**
+(secondary-sourced: AWS's own live pricing pages are JS-rendered,
+same limitation noted in Decisions 32/44): inter-region transfer is
+commonly cited around **$0.02/GB** for most region pairs (`sa-east-1`'s
+specific pairs with `us-east-1`/`ap-northeast-1` aren't one of the
+known pricier outliers). 2 inter-region legs (`sa-east-1` -> `us-east-1`,
+`sa-east-1` -> `ap-northeast-1`) x ~3.5GB x $0.02/GB =~ **$0.14 total** --
+negligible, not a material line item next to the compute estimate above.
+
+**Disk sizing: 30GB confirmed sufficient, with real numbers behind the
+claim, not just assumed.** Server footprint: ~3.96GB (custom) + ~3.77GB
+(stock) =~ **7.73GB of images**, plus container runtime overhead and
+this server's own share of pcap/logs/CPU data (small, KB-to-low-MB
+scale per Decision 37/42's own pcap estimate) -- comfortably under 30GB
+even with generous overhead margin. Client footprint is far smaller:
+`golang:1.27-rc-alpine` (381MB) + the PQC signer image (240MB) =~
+**621MB**, plus one scenario's own small data share. **No larger size
+proposed -- 30GB stays.**
+
+**Docker-dependency audit, all 5 scripts, every dependency point
+classified (run on server via SSH from control / run on client via SSH
+from control / dispense):**
+
+| Script | Dependency | Decision |
+|---|---|---|
+| `opin_flow.py` | `set_latency()` (`docker exec`/`tc`) | **Dispensed** -- already skipped when `REMOTE_GATEWAY_HOST` is set (Decision 51) |
+| `opin_flow.py` | `_run_pqc_signer()` (`docker run --rm -i`) | **Client** -- runs wherever `opin_flow.py` itself runs |
+| `opin_flow.py` | `start_tls_kem_proxy()`/`stop_tls_kem_proxy()` | **Client** -- same reasoning, it's the proxy opin_flow.py talks to locally |
+| `opin_flow.py` | `start_pqc_signer_service()`/`stop_pqc_signer_service()` | **Client** -- persistent signer, same process |
+| `baseline_automation.py` | `collect_gateway_metrics()` (`docker logs` on the gateway container) | **Server, via SSH from control** -- the gateway container lives on the server; a client can't reach it directly (Decision 49's SSH-only-from-control rule blocks a client->server SSH entirely) |
+| `median_automation.py` | (inherits `collect_gateway_metrics()`'s error handling, no independent dependency) | **Server**, same as above |
+| `switch_crypto_profile.py` | `docker compose --profile main ...` (up/down/restart the whole stack) | **Server, via SSH from control** -- manages the server's own stack |
+| `switch_crypto_profile.py` | `docker inspect`/`docker start` (container-state checks) | **Server** |
+| `switch_crypto_profile.py` | `docker exec ... psql` (Postgres health check) | **Server** |
+| `switch_crypto_profile.py` | `docker logs insurance-server-lambdas-mtls-1` (post-recreate readiness poll) | **Server** |
+
+**Architectural finding, not previously registered:** this means the
+orchestrator needs **two** SSH relationships per block, not one --
+control -> client (triggering `opin_flow.py` executions, same as
+already assumed) **and** control -> server (profile switches, gateway
+metrics, server-side CPU/steal/pcap). Decision 49's security design
+already supports this without any change -- every non-control instance
+accepts SSH from control's EIP only, which covers both relationships
+identically; this is a clarified **orchestration** design, not an
+infrastructure change. **Nothing beyond `set_latency()` itself turned
+out to be dispensable** -- every other dependency has a real need in
+the remote campaign, just relocated to the correct side.
+
+**`run_one_execution()`, specified again (not implemented):** must call
+the lab's own existing functions for T_fluxo -- `time.monotonic()`,
+discarded-retry-attempt time excluded from the timed window, a
+whole-execution retry marked and recorded (not silently retried),
+warmup kept separate (`run_warmup()`) -- i.e. invoke
+`latency_automation.py`'s/`opin_flow.py`'s existing, already-correct
+machinery (Decision 26) over SSH with `REMOTE_GATEWAY_HOST` set, not
+reimplement T_fluxo measurement from scratch. `campaign_run.py`'s own
+docstring now states this explicitly.
+
+**`REMOTE_GATEWAY_HOST` validation, implemented (diff, not committed):**
+rejects any value containing `"://"` or `":"` (scheme or port -- both
+are appended automatically wherever the value is used) with an explicit
+`SystemExit` message, and otherwise requires it to parse as a valid IP
+(`ipaddress.ip_address()`) or a syntactically valid hostname. Tested
+live: a bare host and a bare IP are both accepted unchanged; `
+https://54.1.2.3:443` is rejected with the explicit message; unset stays
+`None`, no validation triggered, zero behavior change.
+
+**Pilot acceptance criterion, registered (Decision 46's pilot is where
+this gets checked):** the ClientHello captured during the pilot must
+have **the same size and the same SNI** as the local lab's own
+ClientHello for the matching profile. This is the real, concrete
+pass/fail check Decision 51's "not independently verified" caveat was
+waiting on.
+
+**Safety-timer margin, confirmed against the actual fixed windows
+(Decision 52's 19:00/03:00/11:00 UTC defaults):** gaps between
+consecutive renewals (at startup, and again right before each window,
+`campaign_run.py`'s `renew_safety_timers()`) are at most ~24h (the
+startup-to-window-1 wait, worst case) and ~8h between the 3 windows
+themselves -- comfortably inside the 48h deadline every renewal sets,
+with at least 2x margin in the worst case. Confirmed arithmetically
+against the real schedule, not just assumed adequate.
+
+**Plan ordering, updated:** the flex launch test (Decision 43) comes
+**before** `deliver_images.sh` (Decision 50) -- no point building image
+delivery for an instance type that might fail the launch test. This
+item (the 12-instance Terraform, Decision 54) comes **before** the
+pilot (Decision 46) -- the pilot needs the real topology, including
+both extra `L0` clients, already standing.
+
+**Updated sequence to the first real execution, author's dependencies
+marked:**
+1. Flex launch test (Decision 43) -- **author present**.
+2. 12-instance Terraform apply (Decision 54) -- **author present**,
+   budget/credit confirmation (Decision 52).
+3. Build `deliver_images.sh` (Decision 50) -- not yet built.
+4. Author reviews/approves the `REMOTE_GATEWAY_HOST`/SNI/validation diff
+   (Decisions 51/53) -- then commit.
+5. Pilot (Decision 46) -- **author present** for its own apply (or
+   reuses the standing topology from step 2, if still up) -- validates
+   `L0`'s public-IP RTT, the ClientHello size/SNI acceptance criterion
+   above, tcpdump overhead, written tc/netem confirmation.
+6. Implement `run_one_execution()`/`run_warmup()` for real, using the
+   approved `REMOTE_GATEWAY_HOST` path and the Docker-dependency audit's
+   server/client split above.
+7. First real campaign execution (window 1).
+
+## 56. Round-robin execution within each profile block -- supersedes Decision 40's scenario-by-scenario ordering
+
+**Decision.** Within a profile block, executions alternate across that
+server's scenarios one run-index at a time -- run 1 of every scenario in
+the block, then run 2 of every scenario, and so on -- instead of
+finishing all of one scenario's runs before starting the next.
+Implemented in `campaign_run.py`'s `run_window()` (round-robin is now
+the outer-loop-is-run-index, inner-loop-is-scenario structure).
+
+**Why:** spreads any time-dependent drift within a block (network
+weather, however small, over the block's own span) evenly across every
+scenario in it, rather than letting one scenario systematically land in
+the block's "early" minutes and another in its "late" minutes, every
+single window -- a confound round-robin removes by construction that
+scenario-by-scenario ordering could not.
+
+**Each client's proxy stays active for the whole block, not just its
+own scenario's turn.** New seams, same "specified, not implemented"
+treatment as `run_one_execution()`: `start_block_proxies()` (called once
+per block, before round-robin begins) and `stop_block_proxies()` (called
+once, in a `finally`, after the block's round-robin loop ends or is
+abandoned). Warmup is unaffected in count -- still once per scenario per
+block -- just moved earlier, before round-robin starts rather than
+interleaved into it.
+
+**Effect on total time: none.** Same number of runs, same number of
+profile switches (9/window, Decision 40/54's math unaffected), same
+per-run durations -- only the execution ORDER changes. **Effect on
+orchestrator complexity: real.** Every scenario's proxy in a block must
+now be tracked and health-checked concurrently for the block's whole
+duration, instead of one at a time; the run loop itself inverts
+(scenario becomes the inner loop). This is a genuine increase in how
+much live state the orchestrator holds per block, registered here so
+it's not discovered as a surprise during implementation.
+
+## 57. Pcap: one file per execution, bundled per scenario+window for commit, volume re-estimated for 720 executions x 2 sides
+
+**One pcap per execution, both sides** -- unchanged (Decision 42).
+
+**For the commit, bundled per (scenario, window, side) into one file,
+preserving one member per execution inside it.** `package_pcaps.sh`
+(written, tested against synthetic data, not yet run against real
+campaign data) tars `server/run01..10.pcap.gz` into
+`server/window01.pcaps.tar` (and the same for `client/`) -- plain `tar`,
+deliberately **not** `tar.gz`: each member is already gzip-compressed
+(Decision 42), so an extra gzip layer over already-compressed data buys
+negligible size reduction for real CPU cost. Originals are removed only
+after the bundle is verified readable (`tar -tf`), never before.
+
+**Volume, re-estimated for 720 executions x 2 sides (1,440 pcap files),
+labeled estimate, checked 2026-10-12, same reasoning as Decision 37/42:**
+at the same per-execution range (~15-100KB compressed, PQC/Hybrid's
+larger certificate chains pushing toward the high end) -- **roughly
+22-145MB compressed for the whole campaign**, both sides. Wider than
+Decision 37's original 540-execution/one-topology figure simply because
+the execution count grew (540 -> 720) and this estimate now explicitly
+counts both sides instead of being ambiguous about it.
+
+**Git LFS vs. external storage: still deferred to after the pilot**
+(unchanged from Decision 37/42) -- the pilot is where a real number
+replaces this estimate, and that real number is what should actually
+decide between the two, not a projection.
+
+## 58. Size reports: reproducible script, derived only, variation across executions and latency levels, retries handled separately
+
+**`compute_v8_size_report.py`, written and tested against synthetic
+data (not yet run against real campaign data, since none exists yet).**
+Reads every `runN.json` under `v8/latency/` for a given profile,
+pools `sa-east-1`'s 4 scenarios for the **official** report, and builds
+one **complementary** report each for `us-east-1`/`ap-northeast-1` from
+their own `L0` runs only (Decision 53's scoping, restated). **`v8/size/`
+is always derived this way -- never hand-edited** -- re-running the
+script after any pull recomputes it fresh from whatever runs exist so
+far, including a partial campaign.
+
+**Retried executions:** a run JSON with `"retried": true` is excluded
+from the primary (clean) statistics and listed separately, flagged --
+never silently pooled in with clean runs, never discarded outright.
+Tested live with synthetic data: 5 clean + 1 retried run pooled
+correctly, the retried one correctly excluded from every stat and named
+explicitly in the report.
+
+**Variation reported, both axes required by the author's brief:**
+across executions (min/max/stdev within one scenario, pooled across all
+of `sa-east-1`'s scenarios too) and across latency levels (median per
+scenario, so a `sa-east-1` run can be compared scenario-by-scenario,
+not just pooled blind). The report states explicitly that sizes are
+*expected* to be latency-independent (v7 Decisions 10-12's 0%-spread
+finding) and that any scenario whose median departs from the others by
+more than ordinary noise is a finding to investigate, not something the
+script resolves on its own.
+
+## 59. `deliver_images.sh` written, not executed
+
+**Written, not run -- no apply, no instance launch.** Implements
+Decision 50/55's mechanism concretely: builds/verifies each of the 4
+custom images (`mtls`, `auth`, `mockapi`, `mongo_seed` -- the 3 stock
+images are explicitly excluded, Decision 55) are `linux/amd64`
+(`docker image inspect --format='{{.Os}}/{{.Architecture}}'`, fails
+loudly if not); `docker save | gzip`; checks the control instance's
+free disk space before sending (fails loudly if insufficient, before
+transferring anything); sends via `rsync --partial` when available on
+the control instance (resumable by construction), falling back to
+100MB split parts with a per-part sha256 (resumable by re-checking which
+parts already verify) when `rsync` isn't available; verifies sha256 on
+arrival; distributes from control to each of the 3 servers over the
+campaign key; `docker load`s on each server; **compares the loaded
+image's own ID** (`docker image inspect --format='{{.Id}}'`) across all
+3 servers, failing loudly if they differ; **removes the tarball from
+the control instance** once distribution succeeds. Not yet run against
+real infrastructure.
+
+**Instance type:** `server_client_instance_type` stays without a
+default (Decision 52, unchanged) -- still waiting on Decision 43's
+launch test, not decided here.

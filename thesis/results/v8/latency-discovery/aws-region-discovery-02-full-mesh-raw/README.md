@@ -4,12 +4,12 @@
 
 Raw ICMP RTT samples between **every pair** of the 10 AWS regions in this
 project's IAM policy (not just `sa-east-1` against the other 9, which is
-the earlier, narrower measurement in `../aws-region-discovery-raw/`). See
+the earlier, narrower measurement in `../aws-region-discovery-01-single-origin-raw/`). See
 `DECISIONS.md` (Decision 10) for the full rationale, and Decision 9 for
 why that earlier single-origin measurement didn't find good matches for
 the 14ms/30ms targets.
 
-This directory is additive — `../aws-region-discovery-raw/` is kept
+This directory is additive — `../aws-region-discovery-01-single-origin-raw/` is kept
 untouched as the historical record of the first (single-origin) run.
 
 ## Why it's kept

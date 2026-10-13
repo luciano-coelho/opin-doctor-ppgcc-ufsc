@@ -4,7 +4,7 @@
 
 The full 3-round confirmation (same sampling standard as every other
 discovery run in this project) of the two 30ms candidate pairs that a
-quick single-round look (`../aws-region-discovery-candidates-raw/`) found
+quick single-round look (`../aws-region-discovery-03-candidates-raw/`) found
 promising: `ap-northeast-2` ↔ `ap-northeast-1` (Seoul ↔ Tokyo) and
 `eu-north-1` ↔ `eu-west-1` (Stockholm ↔ Ireland). See `DECISIONS.md`,
 Decision 13, for the full results and the selection made from them.
@@ -17,7 +17,7 @@ measurement, not a single lucky round) and reproducibility.
 
 ## Measurement topology
 
-Identical to `../aws-region-discovery-candidates-raw/`: 6 regions
+Identical to `../aws-region-discovery-03-candidates-raw/`: 6 regions
 (`sa-east-1` as SSH jump host + `ap-northeast-1`, `ap-northeast-2`,
 `eu-west-1`, `eu-central-1`, `eu-north-1`), full mesh among them (30
 directed pairs/round), only the 4 directed pairs between the two
