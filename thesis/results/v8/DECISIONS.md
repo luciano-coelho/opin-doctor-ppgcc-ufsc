@@ -3066,3 +3066,723 @@ real infrastructure.
 **Instance type:** `server_client_instance_type` stays without a
 default (Decision 52, unchanged) -- still waiting on Decision 43's
 launch test, not decided here.
+
+## 60. `run_one_execution()` implemented via an Executor abstraction; regression-tested live against the local stack, all 3 profiles; overlap guard added and tested
+
+**Two pre-existing gaps found by direct inspection before writing any
+code (not assumed):**
+1. `opin_flow.py`'s own `main()` CLI path already had
+   `REMOTE_GATEWAY_HOST` support (Decision 51), but the campaign's
+   actual N-run/retry/warmup driver, `latency_automation.py`, calls
+   `of.set_latency()` **directly** -- bypassing `opin_flow.py`'s CLI
+   entirely, and Decision 51's fix never touched it. Fixed with the
+   identical guard (skip `set_latency()` when `REMOTE_GATEWAY_HOST` is
+   set), now in both places.
+2. `run_once_timed()` computed `call_count` from the flow's raw `calls`
+   list, then discarded the list -- there was no way to get the
+   per-call records `calls.jsonl` (Decision 36/42) needs. Fixed
+   additively: a new `return_calls: bool = False` parameter, threaded
+   through `run_once_timed_with_retry()` too. Default `False` keeps
+   every existing call site (including `latency_automation.py`'s own
+   `main()`) byte-for-byte unaffected; the new code opts in explicitly.
+
+**Architecture: an Executor abstraction, not a single hardcoded path.**
+`LocalExecutor` (real, implemented) runs everything in-process --
+"server" and "client" both the local machine, exactly like
+`switch_crypto_profile.py` already assumes -- calling
+`latency_automation.py`'s `run_once_timed_with_retry()` directly, never
+reimplementing T_fluxo/retry/warmup logic. `SSHExecutor` (real AWS) is
+deliberately left as an unimplemented interface -- Decision 55's
+Docker-dependency audit already specifies which side each command
+belongs on; wiring real SSH calls now, untested against real
+infrastructure, would not be "prepared," it would be fabricated.
+
+**New file, `thesis/scripts/campaign_client_runner.py`:** the thin CLI
+an `SSHExecutor` would eventually invoke on a real client instance --
+calls `run_once_timed_with_retry(..., return_calls=True)` and prints one
+JSON object. Not itself exercised by the local test (`LocalExecutor`
+calls the same underlying function in-process instead, which is the
+more direct way to validate the function itself without also needing a
+subprocess/CLI layer working) -- registered as written, not validated
+end-to-end as a subprocess.
+
+**Every artifact Decision 53's tree specifies, written per execution:**
+`runs/run{NN}.json`, `runs/run{NN}.calls.jsonl`, `server/run{NN}_gateway.log`
+(raw `docker logs --since/--until`, the container's own log text, not
+re-parsed), `server/run{NN}_cpu.jsonl` (`docker stats --no-stream`,
+before/after), `client/run{NN}_cpu.jsonl`, `client/run{NN}_ping.json`,
+and `server/`+`client/run{NN}.pcap.gz` (gzip, matching Decision
+42/57's per-execution default). `run_warmup()` writes
+`run00_warmup_window{NN}.json` once per scenario per block, reusing
+`latency_automation.py`'s own single-warmup-run convention -- **not**
+Decision 4's separate 5-flow container-settling (a different,
+server-side, profile-switch-time concern this orchestrator doesn't
+build yet; flagged explicitly in the code so the two are never
+conflated with each other).
+
+**`calls.jsonl`'s fields, honestly scoped to what `do_call()` already
+produces** (endpoint, request/response/total bytes, per-call latency,
+status, participant) -- Decision 42 originally also wanted an explicit
+per-call connection identifier and a per-call retry flag; neither exists
+in the lab's current call-dict today, and adding them would mean
+touching `do_call()` itself, which "sem reescrevê-las" rules out for
+this pass. Registered as a known, honest gap, not fabricated.
+
+**Overlap guard:** one `threading.Lock()` per installation
+(`_SERVER_LOCKS`), acquired non-blocking at the start of
+`LocalExecutor.run_one_execution()` -- a second concurrent call for the
+same server raises `RuntimeError` immediately rather than silently
+queuing or corrupting shared state. Today's control flow is fully
+sequential (no threading anywhere in `main()`/`run_window()`), so this
+is defense-in-depth against a future change (e.g. running
+installations' windows concurrently) reintroducing an overlap, not a
+fix for an overlap that was actually observed. **Tested directly**: two
+threads, one holding the lock for 1.5s, the other attempting
+`run_one_execution()` 0.3s later on the same installation -- the second
+correctly raised `RuntimeError` every run.
+
+**Regression test -- run live against the real local stack (no AWS),
+all 3 profiles, `REMOTE_GATEWAY_HOST=host.docker.internal`** (deliberately
+not the lab's own `"mtls"` alias -- `host.docker.internal` is Docker
+Desktop's real cross-container-to-host route, the closest thing to "a
+genuinely different network path" achievable without actual AWS
+infrastructure). For each profile: `start_block_proxies()`, one warmup,
+two real executions via `run_one_execution()`, `stop_block_proxies()`.
+
+| Profile | T_fluxo (2 runs) | calls.jsonl byte sum | Matches local-lab baseline (REMOTE_GATEWAY_HOST unset)? |
+|---|---|---|---|
+| classic | 3.00s, 3.17s | 125,485 (both runs) | yes -- exact match |
+| pqc | 2.91s, 2.90s | 275,800 | yes -- exact match |
+| hybrid | 3.31s, 4.08s | 331,639 (both runs) | yes -- exact match |
+
+Every profile's byte total is **exactly** identical to the local-lab
+baseline captured the same session (plain `opin_flow.py 0`,
+`REMOTE_GATEWAY_HOST` unset) -- confirms Decision 51's SNI/target fix
+holds under `run_one_execution()`'s new code path too, not just
+`opin_flow.py`'s bare CLI. `call_count`, `calls.jsonl`'s line count, and
+the summed bytes all agreed internally (42/42, etc.) in every run.
+
+**Tree and manifest, confirmed structurally** (via the test's own file
+listing, Decision 53's spec): `runs/run{NN}.json`,
+`runs/run{NN}.calls.jsonl`, `run00_warmup_window{NN}.json`,
+`server/{_gateway.log,_cpu.jsonl}`, `client/{_cpu.jsonl,_ping.json}` all
+present, named, and nested exactly as specified -- `campaign_pull.sh`'s
+manifest generation (unchanged, Decision 53) needs no adjustment since
+the paths it already walks are these same ones.
+
+**pcap: best-effort, not exercised.** `tcpdump` isn't available in this
+project's own Windows+Docker-Desktop dev environment -- the capture
+code runs, detects its absence, and skips with a clear message rather
+than failing the whole execution. Pcap capture itself is therefore
+**written but not validated live** this session; it would need a real
+Linux client/server (the pilot, Decision 46, or a real EC2 instance) to
+actually exercise.
+
+**Five-rename/doc-reference/lock-file checks, all confirmed clean,
+checked directly:**
+- All 5 raw-data folder renames show as `rename ... (N%)` in `git show
+  --stat` on the commit that made them (confirmed: `0e10332`).
+- No document references the 5 old folder names except Decision 48's
+  own rename-mapping table (`old name -> new name`), which is supposed
+  to name the old ones -- not a stale pointer, the record of the rename
+  itself. No other match anywhere in `thesis/results/v8/`.
+- `.terraform.lock.hcl` is tracked in all 6 Terraform roots in this
+  project (`latency-discovery/terraform`, `terraform-candidates`,
+  `terraform-bue-lz-test`, `terraform-sa-az-test`,
+  `terraform-flex-launch-test`, `campaign/terraform`) -- confirmed via
+  `git ls-files --error-unmatch` on each, individually. **No separate
+  commit needed.**
+
+**Retry-exclusion scope, confirmed, not just assumed:**
+`compute_v8_size_report.py` (Decision 58) excludes `"retried": true`
+runs from its own SIZE statistics only. `latency_automation.py`'s own
+`summarize()` (unchanged, reused as-is by every T_fluxo report) performs
+**no outlier removal of any kind** -- every run, retried or not, stays
+in every T_fluxo statistic, exactly as its own long-standing docstring
+already states. The two statistics genuinely use different inclusion
+rules, confirmed by reading both functions, not inferred.
+
+**Diff shown in the chat response below. Not committed, not applied --
+the local stack this test used was brought up and torn down within this
+session (it was not running before), and the scratch test files/
+directories it wrote were removed afterward, not left behind.**
+
+## 61. `calls.jsonl` extended: per-call UTC start/end and a connection-pool label, additive; cost measured
+
+**Decision.** `do_call()` (`opin_flow.py`) now also records, per call:
+`start_utc`/`end_utc` (real UTC timestamps, for correlating a call
+against the gateway's own log timestamps and pcap packet times later)
+and `pool_label` (`f"session-{id(session):x}"` -- identifies which
+`requests.Session`/connection pool made the call; a stable grouping
+key, confirming connection reuse the way `do_call()`'s own docstring
+already describes -- **not** a per-call retry flag, which the author
+explicitly excluded this round). Additive: every existing field is
+unchanged, nothing removed.
+
+**A second call-construction site found and fixed, not just the obvious
+one.** `simulate_login()`'s redirect-hop response hook
+(`_capture_hop`, builds `login_calls` entries) does **not** go through
+`do_call()` at all -- found live, the hard way: the first regression
+run crashed with `KeyError: 'pool_label'` on exactly these entries
+(indices 8-14, 25-31 in a 42-call run -- the login/interaction/JARM
+hops). Fixed the same way: `pool_label` is exact there too (same
+session object); `start_utc`/`end_utc` are both stamped at the single
+moment the hook fires, same honesty as the pre-existing `latency_ms:
+0.0` comment on that same object ("not independently timed, folded
+into the top-level call's own latency") -- not a real start/end pair,
+registered as such, not quietly presented as one.
+
+**Cost measured, not assumed negligible:** a microbenchmark of the
+exact three-line sequence (two `datetime.now(timezone.utc).isoformat()`
+calls + one `id()` call) over 100,000 iterations: **~2.97us/call**,
+checked 2026-10-13. Against a typical 42-call run's multi-second
+T_fluxo, that is **~0.004%** of the measured time -- not a candidate
+confound for anything this project measures.
+
+**Regression, run live, all 3 profiles, after the fix:** every
+`calls.jsonl` line (all 42/run, both the `do_call()`-sourced and the
+hook-sourced ones) now carries all three new fields; `total_bytes`
+summed from `calls.jsonl` still matches each profile's local-lab
+baseline exactly (classic 125,485; pqc 275,800; hybrid 331,639) --
+confirms the new fields are genuinely additive, not just in principle.
+
+## 62. Settling sequence implemented (local part) and tested; negotiated-group check corrected after a real false positive
+
+**Decision -- the full per-block sequence, as specified:** (a) switch
+profile on the server, (b) restart the client proxy/signer with the
+profile's own curve, (c) check the negotiated group in the gateway's
+log, (d) 5 settling executions -- saved separately, each verified,
+never silently discarded -- (e) per-scenario warmup, (f) round-robin.
+(e)/(f) were already wired (Decisions 53/56); this decision implements
+(a)-(d) in `LocalExecutor.start_block_proxies()`.
+
+**(a)/(b): reuses `switch_crypto_profile.py`'s own private helpers
+directly** (`_compose`, `_start_if_exited`, `_container_status`,
+`_wait_for_mtls_ready`, `_check_psql_checkpoint_health`) -- the exact
+same container-recreate/health-check sequence that script already
+uses, not a reimplementation. `switch_crypto_profile.py`'s own
+`switch()` function is not called wholesale (it runs its own,
+discarded, 5-flow settling internally, which would have meant 10
+flows total, not 5, if layered under this decision's own 5 saved
+ones) -- its constituent pieces are composed directly instead.
+
+**A fourth `set_latency()` gap found and fixed while here, not just
+the three already known.** `switch_crypto_profile.py`'s `switch()`
+function *also* calls `of.set_latency(0)` unconditionally (line 232) --
+a fourth call site Decision 51's original fix never touched (the first
+three were `opin_flow.py`'s CLI, `latency_automation.py`'s driver, and
+now this one). Not actually reachable from this decision's own code
+path (which calls `switch_crypto_profile.py`'s *private helpers*
+directly, never its `switch()` function) -- but a real latent
+inconsistency if anyone ever runs `switch_crypto_profile.py` standalone
+with `REMOTE_GATEWAY_HOST` set. Fixed with the identical guard, for
+consistency with the other three.
+
+**(c)/(d): 5 settling runs, saved and verified, not discarded.** Each
+saved to `_campaign-control/windows/{installation}/settling_{profile}_run{N}.json`,
+"verified" meaning completed without exception and `call_count > 0`
+(a run that silently did nothing would not pass). Clock drift (gateway
+container's own clock vs. this process's) measured once per block via
+`docker exec ... date -u`, saved alongside.
+
+**The negotiated-group check -- corrected after a REAL false positive,
+not a theoretical one.** First version: grep the gateway's "mTLS
+handshake complete" log lines for `curveID`, require all 5 settling
+runs to show the SAME value, abort otherwise. **Running this live for
+`classic` aborted immediately** with
+`{'CurveP256', 'CurveP384'}` seen as "inconsistent." Investigated
+before accepting the abort as correct: re-read Decision 15 (v7) and
+confirmed this project's own architecture has TWO coexisting TLS
+channels per flow -- the client-facing one (profile-specific: P384 for
+classic's `secp384r1`) and the AS->RS internal channel, which is
+**always classical regardless of `CRYPTO_PROFILE`** (the
+`matls-api.local` SNI carve-out) and free to pick any of its own
+`[P521, P384, P256]` list. The gateway's handshake-complete log line
+does not carry SNI, so this check cannot currently tell the two
+channels apart. **Changed from a hard abort to a WARNING**, with the
+real explanation printed, not a raised threshold or a silently
+loosened check. Confirmed consistent with the architecture across all
+3 profiles, live: classic `{CurveP384, CurveP256}`, pqc
+`{MLKEM1024, CurveP256}`, hybrid `{SecP384r1MLKEM1024, CurveP256}` --
+the client-facing value is always the profile-correct one; `CurveP256`
+(or another classical curve) from the internal channel is the
+constant across all three. **Correctly separating the two channels**
+would need correlating `curveID` against the OTHER log line (which
+does carry SNI, Decision 15) by `remoteAddr` -- not built this session,
+registered as a known gap, not silently worked around.
+
+**Regression, all 3 profiles, run live:** settling (5 runs each) +
+2 real executions each, byte totals still match baseline exactly
+(same table as Decision 60, re-confirmed after this session's `do_call()`
+fix). Local stack brought up/down within this session, not left
+running.
+
+## 63. tcpdump: aborts the block loudly by default; explicit local flag required to skip; liveness/growth/dropped-packet checks
+
+**Decision -- default behavior changed from Decision 60's best-effort
+skip.** `_try_tcpdump()` now: uses an **explicit interface** parameter
+(never `"any"`), the existing port-443 filter, and **aborts the block
+with `RuntimeError`** if tcpdump isn't installed, exits immediately
+after starting, or starts but the output file never grows after a
+short grace period -- each of these three failure modes checked
+directly, not assumed from "the process is still running." **The old
+skip-with-warning behavior now requires `allow_tcpdump_skip=True`,
+passed explicitly** -- never the default, never silent -- and the
+skip, when it happens, is recorded in the run's own JSON
+(`"tcpdump_skipped": {"server": bool, "client": bool}`), not just
+printed to a log a reader might not see. On successful capture,
+`tcpdump`'s own stderr summary line ("N packets dropped by kernel") is
+parsed and saved as `dropped_packets` per side.
+
+**Tested, both branches, live:**
+- Without the flag: `_try_tcpdump()` raises `RuntimeError` immediately
+  on this environment's missing `tcpdump` -- confirmed.
+- With `allow_tcpdump_skip=True` (the local test's explicit choice,
+  not a default): skips with the warning, records
+  `tcpdump_skipped: {"server": true, "client": true}` in every run's
+  result -- confirmed.
+- **Not tested: the actual capture, liveness, and growth-check paths**
+  -- `tcpdump` genuinely isn't available on this project's own
+  Windows+Docker-Desktop dev machine, registered as a real gap, not
+  glossed over. Needs a real Linux target (the pilot, or a throwaway
+  EC2/container) to exercise.
+
+## 64. Server-side `flock` + single-orchestrator instance lock, both implemented; real Linux test via Docker (not simulated)
+
+**`SingleInstanceLock`** (`fcntl.flock` on `/tmp/mockopin-campaign-run.lock`):
+wraps `main()`'s entire run -- a second `campaign_run.py` process
+fails loudly on startup if another one already holds the lock. No-op
+with a clear warning on a non-Linux host (this project's own Windows
+dev machine has no `fcntl` at all) -- registered as a platform
+limitation, not hidden.
+
+**`server_flock_wrap()`**: wraps the remote profile-switch command in
+`flock -n /tmp/mockopin-server.lock -c '...'` -- a real shell binary
+(`util-linux`, present on Amazon Linux 2023 by default), not a Python
+mechanism, so it protects the server regardless of which SSH
+invocation ends up running the wrapped command (relevant for
+`SSHExecutor`, where each execution is its own separate SSH call, not
+one long-lived process that could hold an in-memory lock the way
+`LocalExecutor`'s `_SERVER_LOCKS` threading.Lock does).
+
+**Tested against REAL Linux `flock` semantics, via Docker (this
+project's dev machine is Windows, which has no `fcntl` to test
+directly)** -- two processes inside a `python:3.12-alpine` container,
+one holding the lock for 3s, the other attempting it 0.5s later:
+correctly blocked with `OSError: [Errno 11] Resource temporarily
+unavailable` (`EWOULDBLOCK`, exactly what `SingleInstanceLock`/
+`server_flock_wrap`'s own `LOCK_NB` + `except OSError` is built to
+catch), holder released cleanly after. This validates the real
+mechanism's semantics directly, not a simulation of them.
+
+## 65. `campaign_client_runner.py` validated as a real subprocess -- 5 checks, one assumption corrected
+
+**Tested as an actual subprocess (`subprocess.run`/`Popen`), not an
+in-process import** (the earlier regression used the latter, which
+validates the underlying function but not the CLI/process boundary
+itself):
+
+| Check | Result |
+|---|---|
+| `REMOTE_GATEWAY_HOST` unset | exits nonzero, clear message on stderr -- PASS |
+| Missing required `--label` | argparse exits nonzero (code 2) -- PASS |
+| Working directory | **assumption corrected, not a failure** (below) |
+| Timeout (`subprocess.TimeoutExpired`) | raised correctly, process killed, no hang -- PASS |
+| `SIGTERM` mid-run | process exits, stdout never contains a half-written JSON object -- PASS |
+
+**Working-directory assumption corrected, not confirmed as originally
+expected.** The test assumed a wrong `cwd` would break `import
+latency_automation` with `ModuleNotFoundError`. It didn't: Python
+always adds the **running script's own directory** to `sys.path[0]`,
+regardless of the process's `cwd` -- confirmed directly, not assumed,
+by observing the real failure mode with a deliberately wrong `cwd`
+(the script DID start and import correctly; it failed later, on a
+plain connection-refused to a gateway that wasn't running, the same
+reason every other test without a live stack would fail). **This
+means `campaign_client_runner.py` does not actually depend on being
+invoked from `thesis/scripts/` as its `cwd`** -- a more robust finding
+than assumed going in, not a bug.
+
+**Platform caveat, stated plainly:** `Popen.terminate()` on Windows
+calls `TerminateProcess`, not a real `SIGTERM` the target could trap or
+handle differently -- this test exercises "the process gets killed
+mid-run and prints nothing corrupt," not POSIX `SIGTERM` semantics
+specifically. A real signal-handling test needs a Linux target.
+
+## 66. `tls_kem_proxy` as a precompiled binary -- Dockerfile written, not wired into the live path
+
+**`thesis/scripts/tls_kem_proxy/Dockerfile`, multi-stage, written this
+turn.** Builder stage: pinned `golang:1.27-rc-alpine` (same digest
+`opin_flow.py` already pins), `CGO_ENABLED=0 go build -trimpath` --
+`go.mod` declares zero external `require`s (confirmed by reading it,
+not assumed), so there is nothing to download even in today's `go run`
+path; the multi-stage split still matters because it guarantees the
+*runtime* image never contains the Go toolchain or source, only the
+compiled binary, no module resolution possible at container start
+regardless. Runtime stage: `alpine:3.20`, non-root user, `ENTRYPOINT`
+is the binary directly.
+
+**Not wired into `opin_flow.py`'s live `start_tls_kem_proxy()` this
+session** -- that still runs `go run .` exactly as today's lab does;
+changing it would affect every existing local-lab invocation, a larger
+change than this decision's scope. This Dockerfile is what Decision
+50/59's `deliver_images.sh` would eventually build and deliver, once
+that wiring is made -- registered as the next, separate piece of work,
+not done here.
+
+## Item 10 -- lab regression, `latency_automation.py` itself, `REMOTE_GATEWAY_HOST` unset
+
+Run live (not simulated): `CRYPTO_PROFILE=classic python
+latency_automation.py 0 --runs 2` with `REMOTE_GATEWAY_HOST` unset --
+`"Latency reset on insurance-server-lambdas-mtls-1 (eth0)."` printed
+(confirms the `else` branch of Decision 60's guard runs normally,
+`set_latency()` unaffected when the var is unset), warmup + 2 runs
+completed normally (T_fluxo 2.84-2.92s, consistent with this session's
+other classic/0ms measurements), `median_metrics.json`/`report.md`
+written in the expected shape. A direct, final `opin_flow.py 0`
+cross-check immediately after confirmed `total_bytes_exchanged =
+125,485` once more -- unchanged by every edit made this session
+(`do_call()`'s new fields, `switch_crypto_profile.py`'s fourth-gap fix,
+`latency_automation.py`'s own guard). Ad-hoc result files this check
+wrote were reverted (`git restore`) afterward, not left as spurious
+diffs; the throwaway `v3/latency/` folder this test needed was removed.
+
+## 67. `campaign_run.py` corrections (window overwrite, block order, SSH quoting, real-mode exit, remote-data coverage, service lifecycle, interface detection, clock drift, periodic sampling), local rehearsal, correlated negotiated-group check, repo-wide audit, precompiled-proxy flag -- all tested live, no AWS touched
+
+Ten corrections to `campaign_run.py` (A), four verification/test items
+(B), and the precompiled-binary wiring (C, first half of item 15 --
+the commit itself is a separate, later action). Nothing here applies
+Terraform or launches an instance.
+
+**A.1 -- window overwrite, real bug, fixed.**
+`settling_{profile}_run{i}.json`, `settling_{profile}_meta.json`, and
+`gateway_block_{profile}.log` had no window number in their filename --
+window 2 of a campaign would have silently overwritten window 1's
+settling data. Fixed: `settling_{profile}_window{NN}_run{i}.json`,
+`settling_{profile}_window{NN}_meta.json`,
+`gateway_block_{profile}_window{NN}.log`. `start_block_proxies()`/
+`stop_block_proxies()` both gained a `window` parameter (threaded
+through the module-level wrappers and `run_window()`) to make this
+possible. **Tested live** (`tests/test_window_no_overwrite.py`): runs
+the real `LocalExecutor.start_block_proxies()`/`stop_block_proxies()`
+three times with `window=1,2,3` (Docker/compose calls mocked, since
+this is about the FILE-NAMING logic, not re-proving Decision 62's
+settling protocol) -- 21 files written, all 21 names distinct, all 3
+windows represented.
+
+**A.2 -- block order: a REAL bug found while "confirming" it, not just
+confirmed.** The order specified is switch profile -> proxies up -> 5
+settling runs -> per-scenario warmup -> round-robin. Reading
+`run_window()` closely (not just trusting the comment above it) showed
+warmup was actually called BEFORE `start_block_proxies()` -- every
+scenario's warmup ran against whatever profile the client proxy
+happened to still be running from the PREVIOUS block, since the
+current block's profile switch and proxy restart hadn't happened yet.
+Fixed by moving the per-scenario warmup loop to after
+`start_block_proxies()` returns. **Tested live**
+(`tests/test_block_order.py`): patches the module-level
+`start_block_proxies`/`run_warmup`/`run_one_execution`/
+`stop_block_proxies` functions to record call order, runs the real
+`run_window()` against a 4-scenario/3-profile window (seed=42) --
+confirms, per profile block: `start_block_proxies` -> all of that
+block's `run_warmup` calls -> round-robin `run_one_execution` calls ->
+`stop_block_proxies`, in that order, every block.
+
+**A.3 -- SSH command construction: `repr()`/nested single quotes
+replaced with `shlex.quote`/`shlex.join`, hybrid style.** `
+server_flock_wrap()` used `f"...{remote_cmd!r}"` -- `repr()` on a
+string containing a single quote (exactly what the old `python3 -c
+"...start_tls_kem_proxy('{profile}')"` command had, nested inside an
+outer single-quoted SSH command) produces a shell string that doesn't
+parse: the embedded `'` terminates the outer quote early. Fixed with
+`shlex.quote()`, applied with a hybrid rule -- shell SYNTAX (`&&`,
+`$(...)`, env-var-assignment prefixes) is left as literal, correct
+shell text (it's SUPPOSED to be interpreted by the remote shell); only
+VARIABLE values (profile name, IP, label, paths) go through
+`shlex.quote()`. The `python3 -c` command specifically: the inline code
+string is built via `json.dumps()` (a valid Python string literal,
+safe regardless of embedded quotes) and the whole `["python3", "-c",
+code]` list is `shlex.join()`'d, never hand-nested. **Every one of
+these commands was validated against a real SSH connection in the
+local rehearsal (B.11) -- not just read for correctness.**
+
+**A.4 -- real-mode `NotImplementedError` now aborts with a nonzero exit
+code; systemd restart limits; an operator status file.**
+`run_window()` used to catch `NotImplementedError` at three points and
+`return` cleanly -- in real mode (where `SSHExecutor._run_or_print`
+raises it for every action, since live SSH execution is still
+deliberately not implemented, Decision 60/62) this made the orchestrator
+exit 0 and LOOK like a successful, empty campaign. All three `except
+NotImplementedError: print(...); return` blocks removed; the exception
+now propagates out of `run_window()`/`main()` to the interpreter's
+default uncaught-exception handler (nonzero exit, traceback on stderr).
+`--dry-run` is unaffected (`_run_or_print` never raises when
+`dry_run=True`). Added `write_status(state, detail)`, writing
+`CAMPAIGN_STATUS_FILE` (default `/home/ec2-user/campaign-status.json`)
+at `starting`/`running`/`completed`/`aborted` (the last captures the
+exception's type, message, and full traceback) -- a best-effort write
+that never masks or replaces the real error (write failure only warns,
+never raises). `campaign_run.service` gained
+`StartLimitIntervalSec=600`/`StartLimitBurst=5` (`[Unit]` section): 5
+failures inside any rolling 10 minutes trips systemd's own start-limit,
+the unit goes to "failed" and stops restarting on its own --
+`systemctl reset-failed` + `systemctl start` is the explicit operator
+action needed to try again, instead of a silent infinite restart loop
+on a deterministic failure.
+
+**A.5 -- `--dry-run`/`SSHExecutor` now cover the full remote-data
+surface.** `run_one_execution()` previously only constructed tcpdump
+start/execution/stop commands. Added, all real, previewable commands:
+gateway log (`docker logs -t --since 10m ...` on the server), CPU/
+steal/memory of each instance (`cat /proc/stat; cat /proc/meminfo` on
+both sides), reference ping (client -> server), `chronyc tracking` on
+each side, and fetching `calls.jsonl` + the run's own JSON (`cat` over
+SSH stdout, for the text artifacts) plus the detected-interface files
+(A.7). Live SSH execution of these still raises `NotImplementedError`
+in real mode, unchanged (Decision 60/62: no untested SSH call is faked
+as working) -- what's new is that `--dry-run` now previews ALL of
+these, not just the execution/tcpdump subset.
+
+**A.6 -- process lifecycle: proxy via `docker run -d` (a real service,
+not a dying foreground process); tcpdump's PID bug fixed.**
+Two fixes, one in `opin_flow.py`, one in `campaign_run.py`:
+- `opin_flow.start_tls_kem_proxy()` gained `detached: bool = False`.
+  When `True`, swaps `--rm -i` for `-d` (same image, same flags
+  otherwise) and returns the container's fixed name (a `str`) instead
+  of a `Popen` -- `stop_tls_kem_proxy()` already only needed `docker
+  stop <name>` to tear it down (not the Popen handle), so it now
+  accepts either. Needed because `SSHExecutor`'s remote client proxy
+  is started by a SEPARATE SSH invocation than the one that will later
+  stop it -- a foreground `-i` container dies the instant that first
+  SSH session closes; `-d` makes its lifecycle independent of any one
+  SSH connection, matching `start_pqc_signer_service()`'s own
+  long-established `-d` pattern, not a new mechanism.
+  `SSHExecutor.start_block_proxies()`/`stop_block_proxies()` updated to
+  call it with `detached=True` and to `docker stop`/`docker rm -f` the
+  fixed container name directly.
+- tcpdump's `sudo tcpdump ... & echo $!` captured **sudo's own PID**,
+  not tcpdump's (the backgrounding happened OUTSIDE the sudo'd
+  process). Fixed: `sudo setsid sh -c "nohup tcpdump ... & echo \$! >
+  pidfile"` -- the backgrounding and `echo $!` both happen INSIDE the
+  sudo'd shell now, so `$!` is tcpdump's own PID; `nohup`+`setsid`
+  detach it from the SSH session so it survives that session closing;
+  stdout/stderr redirected to a log file. **Confirmed live, three
+  times, by the rehearsal (B.11)** -- see its own writeup for the two
+  FURTHER bugs this specific command's own quoting had, found only by
+  actually running it over SSH.
+
+**A.7 -- network interface auto-detected (`/proc/net/route`), not
+hardcoded `eth0`.** New `_default_route_interface()` (reads
+`/proc/net/route`'s destination-`00000000` row) and, for the SSH path,
+an inline shell equivalent (`_iface_detect_sh()`, since none of
+`SSHExecutor`'s remote reads are wired to live execution yet) with
+`eth0` only as a last-resort fallback if detection itself yields
+nothing -- never the primary source of truth. The detected name is
+recorded in the run's own JSON (`network_interface: {server, client}`)
+instead of assumed. **Confirmed live** on a real Linux container
+(correctly detected `eth0`) and via the rehearsal (B.11, same result
+against the sshd containers).
+
+**A.8 -- clock-drift field renamed and re-conceived: client-vs-server
+via `chronyc tracking`, not container-vs-host.** The old
+`clock_drift_seconds` compared the gateway CONTAINER's clock against
+this Python process's own clock via `docker exec ... date -u` --
+meaningless in the local test (container and host share the same
+kernel clock, Docker Desktop's Linux VM; there is nothing to drift)
+and not what the real campaign needs anyway (client vs. server, not
+container vs. host). Renamed to `client_server_clock_drift_seconds`;
+new `_chrony_tracking_offset()` parses `chronyc tracking`'s "System
+time" line (this host's own offset from its sync reference) -- the
+real quantity is each real instance's own offset, compared against
+each other (`client_offset - server_offset`), not one host asking the
+other's time over SSH (which has its own RTT confound). In
+`LocalExecutor` (single host, no second instance to compare) this
+stays `None` with the reason recorded, never a fabricated 0.0; it is
+SSHExecutor's real per-instance `chronyc tracking` reads (A.5) that
+populate it for real. **`_chrony_tracking_offset()`'s parsing confirmed
+against a REAL `chronyd` daemon** (Docker container, `--cap-add=SYS_TIME`):
+unsynced ("0.000000000 seconds fast") parsed as `0.0`; synced against a
+real NTP pool ("0.434293777 seconds slow") parsed as `-0.4155` (small
+discrepancy vs. the raw reading is the clock continuing to drift
+between the `chronyc` call and the Python parse, not a parsing bug).
+
+**A.9 -- CPU/memory sampled periodically throughout an execution,
+`/proc/meminfo` included.** The old sampler took exactly 3 discrete
+snapshots (before/during/after) of `/proc/stat` only. New
+`_sample_cpu_mem_steal()` reads `/proc/stat` AND `/proc/meminfo`
+(`MemTotal`/`MemFree`/`MemAvailable`) per sample; new `_PeriodicSampler`
+runs a background daemon thread sampling once per `interval_seconds`
+(default 1.0s) from `start()` to `stop()`, returning every sample, not
+3. `run_one_execution()` writes one JSON object per line (jsonl) per
+sample instead of one `{before, during, after}` object. **Confirmed
+live** on a real Linux container: 5 samples over ~1s at a 0.3s
+interval, each with real non-null `cpu`/`mem` values (vs. honest
+`None` on this Windows dev machine, where neither `/proc/stat` nor
+`/proc/meminfo` exist).
+
+**A.10 -- documented, no code change: what actually guarantees "one
+execution at a time."** Two layers, not one: (1) the orchestrator's
+own sequential control flow (no threading in `run_window()`'s
+round-robin loop -- one execution is started, awaited, and written to
+disk before the next begins) and (2) `_SERVER_LOCKS`, an in-memory
+per-installation lock, defense-in-depth against a future
+concurrent-windows change reintroducing an overlap. The server-side
+`flock` (Decision 64) covers ONLY the profile switch -- the one
+server-side action that mutates shared state (recreating containers)
+and could plausibly race with a stray manual `switch_crypto_profile.py`
+invocation or a second orchestrator instance. Individual executions
+are NOT flock-wrapped on the server side at all; there is nothing
+server-side for a single execution against an already-switched,
+already-stable server to race on. Documented in `server_flock_wrap()`'s
+own docstring, not a separate note disconnected from the code.
+
+**B.11 -- 3-container local rehearsal (control, server, client, real
+`sshd`), implemented and run for real.** `tests/rehearsal_setup.sh`
+launches `linuxserver/openssh-server` as "server"/"client" (sudo
+enabled, `python3`/`tcpdump`/`chrony`/`iputils` installed, `/home/
+ec2-user` symlinked to this image's own `/config` home so the real,
+unmodified `/home/ec2-user/...` literal paths this file assumes work
+unchanged) plus a plain `python:3.12-alpine` "control" container with
+an `openssh-client` and the test keypair; `tests/rehearsal_runner.py`
+calls `campaign_run.py`'s REAL, unmodified command-building functions
+(`server_flock_wrap`, `SSHExecutor._ssh_cmd`/`_tcpdump_start_cmd`/
+`_tcpdump_stop_cmd`/`_env_prefix`, `_iface_detect_sh`) and runs the
+result over a real SSH connection -- the one thing `SSHExecutor`
+itself still deliberately doesn't do (Decision 60/62). **Found and
+fixed three real bugs**, each confirmed by an actual failing-then-
+passing SSH round trip, not by inspection: (1) `~/...`-prefixed paths
+wrapped in `shlex.quote()` -- quoting a leading `~` defeats the
+shell's own tilde expansion, so the remote shell tried to create a
+file literally named `~` ("nonexistent directory"); fixed by switching
+to the literal `/home/ec2-user` (consistent with this file's other
+hardcoded paths) and dropping the quoting on these self-constructed,
+safe-by-construction path strings. (2) `$HOME` INSIDE `sudo setsid sh
+-c '...'` resolves to ROOT's home, not the invoking user's (`sudo`
+resets `HOME` by default) -- same literal-path fix covers it. (3)
+`$IFACE` also cannot cross the `sudo` boundary as a variable reference
+(plain, unexported local variable in the login shell) -- fixed by
+DOUBLE-quoting the inner `sh -c` argument instead of single-quoting
+it, so the OUTER (login) shell expands `$IFACE` to the real detected
+interface name BEFORE `sudo` runs, while `$!` is escaped (`\$!`) so it
+survives to be evaluated by the INNER shell instead. After all three
+fixes, all 9 of the rehearsal's checks passed, including reading back
+the captured PID's own `/proc/<pid>/comm` as `tcpdump` (not `sudo`/
+`setsid`/`sh`) -- A.6's claim, independently confirmed.
+**What this rehearsal covers:** every SSH command string
+`SSHExecutor`'s real methods construct actually parses and runs on a
+real remote shell; A.6's PID fix; A.7's interface auto-detection; A.5's
+chronyc/ping/`/proc`-file commands.
+**What it does NOT cover (by design, not an oversight):**
+`switch_crypto_profile.py`'s real settling sequence and
+`campaign_client_runner.py`'s real flow execution (both stand-ins here
+-- already covered against the real local stack by Decision 62/65);
+real AWS conditions (IAM/security-group-gated SSH, instance boot,
+real inter-region latency -- these 3 containers share one Docker
+bridge network at ~0ms); `SSHExecutor.live` execution itself, still
+`NotImplementedError` by design.
+
+**B.12 -- negotiated-group check: correlated by connection, not a flat
+set; now aborts on a real mismatch instead of warning.** New
+`verify_negotiated_groups()` (module-level, pure function) parses
+`docker logs -t`'s slog-JSON lines and pairs each `"mTLS handshake
+complete"` line (has `curveID`, no SNI) with the
+`"GetConfigForClient: internal-caller classical carve-out applied"`
+line (has SNI, no `curveID`) sharing the SAME `remoteAddr` -- an EXACT
+string match (both read off the identical `net.Conn`) within a short
+time window (guards only against a reused ephemeral port across two
+distinct connections, not against fuzziness in the match itself).
+Rule: a handshake WITH a paired carve-out line is the INTERNAL
+channel -- its curve must be exactly `CurveP256`, any other value is a
+regression of the SNI carve-out itself (v7 Decision 15), not a
+settling fluke. A handshake with NO paired carve-out is the
+CLIENT-FACING channel -- its curve must match the profile's own
+(`CurveP384`/`MLKEM1024`/`SecP384r1MLKEM1024`). A carve-out line with
+NO paired handshake is an UNPAIRED FAILURE. This supersedes Decision
+62's WARN-only compromise (which was correct given what was known at
+the time -- the two channels genuinely weren't separated yet) with the
+SNI-correlated check Decision 62 itself said would be needed. Wired
+into BOTH the 5-settling-run check (`start_block_proxies()`, now
+aborts the block on a real problem) AND, new this turn, the per-
+scenario warmup (A.2) -- a mismatch there aborts before any of the
+block's real runs are spent on a broken warmup. **Tested**
+(`tests/test_negotiated_groups.py`, 5 cases, synthetic log text,
+pure-function -- no Docker needed since this validates the
+CORRELATION LOGIC, not the settling protocol which Decision 62 already
+covers live): happy path for all 3 profiles; a forced WRONG client
+curve, all 3 profiles (the test item 12 explicitly asked for); a
+forced wrong INTERNAL curve (regression case); an unpaired carve-out;
+a carve-out just outside the correlation window. All 5 pass.
+
+**B.13 -- Linux SIGTERM/flock repeated; tcpdump in a `netshoot`
+container, all real.** SIGTERM: a real Linux container (not this
+Windows dev machine, where `Popen.terminate()` calls `TerminateProcess`,
+not a true signal) running `campaign_client_runner.py` against a
+black-hole TCP listener standing in for the not-yet-started proxy (so
+the real HTTPS connect call is genuinely still in flight, not already
+failed) -- confirmed `returncode == -15` (the exact signal number) and
+empty stdout (no corrupt partial JSON). flock: repeated (Decision 64
+already proved this once) -- same `OSError: [Errno 11] Resource
+temporarily unavailable` on the second holder. tcpdump in
+`nicolaka/netshoot`: capture on port 443 against REAL outbound traffic
+(a loopback `nc` listener doesn't cross `eth0` at all, so the pcap
+stayed empty until switched to a real external request) -- pcap grew
+0 -> 2080 bytes, 29 real TLS-handshake packets captured, dropped-
+packet counter read from tcpdump's own summary line ("0 packets
+dropped by kernel"), and a deliberately bad interface
+(`-i nonexistent0`) confirmed to fail cleanly (the abort-the-block
+case).
+
+**B.14 -- repo-wide audit: `set_latency`/`docker exec`/`docker logs`/
+hardcoded `127.0.0.1`/`localhost`/absolute paths/fixed ports.** Six
+more `of.set_latency(...)` call sites found unguarded, beyond the four
+Decision 51/62 already fixed: `_capture_pqc_artifacts.py`,
+`_capture_id_token.py`, `_capture_client_assertion.py`,
+`capture_participant_decomposition.py`, `median_automation.py`,
+`go_classical_baseline.py` -- all one-off capture/calibration scripts
+whose OTHER logic (`run_insurance_flow`/`do_call`) already honors
+`REMOTE_GATEWAY_HOST` correctly, making this one unguarded line in
+each a real, reachable inconsistency, not a theoretical one. Fixed
+with the identical guard pattern used everywhere else. `docker exec`/
+`docker logs`/`127.0.0.1`/`localhost` elsewhere in `thesis/scripts/`
+(`baseline_automation.py`, `check_plan_modules.py`,
+`calibrate_tls_kem_proxy_stub.py`, `opin_flow.py`'s own local-proxy
+constants) were reviewed and are intentional, self-contained local-
+only tools/constants with no `REMOTE_GATEWAY_HOST`-guarded counterpart
+to be inconsistent WITH -- not "bugs," not touched. New regression
+guard (`tests/test_no_local_lab_assumptions.py`): scans every `.py`
+file under `thesis/scripts/` for `of.set_latency(` with no
+`REMOTE_GATEWAY_HOST` string within 8 lines above it; fails loudly on
+a new unguarded call site. **Verified it actually catches a
+regression**, not just that it passes today: temporarily reverted one
+guard (`go_classical_baseline.py`) -- the test failed, naming the exact
+file and line; restored, test passes again.
+
+**C.15 (first half) -- precompiled proxy binary wired behind an
+explicit flag; `go run .` stays the default.** `opin_flow.start_tls_kem_proxy()`
+gained `use_precompiled_binary: bool | None = None` (reads
+`TLS_KEM_PROXY_USE_PRECOMPILED=1` from the environment when `None`,
+so nothing changes unless explicitly opted in); new
+`_ensure_precompiled_tls_kem_proxy_image()` builds Decision 66's
+Dockerfile on demand (`docker image inspect` first, so it doesn't
+rebuild on every call) into `mockopin/tls_kem_proxy:precompiled`. When
+set, the `docker run` drops the `/src` source mount and `go run .`
+entirely, running the image's own `ENTRYPOINT` (the binary) with the
+same `-listen`/`-target`/`-cert`/`-key`/`-curve` flags. **Regression,
+both halves checked separately (conflating them would be wrong -- a
+ClientHello's 32-byte Random field and ephemeral key share make
+literal byte-equality across separate TLS connections impossible BY
+DESIGN, not a bug), both run live, both PASS:**
+  - Binary byte-for-byte reproducibility: built twice, independently,
+    with `--no-cache`; extracted via `docker create`+`docker cp`;
+    compared. **9,463,989 bytes, identical, both builds.**
+  - ClientHello size+SNI, `go run .` vs. precompiled, all 3 profiles,
+    captured via a plain TCP listener standing in for the upstream
+    gateway on the real `insurance-server-lambdas_default` network
+    (ClientHello is the first, unencrypted record -- no real mTLS
+    server needed): **classic 341 bytes/SNI `mtls` both modes; pqc
+    1784 bytes/SNI `mtls` both modes; hybrid 1881 bytes/SNI `mtls`
+    both modes** -- size and SNI identical in all 3 cases.
+  (`thesis/scripts/tests/test_tls_kem_proxy_precompiled_regression.py`.)
+  Base image pinned by digest: unchanged from Decision 66 (same
+  `golang:1.27-rc-alpine@sha256:...` the live `go run .` path already
+  pins).
