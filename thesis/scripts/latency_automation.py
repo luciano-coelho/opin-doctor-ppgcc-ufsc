@@ -75,11 +75,11 @@ BASE_DIR = of.BASE_DIR
 RUN_RETRY_LIMIT = 2
 
 
-def run_once_timed_with_retry(crypto_profile: str, label: str, whole_run_retries: list) -> dict:
+def run_once_timed_with_retry(crypto_profile: str, label: str, whole_run_retries: list, return_calls: bool = False) -> dict:
     last_error = None
     for attempt in range(1, RUN_RETRY_LIMIT + 1):
         try:
-            return run_once_timed(crypto_profile)
+            return run_once_timed(crypto_profile, return_calls=return_calls)
         except Exception as e:
             last_error = e
             if attempt < RUN_RETRY_LIMIT:
@@ -92,7 +92,15 @@ def run_once_timed_with_retry(crypto_profile: str, label: str, whole_run_retries
     )
 
 
-def run_once_timed(crypto_profile: str) -> dict:
+def run_once_timed(crypto_profile: str, return_calls: bool = False) -> dict:
+    """return_calls=True is additive, not a rewrite: the T_fluxo/retry/
+    warmup measurement logic below is unchanged from before this
+    parameter existed. It exists so campaign_client_runner.py (Decision
+    60) can get the raw per-call records for calls.jsonl without this
+    function's own, unrelated callers (latency_automation.py's own
+    main(), unchanged) paying for a bigger run{NN}.json than they
+    already write today -- default False keeps every existing call site
+    byte-for-byte identical."""
     timing = {"wasted_seconds": 0.0, "retries": []}
     t_start = time.monotonic()
     insurance_calls = of.run_insurance_flow(crypto_profile, timing=timing)
@@ -101,7 +109,7 @@ def run_once_timed(crypto_profile: str) -> dict:
 
     naive_elapsed_seconds = t_end - t_start
     t_fluxo_seconds = naive_elapsed_seconds - timing["wasted_seconds"]
-    return {
+    result = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "t_fluxo_seconds": round(t_fluxo_seconds, 6),
         "naive_elapsed_seconds": round(naive_elapsed_seconds, 6),
@@ -109,6 +117,9 @@ def run_once_timed(crypto_profile: str) -> dict:
         "retries": timing["retries"],
         "call_count": len(insurance_calls) + len(person_calls),
     }
+    if return_calls:
+        result["calls"] = insurance_calls + person_calls
+    return result
 
 
 def summarize(runs: list[dict]) -> dict:
@@ -233,7 +244,11 @@ def main():
     runs_dir = output_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-    of.set_latency(args.latency_ms)
+    if of.REMOTE_GATEWAY_HOST:
+        print(f"REMOTE_GATEWAY_HOST={of.REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        of.set_latency(args.latency_ms)
 
     # Nível 1 (thesis/results/v6/Level 1/ARCHITECTURE.md): started once for
     # the whole scenario (warmup + all `--runs` attempts), before the warmup

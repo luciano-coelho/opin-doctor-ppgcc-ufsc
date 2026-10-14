@@ -2,6 +2,18 @@
 Description=mockopin Phase 4 campaign orchestrator (Decision 49)
 After=network-online.target chronyd.service
 Wants=network-online.target
+# A.4: a deterministic failure (e.g. SSHExecutor hitting its own
+# NotImplementedError, still real today -- Decision 60/62) must not
+# restart-loop forever. 5 failures inside any rolling 10-minute window
+# trips systemd's own start-limit: the unit goes into "failed" state and
+# stops restarting on its own -- `systemctl status campaign_run` then
+# shows "start-limit-hit", and `systemctl reset-failed campaign_run &&
+# systemctl start campaign_run` is the explicit operator action needed
+# to try again. Paired with CAMPAIGN_STATUS_FILE (campaign_run.py's own
+# write_status()) so the operator doesn't have to read journalctl to
+# know WHY it stopped -- `cat /home/ec2-user/campaign-status.json`.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,6 +22,7 @@ Restart=on-failure
 RestartSec=30
 User=ec2-user
 WorkingDirectory=/home/ec2-user
+Environment=CAMPAIGN_STATUS_FILE=/home/ec2-user/campaign-status.json
 
 [Install]
 WantedBy=multi-user.target

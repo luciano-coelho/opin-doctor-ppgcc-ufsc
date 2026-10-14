@@ -47,7 +47,13 @@ of.do_call = _capturing_do_call
 proc = of.start_tls_kem_proxy(profile)
 pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
 try:
-    of.set_latency(0)
+    # B.14 audit: same local-gateway-container assumption fix as the
+    # _capture_*.py scripts (see _capture_pqc_artifacts.py).
+    if of.REMOTE_GATEWAY_HOST:
+        print(f"REMOTE_GATEWAY_HOST={of.REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        of.set_latency(0)
     insurance_calls = of.run_insurance_flow(profile)
     person_calls = of.run_person_flow(profile)
 finally:

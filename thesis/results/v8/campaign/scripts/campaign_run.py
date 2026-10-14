@@ -61,39 +61,69 @@ proxies must be started before round-robin begins and kept alive
 time, and the run loop itself inverts (scenario the inner loop, run
 index the outer one).
 
-Deliberately NOT implemented here (same reasoning as before -- a call
-to a mechanism that doesn't fully exist yet would be fabricated, not
-prepared):
-  - `run_one_execution()`: the real per-run invocation. Decision 53's
-    spec (not an implementation): it must call the SAME functions the
-    local lab already uses for T_fluxo -- the monotonic clock, discarded
-    retry-attempt time excluded from the timed window, a whole-execution
-    retry marked and recorded (not silently absorbed), warmup kept
-    separate -- exactly `latency_automation.py`'s own existing
-    architecture (Decision 26 already confirmed it starts the proxy
-    once per scenario, before the timed window, specifically to avoid
-    this kind of contamination). This function's job, once implemented,
-    is to invoke that existing machinery over SSH against the right
-    client instance with `REMOTE_GATEWAY_HOST` set -- not to reimplement
-    T_fluxo measurement from scratch.
-  - `run_warmup()`: same seam, for the settling runs (Decision 4's 5
-    discarded flows), writing `run00_warmup.json` once per block.
-  - `start_block_proxies()`/`stop_block_proxies()`: Decision 56's new
-    seam -- starts every scenario's client-side proxy for a block before
-    round-robin begins, stops them only after the whole block completes.
+Decision 60: `run_one_execution()`/`run_warmup()`/`start_block_proxies()`/
+`stop_block_proxies()` are now implemented via an Executor abstraction
+(`LocalExecutor`, real; `SSHExecutor`, not implemented yet -- see their
+own classes below). `LocalExecutor.run_one_execution()` calls
+`latency_automation.py`'s own `run_once_timed_with_retry()` directly
+(the monotonic clock, discarded retry-attempt time excluded, a
+whole-execution retry marked and recorded -- never reimplemented) and
+writes every artifact Decision 53's tree specifies for one execution:
+`runs/run{NN}.json`, `runs/run{NN}.calls.jsonl`, the server/client
+`_gateway.log`/`_cpu.jsonl`/`.pcap.gz`/`_ping.json` files. `run_warmup()`
+reuses the same function for latency_automation.py's own single-warmup-
+run convention (not Decision 4's separate 5-flow container-settling,
+which is a different, server-side, profile-switch-time concern --
+flagged explicitly in `run_warmup()`'s own docstring so the two are
+never conflated). `SSHExecutor` (real AWS) is deliberately left
+unimplemented -- fabricating untested SSH calls would not be
+"prepared."
 """
+import gzip
 import json
+import os
 import random
+import re
+import shlex
 import subprocess
 import sys
+import threading
 import time
-from datetime import datetime, timezone
+import traceback
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Decision 60: lets this file import thesis/scripts' own modules
+# (latency_automation.py, opin_flow.py) directly -- LocalExecutor calls
+# their functions in-process; it does not reimplement them.
+THESIS_SCRIPTS_DIR = Path(__file__).resolve().parents[4] / "scripts"
+if str(THESIS_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(THESIS_SCRIPTS_DIR))
 
 CONFIG_PATH = Path("/home/ec2-user/campaign_schedule.json")
 INVENTORY_PATH = Path("/home/ec2-user/inventory.json")
 CAMPAIGN_KEY = "/home/ec2-user/.ssh/campaign_key"
 DATA_ROOT = Path("/home/ec2-user/campaign-data")  # mirrors the repo's v8/ subtree, Decision 53
+# A.4: the operator-readable status file -- main() writes to this on every
+# state transition (started/running/aborted/completed) so "is it alive and
+# doing what" doesn't require tailing journalctl. Overridable via env var
+# so the local rehearsal (item 11) doesn't need root on /home/ec2-user.
+STATUS_FILE_PATH = Path(os.environ.get("CAMPAIGN_STATUS_FILE", "/home/ec2-user/campaign-status.json"))
+
+
+def write_status(state, detail=""):
+    """A.4: best-effort -- a status-file write failure must never mask
+    or replace the real error that's actually aborting the process, so
+    this only prints a warning on failure, never raises."""
+    try:
+        STATUS_FILE_PATH.write_text(json.dumps({
+            "state": state,
+            "detail": detail,
+            "pid": os.getpid(),
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }, indent=2))
+    except OSError as e:
+        print(f"WARNING: could not write status file {STATUS_FILE_PATH}: {e}", file=sys.stderr)
 RUNS_PER_WINDOW = 10
 WINDOWS_PER_CAMPAIGN = 3
 PROFILES = ["classic", "pqc", "hybrid"]
@@ -169,6 +199,339 @@ def renew_safety_timers(inventory):
             print(f"Renewed safety timer on {label} ({ip}): +{SAFETY_TIMER_RENEW_HOURS}h")
 
 
+SINGLE_INSTANCE_LOCK_PATH = "/tmp/mockopin-campaign-run.lock"
+
+
+class SingleInstanceLock:
+    """Decision 64: only one campaign_run.py process may run at a time
+    on the control instance -- a second launch (operator error, a
+    leftover process from a previous session, systemd restarting it
+    while an old one is still alive) must fail loudly on startup, not
+    silently run two orchestrators against the same servers. Uses
+    `fcntl.flock` (Linux-only, which is all this ever runs on in
+    practice -- the control instance). On a non-Linux host (this
+    project's own Windows dev machine, where `fcntl` doesn't exist at
+    all), falls back to a no-op with a clear warning rather than
+    crashing on import -- so the local test below can still run, with
+    this guarantee explicitly NOT exercised there."""
+    def __init__(self, path=SINGLE_INSTANCE_LOCK_PATH):
+        self.path = path
+        self._fh = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+        except ImportError:
+            print(f"WARNING: fcntl not available on this platform -- SingleInstanceLock is a no-op here "
+                  f"(expected on this project's Windows dev machine; real on Linux).", file=sys.stderr)
+            return self
+        self._fh = open(self.path, "w")
+        try:
+            fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._fh.close()
+            raise RuntimeError(
+                f"Another campaign_run.py is already running (lock held on {self.path}) -- "
+                f"refusing to start a second orchestrator instance (Decision 64)."
+            )
+        return self
+
+    def __exit__(self, *exc):
+        if self._fh is not None:
+            import fcntl
+            fcntl.flock(self._fh, fcntl.LOCK_UN)
+            self._fh.close()
+
+
+def server_flock_wrap(remote_cmd, lock_path="/tmp/mockopin-server.lock"):
+    """Decision 64: wraps a remote command so the SERVER-side flock is
+    held for exactly the command's duration -- `flock` is a real binary
+    (util-linux, present on Amazon Linux 2023 by default), not a Python
+    mechanism, so this works regardless of which process on the server
+    side ends up running the wrapped command (relevant for SSHExecutor,
+    where each execution is its own separate SSH invocation, not one
+    long-lived process that could hold an in-memory lock the way
+    LocalExecutor's `_SERVER_LOCKS` threading.Lock does).
+
+    A.10: this flock covers ONLY the profile switch (the command passed
+    in here, always the `switch_crypto_profile.py` invocation) -- it is
+    NOT what makes "one execution at a time" true in general. That
+    guarantee has two layers: (1) the orchestrator's own sequential
+    control flow (no threading in run_window()'s round-robin loop --
+    one execution is started, awaited, and written to disk before the
+    next begins) and (2) `_SERVER_LOCKS`, an in-memory per-installation
+    lock that is defense-in-depth against a future concurrent-windows
+    change reintroducing an overlap (see its own docstring above).
+    Individual `run_one_execution()` calls are NOT flock-wrapped on the
+    server side at all -- only the profile switch is, because that is
+    the one server-side operation that mutates shared state (the
+    running containers) and could plausibly race with a stray manual
+    `switch_crypto_profile.py` invocation or a second orchestrator
+    instance SSHing in. A single execution's own request against an
+    already-switched, already-stable server has nothing server-side to
+    race on.
+
+    A.3: `remote_cmd` is a single shell command STRING (shell syntax --
+    `&&`, env-var-assignment prefixes -- is meant to be interpreted by
+    the remote shell, so it is not flattened into argv tokens here); any
+    VARIABLE piece inside it must already have been through
+    `shlex.quote()` by the caller before this function sees it. This
+    function itself never uses `repr()` -- `shlex.quote()` on the whole
+    command is what's needed to pass it safely as `flock -c`'s single
+    argument (handles embedded quotes/spaces/$ correctly, unlike
+    `!r}`, which breaks the instant `remote_cmd` itself contains a
+    single quote -- exactly the python3 -c bug SSHExecutor had)."""
+    return f"flock -n {lock_path} -c {shlex.quote(remote_cmd)}"
+
+
+# ---------------------------------------------------------------------------
+# B.12: negotiated key-exchange group verification, correlated by TCP
+# connection (remoteAddr) rather than compared as one flat set across the
+# whole block -- see verify_negotiated_groups()'s own docstring for the
+# full rule. Curve-ID strings below are tls.CurveID.String() values as
+# logged by mock_mtls/main.go's slog.JSONHandler (confirmed live during
+# this project's own testing, not guessed).
+# ---------------------------------------------------------------------------
+_HANDSHAKE_COMPLETE_MSG = "mTLS handshake complete"
+_CARVEOUT_MSG = "GetConfigForClient: internal-caller classical carve-out applied"
+_INTERNAL_CARVEOUT_SNI = "matls-api.local"
+_INTERNAL_CARVEOUT_EXPECTED_CURVE = "CurveP256"
+_CLIENT_EXPECTED_CURVE = {
+    "classic": "CurveP384",
+    "pqc": "MLKEM1024",
+    "hybrid": "SecP384r1MLKEM1024",
+}
+_CORRELATION_WINDOW_SECONDS = 5.0
+
+
+def _parse_gateway_log_lines(log_text):
+    """B.12: parses `docker logs -t ...`'s line format -- an RFC3339Nano
+    timestamp, one space, then the gateway's own slog JSON object -- into
+    (timestamp, dict) pairs. Silently skips any line that isn't both (a
+    container-runtime line, a multi-line stack trace, etc.) -- never
+    raises on a malformed line, never fabricates a missing field."""
+    entries = []
+    for line in log_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        ts_str, _, rest = line.partition(" ")
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        try:
+            obj = json.loads(rest)
+        except ValueError:
+            continue
+        entries.append((ts, obj))
+    return entries
+
+
+def verify_negotiated_groups(log_text, expected_client_curve, window_seconds=_CORRELATION_WINDOW_SECONDS):
+    """B.12: separates the TWO coexisting TLS channels (v7 Decision 15)
+    by correlating each "mTLS handshake complete" line (has curveID, no
+    SNI) against the "GetConfigForClient: internal-caller classical
+    carve-out applied" line (has SNI, no curveID) sharing the SAME
+    remoteAddr -- an EXACT string match is correct here, not fuzzy,
+    because both lines read remoteAddr off the identical net.Conn (same
+    TCP connection, same host:port string) -- within a short time window
+    (guards only against a reused ephemeral port across two distinct,
+    sequential connections being miscorrelated; it is not compensating
+    for any fuzziness in the remoteAddr match itself).
+
+    Rule (this turn's spec):
+      - A handshake whose remoteAddr has a paired carve-out line is the
+        INTERNAL (AS->RS) channel: its curveID must be exactly
+        _INTERNAL_CARVEOUT_EXPECTED_CURVE ("CurveP256"). Any other value
+        is a regression of the SNI carve-out itself, not a settling
+        fluke, and is reported as a problem.
+      - A handshake with NO paired carve-out line is the CLIENT-FACING
+        channel: its curveID must be exactly `expected_client_curve`
+        (the profile's own group). Any divergence is reported as a
+        problem.
+      - A carve-out line with NO paired handshake-complete line within
+        the window is an UNPAIRED FAILURE (the ClientHello was parsed
+        but the connection never completed/reached StateActive, or
+        correlation genuinely failed) -- reported as a problem.
+
+    Never raises or aborts anything itself -- callers (the settling
+    check, the warmup check, and this function's own unit test) decide
+    what to do with a non-empty `problems` list. Returns:
+      {"client_curves": [...], "internal_curves": [...],
+       "problems": [...], "ok": bool}
+    """
+    entries = _parse_gateway_log_lines(log_text)
+    handshakes = [(ts, obj) for ts, obj in entries if obj.get("msg") == _HANDSHAKE_COMPLETE_MSG]
+    carveouts = [(ts, obj) for ts, obj in entries if obj.get("msg") == _CARVEOUT_MSG]
+
+    carveouts_by_addr = {}
+    for ts, obj in carveouts:
+        carveouts_by_addr.setdefault(obj.get("remoteAddr"), []).append((ts, obj))
+
+    problems = []
+    client_curves = set()
+    internal_curves = set()
+    matched_carveout_keys = set()
+
+    for ts, hs in handshakes:
+        addr = hs.get("remoteAddr")
+        curve = hs.get("curveID")
+        pair = None
+        for i, (cts, cobj) in enumerate(carveouts_by_addr.get(addr, [])):
+            if (addr, i) in matched_carveout_keys:
+                continue
+            if abs((cts - ts).total_seconds()) <= window_seconds:
+                pair = (cts, cobj)
+                matched_carveout_keys.add((addr, i))
+                break
+        if pair is not None:
+            internal_curves.add(curve)
+            if curve != _INTERNAL_CARVEOUT_EXPECTED_CURVE:
+                problems.append(
+                    f"INTERNAL channel (remoteAddr={addr}, SNI={pair[1].get('sni')}) negotiated "
+                    f"{curve!r}, expected {_INTERNAL_CARVEOUT_EXPECTED_CURVE!r} -- regression of the "
+                    f"matls-api.local SNI carve-out (Decision 15)."
+                )
+        else:
+            client_curves.add(curve)
+            if curve != expected_client_curve:
+                problems.append(
+                    f"CLIENT-FACING channel (remoteAddr={addr}) negotiated {curve!r}, "
+                    f"expected {expected_client_curve!r} for this profile."
+                )
+
+    for addr, pairs in carveouts_by_addr.items():
+        for i, (cts, cobj) in enumerate(pairs):
+            if (addr, i) not in matched_carveout_keys:
+                problems.append(
+                    f"UNPAIRED carve-out (remoteAddr={addr}, SNI={cobj.get('sni')}) -- no matching "
+                    f"'{_HANDSHAKE_COMPLETE_MSG}' line within {window_seconds}s; treated as a failure."
+                )
+
+    return {
+        "client_curves": sorted(client_curves),
+        "internal_curves": sorted(internal_curves),
+        "problems": problems,
+        "ok": not problems,
+    }
+
+
+def _default_route_interface():
+    """A.7: the real default-route network interface, read straight from
+    /proc/net/route (destination 00000000) -- not `eth0` hardcoded, and
+    not even a call out to the `ip` binary (which isn't installed in
+    every minimal image, e.g. netshoot's busybox-based `ip` is present
+    but a bare Alpine's often isn't) -- /proc/net/route is a kernel
+    interface, present on every real Linux host unconditionally. Returns
+    None (never fabricates "eth0") on any non-Linux host or if no
+    default route is configured."""
+    try:
+        with open("/proc/net/route") as f:
+            lines = f.readlines()[1:]
+    except FileNotFoundError:
+        return None
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == "00000000":
+            return fields[0]
+    return None
+
+
+def _chrony_tracking_offset():
+    """A.8: this host's own clock offset from ITS sync reference (NTP /
+    Amazon Time Sync), per `chronyc tracking`'s "System time" line --
+    positive means this host's clock is ahead of its reference. This is
+    the correct building block for a CLIENT-vs-SERVER drift measurement
+    (each real instance reports its own offset-from-truth; the
+    difference between the two is the client/server drift -- see
+    `client_server_clock_drift_seconds` below), unlike the old
+    container-vs-host reading this replaces, which compared two clocks
+    that are never meaningfully out of sync in the first place (same
+    kernel clock, Docker containers don't have their own hardware
+    clock). Returns None (with the raw stdout available to the caller
+    for logging) if chronyc isn't installed or chronyd isn't tracking
+    anything yet -- never a fabricated 0.0."""
+    try:
+        r = subprocess.run(["chronyc", "tracking"], capture_output=True, text=True, timeout=5)
+    except FileNotFoundError:
+        return None
+    if r.returncode != 0:
+        return None
+    m = re.search(r"System time\s*:\s*([\d.]+)\s*seconds\s*(fast|slow)", r.stdout)
+    if not m:
+        return None
+    offset = float(m.group(1))
+    return -offset if m.group(2) == "slow" else offset
+
+
+def _sample_cpu_mem_steal():
+    """A.9: one point-in-time sample of /proc/stat's cpu line (steal
+    time included -- see the module's own long-standing explanation of
+    why this has to be /proc/stat, never `docker stats`) AND
+    /proc/meminfo (new this turn -- the old sampler read /proc/stat
+    only). Returns None for either half independently on a non-Linux
+    host, never a fabricated value; always returns a dict with a
+    timestamp so repeated samples (via _PeriodicSampler below) can be
+    told apart."""
+    sample = {"sampled_at_utc": datetime.now(timezone.utc).isoformat()}
+    try:
+        with open("/proc/stat") as f:
+            line = f.readline()
+        fields = [int(x) for x in line.split()[1:]]
+        while len(fields) < 8:
+            fields.append(0)
+        user, nice, system, idle, iowait, irq, softirq, steal = fields[:8]
+        sample["cpu"] = {"total": sum(fields), "steal": steal, "idle": idle}
+    except FileNotFoundError:
+        sample["cpu"] = None
+    try:
+        meminfo = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                meminfo[key.strip()] = rest.strip()
+        sample["mem"] = {k: meminfo.get(k) for k in ("MemTotal", "MemFree", "MemAvailable")}
+    except FileNotFoundError:
+        sample["mem"] = None
+    return sample
+
+
+class _PeriodicSampler:
+    """A.9: samples CPU(+steal)/memory on an interval THROUGHOUT an
+    execution via a background thread, not just at 3 discrete
+    before/during/after points -- `start()` takes one sample
+    immediately, then one every `interval_seconds` until `stop()`, which
+    takes one final sample and returns the full list. A plain daemon
+    thread, not a subprocess -- each sample is a handful of open/read/
+    close syscalls, cheap enough that the sampling itself is not a
+    meaningful confound next to what it's measuring."""
+    def __init__(self, interval_seconds=1.0):
+        self.interval_seconds = interval_seconds
+        self.samples = []
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            self._stop_event.wait(self.interval_seconds)
+            if not self._stop_event.is_set():
+                self.samples.append(_sample_cpu_mem_steal())
+
+    def start(self):
+        self.samples.append(_sample_cpu_mem_steal())
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self.samples.append(_sample_cpu_mem_steal())
+        return self.samples
+
+
 def wait_until(iso_timestamp):
     """Blocks until the given ISO-8601 UTC timestamp. A no-op (returns
     immediately) if that time has already passed -- resuming after a
@@ -213,62 +576,679 @@ def pre_block_checks(installation, profile):
     return checks
 
 
-def run_warmup(installation, scenario, profile, window):
-    """Decision 4's settling protocol (5 discarded flows), run once per
-    block, written to its own file -- never mixed into runs/'s
-    numbering. NOT IMPLEMENTED: same reasoning as run_one_execution()."""
-    raise NotImplementedError(
-        "run_warmup: depends on the same SSH-to-client wiring as "
-        "run_one_execution() -- not yet built."
-    )
+# Decision 60: never two executions on the same server at once. Today's
+# control flow is fully sequential (no threading anywhere in main()/
+# run_window()), so this is already true by construction -- the lock is
+# defense-in-depth against a future change (e.g. running installations'
+# windows concurrently) silently reintroducing an overlap. One lock per
+# installation (= per physical server), not global -- different servers
+# running concurrently is fine and intended.
+_SERVER_LOCKS = {name: threading.Lock() for name in SCENARIO_ROTATION}
 
 
-def start_block_proxies(installation, profile, scenarios):
-    """Decision 56: round-robin means every scenario's client-side proxy
-    in this block must be up BEFORE round-robin begins, not started one
-    at a time as each scenario's turn comes up -- each proxy stays alive
-    for the whole block, torn down only by stop_block_proxies() after
-    the round-robin loop finishes. NOT IMPLEMENTED: same reasoning as
-    run_one_execution() -- depends on the same SSH-to-client wiring."""
-    raise NotImplementedError(
-        "start_block_proxies: depends on the same SSH-to-client wiring as "
-        "run_one_execution() -- not yet built."
-    )
+class SSHExecutor:
+    """Real-AWS executor -- control instance SSHing into the client
+    (to run campaign_client_runner.py) and into the server (profile
+    switches, gateway logs, CPU/steal, tcpdump). The actual SSH
+    transport (subprocess.run(["ssh", ...])) is NOT wired here yet --
+    Decision 55's Docker-dependency audit already specifies which side
+    each command belongs on; executing it live is the next, separate
+    piece of work. What IS real here (Decision 62): command
+    CONSTRUCTION, shared by both the (not-yet-executed) live path and
+    `--dry-run`, so `--dry-run` prints the exact strings a live run
+    would use, not a guess."""
+    def __init__(self, inventory, dry_run=False):
+        self.inventory = inventory
+        self.dry_run = dry_run
+
+    def _client_ip(self, scenario_key):
+        return self.inventory["clients"][scenario_key]["public_ip"]
+
+    def _server_ip(self, installation):
+        return self.inventory["servers"][installation]["public_ip"]
+
+    def _ssh_cmd(self, ip, remote_cmd, key="campaign_key"):
+        """A.3: `remote_cmd` is a single shell command STRING, built by
+        the caller with shell syntax (&&, $(...), env-var prefixes) left
+        as literal, correct shell syntax, and every VARIABLE piece
+        (profile name, path, IP, label) already run through
+        `shlex.quote()` -- never `repr()`/hand-nested quotes. This
+        function hands `remote_cmd` to ssh as ONE argv element (ssh
+        joins its trailing args and runs them via the remote shell --
+        no local shell is involved here, so no extra quoting layer is
+        needed around `remote_cmd` itself). Returns an argv LIST, ready
+        for `subprocess.run()` with no `shell=True` on either end."""
+        return ["ssh", "-i", f"~/.ssh/{key}", "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=15", f"ec2-user@{ip}", remote_cmd]
+
+    def _run_or_print(self, label, cmd):
+        if self.dry_run:
+            print(f"[DRY-RUN] {label}: {shlex.join(cmd)}")
+            return None
+        raise NotImplementedError(f"SSHExecutor: live execution not implemented yet (Decision 60/62) -- {label}")
+
+    @staticmethod
+    def _env_prefix(env):
+        """A.3: KEY=VALUE shell-assignment prefix, each VALUE through
+        shlex.quote -- the assignment syntax itself is meant to be
+        interpreted by the remote shell, only the values are untrusted/
+        variable."""
+        return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
+
+    @staticmethod
+    def _iface_detect_sh(var_name="IFACE"):
+        """A.7: detects the default-route interface from /proc/net/route
+        (destination field 00000000) INLINE in the remote shell -- not a
+        separate round trip (none of this class's remote reads are wired
+        to live execution yet, Decision 60/62), and not a hardcoded
+        `eth0` -- the `eth0` here is only a last-resort fallback if
+        detection itself yields nothing (a genuinely interface-less
+        instance, which would be a real problem either way), never the
+        primary source of truth. The detected name is also written to
+        `/home/ec2-user/{label}.{side}.iface` so the collection step
+        (A.5) can fold it into the run's own JSON instead of assuming
+        it."""
+        return (f'{var_name}=$(awk \'$2 == "00000000" {{print $1; exit}}\' /proc/net/route 2>/dev/null); '
+                f'{var_name}=${{{var_name}:-eth0}}')
+
+    def _tcpdump_start_cmd(self, label, side, interface_var="IFACE"):
+        """A.6: fixes the `sudo tcpdump ... & echo $!` PID bug -- that
+        captures sudo's own PID, not tcpdump's, because the backgrounding
+        happens OUTSIDE the sudo'd process. Here, `setsid sh -c '...'` is
+        what sudo elevates, and the backgrounding (`nohup ... &`) plus
+        `echo $!` both happen INSIDE that sudo'd shell, so `$!` is
+        tcpdump's own PID. `setsid` detaches the whole thing from this
+        SSH session's controlling terminal so it survives the session
+        closing (A.6's "ciclo de vida"); stdout/stderr are redirected to
+        a log file (never left attached to the dying SSH pipe).
+
+        B.11's local rehearsal caught two real bugs in earlier versions
+        of this function. First: `pcap_path`/`pid_path`/`log_path` used
+        `~/...` and were passed through `shlex.join()`/`shlex.quote()`
+        -- quoting a `~`-prefixed token defeats the shell's own tilde
+        expansion (it only fires on an UNQUOTED leading `~`), so the
+        remote shell tried to create a file literally named `~`, which
+        doesn't exist ("nonexistent directory"). Switching to `$HOME`
+        and dropping shlex.quote/join on these self-constructed,
+        fixed-template paths (they contain no untrusted content -- no
+        spaces, no shell metacharacters, built only from `label`/`side`,
+        both from a small fixed set -- so there is nothing to escape,
+        and quoting them only breaks the expansion they rely on) fixed
+        that. Second, found by the SAME rehearsal run: `$HOME` INSIDE
+        `sudo setsid sh -c '...'` resolves to ROOT's home, not the
+        invoking user's -- `sudo` resets `$HOME` by default (no
+        `--preserve-env`/`sudoers env_keep`), so the pid/log/pcap files
+        landed in `/root/...`, invisible to the next (non-sudo) SSH
+        command reading `$HOME/...` as ec2-user. Fixed by using the
+        LITERAL path `/home/ec2-user` instead of `$HOME` -- consistent
+        with every other hardcoded `/home/ec2-user/...` path this file
+        already assumes (CONFIG_PATH, CAMPAIGN_KEY, DATA_ROOT), not a
+        new assumption, and immune to sudo's env reset since it's not a
+        variable at all.
+
+        Third bug the rehearsal caught, same root cause as the second:
+        `$IFACE` itself also can't cross the `sudo` boundary as a
+        variable reference -- `IFACE=...` in the login shell is a
+        plain, unexported local variable, and even exporting it
+        wouldn't survive `sudo`'s default env_reset. Single-quoting
+        `inner` (the first fix's approach) made this worse: it froze
+        `$IFACE` as a literal, unexpanded string all the way into the
+        inner shell, which then ran `tcpdump -i $IFACE` with NO
+        variable of that name set there at all -- empty expansion,
+        tcpdump misparsed `-s` as `-i`'s argument ("-s: No such device
+        exists"). Fixed by DOUBLE-quoting `inner` instead of single-
+        quoting it: a double-quoted string IS expanded by the OUTER
+        (login) shell before sudo ever runs, so `$IFACE` resolves to
+        the real, already-detected interface name THERE, crossing the
+        sudo boundary as a plain literal word -- exactly like the
+        `/home/ec2-user` fix above. The one thing that must NOT be
+        expanded by the outer shell is `$!` (tcpdump's own PID, only
+        meaningful once the INNER sh -c backgrounds it) -- escaped as
+        `\\$!`, which double quotes turn back into a literal `$!` for
+        the inner shell to evaluate for real. All three bugs (and the
+        fixes) were found/confirmed by actually running these commands
+        over real SSH against real sshd containers (B.11's rehearsal),
+        not by inspection."""
+        home = "/home/ec2-user"
+        pcap_path = f"{home}/{label}.{side}.pcap"
+        pid_path = f"{home}/{label}.{side}.tcpdump.pid"
+        log_path = f"{home}/{label}.{side}.tcpdump.log"
+        inner = f"nohup tcpdump -i ${interface_var} -s 128 port 443 -w {pcap_path} > {log_path} 2>&1 & echo \\$! > {pid_path}"
+        iface_detect = self._iface_detect_sh(interface_var)
+        remote_cmd = f'{iface_detect}; echo ${interface_var} > {home}/{label}.{side}.iface; sudo setsid sh -c "{inner}"'
+        return remote_cmd, pid_path, log_path, pcap_path
+
+    @staticmethod
+    def _tcpdump_stop_cmd(pid_path):
+        """Kills the real tcpdump PID captured by _tcpdump_start_cmd --
+        `2>/dev/null; true` so a PID that's already gone (process died
+        on its own) doesn't make the SSH command itself look failed.
+        `pid_path` is NOT shlex.quote()'d here -- it's already a
+        trusted, fixed-template literal path (see _tcpdump_start_cmd's
+        own docstring), no expansion involved any more after the
+        $HOME->literal-path fix, so quoting would add nothing."""
+        return f"sudo kill $(cat {pid_path}) 2>/dev/null; sleep 1; true"
+
+    def start_block_proxies(self, installation, profile, scenarios, window):
+        server_ip = self._server_ip(installation)
+        # Decision 64/A.10: flock-wrapped -- the profile switch touches
+        # the whole server's stack and must never overlap with anything
+        # else running against this same server. This is the ONLY
+        # server-side action that is flock-wrapped (see
+        # server_flock_wrap()'s own docstring, A.10, for why individual
+        # executions below are not).
+        switch_cmd = (
+            f"cd insurance-server-lambdas && CRYPTO_PROFILE={shlex.quote(profile)} "
+            f"python3 ../thesis/scripts/switch_crypto_profile.py {shlex.quote(profile)}"
+        )
+        self._run_or_print(
+            f"[{installation}/w{window}] switch profile on server",
+            self._ssh_cmd(server_ip, server_flock_wrap(switch_cmd)),
+        )
+        # A.6: the proxy now starts detached (docker run -d, via
+        # opin_flow.start_tls_kem_proxy(..., detached=True)) -- a
+        # service in the Decision 6/60 sense: its lifecycle is the
+        # container's own, independent of this SSH session, torn down
+        # explicitly by stop_block_proxies() below via `docker stop`,
+        # not by this process exiting.
+        for scenario in scenarios:
+            client_ip = self._client_ip(f"{scenario}@{installation}")
+            py_code = "import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True)" % json.dumps(profile)
+            remote_argv = ["python3", "-c", py_code]
+            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            self._run_or_print(
+                f"[{installation}/{scenario}/w{window}] start client proxy (detached)",
+                self._ssh_cmd(client_ip, remote_cmd),
+            )
+
+    def stop_block_proxies(self, installation, profile, scenarios, window):
+        # A.6: no Popen to join on this side (the proxy was started
+        # detached, via opin_flow.start_tls_kem_proxy(..., detached=True)
+        # -- a plain container name, see its docstring) -- tearing it
+        # down is `docker stop` + `docker rm -f` by its fixed name
+        # (TLS_KEM_PROXY_CONTAINER_NAME = "tls_kem_proxy_run"), the exact
+        # same two calls stop_tls_kem_proxy() itself makes for the str
+        # case, reused here as the literal remote command rather than
+        # re-importing opin_flow just to read one constant.
+        for scenario in scenarios:
+            client_ip = self._client_ip(f"{scenario}@{installation}")
+            remote_cmd = "docker stop tls_kem_proxy_run 2>/dev/null; docker rm -f tls_kem_proxy_run 2>/dev/null; true"
+            self._run_or_print(
+                f"[{installation}/{scenario}/w{window}] stop client proxy (docker stop)",
+                self._ssh_cmd(client_ip, remote_cmd),
+            )
+
+    def run_warmup(self, installation, scenario, profile, window, scenario_path):
+        client_ip = self._client_ip(f"{scenario}@{installation}")
+        remote_argv = ["python3", "campaign_client_runner.py", "--label", "warmup"]
+        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': self._server_ip(installation)})} {shlex.join(remote_argv)}"
+        self._run_or_print(
+            f"[{installation}/{scenario}/w{window}] warmup",
+            self._ssh_cmd(client_ip, remote_cmd),
+        )
+
+    def run_one_execution(self, installation, scenario, profile, window, run_index, scenario_path):
+        client_ip = self._client_ip(f"{scenario}@{installation}")
+        server_ip = self._server_ip(installation)
+        label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
+
+        server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
+        client_tcpdump_cmd, client_pid, client_log, client_pcap = self._tcpdump_start_cmd(label, "client")
+        self._run_or_print(f"[{installation}/{scenario}] tcpdump start (server)",
+                            self._ssh_cmd(server_ip, server_tcpdump_cmd))
+        self._run_or_print(f"[{installation}/{scenario}] tcpdump start (client)",
+                            self._ssh_cmd(client_ip, client_tcpdump_cmd))
+
+        remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
+        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+        result = self._run_or_print(
+            f"[{installation}/{scenario}] run execution {label}",
+            self._ssh_cmd(client_ip, remote_cmd),
+        )
+
+        self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (server)",
+                            self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
+        self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (client)",
+                            self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
+
+        # A.5: the --dry-run/SSHExecutor remote-data surface -- gateway
+        # log, CPU/steal/mem, reference ping, chronyc tracking, and
+        # fetching calls.jsonl + the run's own JSON. Each is a real,
+        # previewable command (cat for small text files read directly
+        # over the SSH stdout pipe, scp for the binary pcaps) -- actually
+        # pulling these back still goes through _run_or_print, so in
+        # real mode it raises exactly like every other action here
+        # (Decision 60/62: no untested SSH call is faked as working).
+        self._run_or_print(f"[{installation}/{scenario}] fetch gateway log (server)",
+                            self._ssh_cmd(server_ip, "docker logs -t --since 10m insurance-server-lambdas-mtls-1"))
+        self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (server)",
+                            self._ssh_cmd(server_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
+        self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (client)",
+                            self._ssh_cmd(client_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
+        self._run_or_print(f"[{installation}/{scenario}] reference ping (client -> server)",
+                            self._ssh_cmd(client_ip, f"ping -c 10 -q {shlex.quote(server_ip)}"))
+        self._run_or_print(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
+                            self._ssh_cmd(server_ip, "chronyc tracking"))
+        self._run_or_print(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
+                            self._ssh_cmd(client_ip, "chronyc tracking"))
+        self._run_or_print(f"[{installation}/{scenario}] fetch calls.jsonl + run JSON (client stdout)",
+                            self._ssh_cmd(client_ip, f"cat /home/ec2-user/{label}.calls.jsonl /home/ec2-user/{label}.json 2>/dev/null"))
+        self._run_or_print(f"[{installation}/{scenario}] fetch detected interfaces",
+                            self._ssh_cmd(server_ip, f"cat /home/ec2-user/{label}.server.iface"))
+        self._run_or_print(f"[{installation}/{scenario}] fetch detected interfaces (client)",
+                            self._ssh_cmd(client_ip, f"cat /home/ec2-user/{label}.client.iface"))
+        self._run_or_print(f"[{installation}/{scenario}] scp pcaps back (both sides)",
+                            f"scp ... {server_pcap} / {client_pcap} -> local scenario_path (not yet wired, Decision 60/62)")
+
+        return result
 
 
-def stop_block_proxies(installation, profile, scenarios):
-    """Counterpart to start_block_proxies() -- torn down once, after
-    every scenario's 30 round-robin'd runs in this block are done, not
-    per-scenario. NOT IMPLEMENTED, same reasoning."""
-    raise NotImplementedError(
-        "stop_block_proxies: depends on the same SSH-to-client wiring as "
-        "run_one_execution() -- not yet built."
-    )
-
-
-def run_one_execution(installation, scenario, profile, window, run_index):
-    """The single seam where a real execution gets triggered.
-
-    Specification (Decision 53), not an implementation: this must call
-    the SAME functions the local lab already uses for T_fluxo --
-    `time.monotonic()` (never wall-clock), discarded-retry-attempt time
-    excluded from the timed window, a whole-execution retry marked and
-    recorded in the run's own JSON (not silently retried and forgotten),
-    warmup handled by `run_warmup()` above, never inline here. This
-    means invoking `opin_flow.py`/`latency_automation.py`'s existing
-    machinery over SSH with `REMOTE_GATEWAY_HOST` set, not
-    reimplementing T_fluxo measurement from scratch -- the lab's own
-    timing code is already correct (Decision 26) and should be reused
-    as-is, not duplicated.
+class LocalExecutor:
+    """Decision 60: runs everything in-process, for the local-stack test
+    (no AWS, no SSH) -- "server" and "client" are both the local
+    machine, exactly like switch_crypto_profile.py/latency_automation.py
+    already assume when run directly. Calls `latency_automation.py`'s
+    and `opin_flow.py`'s own functions directly -- reused, not
+    reimplemented. REMOTE_GATEWAY_HOST must already be set in the
+    environment by the caller (the local test below sets it to the
+    local stack's own gateway address) before this executor is used.
     """
-    raise NotImplementedError(
-        "run_one_execution: depends on opin_flow.py's REMOTE_GATEWAY_HOST "
-        "(Decision 51, implemented as a diff, not yet committed/approved) "
-        "and on the SSH-to-client wiring to actually invoke it -- not yet built."
-    )
+    def __init__(self, allow_tcpdump_skip=False):
+        import opin_flow as of
+        import latency_automation as la
+        import switch_crypto_profile as scp
+        self.of = of
+        self.la = la
+        self.scp = scp
+        self._block_state = {}
+        # Decision 63: the ONLY way to get the old best-effort-skip
+        # behavior back -- default is now "abort the block loudly if
+        # capture can't start," matching the remote-mode requirement.
+        # An explicit local flag, never silent, never the default.
+        self.allow_tcpdump_skip = allow_tcpdump_skip
+
+    def start_block_proxies(self, installation, profile, scenarios, window):
+        """Decision 62's full per-block settling sequence, local part --
+        A.2 confirms/documents the order explicitly: (a) switch profile
+        on the server (reuses switch_crypto_profile.py's own helpers --
+        does not reimplement container recreation/health-check logic),
+        (b) start the client proxy/signer with the profile's own curve,
+        (c) run 5 settling executions -- SAVED, not discarded, each
+        verified -- (d) check the gateway log's negotiated curveID,
+        correlated by channel (B.12), hard-aborts on mismatch. Per-
+        scenario warmup and the round-robin loop happen AFTER this
+        returns, in run_window() below -- this function's own job ends
+        at (d). The SSH part (doing (a)/(c)/(d) against a real remote
+        server) is SSHExecutor's job, not built here (Decision 60/62)."""
+        scp = self.scp
+        print(f"  [{installation}/{profile}] settling: switching server profile...")
+        result = scp._compose("up", "-d", "--force-recreate", *scp.PROFILE_DEPENDENT_SERVICES, env_profile=profile)
+        if result.returncode != 0:
+            raise RuntimeError(f"docker compose up failed:\n{result.stdout}\n{result.stderr}")
+        time.sleep(10)
+        for name in ("insurance-server-lambdas-auth-1", "insurance-server-lambdas-mtls-1",
+                     "insurance-server-lambdas-mockapi-1"):
+            scp._start_if_exited(name)
+        time.sleep(8)
+        for name in ("insurance-server-lambdas-auth-1", "insurance-server-lambdas-mtls-1",
+                     "insurance-server-lambdas-mockapi-1"):
+            status = scp._container_status(name)
+            if status != "running":
+                raise RuntimeError(f"{name} is '{status}' after retry -- settling failed, inspect manually")
+        scp._wait_for_mtls_ready()
+        scp._check_psql_checkpoint_health()
+        print(f"  [{installation}/{profile}] settling: server profile switched, containers healthy.")
+
+        # A.8: renamed from clock_drift_seconds, and no longer a
+        # container-vs-host reading -- the gateway container and this
+        # Windows dev host share the SAME underlying kernel clock
+        # (Docker Desktop's Linux VM), so that comparison could never
+        # show a real drift in the first place, local-test artifact
+        # only. The real quantity A.8 asks for is CLIENT-vs-SERVER
+        # drift, measured via `chronyc tracking` on each real instance
+        # (see _chrony_tracking_offset()'s own docstring for why that's
+        # the right building block) -- not applicable to a single-host
+        # local test at all (there is no second instance here), so this
+        # stays None with the reason recorded, never a fabricated 0.0;
+        # SSHExecutor's real per-instance chronyc readings (A.5) are
+        # what populates this for real.
+        client_server_clock_drift_seconds = None
+        client_server_clock_drift_note = (
+            "single-host local test -- no second real instance to compare chronyc tracking "
+            "against; populated for real by SSHExecutor's per-instance chronyc readings (A.5/A.8)."
+        )
+
+        block_start_utc = datetime.now(timezone.utc)
+        proc = self.of.start_tls_kem_proxy(profile)
+        signer_started = self.of.start_pqc_signer_service(profile)
+        # Recorded as soon as the containers are up, BEFORE the settling
+        # loop and the negotiated-group check (both of which can still
+        # raise) -- so a failure there still leaves stop_block_proxies()
+        # with real state to tear down instead of leaking these
+        # containers (run_window() now calls start_block_proxies() INSIDE
+        # its try/finally for exactly this reason).
+        self._block_state[(installation, profile)] = {
+            "tls_kem_proxy_proc": proc,
+            "pqc_signer_started": signer_started,
+            "block_start_utc": block_start_utc,
+            "gateway_log_lines": [],
+        }
+
+        settling_results = []
+        curve_ids_seen = set()
+        settle_start = datetime.now(timezone.utc)
+        for i in range(1, 6):
+            whole_run_retries = []
+            t0 = time.monotonic()
+            try:
+                r = self.la.run_once_timed_with_retry(profile, f"settling{i}", whole_run_retries, return_calls=False)
+                ok = r.get("call_count", 0) > 0  # "verified" -- completed without exception and did real work
+                r["verified"] = ok
+                if not ok:
+                    raise RuntimeError(f"settling run {i} completed but call_count={r.get('call_count')} -- not verified")
+            except Exception as e:
+                raise RuntimeError(f"settling run {i}/5 failed ({type(e).__name__}: {e}) -- aborting block") from e
+            print(f"    settling run {i}/5: {time.monotonic() - t0:.3f}s (saved, verified)")
+            settling_results.append(r)
+        settle_end = datetime.now(timezone.utc)
+
+        # B.12: negotiated-group check -- now a correlated, per-channel
+        # check (verify_negotiated_groups(), module-level above) instead
+        # of the old flat "all curveIDs equal" comparison that produced
+        # a false positive on classic ({"CurveP256", "CurveP384"} is
+        # NOT a failure -- it's the client channel's P384 plus the
+        # internal AS->RS carve-out's P256, two different, both-correct
+        # channels, v7 Decision 15). This now ABORTS the block on any
+        # real problem (client channel wrong curve, internal channel
+        # drifted off P256, or an unpaired carve-out) -- the loose
+        # "WARN on any mix" compromise from the prior session is
+        # superseded by this turn's exact spec, not kept alongside it.
+        log_r = subprocess.run(
+            ["docker", "logs", "-t", "--since", settle_start.isoformat(), "--until", settle_end.isoformat(),
+             self.of.GATEWAY_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+        gateway_log_text = log_r.stdout + log_r.stderr
+        verification = verify_negotiated_groups(gateway_log_text, _CLIENT_EXPECTED_CURVE[profile])
+        print(f"  [{installation}/{profile}] settling: client curves={verification['client_curves']}, "
+              f"internal curves={verification['internal_curves']}")
+        if not verification["ok"]:
+            raise RuntimeError(
+                f"[{installation}/{profile}] settling: negotiated-group verification FAILED (B.12):\n  "
+                + "\n  ".join(verification["problems"])
+            )
+        curve_ids_seen = set(verification["client_curves"]) | set(verification["internal_curves"])
+
+        # A.1: window folded into every settling/gateway-log filename --
+        # these used to be shared across all 3 windows of a campaign,
+        # so window 2's settling run silently overwrote window 1's.
+        # Verified by test_window_no_overwrite.py (item A.1's own test).
+        meta_dir = DATA_ROOT / "v8" / "latency" / "_campaign-control" / "windows" / installation
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        for i, r in enumerate(settling_results, start=1):
+            (meta_dir / f"settling_{profile}_window{window:02d}_run{i}.json").write_text(json.dumps(r, indent=2))
+        (meta_dir / f"settling_{profile}_window{window:02d}_meta.json").write_text(json.dumps({
+            "client_server_clock_drift_seconds": client_server_clock_drift_seconds,
+            "client_server_clock_drift_note": client_server_clock_drift_note,
+            "negotiated_curve_ids": sorted(curve_ids_seen),
+            "negotiated_group_verification": verification,
+        }, indent=2))
+
+    def stop_block_proxies(self, installation, profile, scenarios, window):
+        state = self._block_state.pop((installation, profile), None)
+        if state is None:
+            return
+        block_end_utc = datetime.now(timezone.utc)
+        # Decision 62: ONE continuous raw capture for the whole block,
+        # not a fresh `docker logs` call per execution -- saved as-is;
+        # per-run slices are DERIVED from this by _slice_gateway_log(),
+        # not captured live.
+        log_r = subprocess.run(
+            ["docker", "logs", "-t", "--since", state["block_start_utc"].isoformat(),
+             "--until", block_end_utc.isoformat(), self.of.GATEWAY_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+        meta_dir = DATA_ROOT / "v8" / "latency" / "_campaign-control" / "windows" / installation
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        # A.1: window folded in -- see start_block_proxies()'s matching note.
+        block_log_path = meta_dir / f"gateway_block_{profile}_window{window:02d}.log"
+        block_log_path.write_text(log_r.stdout + log_r.stderr)
+        state["block_log_path"] = block_log_path
+
+        self.of.stop_pqc_signer_service(state["pqc_signer_started"])
+        self.of.stop_tls_kem_proxy(state["tls_kem_proxy_proc"])
+        self._last_block_log = block_log_path  # so run_one_execution's slicing (called before stop) still has a path to fall back to post-hoc, if ever needed
+
+    def run_warmup(self, installation, scenario, profile, window, scenario_path):
+        """A.2: the warmup itself now also verifies the negotiated
+        key-exchange group (B.12's correlated check) over its own time
+        window -- not just the 5 settling runs. A mismatch here means
+        the profile switch "succeeded" by the settling check but this
+        scenario's own client-facing connection still negotiated the
+        wrong curve (e.g. a stale client-side TLS session reusing an
+        old group) -- aborts before any of the block's real runs are
+        spent on a broken warmup."""
+        whole_run_retries = []
+        since_dt = datetime.now(timezone.utc)
+        result = self.la.run_once_timed_with_retry(profile, "warmup", whole_run_retries, return_calls=False)
+        until_dt = datetime.now(timezone.utc)
+        result["whole_run_retries"] = whole_run_retries
+
+        gateway_log_text = self._slice_gateway_log_live(since_dt, until_dt)
+        verification = verify_negotiated_groups(gateway_log_text, _CLIENT_EXPECTED_CURVE[profile])
+        result["negotiated_group_verification"] = verification
+        if not verification["ok"]:
+            raise RuntimeError(
+                f"[{installation}/{scenario}/{profile}/w{window}] warmup: negotiated-group verification "
+                f"FAILED (A.2/B.12):\n  " + "\n  ".join(verification["problems"])
+            )
+
+        (scenario_path / f"run00_warmup_window{window:02d}.json").write_text(
+            json.dumps(result, indent=2)
+        )
+
+    def _slice_gateway_log_live(self, since_dt, until_dt, margin_seconds=2):
+        """Decision 62: derives a per-run slice from a FRESH `docker
+        logs --since/--until` call widened by a margin -- used here
+        because the continuous block-level file (stop_block_proxies)
+        isn't finalized until the block ends, so a per-run artifact
+        needed during the block itself has to re-query the running
+        container's own log buffer, not read a file that doesn't exist
+        yet. This still reads the gateway's own cumulative log (nothing
+        is captured freshly PER RUN in the tcpdump sense) -- the
+        "continuous capture, derived slices" principle is about not
+        spinning up a NEW capture mechanism per run, which this
+        doesn't."""
+        since_m = since_dt - timedelta(seconds=margin_seconds)
+        until_m = until_dt + timedelta(seconds=margin_seconds)
+        r = subprocess.run(
+            ["docker", "logs", "-t", "--since", since_m.isoformat(), "--until", until_m.isoformat(),
+             self.of.GATEWAY_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+        return r.stdout + r.stderr
+
+    def _try_tcpdump(self, label, out_path, interface=None):
+        """Decision 63: explicit interface (never "any"), port-443
+        filter, liveness + file-growth check after a short grace period,
+        kernel-dropped-packet count captured from tcpdump's own summary
+        line. Default behavior is to ABORT THE BLOCK loudly if capture
+        can't start -- the old best-effort skip only happens now with
+        self.allow_tcpdump_skip explicitly set, and that fact is
+        recorded in the run's own JSON, never silent.
+
+        A.7: `interface=None` (the default, replacing the old hardcoded
+        "eth0" literal callers used to pass in) auto-detects the
+        default-route interface via `_default_route_interface()`
+        (module-level, /proc/net/route-based). Detection failing counts
+        as the SAME class of problem as tcpdump itself being missing --
+        abort unless allow_tcpdump_skip. The resolved interface name is
+        returned in the result dict so the caller can record it in the
+        run's own JSON instead of assuming it."""
+        if interface is None:
+            interface = _default_route_interface()
+            if interface is None:
+                if not self.allow_tcpdump_skip:
+                    raise RuntimeError(
+                        f"[{label}] could not detect a default-route interface (/proc/net/route) and "
+                        f"allow_tcpdump_skip is not set -- aborting the block loudly (A.7/Decision 63)."
+                    )
+                print(f"    [{label}] could not detect a default-route interface -- SKIPPING pcap capture "
+                      f"(allow_tcpdump_skip explicitly set).", file=sys.stderr)
+                return {"process": None, "skipped": True, "skip_reason": "no default-route interface detected",
+                        "interface": None}
+
+        if subprocess.run(["which", "tcpdump"], capture_output=True).returncode != 0:
+            if not self.allow_tcpdump_skip:
+                raise RuntimeError(
+                    f"[{label}] tcpdump not available and allow_tcpdump_skip is not set -- "
+                    f"aborting the block loudly (Decision 63). Pass allow_tcpdump_skip=True "
+                    f"explicitly to permit running without pcap capture."
+                )
+            print(f"    [{label}] tcpdump not available -- SKIPPING pcap capture "
+                  f"(allow_tcpdump_skip explicitly set).", file=sys.stderr)
+            return {"process": None, "skipped": True, "skip_reason": "tcpdump not installed", "interface": interface}
+
+        proc = subprocess.Popen(
+            ["sudo", "tcpdump", "-i", interface, "-s", "128", "port", "443", "-w", str(out_path)],
+            stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            msg = f"[{label}] tcpdump exited immediately (code {proc.returncode}) -- capture never started."
+            if not self.allow_tcpdump_skip:
+                raise RuntimeError(msg + " Aborting the block loudly (Decision 63).")
+            print(f"    {msg} SKIPPING (allow_tcpdump_skip explicitly set).", file=sys.stderr)
+            return {"process": None, "skipped": True, "skip_reason": msg, "interface": interface}
+        time.sleep(1.0)
+        grew = out_path.exists() and out_path.stat().st_size > 0
+        if not grew:
+            proc.terminate()
+            msg = f"[{label}] tcpdump process is alive but {out_path} isn't growing -- capture is not actually working."
+            if not self.allow_tcpdump_skip:
+                raise RuntimeError(msg + " Aborting the block loudly (Decision 63).")
+            print(f"    {msg} SKIPPING (allow_tcpdump_skip explicitly set).", file=sys.stderr)
+            return {"process": None, "skipped": True, "skip_reason": msg, "interface": interface}
+        return {"process": proc, "skipped": False, "skip_reason": None, "interface": interface}
+
+    def run_one_execution(self, installation, scenario, profile, window, run_index, scenario_path):
+        lock = _SERVER_LOCKS[installation]
+        if not lock.acquire(blocking=False):
+            raise RuntimeError(
+                f"OVERLAP DETECTED: another execution is already running on server {installation} -- "
+                f"refusing to start a second one concurrently (Decision 60's guarantee)."
+            )
+        try:
+            label = f"run{run_index:02d}"
+            server_dir = scenario_path / "server"
+            client_dir = scenario_path / "client"
+
+            server_pcap = server_dir / f"{label}.pcap"
+            client_pcap = client_dir / f"{label}.pcap"
+            # A.7: interface=None -> auto-detected from /proc/net/route,
+            # never the old hardcoded "eth0" literal.
+            server_tcpdump = self._try_tcpdump(f"{installation}/server", server_pcap)
+            client_tcpdump = self._try_tcpdump(f"{installation}/client", client_pcap)
+
+            # A.9: periodic sampling throughout the execution (not just
+            # 3 discrete before/during/after points), /proc/meminfo
+            # included alongside /proc/stat -- see _PeriodicSampler's
+            # own docstring.
+            sampler = _PeriodicSampler(interval_seconds=1.0)
+            sampler.start()
+            since_dt = datetime.now(timezone.utc)
+
+            whole_run_retries = []
+            result = self.la.run_once_timed_with_retry(profile, label, whole_run_retries, return_calls=True)
+            result["whole_run_retries"] = whole_run_retries
+            result["retried"] = bool(result.get("retries"))
+
+            until_dt = datetime.now(timezone.utc)
+            cpu_mem_samples = sampler.stop()
+            gateway_log_slice = self._slice_gateway_log_live(since_dt, until_dt)
+
+            dropped_packets = {}
+            for side, tcpdump_info, pcap_path, gz_path in (
+                ("server", server_tcpdump, server_pcap, server_dir / f"{label}.pcap.gz"),
+                ("client", client_tcpdump, client_pcap, client_dir / f"{label}.pcap.gz"),
+            ):
+                proc = tcpdump_info["process"]
+                if proc is not None:
+                    proc.terminate()
+                    try:
+                        _, stderr_text = proc.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        stderr_text = ""
+                    m = re.search(r"(\d+) packets dropped by kernel", stderr_text or "")
+                    dropped_packets[side] = int(m.group(1)) if m else None
+                    if pcap_path.exists():
+                        with open(pcap_path, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
+                            f_out.write(f_in.read())
+                        pcap_path.unlink()
+                else:
+                    dropped_packets[side] = None
+
+            calls = result.pop("calls", [])
+            with open(scenario_path / "runs" / f"{label}.calls.jsonl", "w") as f:
+                for call in calls:
+                    f.write(json.dumps(call) + "\n")
+
+            (server_dir / f"{label}_gateway.log").write_text(gateway_log_slice)
+            # A.9: one JSON object per sample, one per line -- jsonl, not
+            # a single before/during/after object -- /proc/stat AND
+            # /proc/meminfo in every sample (_sample_cpu_mem_steal()).
+            cpu_jsonl_text = "".join(json.dumps(s) + "\n" for s in cpu_mem_samples)
+            (server_dir / f"{label}_cpu.jsonl").write_text(cpu_jsonl_text)
+            (client_dir / f"{label}_cpu.jsonl").write_text(
+                cpu_jsonl_text  # same machine as server in the local test; a real remote
+                                 # client samples its own /proc/stat+/proc/meminfo independently
+            )
+            (client_dir / f"{label}_ping.json").write_text(
+                json.dumps({"note": "reference ping: not applicable in the local test (no real network hop)"}) + "\n"
+            )
+            result["tcpdump_skipped"] = {"server": server_tcpdump["skipped"], "client": client_tcpdump["skipped"]}
+            result["dropped_packets"] = dropped_packets
+            # A.7: the detected interface, recorded instead of assumed.
+            result["network_interface"] = {"server": server_tcpdump.get("interface"),
+                                            "client": client_tcpdump.get("interface")}
+
+            return result
+        finally:
+            lock.release()
 
 
-def run_window(installation, window, seed):
+def run_warmup(executor, installation, scenario, profile, window, scenario_path):
+    """latency_automation.py's OWN single-warmup-run convention (its
+    `run00_warmup.json`, one discarded flow before the counted runs) --
+    reused as-is via the executor, once per scenario per block. NOT the
+    same thing as Decision 4's separate 5-flow container-settling
+    protocol, which happens when switch_crypto_profile.py recreates
+    containers at profile-switch time -- that is a server-side,
+    profile-switch-time concern this orchestrator does not build yet
+    (pre_block_checks() is the natural home for it once it exists;
+    flagged here explicitly so the two are never conflated). Written to
+    its own file, never mixed into runs/'s numbering."""
+    executor.run_warmup(installation, scenario, profile, window, scenario_path)
+
+
+def start_block_proxies(executor, installation, profile, scenarios, window):
+    executor.start_block_proxies(installation, profile, scenarios, window)
+
+
+def stop_block_proxies(executor, installation, profile, scenarios, window):
+    executor.stop_block_proxies(installation, profile, scenarios, window)
+
+
+def run_one_execution(executor, installation, scenario, profile, window, run_index, scenario_path):
+    """Delegates to the executor (Decision 60) -- LocalExecutor (real,
+    in-process, reuses latency_automation.py's run_once_timed_with_retry()
+    directly) for the local test, SSHExecutor (not implemented) for real
+    AWS. Never reimplements T_fluxo measurement itself."""
+    return executor.run_one_execution(installation, scenario, profile, window, run_index, scenario_path)
+
+
+def run_window(executor, installation, window, seed):
     rng = random.Random(seed)
     profile_order = PROFILES[:]
     rng.shuffle(profile_order)
@@ -291,6 +1271,24 @@ def run_window(installation, window, seed):
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
     }, indent=2))
 
+    # A.2: block order, confirmed/fixed this turn --
+    #   (1) switch profile + bring up proxies (start_block_proxies,
+    #       which ALSO runs the 5 settling executions and the
+    #       negotiated-group check internally -- Decision 62),
+    #   (2) per-scenario warmup (once this block's proxies are actually
+    #       up and switched to the right profile -- the OLD code ran
+    #       warmup BEFORE start_block_proxies, against whatever profile
+    #       the client proxy happened to still be running from the
+    #       PREVIOUS block; a real, silent bug, not a style issue --
+    #       fixed here, not just confirmed),
+    #   (3) round-robin.
+    # A.4: real mode must abort the whole process on NotImplementedError,
+    # not swallow it into a clean per-window `return` that exits 0 --
+    # none of the three stages below catch it any more; it propagates
+    # out of run_window(), out of main(), to the interpreter's own
+    # uncaught-exception handler (nonzero exit, traceback on stderr).
+    # --dry-run never raises it in the first place (SSHExecutor._run_or_print
+    # only raises when dry_run=False), so dry-run runs are unaffected.
     for profile in profile_order:
         checks = pre_block_checks(installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
@@ -303,30 +1301,31 @@ def run_window(installation, window, seed):
             (scenario_path / "client").mkdir(parents=True, exist_ok=True)
             scenario_paths[scenario] = scenario_path
 
-            # Decision 56: warmup still happens once per scenario per
-            # block, but upfront now -- before round-robin starts, not
-            # interleaved into it.
-            if not warmup_done(scenario_path, window):
-                try:
-                    run_warmup(installation, scenario, profile, window)
-                except NotImplementedError as e:
-                    print(f"    [{installation}/{scenario}/{profile}/w{window}] warmup: {e}", file=sys.stderr)
-                    return  # stop this window cleanly -- nothing fabricated, nothing half-written
-
-        # Decision 56: every scenario's proxy for this block starts here,
-        # once, and stays up for the whole round-robin loop below -- not
-        # started/stopped per scenario the way sequential execution could.
         try:
-            start_block_proxies(installation, profile, scenarios)
-        except NotImplementedError as e:
-            print(f"    [{installation}/{profile}/w{window}] start_block_proxies: {e}", file=sys.stderr)
-            return
+            # Step 1: switch profile, bring up proxies, 5 settling runs,
+            # negotiated-group check -- all inside start_block_proxies().
+            # Inside the try/finally too (not before it): if this raises
+            # PARTWAY through (e.g. the negotiated-group check fails
+            # after the proxy/signer containers are already up),
+            # stop_block_proxies() below still runs and tears those
+            # containers down -- LocalExecutor records _block_state as
+            # soon as the containers start, before anything that can
+            # still fail, exactly so this cleanup path has something to
+            # clean up.
+            start_block_proxies(executor, installation, profile, scenarios, window)
 
-        # Round-robin: run index is the OUTER loop, scenario the inner
-        # one -- run 1 of every scenario, then run 2 of every scenario,
-        # ... (Decision 56, supersedes Decision 40's scenario-by-scenario
-        # ordering).
-        try:
+            # Step 2: per-scenario warmup, now AFTER the block's proxies
+            # are up and switched (A.2's fix) -- still once per scenario
+            # per block, still its own file, never mixed into runs/.
+            for scenario in scenarios:
+                scenario_path = scenario_paths[scenario]
+                if not warmup_done(scenario_path, window):
+                    run_warmup(executor, installation, scenario, profile, window, scenario_path)
+
+            # Step 3: round-robin -- run index is the OUTER loop,
+            # scenario the inner one -- run 1 of every scenario, then
+            # run 2 of every scenario, ... (Decision 56, supersedes
+            # Decision 40's scenario-by-scenario ordering).
             for i in range(1, RUNS_PER_WINDOW + 1):
                 for scenario in scenarios:
                     scenario_path = scenario_paths[scenario]
@@ -334,7 +1333,7 @@ def run_window(installation, window, seed):
                         print(f"    [{installation}/{scenario}/{profile}/w{window}] run {i:02d} already done -- resuming past it")
                         continue
                     started = datetime.now(timezone.utc).isoformat()
-                    result = run_one_execution(installation, scenario, profile, window, i)
+                    result = run_one_execution(executor, installation, scenario, profile, window, i, scenario_path)
                     (scenario_path / "runs" / f"run{i:02d}.json").write_text(json.dumps({
                         "started_at_utc": started,
                         "window": window,
@@ -342,22 +1341,32 @@ def run_window(installation, window, seed):
                         "client": scenario,
                         "result": result,
                     }, indent=2))
-        except NotImplementedError as e:
-            print(f"    [{installation}/{profile}/w{window}] round-robin loop: {e}", file=sys.stderr)
-            return
         finally:
             # Decision 56: torn down once, after the whole block's
             # round-robin is done (or abandoned) -- never per scenario.
-            try:
-                stop_block_proxies(installation, profile, scenarios)
-            except NotImplementedError as e:
-                print(f"    [{installation}/{profile}/w{window}] stop_block_proxies: {e}", file=sys.stderr)
+            # A.4: no NotImplementedError catch here either -- if
+            # teardown itself isn't implemented, that must abort too,
+            # not be swallowed into a print.
+            stop_block_proxies(executor, installation, profile, scenarios, window)
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true",
+                         help="Decision 62: print every SSH command SSHExecutor would run, execute nothing.")
+    args = parser.parse_args()
+
+    write_status("starting", f"dry_run={args.dry_run}")
     config = load_config()
     inventory = load_inventory()
     installations = ["sa-east-1", "us-east-1", "ap-northeast-1"]
+
+    # Decision 60/62: real campaign runs use SSHExecutor (live execution
+    # not implemented yet); the local test below constructs LocalExecutor
+    # directly and never goes through main() at all -- main() always
+    # means real AWS (or a dry-run preview of it).
+    executor = SSHExecutor(inventory, dry_run=args.dry_run)
 
     window_times = config.get("window_start_times_utc", {})
     if not window_times:
@@ -383,8 +1392,23 @@ def main():
         renew_safety_timers(inventory)  # again right before each window -- cheap, keeps a multi-day campaign safe
         seed = config.get("window_seeds", {}).get(str(window), int(time.time()))
         for installation in installations:
-            run_window(installation, window, seed)
+            write_status("running", f"window={window} installation={installation}")
+            run_window(executor, installation, window, seed)
+    write_status("completed", f"windows={WINDOWS_PER_CAMPAIGN}")
 
 
 if __name__ == "__main__":
-    main()
+    # A.4: this is the operator's ONLY safety net against a deterministic
+    # failure (e.g. SSHExecutor's own NotImplementedError, still real
+    # today) silently looking like success -- write_status() records the
+    # failure for the operator to `cat` without tailing journalctl, and
+    # `raise` (not sys.exit(0), not a bare `return`) so the process exits
+    # NONZERO either way, which is what lets systemd's Restart=on-failure
+    # + the campaign_run.service StartLimitBurst/StartLimitIntervalSec
+    # (added this turn) actually kick in instead of looking clean.
+    try:
+        with SingleInstanceLock():  # Decision 64 -- fails loudly if another instance already holds it
+            main()
+    except BaseException as e:
+        write_status("aborted", f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise

@@ -55,7 +55,16 @@ pqc_signer_started = of.start_pqc_signer_service("pqc")  # persistent ML-DSA-65 
 of.get_client_cert_paths = lambda profile: (str(of.CERTS_DIR / "client_one.crt"), str(of.CERTS_DIR / "client_one.key"))
 
 try:
-    of.set_latency(0)
+    # B.14 audit: this script assumed a local gateway container to
+    # `docker exec`/tc into -- guarded the same way opin_flow.py's own
+    # main() already is, so running this against REMOTE_GATEWAY_HOST
+    # doesn't crash trying to `docker exec` a container that only
+    # exists on this machine's local stack.
+    if of.REMOTE_GATEWAY_HOST:
+        print(f"REMOTE_GATEWAY_HOST={of.REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        of.set_latency(0)
     insurance_calls = of.run_insurance_flow("pqc")
     person_calls = of.run_person_flow("pqc")
 finally:

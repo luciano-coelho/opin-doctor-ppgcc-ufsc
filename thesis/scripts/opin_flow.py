@@ -569,8 +569,46 @@ TLS_KEM_PROXY_GO_IMAGE = "golang:1.27-rc-alpine@sha256:c5aca77a4d16cb6688dbf3cca
 # by this dict.
 TLS_KEM_PROXY_CURVE_BY_PROFILE = {"classic": "secp384r1", "pqc": "mlkem1024", "hybrid": "secp384r1mlkem1024"}
 
+# C.15: the precompiled-binary path, behind an explicit flag -- `go run .`
+# (TLS_KEM_PROXY_GO_IMAGE above) stays the default; this image is only
+# used when TLS_KEM_PROXY_USE_PRECOMPILED=1 is set (or
+# use_precompiled_binary=True is passed explicitly). Built on demand by
+# _ensure_precompiled_tls_kem_proxy_image() from
+# thesis/scripts/tls_kem_proxy/Dockerfile, which pins its OWN base image
+# by digest (same golang:1.27-rc-alpine digest as TLS_KEM_PROXY_GO_IMAGE
+# above, so both paths build from the identical toolchain).
+TLS_KEM_PROXY_PRECOMPILED_IMAGE = "mockopin/tls_kem_proxy:precompiled"
 
-def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
+
+def _ensure_precompiled_tls_kem_proxy_image() -> None:
+    """C.15: builds thesis/scripts/tls_kem_proxy/Dockerfile's image on
+    demand, once -- `docker image inspect` first, so a repeat call (every
+    settling/block start) doesn't rebuild on every single invocation. A
+    stale image (the Go source changed since the last build) is the
+    operator's own responsibility to clear with `docker rmi` -- this
+    function does not try to detect source drift, matching this
+    project's standing style of not fabricating guarantees it hasn't
+    built (Decision 60/62).
+    """
+    check = subprocess.run(
+        ["docker", "image", "inspect", TLS_KEM_PROXY_PRECOMPILED_IMAGE],
+        capture_output=True, text=True,
+    )
+    if check.returncode == 0:
+        return
+    build = subprocess.run(
+        ["docker", "build", "-t", TLS_KEM_PROXY_PRECOMPILED_IMAGE, str(TLS_KEM_PROXY_SRC_DIR)],
+        capture_output=True, text=True, timeout=300,
+    )
+    if build.returncode != 0:
+        raise RuntimeError(
+            f"TLS_KEM_PROXY_USE_PRECOMPILED=1 but building {TLS_KEM_PROXY_PRECOMPILED_IMAGE} failed:\n"
+            f"{build.stdout}\n{build.stderr}"
+        )
+
+
+def start_tls_kem_proxy(crypto_profile: str, detached: bool = False,
+                         use_precompiled_binary: bool | None = None) -> subprocess.Popen | str | None:
     """
     Starts tls_kem_proxy (thesis/scripts/tls_kem_proxy/) as a long-lived
     background container for the duration of one run, bridging the same
@@ -596,6 +634,21 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
     T_fluxo isolation baseline (thesis/results/v6/Level 1/DECISIONS.md):
     same two-hop architecture, same client cert, only the curve differs,
     so latency_automation.py can be reused completely unmodified to
+
+    `detached` (campaign_run.py's SSHExecutor, A.6): when True, runs the
+    SAME container with `-d` instead of `--rm -i`, and returns the
+    container's own name (a str) instead of a Popen handle. This exists
+    because `--rm -i`'s lifecycle is tied to the CLI process this
+    function's own Popen tracks -- fine for LocalExecutor, where one
+    long-lived Python process holds that Popen for the whole block, but
+    wrong for a real remote client instance, where each orchestrator
+    action is its own separate SSH invocation: a foreground `-i`
+    container dies the instant that SSH session closes. `-d` makes the
+    container's own lifecycle independent of any particular SSH
+    connection -- `docker stop <name>` (stop_tls_kem_proxy(), unchanged)
+    is what actually tears it down either way, matching
+    start_pqc_signer_service()'s own long-established `-d` pattern
+    below, not a new mechanism.
     separate "cost of the proxy hop existing" from "cost of the KEM group
     itself" -- mirroring how the Go-clássico handshake_bytes baseline
     already isolates the same variable for size.
@@ -619,26 +672,46 @@ def start_tls_kem_proxy(crypto_profile: str) -> subprocess.Popen | None:
     # sets), so the container can reach a remote host just as well as it
     # reaches "mtls" today.
     proxy_target = f"{REMOTE_GATEWAY_HOST}:443" if REMOTE_GATEWAY_HOST else "mtls:443"
-    proc = subprocess.Popen(
-        [
-            "docker", "run", "--rm", "-i",
-            "--name", TLS_KEM_PROXY_CONTAINER_NAME,
-            "--network", "insurance-server-lambdas_default",
-            "-p", f"127.0.0.1:{TLS_KEM_PROXY_PORT}:{TLS_KEM_PROXY_PORT}",
-            "-v", f"{TLS_KEM_PROXY_SRC_DIR}:/src",
-            "-v", f"{CERTS_DIR}:/certs:ro",
-            "-w", "/src",
-            TLS_KEM_PROXY_GO_IMAGE,
-            "go", "run", ".",
-            "-listen", f":{TLS_KEM_PROXY_PORT}",
-            "-target", proxy_target,
-            "-cert", f"/certs/{Path(crt_path).name}",
-            "-key", f"/certs/{Path(key_path).name}",
-            "-curve", curve,
-        ],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
+    run_mode_flags = ["-d"] if detached else ["--rm", "-i"]
 
+    # C.15: `go run .` (mounting source, compiling on every start) stays
+    # the default -- nothing below changes unless the flag is explicitly
+    # set. use_precompiled_binary=None reads TLS_KEM_PROXY_USE_PRECOMPILED
+    # from the environment so campaign_run.py's SSHExecutor can opt a
+    # real remote client into it without a code change there.
+    if use_precompiled_binary is None:
+        use_precompiled_binary = os.environ.get("TLS_KEM_PROXY_USE_PRECOMPILED", "") == "1"
+
+    if use_precompiled_binary:
+        _ensure_precompiled_tls_kem_proxy_image()
+        image_argv = [TLS_KEM_PROXY_PRECOMPILED_IMAGE]  # ENTRYPOINT is the binary itself -- no "go run ." needed
+        mount_argv = ["-v", f"{CERTS_DIR}:/certs:ro"]  # no /src mount -- the binary doesn't need the source
+    else:
+        image_argv = [TLS_KEM_PROXY_GO_IMAGE, "go", "run", "."]
+        mount_argv = ["-v", f"{TLS_KEM_PROXY_SRC_DIR}:/src", "-v", f"{CERTS_DIR}:/certs:ro", "-w", "/src"]
+
+    argv = [
+        "docker", "run", *run_mode_flags,
+        "--name", TLS_KEM_PROXY_CONTAINER_NAME,
+        "--network", "insurance-server-lambdas_default",
+        "-p", f"127.0.0.1:{TLS_KEM_PROXY_PORT}:{TLS_KEM_PROXY_PORT}",
+        *mount_argv,
+        *image_argv,
+        "-listen", f":{TLS_KEM_PROXY_PORT}",
+        "-target", proxy_target,
+        "-cert", f"/certs/{Path(crt_path).name}",
+        "-key", f"/certs/{Path(key_path).name}",
+        "-curve", curve,
+    ]
+
+    if detached:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(f"tls_kem_proxy (detached): docker run -d failed:\n{r.stdout}\n{r.stderr}")
+        _wait_for_tls_kem_proxy_ready_detached()
+        return TLS_KEM_PROXY_CONTAINER_NAME
+
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     _wait_for_tls_kem_proxy_ready(proc)
     return proc
 
@@ -671,7 +744,35 @@ def _wait_for_tls_kem_proxy_ready(proc: subprocess.Popen, timeout_seconds: int =
     raise RuntimeError(f"tls_kem_proxy did not answer HTTPS on port {TLS_KEM_PROXY_PORT} within {timeout_seconds}s")
 
 
-def stop_tls_kem_proxy(proc: subprocess.Popen | None) -> None:
+def _wait_for_tls_kem_proxy_ready_detached(timeout_seconds: int = 30) -> None:
+    """detached=True's own readiness check -- mirrors
+    _wait_for_pqc_signer_service_ready()'s pattern exactly (docker
+    inspect for "did the container die", a real HTTPS round trip for
+    "is it actually serving") since under -d there is no Popen to
+    proc.poll() -- the `docker run -d` CLI command itself exits
+    (successfully) the moment the container is launched, which is not
+    the same event as the container crashing."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        status = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", TLS_KEM_PROXY_CONTAINER_NAME],
+            capture_output=True, text=True,
+        )
+        if status.returncode == 0 and status.stdout.strip() != "true":
+            logs = subprocess.run(
+                ["docker", "logs", TLS_KEM_PROXY_CONTAINER_NAME],
+                capture_output=True, text=True,
+            )
+            raise RuntimeError(f"tls_kem_proxy (detached) exited early:\n{logs.stdout}{logs.stderr}")
+        try:
+            requests.get(f"https://127.0.0.1:{TLS_KEM_PROXY_PORT}/", timeout=1, verify=False)
+            return
+        except requests.exceptions.RequestException:
+            time.sleep(0.3)
+    raise RuntimeError(f"tls_kem_proxy (detached) did not answer HTTPS on port {TLS_KEM_PROXY_PORT} within {timeout_seconds}s")
+
+
+def stop_tls_kem_proxy(proc: subprocess.Popen | str | None) -> None:
     """
     `docker stop` is what actually matters -- it blocks until the container
     itself is confirmed gone (or forcibly kills it after Docker's own grace
@@ -684,6 +785,12 @@ def stop_tls_kem_proxy(proc: subprocess.Popen | None) -> None:
     this whole function's job is "make sure it's gone," not "make sure this
     specific Python handle joins," a slow-to-notice Popen isn't treated as
     a real failure -- only logged.
+
+    `proc` is a `str` (the container name, not a `--rm`'d one) when
+    start_tls_kem_proxy() was called with detached=True -- there's no
+    Popen to join in that case, and no `--rm` either, so an explicit
+    `docker rm -f` follows the stop (mirrors how both start functions
+    already clean up a stale container up front).
     """
     if proc is None:
         return
@@ -691,6 +798,9 @@ def stop_tls_kem_proxy(proc: subprocess.Popen | None) -> None:
         ["docker", "stop", TLS_KEM_PROXY_CONTAINER_NAME],
         capture_output=True, text=True, timeout=30,
     )
+    if isinstance(proc, str):
+        subprocess.run(["docker", "rm", "-f", TLS_KEM_PROXY_CONTAINER_NAME], capture_output=True, text=True)
+        return
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
@@ -1089,6 +1199,13 @@ def simulate_login(auth_url: str, cert, login_calls: list) -> None:
             if token:
                 jwts, jwt_sizes, src = [token], [len(token)], "JARM"
 
+        # Decision 61: this hop isn't independently timed (latency_ms
+        # stays folded into the top-level call's own latency, unchanged)
+        # -- so start_utc/end_utc are both stamped at the single moment
+        # this hook fires, not a real start-vs-end pair, same honesty
+        # as the pre-existing latency_ms comment. pool_label IS exact
+        # (the same session object do_call() would have used).
+        hop_observed_utc = datetime.now(timezone.utc).isoformat()
         login_calls.append({
             "endpoint": urlparse(resp.url).path or resp.url,
             "full_uri": resp.url,
@@ -1099,6 +1216,9 @@ def simulate_login(auth_url: str, cert, login_calls: list) -> None:
             "response_bytes": resp_bytes,
             "total_bytes": req_bytes + resp_bytes,
             "latency_ms": 0.0,  # not independently timed; folded into the top-level call's own latency
+            "start_utc": hop_observed_utc,
+            "end_utc": hop_observed_utc,
+            "pool_label": f"session-{id(session):x}",
             "authorization_header": None,
             "jwts": jwts,
             "jwt_sizes": jwt_sizes,
@@ -1309,11 +1429,18 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
     if host_header:
         headers["Host"] = host_header
 
+    # start_utc/end_utc (Decision 61): additive, not a replacement for the
+    # existing time.time()-based start/end above (still used for
+    # latency_ms, unchanged) -- these are real UTC wall-clock timestamps
+    # per call, for correlating a call against the gateway's own log
+    # timestamps and against pcap packet times later.
     start = time.time()
+    start_utc = datetime.now(timezone.utc).isoformat()
     response = session.request(
         method, url, cert=cert, verify=False, headers=headers, data=data, timeout=60
     )
     end = time.time()
+    end_utc = datetime.now(timezone.utc).isoformat()
 
     req_headers = dict(response.request.headers)
     req_body = response.request.body or ""
@@ -1340,6 +1467,16 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
         "response_bytes": resp_bytes,
         "total_bytes": req_bytes + resp_bytes,
         "latency_ms": (end - start) * 1000,
+        "start_utc": start_utc,
+        "end_utc": end_utc,
+        # pool_label (Decision 61): identifies WHICH requests.Session (and
+        # therefore which underlying connection pool) made this call --
+        # id() is stable for the lifetime of the session object, which is
+        # exactly the lifetime of one pool. Not a retry flag (the author
+        # explicitly excluded that this round) -- purely a grouping key,
+        # same session id recurring across calls confirms connection
+        # reuse the way this function's own docstring already describes.
+        "pool_label": f"session-{id(session):x}",
         "authorization_header": req_headers.get("Authorization"),
         "jwts": jwts,
         "jwt_sizes": [len(j) for j in jwts],

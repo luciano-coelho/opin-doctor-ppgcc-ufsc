@@ -107,7 +107,13 @@ def main():
     runs_dir = output_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-    of.set_latency(args.latency_ms)
+    # B.14 audit: same local-gateway-container assumption fix as
+    # latency_automation.py/switch_crypto_profile.py's own main()/switch().
+    if of.REMOTE_GATEWAY_HOST:
+        print(f"REMOTE_GATEWAY_HOST={of.REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        of.set_latency(args.latency_ms)
 
     values = []
     for i in range(1, args.runs + 1):

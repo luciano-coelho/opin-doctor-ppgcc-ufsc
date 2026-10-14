@@ -229,7 +229,11 @@ def switch(profile: str) -> None:
 
     print(f"  running {SETTLING_WARMUP_RUNS} discarded full-flow executions to settle "
           f"the freshly (re)started containers (Decision 4) ...")
-    of.set_latency(0)
+    if of.REMOTE_GATEWAY_HOST:
+        print(f"  REMOTE_GATEWAY_HOST={of.REMOTE_GATEWAY_HOST} -- skipping set_latency() "
+              f"(no local gateway container to tc/netem into from a remote client).")
+    else:
+        of.set_latency(0)
     proc = of.start_tls_kem_proxy(profile)  # v7: classic also goes through the proxy now (Decision 1)
     pqc_signer_started = of.start_pqc_signer_service(profile)  # persistent ML-DSA-65 signer
     try:
