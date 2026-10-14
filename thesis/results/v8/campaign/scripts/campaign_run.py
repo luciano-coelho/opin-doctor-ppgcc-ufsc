@@ -49,8 +49,7 @@ per block (unchanged count), but now upfront, before the round-robin
 loop starts, not interleaved into it. Each scenario's client-side proxy
 must stay active for the WHOLE block, not just its own contiguous
 run-span -- `start_block_proxies()`/`stop_block_proxies()` below are the
-new seams for that lifecycle (as unimplemented as `run_one_execution()`
-itself, same reasoning).
+seams for that lifecycle (implemented for both executors, Decision 60/67).
 
 Effect on total time: none -- same number of runs, same number of
 profile switches (9/window, unchanged by Decision 40's math), same
@@ -62,10 +61,11 @@ time, and the run loop itself inverts (scenario the inner loop, run
 index the outer one).
 
 Decision 60: `run_one_execution()`/`run_warmup()`/`start_block_proxies()`/
-`stop_block_proxies()` are now implemented via an Executor abstraction
-(`LocalExecutor`, real; `SSHExecutor`, not implemented yet -- see their
-own classes below). `LocalExecutor.run_one_execution()` calls
-`latency_automation.py`'s own `run_once_timed_with_retry()` directly
+`stop_block_proxies()` are implemented via an Executor abstraction
+(`LocalExecutor`, against the real local docker-compose stack;
+`SSHExecutor`, real SSH/SCP transport, against a real remote server/
+client -- see their own classes below). `LocalExecutor.run_one_execution()`
+calls `latency_automation.py`'s own `run_once_timed_with_retry()` directly
 (the monotonic clock, discarded retry-attempt time excluded, a
 whole-execution retry marked and recorded -- never reimplemented) and
 writes every artifact Decision 53's tree specifies for one execution:
@@ -75,9 +75,11 @@ reuses the same function for latency_automation.py's own single-warmup-
 run convention (not Decision 4's separate 5-flow container-settling,
 which is a different, server-side, profile-switch-time concern --
 flagged explicitly in `run_warmup()`'s own docstring so the two are
-never conflated). `SSHExecutor` (real AWS) is deliberately left
-unimplemented -- fabricating untested SSH calls would not be
-"prepared."
+never conflated). `SSHExecutor`'s live SSH execution was validated
+against a real 3-container local rehearsal (sshd, not AWS) before being
+trusted against real instances -- fabricating untested SSH calls would
+not have been "prepared"; testing them for real, once there was
+something real to test against, is.
 """
 import gzip
 import json
@@ -124,8 +126,11 @@ def write_status(state, detail=""):
         }, indent=2))
     except OSError as e:
         print(f"WARNING: could not write status file {STATUS_FILE_PATH}: {e}", file=sys.stderr)
-RUNS_PER_WINDOW = 10
-WINDOWS_PER_CAMPAIGN = 3
+# Overridable via env var for a short rehearsal schedule (item 4) --
+# the real campaign always uses the default 10/3 (30 runs/profile/
+# scenario total, Decision 53).
+RUNS_PER_WINDOW = int(os.environ.get("CAMPAIGN_RUNS_PER_WINDOW", "10"))
+WINDOWS_PER_CAMPAIGN = int(os.environ.get("CAMPAIGN_WINDOWS_PER_CAMPAIGN", "3"))
 PROFILES = ["classic", "pqc", "hybrid"]
 PROFILE_TO_EXPERIMENT_DIR = {"classic": "experiment1 - Classic", "pqc": "experiment2 - PQC", "hybrid": "experiment3 - Hybrid"}
 SAFETY_TIMER_RENEW_HOURS = 48  # Decision 49 -- must match the Terraform default
@@ -176,19 +181,28 @@ def all_server_client_ips(inventory):
     return ips
 
 
-def renew_safety_timers(inventory):
+def renew_safety_timers(inventory, ssh_port=22, ssh_key_path=None):
     """Decision 49: the orchestrator renews every server/client's
     safety-timer deadline -- the control instance is deliberately
     exempt (no timer to renew there). Called at startup and before each
     window so a multi-day campaign never trips the default 48h timer
-    while legitimately still running."""
+    while legitimately still running.
+
+    `ssh_port`/`ssh_key_path` default to the real campaign's own
+    values (22/`CAMPAIGN_KEY`) -- `main()` passes through the same
+    `CAMPAIGN_SSH_PORT`/`CAMPAIGN_SSH_KEY_PATH` overrides it gives
+    `SSHExecutor`, so this function's own SSH call (separate from
+    SSHExecutor's, since it runs before any executor's block loop)
+    doesn't fall out of sync with the rest of the real-vs-rehearsal
+    targeting."""
+    ssh_key_path = ssh_key_path or CAMPAIGN_KEY
     deadline_cmd = (
         f"sudo mkdir -p /etc/mockopin-campaign && "
         f"date -d '+{SAFETY_TIMER_RENEW_HOURS} hours' +%s | sudo tee /etc/mockopin-campaign/deadline >/dev/null"
     )
     for label, ip in all_server_client_ips(inventory):
         r = subprocess.run(
-            ["ssh", "-i", CAMPAIGN_KEY, "-o", "StrictHostKeyChecking=no",
+            ["ssh", "-i", ssh_key_path, "-p", str(ssh_port), "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
              "-o", "BatchMode=yes", f"ec2-user@{ip}", deadline_cmd],
             capture_output=True, text=True, timeout=30,
@@ -438,31 +452,42 @@ def _default_route_interface():
     return None
 
 
+def _parse_chrony_tracking_text(text):
+    """A.8: parses `chronyc tracking`'s own "System time" line --
+    positive means the host this text came from is ahead of its sync
+    reference. Pure-text parser, reused both by `_chrony_tracking_offset()`
+    (runs chronyc locally) and by `SSHExecutor.run_one_execution()`
+    (parses chronyc's output already fetched over SSH from a real
+    remote instance) -- one parser, two sources, not two
+    implementations. Returns None (never a fabricated 0.0) if `text` is
+    None/empty or doesn't match (chronyc not installed, chronyd not
+    tracking yet)."""
+    if not text:
+        return None
+    m = re.search(r"System time\s*:\s*([\d.]+)\s*seconds\s*(fast|slow)", text)
+    if not m:
+        return None
+    offset = float(m.group(1))
+    return -offset if m.group(2) == "slow" else offset
+
+
 def _chrony_tracking_offset():
     """A.8: this host's own clock offset from ITS sync reference (NTP /
-    Amazon Time Sync), per `chronyc tracking`'s "System time" line --
-    positive means this host's clock is ahead of its reference. This is
-    the correct building block for a CLIENT-vs-SERVER drift measurement
-    (each real instance reports its own offset-from-truth; the
-    difference between the two is the client/server drift -- see
-    `client_server_clock_drift_seconds` below), unlike the old
-    container-vs-host reading this replaces, which compared two clocks
-    that are never meaningfully out of sync in the first place (same
-    kernel clock, Docker containers don't have their own hardware
-    clock). Returns None (with the raw stdout available to the caller
-    for logging) if chronyc isn't installed or chronyd isn't tracking
-    anything yet -- never a fabricated 0.0."""
+    Amazon Time Sync) -- the correct building block for a CLIENT-vs-
+    SERVER drift measurement (each real instance reports its own
+    offset-from-truth; the difference between the two is the client/
+    server drift -- see `client_server_clock_drift_seconds`), unlike
+    the old container-vs-host reading this replaces, which compared
+    two clocks that are never meaningfully out of sync in the first
+    place (same kernel clock, Docker containers don't have their own
+    hardware clock). Returns None if chronyc isn't installed locally."""
     try:
         r = subprocess.run(["chronyc", "tracking"], capture_output=True, text=True, timeout=5)
     except FileNotFoundError:
         return None
     if r.returncode != 0:
         return None
-    m = re.search(r"System time\s*:\s*([\d.]+)\s*seconds\s*(fast|slow)", r.stdout)
-    if not m:
-        return None
-    offset = float(m.group(1))
-    return -offset if m.group(2) == "slow" else offset
+    return _parse_chrony_tracking_text(r.stdout)
 
 
 def _sample_cpu_mem_steal():
@@ -586,20 +611,37 @@ def pre_block_checks(installation, profile):
 _SERVER_LOCKS = {name: threading.Lock() for name in SCENARIO_ROTATION}
 
 
+SSH_TIMEOUT_SECONDS = 30
+SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
+
+
 class SSHExecutor:
     """Real-AWS executor -- control instance SSHing into the client
     (to run campaign_client_runner.py) and into the server (profile
-    switches, gateway logs, CPU/steal, tcpdump). The actual SSH
-    transport (subprocess.run(["ssh", ...])) is NOT wired here yet --
-    Decision 55's Docker-dependency audit already specifies which side
-    each command belongs on; executing it live is the next, separate
-    piece of work. What IS real here (Decision 62): command
-    CONSTRUCTION, shared by both the (not-yet-executed) live path and
-    `--dry-run`, so `--dry-run` prints the exact strings a live run
-    would use, not a guess."""
-    def __init__(self, inventory, dry_run=False):
+    switches, gateway logs, CPU/steal, tcpdump).
+
+    Real SSH/SCP transport, wired this turn: `_run_or_print()` calls
+    `subprocess.run(["ssh", ...], timeout=SSH_TIMEOUT_SECONDS)` for
+    real when `dry_run=False` -- a nonzero exit or a timeout both raise
+    `RuntimeError` (never silently swallowed), exactly matching A.4's
+    "abort loudly" requirement for the real-mode path as a whole.
+    `--dry-run` is unaffected: it still only ever prints, same command
+    construction either way (Decision 62's original point). Validated
+    against a real 3-container local rehearsal (B.11) running the real
+    orchestrator end to end, not just against SSHExecutor in
+    isolation -- see DECISIONS.md for what that rehearsal does and does
+    not cover.
+
+    `ssh_port`/`ssh_key_path` are overridable (default 22 and
+    `CAMPAIGN_KEY`, matching the real campaign's own control-instance
+    layout) so the rehearsal can point this SAME, unmodified class at
+    its own sshd containers (port 2222) without any code forking
+    between "real" and "rehearsal" paths."""
+    def __init__(self, inventory, dry_run=False, ssh_port=22, ssh_key_path=None):
         self.inventory = inventory
         self.dry_run = dry_run
+        self.ssh_port = ssh_port
+        self.ssh_key_path = ssh_key_path or CAMPAIGN_KEY
 
     def _client_ip(self, scenario_key):
         return self.inventory["clients"][scenario_key]["public_ip"]
@@ -607,7 +649,7 @@ class SSHExecutor:
     def _server_ip(self, installation):
         return self.inventory["servers"][installation]["public_ip"]
 
-    def _ssh_cmd(self, ip, remote_cmd, key="campaign_key"):
+    def _ssh_cmd(self, ip, remote_cmd):
         """A.3: `remote_cmd` is a single shell command STRING, built by
         the caller with shell syntax (&&, $(...), env-var prefixes) left
         as literal, correct shell syntax, and every VARIABLE piece
@@ -617,16 +659,93 @@ class SSHExecutor:
         joins its trailing args and runs them via the remote shell --
         no local shell is involved here, so no extra quoting layer is
         needed around `remote_cmd` itself). Returns an argv LIST, ready
-        for `subprocess.run()` with no `shell=True` on either end."""
-        return ["ssh", "-i", f"~/.ssh/{key}", "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=15", f"ec2-user@{ip}", remote_cmd]
+        for `subprocess.run()` with no `shell=True` on either end.
+
+        Uses `self.ssh_key_path` (an ABSOLUTE path, `CAMPAIGN_KEY` by
+        default) rather than a `~/.ssh/...`-relative one passed as a
+        bare argv element -- no local shell is involved to expand that
+        `~` here, and while OpenSSH's own `-i` option handling does
+        tilde-expand internally, there is no reason to depend on that
+        when an absolute path is just as correct and is what this same
+        file already assumes everywhere else (CONFIG_PATH, DATA_ROOT,
+        A.6's `/home/ec2-user/...` fix)."""
+        return ["ssh", "-i", self.ssh_key_path, "-p", str(self.ssh_port),
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", f"ec2-user@{ip}", remote_cmd]
+
+    def _scp_pull(self, ip, remote_path, local_path):
+        """Pulls one remote file back to `local_path` -- used for the
+        binary pcaps (A.5); text artifacts are read directly over SSH's
+        own stdout instead (one round trip fewer). Same real-vs-dry-run
+        split and the same exit-code/timeout handling as `_run_or_print`
+        -- not a second, separately-tested code path."""
+        cmd = ["scp", "-i", self.ssh_key_path, "-P", str(self.ssh_port),
+               "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+               "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+               f"ec2-user@{ip}:{remote_path}", str(local_path)]
+        if self.dry_run:
+            print(f"[DRY-RUN] scp pull {ip}:{remote_path} -> {local_path}: {shlex.join(cmd)}")
+            return
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=SSH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"scp pull {ip}:{remote_path} timed out after {SSH_TIMEOUT_SECONDS}s") from e
+        if r.returncode != 0:
+            raise RuntimeError(f"scp pull {ip}:{remote_path} -> {local_path} failed (exit {r.returncode}): {r.stderr}")
 
     def _run_or_print(self, label, cmd):
         if self.dry_run:
             print(f"[DRY-RUN] {label}: {shlex.join(cmd)}")
             return None
-        raise NotImplementedError(f"SSHExecutor: live execution not implemented yet (Decision 60/62) -- {label}")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=SSH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"[{label}] SSH command timed out after {SSH_TIMEOUT_SECONDS}s") from e
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"[{label}] SSH command failed (exit {r.returncode}):\n"
+                f"  cmd: {shlex.join(cmd)}\n  stdout: {r.stdout.strip()}\n  stderr: {r.stderr.strip()}"
+            )
+        return r.stdout
+
+    def _run_tolerant(self, label, cmd):
+        """For AUXILIARY measurements only (reference ping, chronyc
+        tracking) -- found live, this turn's real-mode rehearsal run:
+        `chronyc tracking` failing (chronyd not running/not synced yet)
+        went through the same `_run_or_print` as every core action and
+        aborted the WHOLE execution, which is wrong for data that's
+        supplementary (A.8's clock-drift field already tolerates
+        `None` by design -- LocalExecutor's own `_chrony_tracking_offset()`
+        returns None rather than raising). Core actions (profile
+        switch, proxy start, tcpdump start+liveness, the execution
+        itself, gateway log/CPU fetch) stay on `_run_or_print` and keep
+        aborting loudly (A.4) -- only ping/chronyc are reclassified."""
+        try:
+            return self._run_or_print(label, cmd)
+        except RuntimeError as e:
+            print(f"  WARNING: {e} -- treated as auxiliary data, continuing without it", file=sys.stderr)
+            return None
+
+    def _verify_tcpdump_started(self, ip, label, pid_path):
+        """A.6/Decision 63: a backgrounded `nohup tcpdump ... &` inside
+        `sudo setsid sh -c '...'` can fail (bad interface, tcpdump
+        missing) WITHOUT the outer SSH command itself returning
+        nonzero -- the `&` means the outer command's own exit code
+        reflects `setsid`/`sh -c` launching successfully, not whether
+        the backgrounded tcpdump is actually still alive a moment
+        later. This follow-up command is what actually catches that:
+        `test -s pidfile` (non-empty) `&& kill -0 $(cat pidfile)` (that
+        PID is alive) -- either failing makes THIS command exit
+        nonzero, which `_run_or_print` turns into a loud abort (A.4),
+        not a silently-missing capture. `sudo kill -0` (not a bare
+        `kill -0`) -- found live, this turn's real-mode rehearsal run:
+        tcpdump itself runs as root (started via `sudo setsid ...`,
+        A.6), so a signal-0 existence check from the unprivileged
+        ec2-user session this SSH command runs as fails with "Operation
+        not permitted" even when the process is alive and well; `sudo`
+        here checks the SAME thing `sudo setsid` started."""
+        check_cmd = f"sleep 1; test -s {pid_path} && sudo kill -0 $(cat {pid_path})"
+        self._run_or_print(f"{label}: verify tcpdump actually started", self._ssh_cmd(ip, check_cmd))
 
     @staticmethod
     def _env_prefix(env):
@@ -762,6 +881,50 @@ class SSHExecutor:
                 self._ssh_cmd(client_ip, remote_cmd),
             )
 
+        # Settling (wired for real this turn, mirroring LocalExecutor's
+        # own Decision 62 sequence): SETTLING_RUNS executions against
+        # the server, then the SAME correlated negotiated-group check
+        # (B.12) LocalExecutor uses, aborting the block on a real
+        # mismatch. Real HTTP traffic needs A client -- the FIRST
+        # scenario's is used; settling verifies the SERVER's negotiated
+        # group, which doesn't depend on which scenario's client
+        # happens to generate the traffic (a deliberate choice, not an
+        # oversight -- there is no "settling's own" client in the real
+        # 8-scenario topology, unlike LocalExecutor's single-host test).
+        settling_scenario = scenarios[0]
+        settling_client_ip = self._client_ip(f"{settling_scenario}@{installation}")
+        settle_start = datetime.now(timezone.utc)
+        for i in range(1, SETTLING_RUNS + 1):
+            remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_settling{i}"]
+            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            stdout = self._run_or_print(
+                f"[{installation}/{profile}/w{window}] settling run {i}/{SETTLING_RUNS}",
+                self._ssh_cmd(settling_client_ip, remote_cmd),
+            )
+            if stdout is not None:  # real mode -- dry-run has nothing to parse
+                result = json.loads(stdout)
+                if result.get("call_count", 0) <= 0:
+                    raise RuntimeError(
+                        f"[{installation}/{profile}/w{window}] settling run {i}/{SETTLING_RUNS} on "
+                        f"{settling_client_ip} completed but call_count={result.get('call_count')} -- not verified"
+                    )
+        settle_end = datetime.now(timezone.utc)
+
+        gateway_log = self._run_or_print(
+            f"[{installation}/{profile}/w{window}] fetch settling gateway log",
+            self._ssh_cmd(server_ip, f"docker logs -t --since {settle_start.isoformat()} "
+                                      f"--until {settle_end.isoformat()} insurance-server-lambdas-mtls-1"),
+        )
+        if gateway_log is not None:  # real mode
+            verification = verify_negotiated_groups(gateway_log, _CLIENT_EXPECTED_CURVE[profile])
+            print(f"  [{installation}/{profile}/w{window}] settling: client curves={verification['client_curves']}, "
+                  f"internal curves={verification['internal_curves']}")
+            if not verification["ok"]:
+                raise RuntimeError(
+                    f"[{installation}/{profile}/w{window}] settling: negotiated-group verification "
+                    f"FAILED (B.12):\n  " + "\n  ".join(verification["problems"])
+                )
+
     def stop_block_proxies(self, installation, profile, scenarios, window):
         # A.6: no Popen to join on this side (the proxy was started
         # detached, via opin_flow.start_tls_kem_proxy(..., detached=True)
@@ -780,68 +943,158 @@ class SSHExecutor:
             )
 
     def run_warmup(self, installation, scenario, profile, window, scenario_path):
+        """A.2/B.12 extended to the real path: verifies the negotiated
+        group during warmup too, same as LocalExecutor's own
+        run_warmup() -- a mismatch aborts before any of the block's
+        real runs are spent on it."""
         client_ip = self._client_ip(f"{scenario}@{installation}")
-        remote_argv = ["python3", "campaign_client_runner.py", "--label", "warmup"]
-        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': self._server_ip(installation)})} {shlex.join(remote_argv)}"
-        self._run_or_print(
+        server_ip = self._server_ip(installation)
+        since_dt = datetime.now(timezone.utc)
+        remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_warmup"]
+        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+        stdout = self._run_or_print(
             f"[{installation}/{scenario}/w{window}] warmup",
             self._ssh_cmd(client_ip, remote_cmd),
         )
+        until_dt = datetime.now(timezone.utc)
+        if stdout is None:
+            return  # dry-run
+
+        result = json.loads(stdout)
+        if result.get("call_count", 0) <= 0:
+            raise RuntimeError(f"[{installation}/{scenario}/{profile}/w{window}] warmup completed but "
+                                f"call_count={result.get('call_count')} -- not verified")
+        gateway_log = self._run_or_print(
+            f"[{installation}/{scenario}/w{window}] fetch warmup gateway log",
+            self._ssh_cmd(server_ip, f"docker logs -t --since {since_dt.isoformat()} "
+                                      f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
+        )
+        verification = verify_negotiated_groups(gateway_log, _CLIENT_EXPECTED_CURVE[profile])
+        if not verification["ok"]:
+            raise RuntimeError(
+                f"[{installation}/{scenario}/{profile}/w{window}] warmup: negotiated-group verification "
+                f"FAILED (A.2/B.12):\n  " + "\n  ".join(verification["problems"])
+            )
+        result.pop("calls", None)
+        result["negotiated_group_verification"] = verification
+        (scenario_path / f"run00_warmup_window{window:02d}.json").write_text(json.dumps(result, indent=2))
 
     def run_one_execution(self, installation, scenario, profile, window, run_index, scenario_path):
-        client_ip = self._client_ip(f"{scenario}@{installation}")
-        server_ip = self._server_ip(installation)
-        label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
+        lock = _SERVER_LOCKS[installation]
+        if not lock.acquire(blocking=False):
+            raise RuntimeError(
+                f"OVERLAP DETECTED: another execution is already running on server {installation} -- "
+                f"refusing to start a second one concurrently (Decision 60's guarantee, A.10)."
+            )
+        try:
+            client_ip = self._client_ip(f"{scenario}@{installation}")
+            server_ip = self._server_ip(installation)
+            label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
 
-        server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
-        client_tcpdump_cmd, client_pid, client_log, client_pcap = self._tcpdump_start_cmd(label, "client")
-        self._run_or_print(f"[{installation}/{scenario}] tcpdump start (server)",
-                            self._ssh_cmd(server_ip, server_tcpdump_cmd))
-        self._run_or_print(f"[{installation}/{scenario}] tcpdump start (client)",
-                            self._ssh_cmd(client_ip, client_tcpdump_cmd))
+            server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
+            client_tcpdump_cmd, client_pid, client_log, client_pcap = self._tcpdump_start_cmd(label, "client")
+            self._run_or_print(f"[{installation}/{scenario}] tcpdump start (server)",
+                                self._ssh_cmd(server_ip, server_tcpdump_cmd))
+            self._run_or_print(f"[{installation}/{scenario}] tcpdump start (client)",
+                                self._ssh_cmd(client_ip, client_tcpdump_cmd))
+            # A.6/Decision 63: a backgrounded start succeeding at the SSH
+            # level doesn't mean tcpdump itself is actually alive (bad
+            # interface, binary missing) -- this follow-up check aborts
+            # loudly if it isn't, same as LocalExecutor's own liveness
+            # check.
+            self._verify_tcpdump_started(server_ip, f"[{installation}/{scenario}] tcpdump (server)", server_pid)
+            self._verify_tcpdump_started(client_ip, f"[{installation}/{scenario}] tcpdump (client)", client_pid)
 
-        remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
-        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
-        result = self._run_or_print(
-            f"[{installation}/{scenario}] run execution {label}",
-            self._ssh_cmd(client_ip, remote_cmd),
-        )
+            since_dt = datetime.now(timezone.utc)
+            remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
+            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            stdout = self._run_or_print(
+                f"[{installation}/{scenario}] run execution {label}",
+                self._ssh_cmd(client_ip, remote_cmd),
+            )
+            until_dt = datetime.now(timezone.utc)
 
-        self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (server)",
-                            self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
-        self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (client)",
-                            self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
+            self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (server)",
+                                self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
+            self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (client)",
+                                self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
 
-        # A.5: the --dry-run/SSHExecutor remote-data surface -- gateway
-        # log, CPU/steal/mem, reference ping, chronyc tracking, and
-        # fetching calls.jsonl + the run's own JSON. Each is a real,
-        # previewable command (cat for small text files read directly
-        # over the SSH stdout pipe, scp for the binary pcaps) -- actually
-        # pulling these back still goes through _run_or_print, so in
-        # real mode it raises exactly like every other action here
-        # (Decision 60/62: no untested SSH call is faked as working).
-        self._run_or_print(f"[{installation}/{scenario}] fetch gateway log (server)",
-                            self._ssh_cmd(server_ip, "docker logs -t --since 10m insurance-server-lambdas-mtls-1"))
-        self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (server)",
-                            self._ssh_cmd(server_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
-        self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (client)",
-                            self._ssh_cmd(client_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
-        self._run_or_print(f"[{installation}/{scenario}] reference ping (client -> server)",
-                            self._ssh_cmd(client_ip, f"ping -c 10 -q {shlex.quote(server_ip)}"))
-        self._run_or_print(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
-                            self._ssh_cmd(server_ip, "chronyc tracking"))
-        self._run_or_print(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
-                            self._ssh_cmd(client_ip, "chronyc tracking"))
-        self._run_or_print(f"[{installation}/{scenario}] fetch calls.jsonl + run JSON (client stdout)",
-                            self._ssh_cmd(client_ip, f"cat /home/ec2-user/{label}.calls.jsonl /home/ec2-user/{label}.json 2>/dev/null"))
-        self._run_or_print(f"[{installation}/{scenario}] fetch detected interfaces",
-                            self._ssh_cmd(server_ip, f"cat /home/ec2-user/{label}.server.iface"))
-        self._run_or_print(f"[{installation}/{scenario}] fetch detected interfaces (client)",
-                            self._ssh_cmd(client_ip, f"cat /home/ec2-user/{label}.client.iface"))
-        self._run_or_print(f"[{installation}/{scenario}] scp pcaps back (both sides)",
-                            f"scp ... {server_pcap} / {client_pcap} -> local scenario_path (not yet wired, Decision 60/62)")
+            # A.5: the full remote-data surface -- gateway log, CPU/
+            # steal/mem, reference ping, chronyc tracking, and the
+            # detected interfaces. Real round trips now (not previews
+            # only); results are folded into the run's own JSON/files,
+            # mirroring LocalExecutor's own artifact layout exactly so
+            # campaign_pull.sh's tree doesn't need to know which
+            # executor produced them.
+            gateway_log = self._run_or_print(
+                f"[{installation}/{scenario}] fetch gateway log (server)",
+                self._ssh_cmd(server_ip, f"docker logs -t --since {since_dt.isoformat()} "
+                                          f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
+            )
+            server_cpu_mem = self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (server)",
+                                                 self._ssh_cmd(server_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
+            client_cpu_mem = self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (client)",
+                                                 self._ssh_cmd(client_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
+            ping_output = self._run_tolerant(f"[{installation}/{scenario}] reference ping (client -> server)",
+                                              self._ssh_cmd(client_ip, f"ping -c 10 -q {shlex.quote(server_ip)}"))
+            server_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
+                                                self._ssh_cmd(server_ip, "chronyc tracking"))
+            client_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
+                                                self._ssh_cmd(client_ip, "chronyc tracking"))
+            server_iface = self._run_or_print(f"[{installation}/{scenario}] fetch detected interface (server)",
+                                               self._ssh_cmd(server_ip, f"cat /home/ec2-user/{label}.server.iface"))
+            client_iface = self._run_or_print(f"[{installation}/{scenario}] fetch detected interface (client)",
+                                               self._ssh_cmd(client_ip, f"cat /home/ec2-user/{label}.client.iface"))
 
-        return result
+            if stdout is None:
+                return None  # dry-run -- nothing real happened, nothing to write
+
+            # campaign_client_runner.py's own stdout IS the complete
+            # result, "calls" included (latency_automation.py's
+            # run_once_timed(..., return_calls=True)) -- there is no
+            # separate remote calls.jsonl file to fetch; the earlier
+            # "cat .../calls.jsonl" command this turn's rehearsal
+            # exposed as pointing at a file nothing ever writes has
+            # been removed, not just left unreachable.
+            result = json.loads(stdout)
+            calls = result.pop("calls", [])
+            server_dir, client_dir = scenario_path / "server", scenario_path / "client"
+            with open(scenario_path / "runs" / f"{label}.calls.jsonl", "w") as f:
+                for call in calls:
+                    f.write(json.dumps(call) + "\n")
+            (server_dir / f"{label}_gateway.log").write_text(gateway_log or "")
+            (server_dir / f"{label}_cpu.jsonl").write_text(json.dumps({"raw_proc_stat_and_meminfo": server_cpu_mem}) + "\n")
+            (client_dir / f"{label}_cpu.jsonl").write_text(json.dumps({"raw_proc_stat_and_meminfo": client_cpu_mem}) + "\n")
+            (client_dir / f"{label}_ping.json").write_text(json.dumps({"raw_ping_output": ping_output}) + "\n")
+
+            # A.8: client-vs-server drift from each side's own chronyc
+            # tracking offset -- not a container-vs-host reading.
+            server_offset = _parse_chrony_tracking_text(server_chrony)
+            client_offset = _parse_chrony_tracking_text(client_chrony)
+            result["client_server_clock_drift_seconds"] = (
+                (client_offset - server_offset) if (server_offset is not None and client_offset is not None) else None
+            )
+            result["network_interface"] = {
+                "server": (server_iface or "").strip() or None,
+                "client": (client_iface or "").strip() or None,
+            }
+
+            # A.5: pcaps pulled back and gzipped locally, same as
+            # LocalExecutor's own convention.
+            for side, remote_pcap, local_dir in (("server", server_pcap, server_dir), ("client", client_pcap, client_dir)):
+                local_pcap = local_dir / f"{label}.pcap"
+                try:
+                    self._scp_pull(server_ip if side == "server" else client_ip, remote_pcap, local_pcap)
+                except RuntimeError as e:
+                    print(f"  WARNING: {e} -- continuing without this side's pcap", file=sys.stderr)
+                    continue
+                with open(local_pcap, "rb") as f_in, gzip.open(local_dir / f"{label}.pcap.gz", "wb") as f_out:
+                    f_out.write(f_in.read())
+                local_pcap.unlink()
+
+            return result
+        finally:
+            lock.release()
 
 
 class LocalExecutor:
@@ -1326,17 +1579,33 @@ def run_window(executor, installation, window, seed):
             # scenario the inner one -- run 1 of every scenario, then
             # run 2 of every scenario, ... (Decision 56, supersedes
             # Decision 40's scenario-by-scenario ordering).
+            #
+            # GLOBAL run numbering across the whole campaign (this
+            # turn's fix -- a real bug, not just A.1's settling/meta/
+            # gateway-log files): `i` here is 1..RUNS_PER_WINDOW,
+            # reused identically in every window. The file's own
+            # docstring says "30 runs/profile/scenario" (10/window x 3
+            # windows) -- using `i` directly as the run number/filename
+            # would make window 2's run01..run10 overwrite window 1's,
+            # exactly the class of bug A.1 fixed for the settling files,
+            # just not caught there because runs/ wasn't in scope yet.
+            # `global_run_index` is what already_done()/run_one_execution()/
+            # the run JSON's filename all use instead -- window 1 is
+            # runs 1-10, window 2 is runs 11-20, window 3 is runs 21-30.
             for i in range(1, RUNS_PER_WINDOW + 1):
+                global_run_index = (window - 1) * RUNS_PER_WINDOW + i
                 for scenario in scenarios:
                     scenario_path = scenario_paths[scenario]
-                    if already_done(scenario_path, i):
-                        print(f"    [{installation}/{scenario}/{profile}/w{window}] run {i:02d} already done -- resuming past it")
+                    if already_done(scenario_path, global_run_index):
+                        print(f"    [{installation}/{scenario}/{profile}/w{window}] run {global_run_index:02d} "
+                              f"(window-local {i:02d}) already done -- resuming past it")
                         continue
                     started = datetime.now(timezone.utc).isoformat()
-                    result = run_one_execution(executor, installation, scenario, profile, window, i, scenario_path)
-                    (scenario_path / "runs" / f"run{i:02d}.json").write_text(json.dumps({
+                    result = run_one_execution(executor, installation, scenario, profile, window, global_run_index, scenario_path)
+                    (scenario_path / "runs" / f"run{global_run_index:02d}.json").write_text(json.dumps({
                         "started_at_utc": started,
                         "window": window,
+                        "window_local_run_index": i,
                         "server": installation,
                         "client": scenario,
                         "result": result,
@@ -1360,13 +1629,21 @@ def main():
     write_status("starting", f"dry_run={args.dry_run}")
     config = load_config()
     inventory = load_inventory()
-    installations = ["sa-east-1", "us-east-1", "ap-northeast-1"]
+    # Overridable via env vars (same pattern as STATUS_FILE_PATH/
+    # CAMPAIGN_STATUS_FILE) -- defaults are the real campaign's own
+    # values; CAMPAIGN_INSTALLATIONS/SSH_PORT/SSH_KEY_PATH exist so
+    # item-4's real-mode local rehearsal (3 containers, port 2222) can
+    # run this SAME main(), unmodified, instead of a parallel
+    # reimplementation of it.
+    installations = os.environ.get("CAMPAIGN_INSTALLATIONS", "sa-east-1,us-east-1,ap-northeast-1").split(",")
+    ssh_port = int(os.environ.get("CAMPAIGN_SSH_PORT", "22"))
+    ssh_key_path = os.environ.get("CAMPAIGN_SSH_KEY_PATH", CAMPAIGN_KEY)
 
-    # Decision 60/62: real campaign runs use SSHExecutor (live execution
-    # not implemented yet); the local test below constructs LocalExecutor
-    # directly and never goes through main() at all -- main() always
-    # means real AWS (or a dry-run preview of it).
-    executor = SSHExecutor(inventory, dry_run=args.dry_run)
+    # Decision 60/67: real campaign runs use SSHExecutor (real SSH/SCP
+    # transport); LocalExecutor is only ever constructed directly by
+    # this file's own tests, never via main() -- main() always means a
+    # real remote target (or a --dry-run preview of it).
+    executor = SSHExecutor(inventory, dry_run=args.dry_run, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
 
     window_times = config.get("window_start_times_utc", {})
     if not window_times:
@@ -1383,13 +1660,13 @@ def main():
     control_dir.mkdir(parents=True, exist_ok=True)
     (control_dir / "schedule.json").write_text(json.dumps(config, indent=2))
 
-    renew_safety_timers(inventory)  # at startup, before any waiting
+    renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # at startup, before any waiting
     for window in range(1, WINDOWS_PER_CAMPAIGN + 1):
         start_time = window_times.get(str(window))
         if not start_time:
             sys.exit(f"campaign_schedule.json is missing window_start_times_utc['{window}'].")
         wait_until(start_time)
-        renew_safety_timers(inventory)  # again right before each window -- cheap, keeps a multi-day campaign safe
+        renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # again right before each window
         seed = config.get("window_seeds", {}).get(str(window), int(time.time()))
         for installation in installations:
             write_status("running", f"window={window} installation={installation}")
@@ -1406,9 +1683,21 @@ if __name__ == "__main__":
     # NONZERO either way, which is what lets systemd's Restart=on-failure
     # + the campaign_run.service StartLimitBurst/StartLimitIntervalSec
     # (added this turn) actually kick in instead of looking clean.
-    try:
-        with SingleInstanceLock():  # Decision 64 -- fails loudly if another instance already holds it
+    #
+    # SingleInstanceLock() itself is OUTSIDE the write_status try/except
+    # -- found live, this turn's real-mode rehearsal (item 4's overlap
+    # check): a SECOND process that gets refused by the lock (Decision
+    # 64's own guarantee working exactly as intended) would otherwise
+    # overwrite the FIRST, legitimately-running instance's status file
+    # with its own "aborted: already running" -- corrupting the one
+    # thing the operator relies on to monitor the run that's actually
+    # in progress. A refused second instance writes NOTHING; only a
+    # process that actually acquired the lock (and is therefore the
+    # one responsible for this campaign) gets to report its own
+    # outcome into the shared status file.
+    with SingleInstanceLock():
+        try:
             main()
-    except BaseException as e:
-        write_status("aborted", f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
-        raise
+        except BaseException as e:
+            write_status("aborted", f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            raise
