@@ -3786,3 +3786,249 @@ DESIGN, not a bug), both run live, both PASS:**
   Base image pinned by digest: unchanged from Decision 66 (same
   `golang:1.27-rc-alpine@sha256:...` the live `go run .` path already
   pins).
+
+## 68. `SSHExecutor`'s real SSH/SCP transport implemented and run end to end against the 3-container rehearsal, all 3 profiles; a second, more serious window-overwrite bug found and fixed (`runs/` itself, not just settling); three more real bugs found live; precompiled proxy validated in the full settling+execution flow; delivery/cleanup items closed
+
+Seven items this turn, in the order asked: (1) `scan_secrets.sh`
+re-confirmed before and after Decision 67's two commits, and again now
+over the full history; (2) `verify_negotiated_groups()` shown in full,
+with the forced-wrong-curve test's live output; (3) a SECOND window-
+overwrite bug found and fixed, more serious than Decision 67's own
+item A.1; (4) `SSHExecutor`'s real SSH/SCP transport implemented and
+the orchestrator run for real against the 3-container rehearsal, all
+3 profiles, with the full verification suite requested; (5) the
+precompiled proxy validated inside the full settling+execution flow,
+not just an isolated ClientHello; (6) the hand-created Docker network
+removed, compose's own clean adoption confirmed; (7) an after-pilot
+deferred-items list.
+
+**(1) Scanner.** Passed before `04e8137`/`00b7b06` (shown live in that
+turn's own transcript) and passes again now, full history, all refs:
+`RESULT: PASS -- no secrets, account ID, or author IP found`.
+
+**(2) `verify_negotiated_groups()`, shown in full** (the function
+itself is reproduced in full in this turn's own chat response, not
+re-pasted here -- `campaign_run.py`'s own module-level function,
+~85 lines, correlates by exact `remoteAddr` string match within a
+short time window, three outcomes: INTERNAL-channel curve wrong,
+CLIENT-FACING-channel curve wrong, UNPAIRED carve-out). Live test
+output, all 5 cases (`tests/test_negotiated_groups.py`): happy path
+(all 3 profiles), forced wrong CLIENT curve (all 3 profiles --
+Decision 15 item 12's own ask), forced wrong INTERNAL curve, unpaired
+carve-out, a carve-out just outside the correlation window -- all 5
+PASS.
+
+**(3) A second, more serious window-overwrite bug -- `runs/` itself,
+not just the settling/meta/gateway-log files Decision 67's A.1 fixed.**
+`run_window()`'s round-robin loop used the window-LOCAL run index `i`
+(1..`RUNS_PER_WINDOW`) directly as both the argument to
+`already_done()`/`run_one_execution()` AND the `runs/run{i:02d}.json`
+filename -- window 2's run01..run10 would have silently overwritten
+window 1's, exactly the class of bug A.1 fixed for the settling files,
+just not caught there because `runs/` itself wasn't in that test's
+scope. The file's own docstring says "30 runs/profile/scenario"
+(10/window x 3 windows) -- only true with GLOBAL numbering. Fixed:
+`global_run_index = (window - 1) * RUNS_PER_WINDOW + i`, used for
+`already_done()`, `run_one_execution()`'s `run_index` argument, and
+the JSON filename; the window-local index is still recorded inside the
+file (`window_local_run_index`) for traceability.
+**Tested live** (`tests/test_full_campaign_no_overwrite.py`): runs the
+REAL `run_window()` three times (not a narrower slice of it), full
+round-robin/warmup/settling/negotiated-group-check path, mocking only
+the genuinely remote/slow pieces (docker compose/exec/logs,
+`latency_automation`'s own flow execution, tcpdump's absence on this
+dev machine) -- confirms, for all 4 scenarios x 3 profiles (12
+combinations): exactly 30 distinct `run{NN}.json` files, `run01`'s
+content says `window=1`, `run11`'s says `window=2`, `run21`'s says
+`window=3` (content-correctness, not just a file-count match), plus
+all 63 settling/meta/gateway-log files (3 windows x 3 profiles x 7)
+present and distinct. **Reverted the fix, confirmed the test actually
+fails** (10 files per combination, not 30, content-check fails too) --
+**restored it, confirmed PASS again** -- the same prove-the-regression-
+guard-actually-guards discipline used throughout this project.
+
+**(4) `SSHExecutor`'s real SSH/SCP transport -- implemented, and run
+for real, not previewed.** `_run_or_print()` now calls
+`subprocess.run(["ssh", ...], timeout=SSH_TIMEOUT_SECONDS)` for real
+when `dry_run=False`; a nonzero exit or a timeout both raise
+`RuntimeError` (A.4's "abort loudly," now exercised for real, not just
+designed for it). New `_scp_pull()` (pcaps), `_verify_tcpdump_started()`
+(the backgrounded start's own liveness, since a `nohup ... &` inside
+`sudo setsid sh -c` can "succeed" at the SSH-exit-code level while the
+backgrounded tcpdump itself is actually dead), `_run_tolerant()`
+(ping/chronyc -- auxiliary measurements, reclassified below). The
+settling sequence (5 runs + the correlated negotiated-group check,
+B.12) is now real in `SSHExecutor.start_block_proxies()` too, not just
+`LocalExecutor`'s -- using the FIRST scenario's client to generate the
+traffic (settling verifies the SERVER's negotiated group, which
+doesn't depend on which scenario's client happens to generate it; no
+"settling's own" client exists in the real 8-scenario topology). `ssh
+-i ~/.ssh/{key}` replaced with the absolute `CAMPAIGN_KEY` (no local
+shell to tilde-expand a bare argv element). `main()`/`renew_safety_timers()`
+gained `CAMPAIGN_INSTALLATIONS`/`CAMPAIGN_SSH_PORT`/`CAMPAIGN_SSH_KEY_PATH`/
+`CAMPAIGN_RUNS_PER_WINDOW`/`CAMPAIGN_WINDOWS_PER_CAMPAIGN` env-var
+overrides (same pattern as `CAMPAIGN_STATUS_FILE`) so the rehearsal
+runs this SAME, unmodified `main()` against 1 installation/port
+2222/a short schedule instead of a parallel reimplementation of it --
+the real campaign's own defaults (22, `CAMPAIGN_KEY`, all 3
+installations, 10/3) are untouched.
+
+**Four MORE real bugs found live, this turn, running the real
+orchestrator against the rehearsal -- none visible from reading the
+code:**
+  - `sudo kill -0 $(cat pidfile)` -- tcpdump runs as root (`sudo setsid`,
+    A.6); a bare, non-sudo `kill -0` existence-check failed with
+    "Operation not permitted" even though the process was alive and
+    well. Fixed: `sudo kill -0`.
+  - Auxiliary data (reference ping, `chronyc tracking`) going through
+    the same hard-abort `_run_or_print()` as every core action meant
+    `chronyc` failing (chronyd not running on the bare rehearsal
+    containers) aborted the WHOLE execution -- wrong, since A.8's own
+    clock-drift field already tolerates `None` by design
+    (`LocalExecutor`'s own `_chrony_tracking_offset()` returns `None`
+    rather than raising). Reclassified via `_run_tolerant()`: core
+    actions (profile switch, proxy start, tcpdump start+liveness, the
+    execution itself, gateway log/CPU fetch) still abort loudly; ping/
+    chronyc now warn and continue.
+  - A SECOND process refused by `SingleInstanceLock` (working exactly
+    as designed, Decision 64) was overwriting the FIRST, legitimately-
+    running instance's status file with its own "aborted: already
+    running" -- corrupting the one thing an operator relies on to
+    monitor the campaign that's actually in progress. Fixed: moved the
+    `write_status("aborted", ...)` try/except INSIDE the
+    `with SingleInstanceLock():` block, so a refused second instance
+    writes nothing at all; only the process that actually holds the
+    lock reports its own outcome.
+  - (Documented together with Decision 67's own three rehearsal-found
+    bugs in `_tcpdump_start_cmd`'s docstring -- the full real-mode run
+    is what exercises the command for real, past what the rehearsal's
+    own driver script checked in isolation.)
+
+**Full real-mode verification suite, run against the 3-container
+rehearsal (not simulated), 3 profiles:**
+  - **Golden path**: 1 window, 2 runs/window, 4 scenarios, 3 profiles
+    (`CAMPAIGN_RUNS_PER_WINDOW=2 CAMPAIGN_WINDOWS_PER_CAMPAIGN=1
+    CAMPAIGN_INSTALLATIONS=sa-east-1 CAMPAIGN_SSH_PORT=2222`) --
+    `campaign-status.json` ends at `"state": "completed"`; settling
+    verified the correct curve for all 3 profiles over real SSH
+    (`pqc` -> `MLKEM1024`, `hybrid` -> `SecP384r1MLKEM1024`, `classic`
+    -> `CurveP384`); 36 files written (24 `run{NN}.json` + 12
+    `run00_warmup`), full `server`/`client`/`runs` tree, real `.pcap.gz`
+    pulled back via `scp` for every run.
+  - **Hash manifest** (`campaign_pull.sh`'s own core logic -- `find |
+    xargs sha256sum`, `sha256sum -c` on the pulled copy; `docker cp`
+    substituted for `rsync`, not installed on this dev machine, same
+    verification semantics): 206 files, `OK: every pulled file matches
+    its sha256` -- then ONE byte appended to one file, confirmed the
+    check actually fails (`FAILED`, exit 1) -- restored.
+  - **Resume after a real kill mid-run**: `SIGKILL -9` sent to the
+    orchestrator process after 4 runs committed; restarted -- printed
+    `run 01 (window-local 01) already done -- resuming past it` for
+    the exact run that was already on disk, completed the remaining
+    47 of 48 total runs, reached `"state": "completed"`. Confirmed
+    the pre-existing run's `started_at_utc` predates the restart (it
+    was never re-executed, not just re-named).
+  - **Instance lock**: a second real process attempt while the first
+    was running raised `RuntimeError: Another campaign_run.py is
+    already running` immediately (real `fcntl.flock`, Linux, not
+    simulated) -- and, after the status-file fix above, left the
+    first instance's status file untouched.
+  - **Abort loudly, wrong curve**: `.client_curve_override` written
+    to `CurveP521` on the rehearsal server (read by the rehearsal's
+    fake `docker logs` script) -- the WHOLE process aborted with
+    `negotiated-group verification FAILED (B.12): CLIENT-FACING
+    channel ... negotiated 'CurveP521', expected 'MLKEM1024'`,
+    recorded in `campaign-status.json` as `"state": "aborted"`.
+  - **Abort loudly, tcpdump unavailable ("sem interface" in the sense
+    of "capture can't actually happen")**: the real `tcpdump` binary
+    hidden (`mv` to a different name) on the client -- the backgrounded
+    start command still exited 0 (the `&` absorbs it), but
+    `_verify_tcpdump_started()`'s own follow-up check caught it
+    ("No such process") and aborted the whole run with a full
+    traceback, recorded in the status file. Binary restored afterward.
+
+**What this real-mode run does NOT cover** (same three items
+Decision 67's rehearsal already named, still true): real AWS
+conditions (IAM/security-group-gated SSH, instance boot, real inter-
+region latency/packet loss -- `SSH_TIMEOUT_SECONDS=30` and the
+settling-run timeouts are UNTESTED under real multi-hundred-ms RTT);
+`switch_crypto_profile.py`/`campaign_client_runner.py`'s real logic
+(stand-ins here, covered against the real local stack separately);
+multiple REAL per-scenario client instances (this run's inventory
+aliased all 4 of `sa-east-1`'s scenario keys to the SAME one rehearsal
+client container -- genuine per-scenario machine isolation was never
+exercised).
+
+**(5) Precompiled proxy validated inside the FULL settling+execution
+flow**, against the real local docker-compose stack (not just the
+isolated ClientHello capture Decision 67 already did) --
+`LocalExecutor.start_block_proxies()` (profile switch, 5 settling
+runs, correlated negotiated-group check) + one real execution via
+`latency_automation.run_once_timed_with_retry()`, classic profile, with
+`TLS_KEM_PROXY_USE_PRECOMPILED=1`: settling verified `CurveP384`
+correctly, 42 calls, **`total_bytes_exchanged = 125,485`** -- the
+EXACT same figure `go run .` produces (confirmed in the same session,
+same stack) and the long-standing baseline this project has used
+since v1. Two real, pre-existing-and-documented environmental flukes
+hit along the way, NOT caused by this change: the psql manual-
+CHECKPOINT health check correctly tripped once (`5.36s > 5.0s`
+threshold) after a `docker restart`, and one settling run hit a `502
+Bad Gateway` on its first HTTP request (both already-known, already-
+guarded-against failure modes from Decisions 4/9, not new) --
+resolved by restarting the affected container and re-running, exactly
+as their own error messages instruct. The local stack was brought up
+only for this check and brought back down afterward (`docker compose
+--profile main down`), not left running.
+(`thesis/scripts/tests/test_precompiled_binary_full_flow.py`.)
+**The campaign now uses the precompiled binary by default once wired
+into the real deployment** -- i.e., `campaign_up.sh` (not yet built,
+Decision 49/59) should set `TLS_KEM_PROXY_USE_PRECOMPILED=1` in the
+client instances' environment; `go run .` remains the code's own
+default for anyone running these scripts directly without that
+variable set (local dev, this rehearsal), per C.15's original design.
+
+**(6) Docker network cleanup.** The `insurance-server-lambdas_default`
+network had been created BY HAND in an earlier session (the local
+stack wasn't running at the time a test needed that network to
+exist) -- confirmed the local stack was stopped, removed the
+hand-created network, then brought the stack up fresh: compose created
+its own network cleanly this time, with NO "a network with name ...
+exists but was not created by compose" warning (confirmed by grepping
+the `up` output for `warning`/`network` -- only the unrelated,
+pre-existing `cs-builder-run` orphan-container warning remains, a
+leftover from a different, unrelated compose service, 2 months old,
+not touched). Stack brought back down afterward; `docker compose down`
+removed its own network along with it, same as any other compose-
+managed resource.
+
+**(7) After-pilot: what's still deferred, not glossed over.**
+  - `deliver_images.sh` (Decision 50/59) -- still not built; the
+    precompiled proxy image now exists and passes its own regression,
+    but nothing yet ships it (or the main stack's images) to a real
+    EC2 instance.
+  - `pre_block_checks()`'s `image_id` and `negotiated_group` fields
+    are still literal "NOT YET AVAILABLE" placeholders (Decision
+    50/54's image-ID pre-flight comparison, and Decision 45/51's
+    PRE-block negotiated-group check -- distinct from the POST-
+    settling check this turn made real).
+  - Real AWS launch itself: 12-instance Terraform, the flex-instance
+    launch test -- both `plan`-clean, neither applied; author must be
+    present (standing instruction).
+  - `SSH_TIMEOUT_SECONDS=30` and the settling-run retry timing are
+    untested under real inter-region RTT/packet loss -- this
+    rehearsal's 3 containers share one Docker bridge network at ~0ms.
+  - Genuine per-scenario client machine isolation (8 real scenarios
+    across 3 installations, not 4 scenario-keys aliased to one shared
+    rehearsal container) -- untested until real instances exist.
+  - `rsync` itself was never actually exercised (not installed on this
+    dev machine; `docker cp` substituted for the pull-mechanism
+    verification) -- worth confirming the OPERATOR's own machine has
+    it before relying on `campaign_pull.sh` for real.
+  - Systemd units for the client-side proxy/signer (vs. this turn's
+    `docker run -d`, which already satisfies "service, not a dying
+    foreground process") -- not built; `docker run -d` was judged
+    sufficient for A.6's own requirement, but a systemd unit would be
+    more restart-robust if ever wanted.
+  - Disk sizing at FULL SCALE (720 real executions x real-sized pcaps,
+    not this rehearsal's ~50-byte empty ones) -- Decision 54's earlier
+    estimate was not re-validated against this turn's code.

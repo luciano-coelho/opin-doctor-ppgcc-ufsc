@@ -441,22 +441,27 @@ with the author's dependencies marked):
    public-IP RTT, the ClientHello size/SNI acceptance criterion, tcpdump
    overhead, written tc/netem confirmation.
 6. ~~Implement `run_one_execution()`/`run_warmup()` for real.~~ Done —
-   `LocalExecutor` implements the full per-block sequence (profile
+   both executors implement the full per-block sequence (profile
    switch, 5 settling runs, correlated negotiated-group check,
    per-scenario warmup, round-robin, periodic CPU/mem sampling,
-   auto-detected network interface) against the real local stack
-   (Decisions 60-67). `SSHExecutor`'s command CONSTRUCTION is complete
-   and validated over a real SSH connection against a 3-container
-   `sshd` rehearsal (`campaign/scripts/tests/rehearsal_*`, Decision 67,
-   item B.11) — its LIVE execution against real AWS instances is still
-   deliberately `NotImplementedError` (no untested SSH call is faked
-   as working) until there are real instances to SSH into.
+   auto-detected network interface) for real: `LocalExecutor` against
+   the real local stack (Decisions 60-67), `SSHExecutor` with real
+   SSH/SCP transport (Decision 68), run end to end against a
+   3-container `sshd` rehearsal (`campaign/scripts/tests/rehearsal_*`)
+   covering the full folder tree, the hash manifest, resume after a
+   real kill mid-run, the instance lock, and a loud abort on a wrong
+   curve or a missing capture tool — all 3 crypto profiles. Still
+   untested: real AWS conditions (IAM/security groups, instance boot,
+   real inter-region latency/packet loss) and genuine per-scenario
+   client machine isolation — both only testable once real instances
+   exist (Decision 68's own "after-pilot" list).
 7. First real campaign execution (window 1).
 
 See `campaign/scripts/tests/` for the automated tests backing step 6
-(window-overwrite, block-order, negotiated-group correlation, the
-rehearsal, and a regression guard against new local-lab assumptions
-creeping into `thesis/scripts/*.py`) — none require AWS.
+(window-overwrite at two levels, block-order, negotiated-group
+correlation, the rehearsal and its real-mode extension, and a
+regression guard against new local-lab assumptions creeping into
+`thesis/scripts/*.py`) — none require AWS.
 
 ## Teardown / cost safety
 
