@@ -4032,3 +4032,211 @@ managed resource.
   - Disk sizing at FULL SCALE (720 real executions x real-sized pcaps,
     not this rehearsal's ~50-byte empty ones) -- Decision 54's earlier
     estimate was not re-validated against this turn's code.
+
+## 69. Pre-flight image_id/negotiated_group wired for real; `deliver_images.sh` run for real with real rsync (two more real bugs found and fixed); 4 separate per-scenario client containers confirm real isolation; `ServerAliveInterval` added and the golden path confirmed under real 325ms/2%-loss `netem`, including a genuine SSH-drop-mid-execution abort and clean resume; Terraform `enabled_client_scenarios` added and plan-tested against live AWS credentials (read-only, nothing applied)
+
+Five items this turn, in the order asked, every one run for real rather
+than reasoned about: (1) `pre_block_checks()`'s two placeholders wired
+and tested, including a real abort-on-mismatch; (2) `deliver_images.sh`
+clarified as ALREADY WRITTEN (Decision 67's own "after-pilot" list was
+wrong to call it unbuilt) and run for real with real rsync -- send,
+interrupt, resume, sha256 match, disk-space check, tarball cleanup --
+finding and fixing two more real bugs; (3) the rehearsal rebuilt with 4
+genuinely separate client containers, one per `sa-east-1` scenario,
+confirming real per-scenario isolation; (4) `ServerAliveInterval`/
+`ServerAliveCountMax` added (a real, previously-missing gap), and the
+full golden path confirmed passing under real `tc netem` 325ms delay +
+2% packet loss, including a live SSH-drop-mid-execution test that
+aborted correctly and resumed cleanly afterward; (5) a Terraform
+`enabled_client_scenarios` variable, plan-tested in all three requested
+scenarios against this project's REAL, live AWS credentials (plan
+only -- nothing ever applied, no instance ever launched, consistent
+with this turn's own opening instruction).
+
+**(1) Pre-flight checks, wired for real.** `pre_block_checks()` gained
+an `executor` parameter. For `SSHExecutor`: `image_id` now really
+`docker image inspect`s the server's loaded gateway image
+(`insurance-server-lambdas-mtls:latest` -- the one whose ID actually
+matters for crypto correctness) and compares it against
+`/home/ec2-user/delivered_images_manifest.json` (written by
+`deliver_images.sh`, see (2)) -- **a mismatch now ABORTS THE BLOCK**,
+confirmed live: with the manifest set to one fake ID and the server's
+(fake, rehearsal) image reporting a different one, the whole process
+aborted immediately with a clear message naming both IDs, before
+spending any run. A matching ID (the normal case) was ALSO confirmed
+live, every block, across all 3 profiles. `negotiated_group` now
+really calls `verify_negotiated_groups()` against a short recent
+gateway-log slice -- but only REPORTS (never aborts here): confirmed
+live that it correctly shows the PREVIOUS block's own curve as a
+"mismatch" against the upcoming profile's expected one (routine, not a
+real problem -- the real, abort-worthy check is `start_block_proxies()`'s
+own post-switch settling verification, B.12, which ran correctly right
+after, every time). For `LocalExecutor`: both fields report "N/A --
+local executor" rather than fabricating a comparison that has nothing
+real to compare against.
+
+**(2) `deliver_images.sh` -- clarified, and run for real.** It
+ALREADY EXISTS (155 lines, Decision 50/55/57) -- Decision 67's own
+after-pilot list was simply wrong to call it "not yet built"; it
+builds/verifies each image's platform, saves+gzips, checks disk space
+on the control instance BEFORE sending, sends via rsync (falling back
+to scp+split-parts if rsync is missing), verifies sha256 on the
+control instance, distributes to each server via scp, loads and
+compares image IDs across servers, and cleans up the tarball on both
+ends. Gained `MOCKOPIN_DELIVER_IMAGES_OVERRIDE`/`MOCKOPIN_CONTROL_IP_OVERRIDE`/
+`MOCKOPIN_SSH_PORT` env-var overrides (same pattern as
+`campaign_run.py`'s own) so it could be run UNMODIFIED against the
+rehearsal instead of a parallel reimplementation; also now WRITES
+`delivered_images_manifest.json` after each image's cross-server ID
+check succeeds, feeding item 1's own pre-flight check.
+**Run for real** (an "operator" container with real Docker via a
+mounted host socket + real `rsync`, against the rehearsal's server +
+one client standing in as "the real server"), using the actual
+`mockopin/tls_kem_proxy:precompiled` image (Decision 67) as the
+delivered artifact:
+  - Platform/size check, disk-space check, sha256 generation: all
+    real, all passed.
+  - **Real rsync send**: confirmed via its own progress output (not
+    inferred) -- transferred for real over the rehearsal's SSH
+    connection, not a stand-in.
+  - **Two real bugs found and fixed**, neither visible without running
+    the script for real:
+    1. `SSH_OPTS` (one shared array) used `-p PORT` for BOTH `ssh` AND
+       `scp` -- `-p` is `ssh`'s port flag but `scp`'s own "preserve
+       modification times" flag (no argument), so `scp` silently
+       tried to open a local file literally named "2222"
+       ("stat local '2222': No such file or directory"). This had
+       always been latent (port was always the AWS default, 22,
+       before this turn introduced a non-default port for testing) --
+       invisible until a non-default port was ever actually used.
+       Fixed with a SEPARATE `SCP_OPTS` array using `-P` (capital).
+    2. `sha256sum "$tarball" > "$tarball.sha256"` (and the same
+       pattern for the split-parts fallback) embeds `$tarball`'s full
+       LOCAL path (under the operator's own `$WORKDIR`) as the
+       filename INSIDE the `.sha256` file. `sha256sum -c` on the
+       REMOTE side then tries to open that SAME local-looking absolute
+       path, which obviously doesn't exist there (the remote copy
+       lives at `~/basename`) -- the verification step would have
+       FAILED on every single real transfer, interrupted or not; this
+       was never an "interrupted transfer only" bug. Fixed:
+       `(cd "$(dirname "$tarball")" && sha256sum "$(basename
+       "$tarball")")` -- records just the basename, resolving
+       correctly on both ends.
+  - After both fixes: full real run completed end to end -- sha256
+    verified OK on the control instance, distributed to the stand-in
+    server, image-ID comparison OK, manifest written, tarball removed
+    on BOTH ends (confirmed by `ls` on each afterward).
+  - **Real interrupt + resume**, demonstrated separately with a 20MB
+    random-data file (a real image's exact bytes don't matter for
+    testing the TRANSPORT mechanism itself) and `rsync --bwlimit=200`
+    to make the interruption timing controllable regardless of the
+    rehearsal's own (very fast) local network: killed mid-transfer at
+    ~2.1MB/20MB (confirmed via the remote partial file's size), resumed
+    with a second `rsync --partial` call, **final sha256 identical to
+    the original** on both ends.
+  - rsync confirmed NOT present on the Amazon Linux 2023 base AMI by
+    default (`docker run --rm amazonlinux:2023 command -v rsync` finds
+    nothing) -- added to the CONTROL instance's own user-data
+    (`templates/install_rsync.sh`, `role == "control"` only; servers
+    never need it, they only receive a plain `scp`) rather than just
+    relying on the script's already-existing scp+split-parts fallback,
+    which stays in place as the safety net either way.
+
+**(3) Isolation -- 4 separate client containers, one per `sa-east-1`
+scenario.** Rebuilt the rehearsal with `client_l0`/`client_l123`/
+`client_l219`/`client_l325` as 4 genuinely distinct containers (not
+one container aliased to all 4 scenario keys, Decision 67's own
+simplification) -- `inventory.json` maps each `{scenario}@sa-east-1`
+key to its own container. Each client's own `campaign_client_runner.py`
+stand-in reports its real `hostname` in its JSON result. **Confirmed
+live**: the real golden-path run's `runs/run01.json` for each of the 4
+scenarios shows a DISTINCT hostname matching that scenario's own
+container ID exactly (`L0`->`3a7e534fd53d`, `L123`->`188150b0e8fa`,
+`L219`->`54eafad0612f`, `L325`->`5da26a38ac80`) -- genuine per-scenario
+machine isolation, not inferred from the code, read back from the
+actual executed data.
+
+**(4) SSH under real latency + packet loss; a real gap found and
+fixed; a real mid-execution drop tested.** `ServerAliveInterval=10`/
+`ServerAliveCountMax=3` were simply ABSENT from every `ssh`/`scp` call
+in `campaign_run.py` before this turn -- without them, a connection
+gone quiet under real packet loss could sit unnoticed by the SSH
+client far longer than `ConnectTimeout` governs (that option is
+initial-handshake-only). Added to `_ssh_cmd()`, `_scp_pull()`, and
+`renew_safety_timers()`'s own direct `ssh` call. **Tested under real
+degraded conditions**: `tc qdisc add dev eth0 root netem delay 325ms
+loss 2%` on the server AND all 4 clients (real `iproute2`, real
+kernel-level shaping, not simulated) -- a plain `ssh ... echo hi` that
+took ~0.1s unshaped took 4.8s shaped, confirming the impairment was
+real. The FULL golden path (4 scenarios x 3 profiles, settling +
+warmup + round-robin) **completed successfully end to end under this
+shaping** -- `ConnectTimeout=15` was never hit, `ServerAliveInterval`
+never produced a false-positive drop, every profile's settling check
+still correctly verified its curve.
+**SSH-drop-mid-execution, the real test**: disconnected `client_l123`
+from the Docker network (`docker network disconnect`) mid-campaign.
+The round-robin loop correctly finished every OTHER scenario's
+in-flight/pending runs, then hit L123's next execution and
+**aborted the whole process** (`tcpdump start (client)`: "Could not
+resolve hostname" -- then the `finally` block's own
+`stop_block_proxies()` attempt failed the SAME way, chained in the
+traceback, which is itself correct: cleanup should try and its own
+failure shouldn't be hidden). **Confirmed no `run02.json` was ever
+written for L123** -- the interrupted execution was neither marked
+done nor duplicated. Reconnected the network, restarted with the
+SAME command -- confirmed via the printed "already done -- resuming
+past it" messages that every OTHER already-completed run (L0/L123/
+L219/L325 run01, L0 run02) was correctly skipped, while L123's run02
+was genuinely RE-EXECUTED (a fresh `started_at_utc`, strictly after
+the reconnect) -- final state: `"completed"`, exactly 24 run files
+(4 scenarios x 2 runs x 3 profiles), no duplicates. Same underlying
+mechanism Decision 68 already proved for a `SIGKILL` -- this turn
+confirms it holds for a genuine network-level SSH drop too, not just
+a killed process.
+
+**(5) Terraform `enabled_client_scenarios` -- added, and plan-tested
+against REAL, live AWS credentials this session unexpectedly turned
+out to have (confirmed by `terraform plan` successfully reading real
+VPC/AMI/subnet data) -- plan only, nothing ever applied, no instance
+ever launched, per this turn's own opening instruction and the
+project's standing rule that only the author applies/launches.**
+Added `var.enabled_client_scenarios` (a set of `"{scenario}@{installation}"`
+keys, matching `inventory.json`'s own convention -- finer-grained than
+a bare per-installation toggle, needed to reproduce scenario (a)'s
+exact "only L0 and L325" subset within a single enabled installation).
+Every client/server module gained a `count` gated on this set
+(`local.sa_east_1_enabled` etc., derived via `split("@", s)[1]`);
+`gateway_ingress_cidrs` and the `inventory` output both use
+`compact()`/`merge()` to include ONLY enabled entries, never a null/
+placeholder for a disabled one. The control instance is NOT gated --
+needed regardless of which installations are active.
+  - **(a) sa-east-1 only, clients L0+L325, + control**:
+    `enabled_client_scenarios=["L0@sa-east-1","L325@sa-east-1"]` ->
+    **21 resources to add**, confirmed to be EXACTLY control + the
+    `sa-east-1` server + the 2 named clients (+ the 7 region key pairs,
+    ungated by design -- cheap, region-scoped, not scenario-specific).
+    The `inventory` output's own keys, read back from the plan JSON:
+    `servers: ['sa-east-1']`, `clients: ['L0@sa-east-1', 'L325@sa-east-1']`
+    -- exactly right, not just "probably."
+  - **(b) all installations** (the default): **45 resources to add**
+    -- unchanged from the pre-existing baseline (Decision 54's own
+    "45 resources, plan-clean" claim still holds after this refactor).
+  - **(c) "second apply of (b) over (a)'s state, confirming nothing
+    recreated"** -- done as a STRUCTURAL comparison, not a literal two-
+    step apply (which the opening instruction forbids): saved both
+    plans (`-out`), exported both as JSON (`terraform show -json`),
+    and programmatically compared every resource address appearing in
+    BOTH plans. **Result: all 21 overlapping resources have IDENTICAL
+    planned configuration between (a) and (b)** -- meaning a real
+    second apply of (b) over (a)'s state would see 0 diff on them
+    (0 to change, 0 to destroy, 0 replace), only the 24 new addresses
+    (the other 2 installations + sa-east-1's L123/L219) would be
+    added. 21 + 24 = 45, consistent with (b)'s own total. This is a
+    sound proof given the no-apply constraint: Terraform's own
+    replace-vs-update decision is a direct function of whether a
+    resource's desired config changed, and this shows it didn't, for
+    any of the 21 resources (a) and (b) share.
+  - Security-group rules and the `inventory` output were already
+    confirmed, above, to include ONLY what's enabled -- not a
+    separate claim, the SAME evidence.
+
