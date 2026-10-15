@@ -204,6 +204,7 @@ def renew_safety_timers(inventory, ssh_port=22, ssh_key_path=None):
         r = subprocess.run(
             ["ssh", "-i", ssh_key_path, "-p", str(ssh_port), "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+             "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
              "-o", "BatchMode=yes", f"ec2-user@{ip}", deadline_cmd],
             capture_output=True, text=True, timeout=30,
         )
@@ -587,17 +588,82 @@ def warmup_done(scenario_path, window):
     return (scenario_path / f"run00_warmup_window{window:02d}.json").exists()
 
 
-def pre_block_checks(installation, profile):
+# Item 1 (this turn): the gateway image -- the one whose ID actually
+# matters for the campaign's crypto correctness (auth/mockapi/
+# mongo_seed's own IDs aren't gated here; deliver_images.sh delivers
+# and checks all 4, this pre-flight is specifically about what's
+# running the TLS handshake). Matches deliver_images.sh's own IMAGES
+# list entry for mtls.
+GATEWAY_IMAGE_NAME = "insurance-server-lambdas-mtls:latest"
+DELIVERED_IMAGES_MANIFEST_PATH = Path("/home/ec2-user/delivered_images_manifest.json")
+
+
+def pre_block_checks(executor, installation, profile):
     """Decision 49/53: at the start of every profile block, verify the
-    negotiated key-exchange group, the loaded image's ID (Decision 54 --
-    image ID, not a registry digest, since image delivery is a local
-    tarball load, not a registry pull), and disk space -- before
-    spending any run on a block that's already wrong."""
+    loaded gateway image's ID against deliver_images.sh's own delivery
+    manifest, take an INFORMATIONAL look at the negotiated key-exchange
+    group, and check disk space -- before spending any run on a block
+    that's already wrong.
+
+    Item 1 (this turn) wires both the image_id and negotiated_group
+    fields for real (were literal "NOT YET AVAILABLE" placeholders):
+      - image_id: `docker image inspect` ON THE SERVER, compared
+        against `/home/ec2-user/delivered_images_manifest.json`
+        (written by deliver_images.sh after its own per-server ID
+        comparison succeeds) -- a MISMATCH ABORTS THE BLOCK (a
+        different image is running than what delivery actually
+        shipped). Missing manifest (deliver_images.sh never run, or
+        LocalExecutor) is reported, not fatal -- there's nothing to
+        compare against yet.
+      - negotiated_group: a short recent gateway-log slice through
+        `verify_negotiated_groups()` -- REPORTED ONLY, never aborts
+        here. This runs BEFORE this block's own profile switch, so
+        "wrong curve" at this point is routinely just the PREVIOUS
+        block's own correct state, not a real problem; the real,
+        abort-worthy check is `start_block_proxies()`'s own settling
+        verification (B.12), which runs AFTER the switch, for real.
+    """
     checks = {}
     df = subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
     checks["disk_space_df_output"] = df.stdout.strip()
-    checks["image_id"] = "NOT YET AVAILABLE -- Decision 50/54 not implemented"
-    checks["negotiated_group"] = "NOT YET AVAILABLE -- Decision 45/51 wiring not implemented"
+
+    if not isinstance(executor, SSHExecutor):
+        checks["image_id"] = "N/A -- local executor, no delivery manifest to compare against"
+        checks["negotiated_group"] = "N/A -- local executor; see B.12's own check inside start_block_proxies()"
+        return checks
+
+    server_ip = executor._server_ip(installation)
+    try:
+        manifest = json.loads(DELIVERED_IMAGES_MANIFEST_PATH.read_text())
+    except FileNotFoundError:
+        manifest = None
+
+    if manifest is None:
+        checks["image_id"] = f"N/A -- no delivery manifest at {DELIVERED_IMAGES_MANIFEST_PATH} (deliver_images.sh not yet run)"
+    else:
+        expected_id = manifest.get(GATEWAY_IMAGE_NAME)
+        inspect_cmd = f"docker image inspect -f {shlex.quote('{{.Id}}')} {shlex.quote(GATEWAY_IMAGE_NAME)}"
+        actual_id = executor._run_or_print(
+            f"[{installation}/{profile}] pre-flight: inspect loaded gateway image",
+            executor._ssh_cmd(server_ip, inspect_cmd),
+        )
+        actual_id = (actual_id or "").strip() or None
+        checks["image_id"] = {"expected": expected_id, "actual": actual_id}
+        if expected_id and actual_id and expected_id != actual_id:
+            raise RuntimeError(
+                f"[{installation}/{profile}] pre-flight: loaded gateway image ID ({actual_id}) does not "
+                f"match the delivery manifest ({expected_id}) -- a different image is running than what "
+                f"was actually delivered. Aborting before spending any run on it."
+            )
+
+    gateway_log = executor._run_tolerant(
+        f"[{installation}/{profile}] pre-flight: recent gateway log (informational only)",
+        executor._ssh_cmd(server_ip, "docker logs -t --since 2m insurance-server-lambdas-mtls-1"),
+    )
+    if gateway_log:
+        checks["negotiated_group"] = verify_negotiated_groups(gateway_log, _CLIENT_EXPECTED_CURVE[profile])
+    else:
+        checks["negotiated_group"] = "N/A -- no recent gateway log yet (first block, or server unreachable)"
     return checks
 
 
@@ -668,10 +734,26 @@ class SSHExecutor:
         tilde-expand internally, there is no reason to depend on that
         when an absolute path is just as correct and is what this same
         file already assumes everywhere else (CONFIG_PATH, DATA_ROOT,
-        A.6's `/home/ec2-user/...` fix)."""
+        A.6's `/home/ec2-user/...` fix).
+
+        `ServerAliveInterval=10`/`ServerAliveCountMax=3` (item 4, this
+        turn): without these, a connection that goes quiet (the remote
+        command is still running but producing no output) under real
+        packet loss/a dead path can sit unnoticed by the SSH CLIENT
+        until the underlying TCP connection itself times out, which can
+        take far longer than `ConnectTimeout` (that option only governs
+        the initial handshake, not an already-established session).
+        With them, ssh sends a keepalive every 10s and gives up after 3
+        unanswered ones (30s) -- generous next to even this project's
+        own worst-case simulated RTT (320ms) or the real inter-region
+        latency v8 measures, but short enough that a genuinely dead
+        connection is detected and reported (nonzero exit, caught by
+        `_run_or_print`) rather than hanging indefinitely."""
         return ["ssh", "-i", self.ssh_key_path, "-p", str(self.ssh_port),
                 "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", f"ec2-user@{ip}", remote_cmd]
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
+                f"ec2-user@{ip}", remote_cmd]
 
     def _scp_pull(self, ip, remote_path, local_path):
         """Pulls one remote file back to `local_path` -- used for the
@@ -682,6 +764,7 @@ class SSHExecutor:
         cmd = ["scp", "-i", self.ssh_key_path, "-P", str(self.ssh_port),
                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+               "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
                f"ec2-user@{ip}:{remote_path}", str(local_path)]
         if self.dry_run:
             print(f"[DRY-RUN] scp pull {ip}:{remote_path} -> {local_path}: {shlex.join(cmd)}")
@@ -1543,7 +1626,7 @@ def run_window(executor, installation, window, seed):
     # --dry-run never raises it in the first place (SSHExecutor._run_or_print
     # only raises when dry_run=False), so dry-run runs are unaffected.
     for profile in profile_order:
-        checks = pre_block_checks(installation, profile)
+        checks = pre_block_checks(executor, installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
 
         scenario_paths = {}

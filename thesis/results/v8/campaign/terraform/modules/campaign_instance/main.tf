@@ -63,6 +63,14 @@ locals {
     "${path.module}/templates/safety_timer.sh.tftpl",
     { self_terminate_hours = var.self_terminate_hours }
   ) : ""
+
+  # Item 2 (this turn): rsync, control instance only -- see
+  # templates/install_rsync.sh's own comment for why only control needs
+  # it and why it's not a hard dependency either way.
+  install_rsync_user_data = var.role == "control" ? file("${path.module}/templates/install_rsync.sh") : ""
+
+  user_data_parts    = compact([local.self_terminate_user_data, local.install_rsync_user_data])
+  combined_user_data = length(local.user_data_parts) > 0 ? join("\n", local.user_data_parts) : ""
 }
 
 resource "aws_instance" "this" {
@@ -88,7 +96,7 @@ resource "aws_instance" "this" {
     volume_size = 30
   }
 
-  user_data = local.self_terminate_user_data != "" ? local.self_terminate_user_data : null
+  user_data = local.combined_user_data != "" ? local.combined_user_data : null
 
   tags = {
     Name    = "mockopin-pqc-campaign-${var.name_tag}"

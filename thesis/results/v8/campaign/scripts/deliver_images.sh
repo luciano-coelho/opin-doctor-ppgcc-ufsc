@@ -34,9 +34,33 @@ IMAGES=(
   "raidiam-insurance-lambdas:latest"
   "insurance-server-lambdas-mongo_seed:latest"
 )
+# Item 2 (this turn): overridable so the real transport (rsync send/
+# interrupt/resume, disk-space check, tarball cleanup) can be rehearsed
+# against a throwaway test image/target without touching the real
+# IMAGES list or needing a real Terraform `inventory` output -- unset
+# in every real run, where the defaults above/below are what's used.
+if [ -n "${MOCKOPIN_DELIVER_IMAGES_OVERRIDE:-}" ]; then
+  IFS=' ' read -r -a IMAGES <<< "$MOCKOPIN_DELIVER_IMAGES_OVERRIDE"
+fi
 
-CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
-SSH_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)
+if [ -n "${MOCKOPIN_CONTROL_IP_OVERRIDE:-}" ]; then
+  CONTROL_IP="$MOCKOPIN_CONTROL_IP_OVERRIDE"
+else
+  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
+fi
+SSH_PORT="${MOCKOPIN_SSH_PORT:-22}"
+SSH_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)
+# Item 2 (this turn): found live, running this script for real against
+# the rehearsal -- `scp` takes its port flag as `-P` (capital), `ssh`
+# as `-p` (lowercase); sharing ONE options array between both (as this
+# script did before) means scp silently treats the port NUMBER as a
+# positional filename argument instead ("stat local '2222': No such
+# file or directory") while still parsing fine for every `ssh` call,
+# so the bug stayed invisible until a port other than 22 was ever
+# actually used. Real rsync in this same run still worked -- rsync's
+# own `-e "ssh ${SSH_OPTS[*]}"` just hands that whole string to ssh,
+# where `-p` is correct.
+SCP_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -P "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -60,7 +84,17 @@ for image in "${IMAGES[@]}"; do
   tarball="$WORKDIR/${safe_name}.tar.gz"
   echo "    docker save | gzip -> $tarball"
   docker save "$image" | gzip > "$tarball"
-  sha256sum "$tarball" > "$tarball.sha256"
+  # Item 2 (this turn): found live, running this script for real --
+  # `sha256sum "$tarball"` (the OLD line) embeds $tarball's full LOCAL
+  # path (under $WORKDIR) as the filename INSIDE the .sha256 file
+  # itself. That's exactly what `sha256sum -c` later tries to open on
+  # the REMOTE side too, after sha256sum.sh file is scp'd over there --
+  # and the remote copy lives at `~/$(basename "$tarball")`, not at the
+  # operator's own $WORKDIR path, so the check ALWAYS failed ("No such
+  # file or directory") for any transfer, not just an interrupted one.
+  # `(cd ... && sha256sum basename)` records just the basename, which
+  # resolves correctly on both ends.
+  (cd "$(dirname "$tarball")" && sha256sum "$(basename "$tarball")") > "$tarball.sha256"
   size_bytes="$(stat -c%s "$tarball" 2>/dev/null || stat -f%z "$tarball")"
   echo "    size: $size_bytes bytes"
 
@@ -83,13 +117,13 @@ for image in "${IMAGES[@]}"; do
     echo "    rsync not available on control -- falling back to split parts + scp."
     split -b 100m "$tarball" "$tarball.part."
     for part in "$tarball".part.*; do
-      sha256sum "$part" > "$part.sha256"
-      scp "${SSH_OPTS[@]}" "$part" "$part.sha256" "ec2-user@${CONTROL_IP}:~/"
+      (cd "$(dirname "$part")" && sha256sum "$(basename "$part")") > "$part.sha256"  # basename only -- same fix as above
+      scp "${SCP_OPTS[@]}" "$part" "$part.sha256" "ec2-user@${CONTROL_IP}:~/"
     done
     ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" \
       "cd ~ && for p in $(basename "$tarball").part.*.sha256; do sha256sum -c \"\$p\"; done && cat $(basename "$tarball").part.* > $(basename "$tarball") && rm -f $(basename "$tarball").part.*"
   fi
-  scp "${SSH_OPTS[@]}" "$tarball.sha256" "ec2-user@${CONTROL_IP}:~/"
+  scp "${SCP_OPTS[@]}" "$tarball.sha256" "ec2-user@${CONTROL_IP}:~/"
 
   echo "    Verifying sha256 on control instance..."
   ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" "cd ~ && sha256sum -c $(basename "$tarball").sha256"
@@ -99,24 +133,25 @@ for image in "${IMAGES[@]}"; do
   # Decision 49/55's architecture) -- AWS-internal network, far faster
   # than the operator's own upload leg above.
   echo "    Distributing to the 3 servers from control..."
-  ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" bash -s -- "$(basename "$tarball")" <<'REMOTE'
+  ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" env MOCKOPIN_SERVER_SSH_PORT="$SSH_PORT" bash -s -- "$(basename "$tarball")" <<'REMOTE'
 set -euo pipefail
 TARBALL="$1"
 python3 - "$TARBALL" <<'PY'
-import json, subprocess, sys
+import json, os, subprocess, sys
 tarball = sys.argv[1]
 raw = json.load(open("/home/ec2-user/inventory.json"))
 inv = raw["value"] if "value" in raw else raw
 campaign_key = "/home/ec2-user/.ssh/campaign_key"
+server_port = os.environ.get("MOCKOPIN_SERVER_SSH_PORT", "22")
 for name, data in inv["servers"].items():
     ip = data["public_ip"]
-    scp_cmd = ["scp", "-i", campaign_key, "-o", "StrictHostKeyChecking=no",
+    scp_cmd = ["scp", "-i", campaign_key, "-P", server_port, "-o", "StrictHostKeyChecking=no",
                "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
                f"/home/ec2-user/{tarball}", f"ec2-user@{ip}:~/"]
     print(f"  -> {name} ({ip})")
     subprocess.run(scp_cmd, check=True, timeout=600)
     load_cmd = [
-        "ssh", "-i", campaign_key, "-o", "StrictHostKeyChecking=no",
+        "ssh", "-i", campaign_key, "-p", server_port, "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
         f"ec2-user@{ip}",
         f"gunzip -c ~/{tarball} | docker load && rm -f ~/{tarball}",
@@ -126,25 +161,52 @@ PY
 REMOTE
 
   echo "    Comparing loaded image ID across the 3 servers (Decision 55 -- ID, not a registry digest)..."
-  ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" bash -s <<'REMOTE'
+  # Item 1 (this turn): `docker images -q | head -1` picked WHICHEVER
+  # image happened to be first in `docker images`'s own listing order
+  # -- fine by coincidence when a server has exactly one image loaded,
+  # silently wrong the moment it has more than one. Pinned to the
+  # EXACT image name/tag this loop is already delivering, via Python's
+  # own string formatting (no shell quoting to get wrong). Also now
+  # APPENDS to /home/ec2-user/delivered_images_manifest.json on the
+  # control instance -- item 1's own pre-flight check
+  # (campaign_run.py's pre_block_checks()) reads this file locally
+  # (it runs ON the control instance) to compare against what's
+  # ACTUALLY loaded on a server at block-start time, catching drift
+  # between delivery and a later, unexpected reload.
+  ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" env MOCKOPIN_SERVER_SSH_PORT="$SSH_PORT" bash -s -- "$image" <<'REMOTE'
 set -euo pipefail
-python3 - <<'PY'
-import json, subprocess
+IMAGE="$1"
+python3 - "$IMAGE" <<'PY'
+import json, os, subprocess, sys
+image = sys.argv[1]
 raw = json.load(open("/home/ec2-user/inventory.json"))
 inv = raw["value"] if "value" in raw else raw
 campaign_key = "/home/ec2-user/.ssh/campaign_key"
+server_port = os.environ.get("MOCKOPIN_SERVER_SSH_PORT", "22")
 ids = {}
 for name, data in inv["servers"].items():
     ip = data["public_ip"]
-    cmd = ["ssh", "-i", campaign_key, "-o", "StrictHostKeyChecking=no",
+    cmd = ["ssh", "-i", campaign_key, "-p", server_port, "-o", "StrictHostKeyChecking=no",
            "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
-           f"ec2-user@{ip}", "docker image inspect --format='{{.Id}}' $(docker images -q | head -1)"]
+           f"ec2-user@{ip}", "docker", "image", "inspect", "-f", "{{.Id}}", image]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise SystemExit(f"FATAL: 'docker image inspect {image}' failed on {name} ({ip}):\n{r.stderr}")
     ids[name] = r.stdout.strip()
-print("Image IDs per server:", ids)
+print(f"Image IDs per server for {image}:", ids)
 if len(set(ids.values())) != 1:
-    raise SystemExit(f"FATAL: image IDs differ across servers -- {ids}")
-print("OK: identical image ID on all 3 servers.")
+    raise SystemExit(f"FATAL: image IDs differ across servers for {image} -- {ids}")
+image_id = next(iter(ids.values()))
+print(f"OK: identical image ID on all 3 servers: {image_id}")
+
+manifest_path = "/home/ec2-user/delivered_images_manifest.json"
+try:
+    manifest = json.load(open(manifest_path))
+except FileNotFoundError:
+    manifest = {}
+manifest[image] = image_id
+json.dump(manifest, open(manifest_path, "w"), indent=2)
+print(f"Recorded in {manifest_path}.")
 PY
 REMOTE
 

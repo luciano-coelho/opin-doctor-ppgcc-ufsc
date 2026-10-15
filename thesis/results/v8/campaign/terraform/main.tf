@@ -335,6 +335,28 @@ data "aws_ami" "arm64_sa_east_1" {
 }
 
 # ============================================================
+# Item 5 (this turn): which installations/clients this apply actually
+# creates, derived from var.enabled_client_scenarios. The control
+# instance is NOT gated by this -- it's needed regardless of which
+# installations are active (it's where the orchestrator itself runs).
+# ============================================================
+locals {
+  enabled_installations = toset([for s in var.enabled_client_scenarios : split("@", s)[1]])
+  sa_east_1_enabled      = contains(local.enabled_installations, "sa-east-1")
+  us_east_1_enabled      = contains(local.enabled_installations, "us-east-1")
+  ap_northeast_1_enabled = contains(local.enabled_installations, "ap-northeast-1")
+
+  l0_sa_east_1_enabled      = contains(var.enabled_client_scenarios, "L0@sa-east-1")
+  l123_enabled              = contains(var.enabled_client_scenarios, "L123@sa-east-1")
+  l219_enabled              = contains(var.enabled_client_scenarios, "L219@sa-east-1")
+  l325_enabled              = contains(var.enabled_client_scenarios, "L325@sa-east-1")
+  l0_us_east_1_enabled      = contains(var.enabled_client_scenarios, "L0@us-east-1")
+  l14_enabled               = contains(var.enabled_client_scenarios, "L14@us-east-1")
+  l0_ap_northeast_1_enabled = contains(var.enabled_client_scenarios, "L0@ap-northeast-1")
+  l30_enabled               = contains(var.enabled_client_scenarios, "L30@ap-northeast-1")
+}
+
+# ============================================================
 # Control instance -- no AWS credential, no IAM role, outside the
 # self-terminate timer, SSH from the operator's own /32 only.
 # ============================================================
@@ -358,6 +380,7 @@ module "control" {
 # ============================================================
 
 module "client_l0" {
+  count                = local.l0_sa_east_1_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.sa_east_1 }
   name_tag             = "client-l0"
@@ -372,6 +395,7 @@ module "client_l0" {
 }
 
 module "client_ca_central_1_a" {
+  count                = local.l123_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.ca_central_1 }
   name_tag             = "client-ca-central-1-a"
@@ -386,6 +410,7 @@ module "client_ca_central_1_a" {
 }
 
 module "client_ca_central_1_b" {
+  count                = local.l14_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.ca_central_1 }
   name_tag             = "client-ca-central-1-b"
@@ -400,6 +425,7 @@ module "client_ca_central_1_b" {
 }
 
 module "client_eu_north_1" {
+  count                = local.l219_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.eu_north_1 }
   name_tag             = "client-eu-north-1"
@@ -414,6 +440,7 @@ module "client_eu_north_1" {
 }
 
 module "client_ap_southeast_1" {
+  count                = local.l325_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.ap_southeast_1 }
   name_tag             = "client-ap-southeast-1"
@@ -428,6 +455,7 @@ module "client_ap_southeast_1" {
 }
 
 module "client_ap_northeast_2" {
+  count                = local.l30_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.ap_northeast_2 }
   name_tag             = "client-ap-northeast-2"
@@ -446,6 +474,7 @@ module "client_ap_northeast_2" {
 # as every other campaign instance (Decision 53's explicit requirement),
 # nothing special about these two beyond their subnet choice.
 module "client_l0_us_east_1" {
+  count                = local.l0_us_east_1_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.us_east_1 }
   name_tag             = "client-l0-us-east-1"
@@ -460,6 +489,7 @@ module "client_l0_us_east_1" {
 }
 
 module "client_l0_ap_northeast_1" {
+  count                = local.l0_ap_northeast_1_enabled ? 1 : 0
   source               = "./modules/campaign_instance"
   providers            = { aws = aws.ap_northeast_1 }
   name_tag             = "client-l0-ap-northeast-1"
@@ -484,6 +514,7 @@ module "client_l0_ap_northeast_1" {
 # ============================================================
 
 module "server_sa_east_1" {
+  count         = local.sa_east_1_enabled ? 1 : 0
   source        = "./modules/campaign_instance"
   providers     = { aws = aws.sa_east_1 }
   name_tag      = "server-sa-east-1"
@@ -494,16 +525,21 @@ module "server_sa_east_1" {
   subnet_id     = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the L0 client
   key_name      = aws_key_pair.campaign_sa_east_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
-  gateway_ingress_cidrs = [
-    "${module.client_l0.private_ip}/32", # co-located -- private IP, Decision 28/41
-    "${module.client_ca_central_1_a.public_ip}/32",
-    "${module.client_eu_north_1.public_ip}/32",
-    "${module.client_ap_southeast_1.public_ip}/32",
-  ]
+  # Item 5: one rule per ENABLED client only -- a disabled scenario's
+  # module has count=0, so referencing it unconditionally would error
+  # ("index out of range"); compact() drops the disabled ones' empty
+  # strings instead.
+  gateway_ingress_cidrs = compact([
+    local.l0_sa_east_1_enabled ? "${module.client_l0[0].private_ip}/32" : "", # co-located -- private IP, Decision 28/41
+    local.l123_enabled ? "${module.client_ca_central_1_a[0].public_ip}/32" : "",
+    local.l219_enabled ? "${module.client_eu_north_1[0].public_ip}/32" : "",
+    local.l325_enabled ? "${module.client_ap_southeast_1[0].public_ip}/32" : "",
+  ])
   self_terminate_hours = var.self_terminate_hours
 }
 
 module "server_us_east_1" {
+  count         = local.us_east_1_enabled ? 1 : 0
   source        = "./modules/campaign_instance"
   providers     = { aws = aws.us_east_1 }
   name_tag      = "server-us-east-1"
@@ -514,14 +550,15 @@ module "server_us_east_1" {
   subnet_id     = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 L0 client (Decision 53)
   key_name      = aws_key_pair.campaign_us_east_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
-  gateway_ingress_cidrs = [
-    "${module.client_l0_us_east_1.private_ip}/32", # co-located -- private IP, same rule as sa-east-1's L0
-    "${module.client_ca_central_1_b.public_ip}/32",
-  ]
+  gateway_ingress_cidrs = compact([
+    local.l0_us_east_1_enabled ? "${module.client_l0_us_east_1[0].private_ip}/32" : "", # co-located -- private IP, same rule as sa-east-1's L0
+    local.l14_enabled ? "${module.client_ca_central_1_b[0].public_ip}/32" : "",
+  ])
   self_terminate_hours = var.self_terminate_hours
 }
 
 module "server_ap_northeast_1" {
+  count         = local.ap_northeast_1_enabled ? 1 : 0
   source        = "./modules/campaign_instance"
   providers     = { aws = aws.ap_northeast_1 }
   name_tag      = "server-ap-northeast-1"
@@ -532,9 +569,9 @@ module "server_ap_northeast_1" {
   subnet_id     = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 L0 client (Decision 53)
   key_name      = aws_key_pair.campaign_ap_northeast_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
-  gateway_ingress_cidrs = [
-    "${module.client_l0_ap_northeast_1.private_ip}/32", # co-located -- private IP
-    "${module.client_ap_northeast_2.public_ip}/32",
-  ]
+  gateway_ingress_cidrs = compact([
+    local.l0_ap_northeast_1_enabled ? "${module.client_l0_ap_northeast_1[0].private_ip}/32" : "", # co-located -- private IP
+    local.l30_enabled ? "${module.client_ap_northeast_2[0].public_ip}/32" : "",
+  ])
   self_terminate_hours = var.self_terminate_hours
 }
