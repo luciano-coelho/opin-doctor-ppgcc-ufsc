@@ -4586,3 +4586,193 @@ recorded in Decision 70/71 (flex-launch test, instance-type choice,
 `record_environment()` unverified against a real EC2 instance) remain
 unchanged.
 
+## 73. Flex launch test run for real (14 instances, 7 regions) -- both types pass everywhere; Luciano's choice registered: `m7i-flex.large` for all 11 server/client instances, `t4g.micro` for control; Decision 29's open question answered ONLY for the two free-tier flex types; pilot `terraform plan` shown with the chosen type, not applied
+
+Luciano present, budget alert and credit balance confirmed by him before
+anything touched AWS (standing precondition). The launch test itself
+(apply, measure, destroy) is covered here in full since it was never
+written to this log at the time it ran -- Luciano reviewed the results
+in chat first and asked for this Decision afterward, once he'd chosen.
+
+**Method, exactly as fixed by Luciano before the apply, never adjusted
+after seeing data:** 14 real instances (`m7i-flex.large` and
+`c7i-flex.large`, 7 regions -- the 3 server regions `sa-east-1`/
+`us-east-1`/`ap-northeast-1` plus the 4 client regions `ca-central-1`/
+`eu-north-1`/`ap-southeast-1`/`ap-northeast-2`), AZ pinned by ID (the 3
+server regions to the exact IDs Luciano named -- `sae1-az1`/`use1-az1`/
+`apne1-az1`; the 4 client regions to the first AZ ID, per a real
+`describe-instance-type-offerings` query, that actually offers BOTH
+flex types). Same command on every instance (confirmed both types have
+exactly 2 vCPUs first): `stress-ng --cpu 2 --timeout 20s --metrics-brief`.
+Per instance: >=3 bursts at the start (the median's dispersion
+`(max-min)/median` had to be <=5% or the whole set of >=3 bursts
+repeated, capped at 2 repeats -- still >5% after that stays
+INCONCLUSIVE, neither pass nor fail), a real wait of >=10 minutes, then
+>=3 more bursts. Thresholds, fixed before the apply and never moved:
+**steal > 5% in ANY single measurement fails the type in that region;
+throughput drop > 10% (median of the start bursts vs. median of the
+end-of-wait bursts) fails it; initial dispersion > 5% is inconclusive.**
+A 90-minute self-terminate safety net (`shutdown -h +90` +
+`instance_initiated_shutdown_behavior = "terminate"` +
+`delete_on_termination = true` made explicit) was added to every
+instance independent of the orchestrating script actually reaching its
+own `terraform destroy` -- never triggered; every instance was torn
+down in ~37 minutes, well inside the margin.
+
+**Column-sign correction, registered here because it was reported
+backwards in chat before this Decision was written:** the "throughput
+drop" figure is `(median_start - median_end) / median_start x 100`.
+**Positive is a REAL drop in throughput; negative is an INCREASE**
+(the end-of-wait median came back higher than the start -- unremarkable
+for a short CPU-bound synthetic load, not evidence of anything wrong).
+Reading negative numbers as if they were drops, which is how the first
+chat report of this table implicitly read, would have been exactly
+backwards.
+
+**Real results (all 14, final, after one single-instance re-run --
+see below):**
+
+| Region (AZ ID) | Type | Attempts | Max steal | CPU start/end | Throughput start/end (bogo-ops/s, median) | Drop (+) / Increase (-) | Verdict |
+|---|---|---|---|---|---|---|---|
+| sa-east-1 (sae1-az1) | m7i-flex.large | 2 | 0.025% | 100.0%/100.0% | 2520.3 / 2527.2 | -0.27% | PASS |
+| sa-east-1 (sae1-az1) | c7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2469.2 / 2464.9 | +0.17% | PASS |
+| us-east-1 (use1-az1) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2589.4 / 2686.4 | **-3.75%** (largest increase) | PASS |
+| us-east-1 (use1-az1) | c7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2602.8 / 2621.9 | -0.73% | PASS |
+| ap-northeast-1 (apne1-az1) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2802.5 / 2793.6 | +0.32% | PASS |
+| ap-northeast-1 (apne1-az1) | c7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2730.2 / 2704.1 | **+0.96%** (largest real drop) | PASS |
+| ca-central-1 (cac1-az1) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2457.5 / 2454.2 | +0.14% | PASS |
+| ca-central-1 (cac1-az1) | c7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2710.9 / 2691.4 | +0.72% | PASS |
+| eu-north-1 (eun1-az1) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2786.5 / 2829.3 | -1.54% | PASS |
+| eu-north-1 (eun1-az1) | c7i-flex.large | 2 | 0.000% | 100.0%/100.0% | 2934.2 / 2932.9 | +0.04% | PASS |
+| ap-southeast-1 (apse1-az1) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2679.0 / 2746.2 | -2.51% | PASS |
+| ap-southeast-1 (apse1-az1) | c7i-flex.large | 1 | 0.450% (max steal overall) | 100.0%/100.0% | 2459.2 / 2467.2 | -0.33% | PASS |
+| ap-northeast-2 (apne2-az2) | m7i-flex.large | 1 | 0.000% | 100.0%/100.0% | 2701.8 / 2743.0 | -1.53% | PASS |
+| ap-northeast-2 (apne2-az2) | c7i-flex.large | 2 | 0.000% | 100.0%/100.0% | 2909.4 / 2910.6 | -0.04% | PASS |
+
+**All 14 PASS, no exceptions, both types, every region.** Max steal
+overall: 0.450% (less than a tenth of the 5% fail threshold). Largest
+REAL drop: **0.96%** (`c7i-flex.large`, `ap-northeast-1`) -- under a
+tenth of the 10% fail threshold. Largest INCREASE: **3.75%**
+(`m7i-flex.large`, `us-east-1`). **3 of the 14 instances needed one
+repeat of the initial measurement** (dispersion > 5% on the first
+attempt): `sa-east-1`/`m7i-flex.large`, `eu-north-1`/`c7i-flex.large`,
+`ap-northeast-2`/`c7i-flex.large` -- all 3 came back under 5% on the
+second attempt, none exhausted the 2-repeat cap, none ended up
+INCONCLUSIVE.
+
+**One real infrastructure hiccup, handled, not hidden:** the first
+attempt's `eu-north-1`/`m7i-flex.large` pair hit a transient SSH timeout
+(unrelated to steal/throughput) and was re-run alone, on the SAME
+already-running instance, before teardown -- its real result (PASS) is
+what's in the table above.
+
+**Three real bugs found by actually running this, not by reading the
+code, all fixed before they cost meaningful time or money:**
+1. `aws_instance.availability_zone` takes an AZ NAME
+   ("sa-east-1a"), not an AZ ID ("sae1-az1") -- the first real apply
+   failed all 14 instances on this. Removed; `subnet_id` (already
+   filtered to the right AZ ID via a dedicated `data.aws_subnets`
+   lookup) fully determines the AZ on its own.
+2. `json.dumps()` is not shell quoting -- using it (instead of
+   `shlex.quote()`, this project's own established pattern) to build a
+   remote `python3 -c` command made the remote shell see literal `\n`
+   two-character sequences instead of real newlines. Caught testing
+   against one real instance before running the full 14-instance test.
+3. `terraform output -json <name>` (a NAMED output) returns the raw
+   value directly -- no `{"value": ...}` wrapper, unlike the no-name
+   form. Caught on the very first run attempt, before any instance was
+   touched.
+
+**Luciano's choice, registered:** **`m7i-flex.large` for all 11
+server/client instances** (both types passed everywhere, so Decision
+43's own fallback -- "use one instance type uniformly across every
+installation" -- applies cleanly); **`t4g.micro` for the control
+instance** (already the Terraform default, free-tier, never runs the
+measured workload).
+
+**Memory, confirmed against AWS's own official documentation, not just
+the API:** `docs.aws.amazon.com/ec2/latest/instancetypes/gp.html` (general
+purpose) lists `m7i-flex.large` at 2 vCPU / **8 GiB** (4:1 memory:vCPU
+ratio for the whole M7i-flex family);
+`docs.aws.amazon.com/ec2/latest/instancetypes/co.html` (compute
+optimized) lists `c7i-flex.large` at 2 vCPU / **4 GiB** (2:1 ratio) --
+both match the `describe-instance-types` figures already queried
+(8192/4096 MiB). **Compared against the local stack's own measured peak
+memory** (server-side containers' combined peak, under real automated
+flow execution, all 3 profiles: ~1.03GiB -- `mockapi` 673MiB + `auth`
+93MiB + `mongodb` 198MiB + `mtls` 19MiB + `psql` 72MiB; client-side
+`tls_kem_proxy` peak 281MiB + `pqc_signer_service_run` 24MiB ~ 305MiB):
+**`m7i-flex.large`'s 8GiB leaves ample headroom on EITHER side** -- the
+server-side peak uses about 13% of it, the client-side peak about 4%.
+
+**Decision 29's open question -- answered ONLY for the flex types,
+registered explicitly so it isn't mistaken for a broader answer.**
+Decision 29 asked whether this account's free-tier restriction also
+blocks the BIGGER, non-free-tier types Decisions 14/18/21 had
+recommended (`m6i.large`, `c6i.xlarge`, `c5.2xlarge`) -- this launch
+test never touched any of those three; it only confirms the two
+free-tier-eligible flex types (`m7i-flex.large`/`c7i-flex.large`) launch
+and perform fine everywhere needed. Decision 29's own question, about
+the bigger types, remains exactly as open as it was.
+
+**Cost estimate, instance-hours, for Luciano to compare against the
+real bill:** real launch/terminate timestamps (`describe_instances`,
+`StateTransitionReason`), not assumed -- all 14 instances ran
+17:54:3x-18:31:5x UTC, **2026-10-20**, ~37m9s each. Total: **4.334
+instance-hours of `m7i-flex.large` + 4.333 instance-hours of
+`c7i-flex.large` = 8.667 instance-hours** across the 14 instances. This
+project's own restricted IAM profile cannot reach the AWS Pricing API
+(`pricing:DescribeServices` -- `AccessDeniedException`, consistent with
+Decision 44's finding that billing-adjacent APIs are denied) and AWS's
+own on-demand pricing pages are JS-rendered, same limitation Decision 44
+already hit -- so, same as that decision's own precedent, a
+secondary-sourced estimate: **us-east-1 on-demand rates of $0.0958/hr
+(`m7i-flex.large`) and $0.0848/hr (`c7i-flex.large`)**, per
+calculator.holori.com (a third-party pricing aggregator, pages last
+updated 2026-09-09 and 2026-09-16 respectively -- not AWS's own
+published number, checked here because AWS's own page didn't return a
+number directly). Applying these us-east-1 rates uniformly to all 8.667
+instance-hours gives **~$0.78** total; 6 of the 7 regions actually used
+are typically priced above us-east-1 for compute (commonly 15-40%
+higher), so a more realistic order-of-magnitude range is **~$0.80-$1.00
+total** for the whole test. Stated as an estimate to compare against the
+real bill, not a committed figure.
+
+**Raw results saved, not just reported in chat:**
+`v8/latency-discovery/aws-flex-launch-test-raw/flex_launch_test_results.json`
+(all 14 instances' full per-burst data -- real UTC timestamps, real
+`/proc/stat` deltas, real `stress-ng` output, real AMI ID/AZ ID/kernel/
+tool version per instance, scanned for secrets/account identifiers
+before being saved) + its own `README.md` explaining the schema and the
+sign convention above.
+
+**`MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE` set in
+`campaign.vars.example.sh`** to `m7i-flex.large` -- the Terraform
+variable itself (`server_client_instance_type`) KEEPS no default, on
+purpose, still (Decision 52): only the example script's own value
+changed, so a bare `plan`/`apply` still fails loudly if nobody passes a
+value in for that specific run. **Pilot `terraform plan` shown with the
+chosen type** (`sa-east-1` only: server + `L0` + `L325` clients +
+control) -- `Plan: 21 to add, 0 to change, 0 to destroy`, the same
+21-resource scope as every prior pilot plan, now with `m7i-flex.large`
+on the 3 workload instances and `t4g.micro` (unchanged) on control.
+**Not applied** -- read-only `plan` only, consistent with this turn's
+own no-AWS-mutation instruction.
+
+**A second account-ID exposure this session, disclosed the moment it
+happened:** the `pricing:DescribeServices` `AccessDeniedException`
+above printed this project's full IAM ARN, account ID included, in a
+tool-call result -- an AWS-generated error message, not something
+requested, but foreseeable (IAM denial messages always include the
+full ARN) and should have been anticipated/filtered. Flagged to Luciano
+immediately; the value was never written to any file and is not
+reproduced here.
+
+**Open questions:** Decision 29's bigger-type question (`m6i.large`/
+`c6i.xlarge`/`c5.2xlarge`) remains unresolved -- untouched by this test.
+The flex-launch-test Terraform changes (AZ pinning, shutdown safety net,
+the `availability_zone` bugfix) were deliberately left uncommitted the
+turn the test itself ran ("não commita," that turn's own instruction,
+while Luciano was still reviewing results) and are committed THIS turn
+instead, now that he's chosen.
+
