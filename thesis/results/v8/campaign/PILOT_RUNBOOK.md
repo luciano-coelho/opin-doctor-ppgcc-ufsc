@@ -150,6 +150,7 @@ local check — it contains real IPs).
 | chrony active + synced | `chronyc tracking` | `Leap status : Normal`, `Stratum` a small number (not `0`) |
 | rsync installed | `command -v rsync` | a path, e.g. `/usr/bin/rsync` |
 | Elastic IP actually associated | `curl -s https://checkip.amazonaws.com` (run ON the instance) | matches the EIP Terraform's own output shows for that instance |
+| environment recorded, AMI matches pinned | after `campaign_run.py` starts (step 5), check `v8/latency/_campaign-control/environment/<instance>.json` was written for every pilot instance, and that its `ami_id` matches `terraform/main.tf`'s own `pinned_ami_x86_by_region`/`pinned_ami_arm64_sa_east_1` for that region | file exists, `ami_id` matches the pinned value exactly (a mismatch means the instance didn't boot from the AMI Terraform pinned — investigate before trusting any data from it) |
 | security group: server accepts 443 only from its 2 pilot clients | `aws ec2 describe-security-groups --group-ids <SG_ID> --profile mockopin-pqc` (run from the OPERATOR's own machine, not an instance) | exactly 2 ingress rules on 443, each a /32 matching the 2 clients' own IPs (one private — `L0`'s, co-located — one public — `L325`'s) |
 | security group: clients/server accept 22 only from control's EIP | same `describe-security-groups` on each client/server's own SG | exactly one ingress rule on 22, the control instance's EIP /32 |
 | control ↔ server connectivity | `ssh -i ~/.ssh/campaign_key ec2-user@<SERVER_IP> echo ok` (from control) | `ok` |

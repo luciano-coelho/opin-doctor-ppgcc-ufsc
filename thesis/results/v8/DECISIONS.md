@@ -4392,3 +4392,153 @@ data only; it has never seen real pilot data because the pilot has not
 been run yet. No AWS resource was created, modified, or destroyed this
 turn.
 
+## 71. tcpdump A/B toggle reworked into a one-by-one alternation with its own `tcpdump_enabled` field; per-instance environment recorded at campaign start and the AMI pinned per region (replacing silent `most_recent` re-resolution); real reference ClientHello pcaps captured against the local stack via `netshoot`, values moved into a fixture `pilot_acceptance.py` reads; the REAL LocalExecutor run for real against the REAL local stack, fed through `pilot_acceptance.py`, catching two more real bugs no amount of reading would have found
+
+A no-AWS-mutation turn again (confirmed throughout -- every AMI ID
+below came from a read-only `describe-images` call, every Terraform
+command was `validate`/`plan`, no `apply`/`destroy`/launch anywhere).
+Five items, in the order asked:
+
+**(1) tcpdump A/B toggle reworked.** `TCPDUMP_SKIP_RUN_INDICES` (an
+explicit, arbitrary set of global run indices) is gone, replaced by
+`CAMPAIGN_TCPDUMP_AB_TEST` (a single on/off env var) +
+`_tcpdump_enabled_for_run()`: off (the default) means every execution
+captures, unchanged; on means capture alternates ONE BY ONE across
+global run indices (odd ON, even OFF, run 1 always ON so the very
+first execution of any cell still has a pcap baseline) instead of an
+arbitrary subset, so the pilot's own with/without comparison is
+interleaved across the whole run rather than confounded by a block of
+consecutive skipped runs. `result["tcpdump_skipped"]` (inverted,
+SSHExecutor-only) is gone, replaced by `result["tcpdump_enabled"]`
+(same polarity, true=captured) on BOTH executors -- LocalExecutor's
+own per-side availability-skip detail is kept under a separately-named
+`tcpdump_skip_detail`, not lost, just no longer sharing the one field
+`pilot_acceptance.py`'s criterion 7 actually reads. A real capture
+failure on an ENABLED run still aborts the block exactly as before
+(`_verify_tcpdump_started()`'s own abort path is untouched by this
+toggle) -- the toggle only ever decides whether capture is ATTEMPTED,
+never whether a failed attempt is tolerated. `pilot_acceptance.py`'s
+criterion 7 updated to match. Full test suite re-run, still passes.
+
+**(2) AMI pinned per region; per-instance environment recorded at
+campaign start.** Investigated how the AMI is resolved today: a
+`data "aws_ami" { most_recent = true, owners = ["amazon"], filter {...}
+}` block per region, re-resolved FRESH on every single
+`plan`/`apply` -- meaning a real multi-day campaign (settling + 3
+windows) could silently land on a DIFFERENT AL2023 build on a later
+apply than the pilot used (Amazon publishes new builds roughly
+monthly), with Terraform showing it as an ordinary-looking instance
+replacement, not flagged as an environment change. Fixed: a real
+(read-only) `describe-images` query via boto3 against the
+`mockopin-pqc` profile, same filters the old data sources used,
+against all 7 x86_64 regions + sa-east-1's arm64 (control) --
+`terraform/main.tf`'s `data "aws_ami"` blocks removed entirely,
+replaced by a `pinned_ami_x86_by_region`/`pinned_ami_arm64_sa_east_1`
+locals map holding the IDs that query returned
+(2026-10-20T12:5x UTC, recorded in the map's own comments alongside
+each AMI's name/kernel). `terraform validate` passes; a real
+`terraform plan` against the pilot's exact 21-resource scope confirms
+every `ami` attribute now resolves to a static, known-at-plan-time
+value (not `(known after apply)`) matching the pinned map exactly, and
+the plan is still `21 to add, 0 to change, 0 to destroy` -- the pin
+didn't change what gets built, only how deterministically. Pinning the
+AMI doesn't, by itself, prove a given real instance actually booted
+from it, so `campaign_run.py` gained `record_environment()`: queried
+from INSIDE each instance (control included) via its own IMDSv2 (ami-
+id/instance-type/availability-zone-id) plus `uname -r`/`docker
+--version`/`chronyd -v`/`rsync --version`, written once per instance
+at campaign start to `v8/latency/_campaign-control/environment/
+<instance>.json` -- the ground-truth audit trail a later check compares
+against the pinned map. The remote probe is a self-contained `python3
+-c` script (same pattern as the CPU/mem sampler) so its JSON is built
+by `json.dumps()`, never hand-concatenated command output. Smoke-
+tested standalone on this dev machine (no real IMDS reachable here,
+which the script's own try/except correctly reports as an `"ERROR:
+..."` string rather than crashing -- `docker --version`/`uname -r`
+came back real, `chronyd`/`rpm` correctly reported absent on Windows);
+real AMI/IMDS values remain unverified against an actual EC2 instance,
+since none was launched this turn. `PILOT_RUNBOOK.md`'s first-contact
+table gained a row checking the recorded environment's `ami_id`
+against the pinned map.
+
+**(3) Real reference ClientHello pcaps, captured live, not hand-typed.**
+Brought up the local lab stack for real (`docker compose --profile
+main up -d`, then `switch_crypto_profile.py` for each profile in turn,
+all 5 real settling runs passing for all 3 profiles). For each profile,
+ran `tcpdump` inside a `nicolaka/netshoot` container sharing the
+gateway container's OWN network namespace (`docker run --network
+container:insurance-server-lambdas-mtls-1 ...`, same technique as an
+earlier turn's B.13), triggered one real `opin_flow.run_insurance_flow()`
+call against the real gateway, and extracted the first TLS
+ClientHello's size+SNI from the resulting real pcap via
+`pilot_acceptance.py`'s own `find_first_clienthello()`. **Result: 341/
+1784/1881 bytes, SNI "mtls" for classic/pqc/hybrid respectively --
+exactly the figures already in use**, now confirmed by a real capture
+this turn rather than carried over from an earlier session's test.
+Values (not the pcaps themselves, per this turn's own instruction)
+saved to `tests/fixtures/reference_clienthello.json`, with a `_method`
+field documenting exactly how they were captured; `pilot_acceptance.py`
+now loads `BASELINE_CLIENTHELLO` from that fixture instead of a
+hardcoded dict, and criterion 2 prints the loaded values every run.
+
+**(4) The REAL LocalExecutor, run for real, against the REAL local
+stack -- fed through `pilot_acceptance.py`, which caught two more real
+bugs.** 2 executions per profile (6 total), via the actual, non-mocked
+`LocalExecutor` (`allow_tcpdump_skip=True` -- this Windows dev host has
+no Linux `tcpdump` at all) -- real `start_block_proxies()` (real
+compose profile switch, real 5-settling-run verification, real
+negotiated-group check: classic→CurveP384, pqc→MLKEM1024,
+hybrid→SecP384r1MLKEM1024, internal always CurveP256, all correct) +
+real `run_one_execution()` x2 + real `stop_block_proxies()`, written to
+a temp `DATA_ROOT` (never the real `v8/latency/` tree -- this is a
+smoke test, not pilot data). Feeding this real output through
+`pilot_acceptance.py` caught two more real bugs neither code reading
+nor the earlier synthetic-data smoke test had surfaced:
+  1. **Label convention mismatch, criteria 1/2/3/5/8 silently N/A on
+     real LocalExecutor data.** `load_runs()` always reconstructed the
+     execution label as SSHExecutor's own
+     `"w{window:02d}_run{run_index:02d}"` -- but LocalExecutor names
+     its OWN per-execution files (`.calls.jsonl`/`_cpu.jsonl`/
+     `_gateway.log`/`_ping.json`) as the bare `"run{run_index:02d}"`,
+     no window prefix, a genuinely different convention between the
+     two executors. `load_runs()` now checks which convention is
+     actually ON DISK (via `calls.jsonl`, the one file every execution
+     always writes) rather than assuming either one; defaults to the
+     SSHExecutor form when neither is found, since the real pilot/
+     campaign only ever uses SSHExecutor.
+  2. **Criterion 4 crashed outright (`KeyError: 'proc_stat_line'`) on
+     real LocalExecutor data.** SSHExecutor's CPU/mem sampler writes
+     RAW `/proc/stat`/`/proc/meminfo` TEXT; LocalExecutor's own,
+     pre-existing `_sample_cpu_mem_steal()` writes ALREADY-PARSED
+     dicts under different key names entirely (`"cpu"`/`"mem"`, each
+     `None` on a non-Linux host -- confirmed live: both were `null` on
+     this Windows machine, which genuinely has no `/proc`). Fixed with
+     `_normalize_cpu_mem_sample()`, handling both schemas, skipping
+     (not crashing) a sample pair with no usable `/proc` data.
+  After both fixes, re-running against the SAME real data: criteria 1
+  and 3 **PASS for real** (bytes-exchanged match the baseline exactly
+  for all 3 profiles; negotiated groups correct for all 3); criteria 2/
+  4/5 correctly report **N/A** (no pcap, no `/proc` -- both genuine,
+  reported limitations of this Windows host running LocalExecutor, not
+  bugs); criterion 6 **N/A** (2 runs/profile, needs >=3 for a bootstrap
+  CI -- expected, this turn only asked for 2); criterion 7 **PASS**
+  (correctly reports a without-tcpdump-only group, no crash); criterion
+  8 **PASS** (volume measured and extrapolated for real); criterion 9
+  **FAILS**, correctly -- it needs a real `campaign_pull.sh` hash
+  manifest, which only a real AWS pilot produces, never a local smoke
+  test. Every one of these outcomes is now either a real PASS or an
+  honestly-labeled, correctly-explained N/A -- nothing silent, nothing
+  fabricated. Full existing test suite re-run afterward, still passes.
+
+**(5) Data-retention rule -- not touched this turn.** Already
+documented (Decision 70); no change needed or made.
+
+**Open questions, honestly stated:** `record_environment()`'s real
+IMDS/docker/chrony/rsync values remain unverified against an actual
+EC2 instance -- no instance was launched this turn to check against.
+The pinned AMI map will go stale the moment Amazon ships a new AL2023
+build; nothing currently alerts on that automatically -- re-pinning is
+a deliberate, manual, documented act by design, not something to
+automate away. The flex-launch test and instance-type choice are still
+outstanding, unchanged from Decision 70.
+
