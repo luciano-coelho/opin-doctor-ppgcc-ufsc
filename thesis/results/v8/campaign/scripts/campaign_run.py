@@ -390,7 +390,16 @@ def server_flock_wrap(remote_cmd, lock_path="/tmp/mockopin-server.lock"):
     argument (handles embedded quotes/spaces/$ correctly, unlike
     `!r}`, which breaks the instant `remote_cmd` itself contains a
     single quote -- exactly the python3 -c bug SSHExecutor had)."""
-    return f"flock -n {lock_path} -c {shlex.quote(remote_cmd)}"
+    # Software-inventory audit (this turn): absolute path, not a bare
+    # `flock` -- a plain `ssh host "cmd"` (no -t, no login shell) is
+    # NOT guaranteed to source /etc/profile's own non-root PATH
+    # addition of /usr/sbin and /usr/local/sbin (where flock, ping, ss,
+    # tcpdump actually live on AL2023's MINIMAL AMI, confirmed via a
+    # real amazonlinux:2023 container) -- untested on a real EC2 sshd
+    # session, so hardcoded rather than assumed. Same reasoning applies
+    # to every other bare remote command this file issues for a tool
+    # that lives in /usr/sbin.
+    return f"/usr/bin/flock -n {lock_path} -c {shlex.quote(remote_cmd)}"
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +809,22 @@ def _tcpdump_enabled_for_run(run_index):
     return run_index % 2 == 1
 
 
+def _REMOTE_CLIENT_ENV(profile, server_ip):
+    """Software-inventory audit (this turn): every remote
+    `campaign_client_runner.py`/`of.start_tls_kem_proxy(...)` invocation
+    on the client now ALSO sets TLS_KEM_PROXY_USE_PRECOMPILED=1 -- the
+    default (unset) path is `go run .` against
+    thesis/scripts/tls_kem_proxy/'s own SOURCE directory, which no
+    mechanism ever shipped to a real remote client (deliver_images.sh
+    only ever distributed to servers until this same turn's fix). The
+    precompiled image (`mockopin/tls_kem_proxy:precompiled`) IS now
+    delivered to every client by `deliver_images.sh`'s own
+    `CLIENT_IMAGES` list -- this env var is what makes the client
+    actually use it instead of a live build with no source to build
+    from."""
+    return {"CRYPTO_PROFILE": profile, "REMOTE_GATEWAY_HOST": server_ip, "TLS_KEM_PROXY_USE_PRECOMPILED": "1"}
+
+
 class SSHExecutor:
     """Real-AWS executor -- control instance SSHing into the client
     (to run campaign_client_runner.py) and into the server (profile
@@ -1035,7 +1060,7 @@ class SSHExecutor:
         pcap_path = f"{home}/{label}.{side}.pcap"
         pid_path = f"{home}/{label}.{side}.tcpdump.pid"
         log_path = f"{home}/{label}.{side}.tcpdump.log"
-        inner = f"nohup tcpdump -i ${interface_var} -s 128 port 443 -w {pcap_path} > {log_path} 2>&1 & echo \\$! > {pid_path}"
+        inner = f"nohup /usr/sbin/tcpdump -i ${interface_var} -s 128 port 443 -w {pcap_path} > {log_path} 2>&1 & echo \\$! > {pid_path}"
         iface_detect = self._iface_detect_sh(interface_var)
         remote_cmd = f'{iface_detect}; echo ${interface_var} > {home}/{label}.{side}.iface; sudo setsid sh -c "{inner}"'
         return remote_cmd, pid_path, log_path, pcap_path
@@ -1114,7 +1139,7 @@ class SSHExecutor:
             client_ip = self._client_ip(f"{scenario}@{installation}")
             py_code = "import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True)" % json.dumps(profile)
             remote_argv = ["python3", "-c", py_code]
-            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
             self._run_or_print(
                 f"[{installation}/{scenario}/w{window}] start client proxy (detached)",
                 self._ssh_cmd(client_ip, remote_cmd),
@@ -1135,7 +1160,7 @@ class SSHExecutor:
         settle_start = datetime.now(timezone.utc)
         for i in range(1, SETTLING_RUNS + 1):
             remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_settling{i}"]
-            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
             stdout = self._run_or_print(
                 f"[{installation}/{profile}/w{window}] settling run {i}/{SETTLING_RUNS}",
                 self._ssh_cmd(settling_client_ip, remote_cmd),
@@ -1190,7 +1215,7 @@ class SSHExecutor:
         server_ip = self._server_ip(installation)
         since_dt = datetime.now(timezone.utc)
         remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_warmup"]
-        remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+        remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
         stdout = self._run_or_print(
             f"[{installation}/{scenario}/w{window}] warmup",
             self._ssh_cmd(client_ip, remote_cmd),
@@ -1265,7 +1290,7 @@ class SSHExecutor:
 
             since_dt = datetime.now(timezone.utc)
             remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
-            remote_cmd = f"{self._env_prefix({'CRYPTO_PROFILE': profile, 'REMOTE_GATEWAY_HOST': server_ip})} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
             stdout = self._run_or_print(
                 f"[{installation}/{scenario}] run execution {label}",
                 self._ssh_cmd(client_ip, remote_cmd),
@@ -1298,12 +1323,15 @@ class SSHExecutor:
                 self._ssh_cmd(server_ip, f"docker logs -t --since {since_dt.isoformat()} "
                                           f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
             )
+            # Software-inventory audit (this turn): absolute paths
+            # (/usr/sbin/ping, /usr/bin/chronyc) -- see server_flock_wrap()'s
+            # own comment for why a bare command name isn't trusted here.
             ping_output = self._run_tolerant(f"[{installation}/{scenario}] reference ping (client -> server)",
-                                              self._ssh_cmd(client_ip, f"ping -c 10 -q {shlex.quote(server_ip)}"))
+                                              self._ssh_cmd(client_ip, f"/usr/sbin/ping -c 10 -q {shlex.quote(server_ip)}"))
             server_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
-                                                self._ssh_cmd(server_ip, "chronyc tracking"))
+                                                self._ssh_cmd(server_ip, "/usr/bin/chronyc tracking"))
             client_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
-                                                self._ssh_cmd(client_ip, "chronyc tracking"))
+                                                self._ssh_cmd(client_ip, "/usr/bin/chronyc tracking"))
             server_iface = self._run_or_print(f"[{installation}/{scenario}] fetch detected interface (server)",
                                                self._ssh_cmd(server_ip, f"cat /home/ec2-user/{label}.server.iface"))
             client_iface = self._run_or_print(f"[{installation}/{scenario}] fetch detected interface (client)",

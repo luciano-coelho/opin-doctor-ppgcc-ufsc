@@ -51,34 +51,54 @@ OPERATOR_IP="$(curl -s https://checkip.amazonaws.com)"
 export TF_VAR_operator_ip_cidr="${OPERATOR_IP}/32"
 
 echo "==> terraform destroy"
-(cd "$TF_DIR" && terraform destroy -input=false -auto-approve)
+# Software-inventory audit (this turn): piped through redact_aws_errors.py
+# -- a failed apply/destroy's own error text can embed this account's
+# full ARN (confirmed live elsewhere this session, an IAM denial
+# message did exactly that). set -o pipefail (already on, top of this
+# file) means a failing `terraform destroy` still fails this script,
+# despite being the first stage of a pipeline now.
+(cd "$TF_DIR" && terraform destroy -input=false -auto-approve) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
 
 echo "==> Verifying teardown directly via the AWS API, region by region (not just Terraform's own exit status)..."
-python3 - <<'PY'
+python3 - "$SCRIPT_DIR" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from redact_aws_errors import redact
+
 import boto3
+import botocore.exceptions
 
 regions = ["sa-east-1", "us-east-1", "ap-northeast-1", "ca-central-1", "eu-north-1", "ap-southeast-1", "ap-northeast-2"]
 tag_filter = [{"Name": "tag:Project", "Values": ["mockopin-pqc-aws"]}]
 failed = False
 
-for region in regions:
-    s = boto3.Session(profile_name="mockopin-pqc", region_name=region)
-    ec2 = s.client("ec2")
+# Software-inventory audit (this turn): a ClientError's own message
+# text can embed this account's ARN (confirmed live elsewhere this
+# session, a real AccessDeniedException did exactly that) -- caught
+# and redacted here before ever reaching print()/the raised
+# SystemExit, rather than trusting boto3's own exception text not to
+# mention it.
+try:
+    for region in regions:
+        s = boto3.Session(profile_name="mockopin-pqc", region_name=region)
+        ec2 = s.client("ec2")
 
-    insts = ec2.describe_instances(Filters=tag_filter)
-    running = [i for r in insts["Reservations"] for i in r["Instances"] if i["State"]["Name"] not in ("terminated", "shutting-down")]
-    sgs = ec2.describe_security_groups(Filters=[{"Name": "group-name", "Values": ["mockopin-pqc-campaign-*"]}])
-    kps = ec2.describe_key_pairs(Filters=[{"Name": "key-name", "Values": ["mockopin-pqc-campaign*"]}])
-    vols = ec2.describe_volumes(Filters=tag_filter)
-    active_vols = [v for v in vols["Volumes"] if v["State"] != "deleted"]
-    addrs = ec2.describe_addresses(Filters=tag_filter)
+        insts = ec2.describe_instances(Filters=tag_filter)
+        running = [i for r in insts["Reservations"] for i in r["Instances"] if i["State"]["Name"] not in ("terminated", "shutting-down")]
+        sgs = ec2.describe_security_groups(Filters=[{"Name": "group-name", "Values": ["mockopin-pqc-campaign-*"]}])
+        kps = ec2.describe_key_pairs(Filters=[{"Name": "key-name", "Values": ["mockopin-pqc-campaign*"]}])
+        vols = ec2.describe_volumes(Filters=tag_filter)
+        active_vols = [v for v in vols["Volumes"] if v["State"] != "deleted"]
+        addrs = ec2.describe_addresses(Filters=tag_filter)
 
-    control_note = " (includes the control instance -- sa-east-1 only)" if region == "sa-east-1" else ""
-    print(f"{region}{control_note}: instances={len(running)} sgs={len(sgs['SecurityGroups'])} "
-          f"key_pairs={len(kps['KeyPairs'])} volumes={len(active_vols)} eips={len(addrs['Addresses'])}")
+        control_note = " (includes the control instance -- sa-east-1 only)" if region == "sa-east-1" else ""
+        print(f"{region}{control_note}: instances={len(running)} sgs={len(sgs['SecurityGroups'])} "
+              f"key_pairs={len(kps['KeyPairs'])} volumes={len(active_vols)} eips={len(addrs['Addresses'])}")
 
-    if running or sgs["SecurityGroups"] or kps["KeyPairs"] or active_vols or addrs["Addresses"]:
-        failed = True
+        if running or sgs["SecurityGroups"] or kps["KeyPairs"] or active_vols or addrs["Addresses"]:
+            failed = True
+except botocore.exceptions.ClientError as e:
+    raise SystemExit(f"FATAL: AWS API call failed during teardown verification: {redact(str(e))}") from None
 
 if failed:
     raise SystemExit("FATAL: at least one region still has a resource after destroy -- see counts above.")

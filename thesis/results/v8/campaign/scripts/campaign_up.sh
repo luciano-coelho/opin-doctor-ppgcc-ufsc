@@ -72,7 +72,7 @@ fi
 if [ "$MODE" = "--update-operator-ip" ]; then
   echo "==> --update-operator-ip: re-applying ONLY the control instance's security group."
   (cd "$TF_DIR" && terraform init -input=false)
-  (cd "$TF_DIR" && terraform apply -input=false -auto-approve -target=module.control.aws_security_group.this)
+  (cd "$TF_DIR" && terraform apply -input=false -auto-approve -target=module.control.aws_security_group.this) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
   echo "==> Done -- control instance now accepts SSH from ${OPERATOR_IP}/32 only."
   exit 0
 fi
@@ -99,7 +99,11 @@ if [ "$CONFIRM" != "apply" ]; then
   echo "Aborted -- confirmation not given." >&2
   exit 1
 fi
-(cd "$TF_DIR" && terraform apply -input=false -auto-approve)
+# Software-inventory audit (this turn): piped through redact_aws_errors.py
+# -- a failed apply's own error text can embed this account's full ARN
+# (confirmed live elsewhere this session). pipefail (set at the top of
+# this file) means a failing `terraform apply` still fails this script.
+(cd "$TF_DIR" && terraform apply -input=false -auto-approve) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
 
 echo "==> Extracting outputs..."
 CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
@@ -178,7 +182,7 @@ for label, ip in hosts:
         "ssh", "-i", "/home/ec2-user/.ssh/campaign_key",
         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=15", "-o", "BatchMode=yes",
-        f"ec2-user@{ip}", "chronyc tracking | head -5"
+        f"ec2-user@{ip}", "/usr/bin/chronyc tracking | head -5"
     ]
     r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:

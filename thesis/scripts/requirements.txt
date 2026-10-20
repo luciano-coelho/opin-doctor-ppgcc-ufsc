@@ -3,9 +3,20 @@
 # all -- in short, presenting an ML-DSA-65 client certificate requires
 # routing TLS through cryptography's bundled OpenSSL via pyOpenSSL, not
 # through the system/Python-bundled OpenSSL requests uses by default).
-requests==2.34.2
-PyJWT==2.13.0
-cryptography==50.0.0
+#
+# Software-inventory audit (v8, this turn): two of the six pins below
+# (requests==2.34.2, urllib3==2.7.0) do NOT exist on the real PyPI --
+# confirmed by actually trying to install them (`pip download`), not
+# assumed -- so `pip install -r requirements.txt` would have failed
+# outright on any fresh real client instance. All six pins below are
+# the latest REAL versions confirmed to both exist on PyPI and install
+# together cleanly, this turn, under AL2023's own real Python 3.9 (a
+# real `amazonlinux:2023` container, not simulated) -- `import
+# opin_flow` (and its own `latency_automation`/`campaign_client_runner`
+# importers) confirmed working afterward, end to end.
+requests==2.32.5
+PyJWT==2.15.1
+cryptography==50.0.2
 pyOpenSSL==26.4.0
-urllib3==2.7.0
+urllib3==2.6.3
 rfc8785==0.1.4

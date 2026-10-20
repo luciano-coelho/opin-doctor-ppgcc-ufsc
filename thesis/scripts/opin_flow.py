@@ -85,6 +85,29 @@ not the combined alg string the AS/RS's own outbound artifacts use).
 Usage:
   CRYPTO_PROFILE=classic|pqc|hybrid EXPERIMENT_NUMBER=1|2|3 python opin_flow.py <latency_ms>
 """
+# Software-inventory audit (v8, this turn): confirmed via AWS's own
+# documentation that AL2023's default `/usr/bin/python3` is 3.9, for
+# the AMI's whole lifetime -- then confirmed LIVE (a real `import
+# opin_flow` in a real amazonlinux:2023 container) that this file
+# crashed immediately, at module level, every single time, every
+# profile, not just pqc/hybrid: `_PQC_SIGNER_SERVICE_URL: str | None`
+# (PEP 604's `X | Y` union syntax) isn't valid until Python 3.10 --
+# `str.__or__` doesn't exist on 3.9, so evaluating that bare module-
+# level annotation (not even calling a function) raised
+# `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`
+# before campaign_client_runner.py's own import of this module could
+# get anywhere at all. This would have failed EVERY real execution of
+# the real AWS campaign, on every client, on first contact -- the
+# single most severe gap this audit found. `from __future__ import
+# annotations` (PEP 563) defers every annotation in this file to a
+# string, never evaluated at runtime, which is the complete fix for
+# this specific failure mode (and the only other `X | Y` spots in this
+# file, Decision 60/66's own signatures, are ordinary function
+# annotations the SAME fix already covers) -- it changes nothing about
+# how this file actually behaves above 3.9, so nothing already
+# validated on this dev machine's own newer Python changes either.
+from __future__ import annotations
+
 import argparse
 import base64
 import hashlib
