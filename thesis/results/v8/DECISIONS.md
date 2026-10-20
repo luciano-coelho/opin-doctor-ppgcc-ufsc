@@ -4240,3 +4240,155 @@ needed regardless of which installations are active.
     confirmed, above, to include ONLY what's enabled -- not a
     separate claim, the SAME evidence.
 
+## 70. Credentials/user-data/scheduled-task audit (one real gap found and fixed: Docker was missing from every instance); `PILOT_RUNBOOK.md` written; `pilot_acceptance.py` written for all 9 acceptance criteria, smoke-tested against synthetic data end to end, one real bug found and fixed in the process (the run JSON has no `"label"` field and no `"duration_seconds"` field); data-retention rule for the pilot's window 1 documented
+
+A no-AWS-mutation turn (`terraform plan` only, confirmed throughout --
+no `apply`/`destroy`/instance launch at any point), auditing the
+pilot's own readiness and building the two pieces of tooling the pilot
+itself depends on to be judged pass/fail. Six items, in the order
+asked:
+
+**(1) Credentials and access.** Exactly one AWS profile
+(`mockopin-pqc`) exists in `~/.aws/config`/`credentials` in this
+session's environment -- no admin credential present, no credential
+value printed anywhere (only the profile NAME, per the profile's own
+restriction from Decision 44). `terraform plan` run read-only against
+the pilot's exact 21-resource scope; nothing from its output (ARNs,
+IDs, addresses) was written into any document without first passing
+`scan_secrets.sh` (see item 7 below).
+
+**(2) A real, previously-undiscovered gap: Docker was missing from
+EVERY instance's user-data.** Amazon Linux 2023's base AMI ships
+neither `docker` nor `rsync` (confirmed empirically:
+`docker run --rm amazonlinux:2023 sh -c "command -v docker"`/`rsync`
+both find nothing) -- yet the only user-data template wired into
+`campaign_instance`'s module was role-gated to install `rsync` alone,
+on a subset of roles. Had this gone uncaught, the FIRST real pilot
+launch would have failed completely (no `docker` to run the gateway
+stack, no `docker` group for `ec2-user`, since none of this project's
+own SSH commands prefix `docker` with `sudo`). Fixed: the role-gated
+`install_rsync_user_data` local was replaced with an unconditional
+`install_docker_and_rsync_user_data` (`templates/install_docker_and_rsync.sh`,
+new; `templates/install_rsync.sh`, removed) applied to all 12 instance
+roles (3 servers, 8 clients, 1 control) via `dnf install -y docker
+rsync` + `systemctl enable --now docker` + `usermod -aG docker
+ec2-user`. Validated via `terraform validate` (pass) and a real
+`terraform plan` against the pilot's exact scope -- confirmed (via
+`terraform show`'s plain-text output; `user_data` itself is
+represented only as a SHA1 hash in both JSON and plain-text plan
+output, a known AWS-provider quirk, not inspectable directly) that
+control's `user_data` hash differs from the 3 server/client instances'
+shared hash, consistent with the expected self-terminate-component
+grouping.
+
+**(3) Scheduled tasks.** `CronList` confirms no persistent recurring
+job (`CronCreate`-based) exists from this session. Every
+`ScheduleWakeup` call made this session was a one-shot, self-consuming
+dynamic wakeup used only to pace long rehearsal waits -- none pending,
+none AWS-altering, none capable of running `apply`/`destroy`/launch
+without Luciano present.
+
+**(4) `v8/campaign/PILOT_RUNBOOK.md` written.** Covers: preconditions
+(flex-launch test done + instance type chosen; Luciano's own billing-
+budget/credit check, since the restricted profile can't read either
+via the API); a 7-step walkthrough with exact commands and each step's
+expected output; a 10-row first-contact-with-AWS verification table
+(cloud-init, docker+chrony, Elastic IPs, security-group rules,
+control↔server↔client connectivity); 5 explicit Luciano-confirms-before-
+proceeding points; 8 abort criteria; a cost-monitoring schedule across
+the run; the two outcomes (A: unscoped re-apply adds the other 24
+resources without touching the pilot's 21, per Decision 69's own
+structural proof; B: `campaign_down.sh`); and a keep-up-vs-teardown
+cost/time/risk comparison table with a stated, overridable
+recommendation.
+
+**(5) `pilot_acceptance.py` written for all 9 criteria -- and smoke-
+tested for real, not just read over.** Computes, from raw pulled data
+only: total_bytes_exchanged vs. the local-lab baseline (125,485/
+275,800/331,639 bytes); client ClientHello size+SNI vs. the local-lab
+baseline (341/1784/1881 bytes, SNI "mtls", Decision 67's own
+precompiled-proxy regression figures); negotiated group via
+`verify_negotiated_groups()` (reused, not reimplemented); steal% (now
+computable at all -- see below) with a <5% pass/fail and max CPU/
+memory; RTT from the pcap's own SYN→SYN-ACK timestamps vs. the
+reference ping; bootstrap CI width of the per-cell median against a
+±5% target, with an execution-count recommendation when it isn't met;
+T_fluxo with vs. without tcpdump; pcap/disk volume extrapolated to 720
+executions with a Git-LFS-vs-external-storage recommendation; and a
+full re-verification of `campaign_pull.sh`'s own sha256 manifest
+(independent of its `.pull-verified` marker, not just trusting it).
+Required a minimal pure-stdlib pcap reader (classic libpcap format,
+`struct`-based Ethernet/IPv4/TCP parsing) since no pcap library is in
+`thesis/scripts/requirements.txt` and this project's own standing
+style doesn't add one for a single narrow read need.
+
+Two `campaign_run.py` additions were built as direct prerequisites,
+both validated live in a throwaway Linux container (not just read over):
+a `CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES` env var letting specific global
+run indices skip tcpdump entirely (criterion 7's own with/without
+comparison group); and a periodic CPU/mem sampler for `SSHExecutor`
+(`_cpu_mem_sampler_start_cmd`/`_cpu_mem_sampler_stop_cmd`), replacing
+the old single-snapshot `/proc/stat`/`/proc/meminfo` fetch -- steal% is
+a DELTA between two readings, uncomputable from one snapshot at all
+(only `LocalExecutor`'s own A.9 sampler had this before). Confirmed
+live: the sampler starts under the same safe-quoting pattern as the
+proxy-start command, captures its OWN pid (not a wrapper's) via
+`echo $!`, produces one real JSON sample/second of actual
+`/proc/stat`/`/proc/meminfo` content, and `kill` genuinely terminates
+it (confirmed via `/proc/<pid>/status` showing `State: Z`, i.e.
+successfully killed, not yet reaped by the throwaway container's own
+minimal `sleep`-based PID 1 -- a benign test-container artifact, not a
+concern on a real systemd-based EC2 instance). Full existing test
+suite (`test_negotiated_groups.py`, `test_window_no_overwrite.py`,
+`test_full_campaign_no_overwrite.py`, `test_block_order.py`) re-run and
+still passes after these additions.
+
+**A real bug in `pilot_acceptance.py` itself, found only by actually
+running it, not by reading the code:** the run JSON's own `result`
+dict (whatever `campaign_client_runner.py`'s stdout/`run_once_timed()`
+produces) has NEITHER a `"label"` key NOR a `"duration_seconds"` key --
+the real field is `t_fluxo_seconds`, and the real per-execution label
+has to be reconstructed from the `run{NN}.json` filename's own run
+index plus the JSON's `"window"` field
+(`f"w{window:02d}_run{run_index:02d}"`, matching `SSHExecutor`'s own
+file-naming convention for `.pcap.gz`/`_cpu.jsonl`/`_gateway.log`/
+`_ping.json`, which is NOT the same string as the `run{NN}.json`
+filename itself). Caught by building a small, structurally real
+synthetic pilot-data tree (a real gzipped pcap with a real SYN/SYN-ACK
+pair and a hand-built ClientHello record, a real gateway-log JSON
+line pair, real `/proc/stat`-shaped samples, a real sha256 manifest)
+and running `pilot_acceptance.py` against it end to end -- it crashed
+immediately on the wrong assumption, was fixed (`load_runs()` now
+derives `(path, run, run_index, label)` from the filename+`window`
+field, not a nonexistent `result["label"]`), and then ran clean through
+all 9 criteria with no crash. The two criteria that reported FAIL
+against the synthetic run (ClientHello size, bootstrap CI width) did so
+correctly -- the synthetic fixture's ClientHello is a deliberately
+undersized hand-built stand-in (64 bytes, not a real TLS ClientHello),
+and its 3 synthetic `t_fluxo_seconds` values genuinely have more than
+±5% spread. This is a smoke test against synthetic data, not a
+validation against real pilot data (none exists yet, by design -- the
+pilot hasn't run) -- stated plainly, not implied otherwise.
+
+**(6) Data-retention rule for the pilot's data, documented in
+`PILOT_RUNBOOK.md`** (new section, "Dados do piloto — regra de
+retenção"): the pilot's 2-cell, 1-window data counts as window 1 of the
+full campaign's own cells ONLY if the measurement protocol doesn't
+change afterward (concrete examples given of what does and doesn't
+count as a protocol change: `campaign_run.py`/`campaign_client_runner.py`
+measurement-logic changes, instance-type changes, delivered-image
+changes count; acceptance-script-only bug fixes and unrelated-region
+documentation changes don't). If it changes, the pilot's data are
+MOVED (never discarded) to
+`v8/latency/_pilot-superseded-<date>/`, with a `DECISIONS.md` note
+explaining why, and window 1 of those 2 cells restarts clean under the
+corrected protocol.
+
+**Open questions, honestly stated:** the flex-launch test and instance-
+type choice (this runbook's own precondition) are still outstanding --
+`MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE` still has no default, on
+purpose. `pilot_acceptance.py` has been smoke-tested against synthetic
+data only; it has never seen real pilot data because the pilot has not
+been run yet. No AWS resource was created, modified, or destroyed this
+turn.
+
