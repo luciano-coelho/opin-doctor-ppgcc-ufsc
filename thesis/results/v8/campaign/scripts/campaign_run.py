@@ -181,6 +181,100 @@ def all_server_client_ips(inventory):
     return ips
 
 
+def all_instance_ips(inventory):
+    """Item 2 (this turn): every instance INCLUDING control -- unlike
+    all_server_client_ips() (used only for safety-timer renewal, which
+    deliberately excludes control, Decision 49). Environment recording
+    has no such exclusion: control is a real instance with its own AMI/
+    kernel/instance-type/AZ worth recording too."""
+    return [("control", inventory["control"]["public_ip"])] + all_server_client_ips(inventory)
+
+
+# Item 2 (this turn): queried from INSIDE each instance via its own
+# IMDSv2 (not Terraform state/output, which this never reads) -- the
+# ground truth of what's actually running, since pinning the AMI in
+# terraform/main.tf's own locals doesn't, by itself, prove a given real
+# instance booted from it (a stale instance predating a pin change,
+# launched manually outside Terraform, etc.). Built as a self-contained
+# python3 script (same `python3 -c` + shlex.quote pattern as the CPU/mem
+# sampler) so the JSON is assembled by json.dumps(), never hand-built
+# string concatenation of command output that could contain a quote.
+_ENVIRONMENT_PROBE_SCRIPT = (
+    "import json, subprocess, urllib.request\n"
+    "def sh(cmd):\n"
+    "    try:\n"
+    "        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10).stdout.strip()\n"
+    "    except Exception as e:\n"
+    "        return f'ERROR: {e}'\n"
+    "try:\n"
+    "    token_req = urllib.request.Request('http://169.254.169.254/latest/api/token', method='PUT',\n"
+    "                                        headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'})\n"
+    "    token = urllib.request.urlopen(token_req, timeout=5).read().decode()\n"
+    "    def imds(path):\n"
+    "        req = urllib.request.Request('http://169.254.169.254/latest/meta-data/' + path,\n"
+    "                                      headers={'X-aws-ec2-metadata-token': token})\n"
+    "        return urllib.request.urlopen(req, timeout=5).read().decode()\n"
+    "    ami_id = imds('ami-id')\n"
+    "    instance_type = imds('instance-type')\n"
+    "    az_id = imds('placement/availability-zone-id')\n"
+    "except Exception as e:\n"
+    "    ami_id = instance_type = az_id = f'ERROR: {e}'\n"
+    "print(json.dumps({\n"
+    "    'ami_id': ami_id,\n"
+    "    'instance_type': instance_type,\n"
+    "    'availability_zone_id': az_id,\n"
+    "    'kernel': sh('uname -r'),\n"
+    "    'docker_version': sh('docker --version'),\n"
+    "    'chrony_version': sh('chronyd -v 2>&1 || rpm -q chrony 2>&1'),\n"
+    "    'rsync_version': sh('rsync --version | head -1'),\n"
+    "}))\n"
+)
+
+
+def record_environment(inventory, ssh_port=22, ssh_key_path=None):
+    """Item 2 (this turn): records, once per instance, at campaign
+    start, into v8/latency/_campaign-control/environment/<instance>.json
+    -- AMI ID, kernel, docker/chrony/rsync versions, instance type, and
+    availability-zone ID. This is the audit trail a later check compares
+    against terraform/main.tf's own pinned_ami_x86_by_region/
+    pinned_ami_arm64_sa_east_1 map, to catch drift between "what was
+    pinned" and "what actually booted." A probe failure on one instance
+    is reported but does not abort the campaign (environment recording
+    is observational, not a precondition any execution depends on)."""
+    ssh_key_path = ssh_key_path or CAMPAIGN_KEY
+    env_dir = DATA_ROOT / "v8" / "latency" / "_campaign-control" / "environment"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    remote_cmd = f"python3 -c {shlex.quote(_ENVIRONMENT_PROBE_SCRIPT)}"
+    for label, ip in all_instance_ips(inventory):
+        safe_label = label.replace("/", "_").replace("@", "_at_").replace(":", "_")
+        try:
+            r = subprocess.run(
+                ["ssh", "-i", ssh_key_path, "-p", str(ssh_port), "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+                 "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
+                 "-o", "BatchMode=yes", f"ec2-user@{ip}", remote_cmd],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"WARNING: environment probe for {label} ({ip}) timed out -- skipping", file=sys.stderr)
+            continue
+        if r.returncode != 0:
+            print(f"WARNING: could not record environment for {label} ({ip}): {r.stderr.strip()}", file=sys.stderr)
+            continue
+        try:
+            info = json.loads(r.stdout)
+        except ValueError:
+            print(f"WARNING: environment probe for {label} ({ip}) did not return valid JSON: {r.stdout!r}",
+                  file=sys.stderr)
+            continue
+        info["recorded_at_utc"] = datetime.now(timezone.utc).isoformat()
+        info["label"] = label
+        info["ip"] = ip
+        (env_dir / f"{safe_label}.json").write_text(json.dumps(info, indent=2))
+        print(f"Recorded environment for {label} ({ip}): ami={info.get('ami_id')}, "
+              f"type={info.get('instance_type')}, az={info.get('availability_zone_id')}")
+
+
 def renew_safety_timers(inventory, ssh_port=22, ssh_key_path=None):
     """Decision 49: the orchestrator renews every server/client's
     safety-timer deadline -- the control instance is deliberately
@@ -680,16 +774,30 @@ _SERVER_LOCKS = {name: threading.Lock() for name in SCENARIO_ROTATION}
 SSH_TIMEOUT_SECONDS = 30
 SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
 
-# Pilot acceptance criterion 7 (this turn): T_fluxo with vs. without
-# tcpdump, "some executions of each" -- comma-separated GLOBAL run
-# indices (the number in `run{NN}.json`'s own filename) to run WITHOUT
-# tcpdump, for direct within-dataset comparison by
-# `pilot_acceptance.py`. Unset (the default) means every execution
-# captures, unchanged from today's behavior -- this is an opt-in
-# comparison mechanism, not a new default.
-TCPDUMP_SKIP_RUN_INDICES = {
-    int(x) for x in os.environ.get("CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES", "").split(",") if x.strip()
-}
+# Pilot acceptance criterion 7: T_fluxo with vs. without tcpdump. This
+# toggle exists ONLY for the pilot's own A/B test -- never the full
+# campaign's default, which is always capture-on (unset ==
+# CAMPAIGN_TCPDUMP_AB_TEST is falsy below). When explicitly turned on,
+# capture alternates ONE BY ONE across global run indices (odd ON, even
+# OFF) rather than an arbitrary subset, so the with/without comparison
+# is interleaved across the whole run instead of confounded by a block
+# of consecutive skipped (or captured) runs. A failure to actually
+# start capture on an ENABLED run still aborts the block exactly as
+# before (_verify_tcpdump_started()'s own abort path below is
+# untouched by this toggle) -- alternating only decides, per run,
+# whether capture is attempted at all, never whether a failed attempt
+# is tolerated.
+CAMPAIGN_TCPDUMP_AB_TEST = os.environ.get("CAMPAIGN_TCPDUMP_AB_TEST", "").strip().lower() in ("1", "true", "yes")
+
+
+def _tcpdump_enabled_for_run(run_index):
+    """True (capture) unless the pilot's own A/B test is explicitly
+    enabled, in which case odd/even GLOBAL run indices alternate --
+    run 1 always captures, so the very first execution of any cell
+    still has a pcap baseline available regardless of the toggle."""
+    if not CAMPAIGN_TCPDUMP_AB_TEST:
+        return True
+    return run_index % 2 == 1
 
 
 class SSHExecutor:
@@ -1121,7 +1229,8 @@ class SSHExecutor:
             client_ip = self._client_ip(f"{scenario}@{installation}")
             server_ip = self._server_ip(installation)
             label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
-            skip_tcpdump = run_index in TCPDUMP_SKIP_RUN_INDICES
+            tcpdump_enabled = _tcpdump_enabled_for_run(run_index)
+            skip_tcpdump = not tcpdump_enabled
 
             if not skip_tcpdump:
                 server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
@@ -1139,7 +1248,7 @@ class SSHExecutor:
                 self._verify_tcpdump_started(client_ip, f"[{installation}/{scenario}] tcpdump (client)", client_pid)
             else:
                 print(f"  [{installation}/{scenario}] run {label}: tcpdump DELIBERATELY SKIPPED "
-                      f"(CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES, pilot acceptance criterion 7)")
+                      f"(CAMPAIGN_TCPDUMP_AB_TEST alternation, pilot acceptance criterion 7)")
                 server_pid = client_pid = server_pcap = client_pcap = None
 
             # Pilot acceptance criterion 4: periodic CPU/steal/mem
@@ -1241,7 +1350,7 @@ class SSHExecutor:
             # LocalExecutor's own convention. Pilot acceptance
             # criterion 7: skipped entirely when tcpdump itself was
             # deliberately skipped -- nothing to pull.
-            result["tcpdump_skipped"] = skip_tcpdump
+            result["tcpdump_enabled"] = tcpdump_enabled
             if not skip_tcpdump:
                 for side, remote_pcap, local_dir in (("server", server_pcap, server_dir), ("client", client_pcap, client_dir)):
                     local_pcap = local_dir / f"{label}.pcap"
@@ -1622,7 +1731,14 @@ class LocalExecutor:
             (client_dir / f"{label}_ping.json").write_text(
                 json.dumps({"note": "reference ping: not applicable in the local test (no real network hop)"}) + "\n"
             )
-            result["tcpdump_skipped"] = {"server": server_tcpdump["skipped"], "client": client_tcpdump["skipped"]}
+            # Same field name as SSHExecutor's own result["tcpdump_enabled"]
+            # (every execution JSON registers it) -- here it means "both
+            # sides actually captured", distinct from the pilot's own
+            # A/B-test alternation (LocalExecutor never runs the AWS
+            # pilot); per-side skip reasons stay available for
+            # debugging under their own, differently-named key.
+            result["tcpdump_enabled"] = not (server_tcpdump["skipped"] or client_tcpdump["skipped"])
+            result["tcpdump_skip_detail"] = {"server": server_tcpdump["skipped"], "client": client_tcpdump["skipped"]}
             result["dropped_packets"] = dropped_packets
             # A.7: the detected interface, recorded instead of assumed.
             result["network_interface"] = {"server": server_tcpdump.get("interface"),
@@ -1821,6 +1937,12 @@ def main():
     control_dir = DATA_ROOT / "v8" / "latency" / "_campaign-control"
     control_dir.mkdir(parents=True, exist_ok=True)
     (control_dir / "schedule.json").write_text(json.dumps(config, indent=2))
+
+    # Item 2 (this turn): once per campaign start, per instance -- not
+    # repeated per window (the environment isn't expected to change
+    # mid-campaign; if it does, that's exactly the drift this is meant
+    # to catch on a later audit, not something to keep re-recording).
+    record_environment(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
 
     renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # at startup, before any waiting
     for window in range(1, WINDOWS_PER_CAMPAIGN + 1):

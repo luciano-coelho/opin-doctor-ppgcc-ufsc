@@ -1,0 +1,7 @@
+{
+  "_method": "Captured live against the local lab stack (insurance-server-lambdas, docker compose --profile main), one real opin_flow.run_insurance_flow() call per profile against the actual gateway (mtls container), with tcpdump running inside a nicolaka/netshoot container sharing the gateway's own network namespace (docker run --network container:insurance-server-lambdas-mtls-1 ... tcpdump -i eth0 -s <snaplen> port 443 -w ...). Size/SNI extracted from the first TLS record (type 0x16) with destination port 443 in the resulting pcap via pilot_acceptance.py's own find_first_clienthello()/extract_sni() -- the exact same parser pilot_acceptance.py uses against real pilot data, so this fixture and a real pilot run are measured identically.",
+  "_captured_at_utc": "2026-10-20T01:12:00Z",
+  "classic": {"size": 341, "sni": "mtls"},
+  "pqc": {"size": 1784, "sni": "mtls"},
+  "hybrid": {"size": 1881, "sni": "mtls"}
+}

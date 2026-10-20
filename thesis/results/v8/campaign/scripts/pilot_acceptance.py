@@ -17,8 +17,9 @@ Criteria, in the order PILOT_RUNBOOK.md lists them:
   1. total_bytes_exchanged per execution == the local-lab regression
      baseline (125,485 classic / 275,800 pqc / 331,639 hybrid).
   2. Client-side pcap's ClientHello: same SIZE and SNI as the local lab
-     (341/1784/1881 bytes, SNI "mtls" -- measured this project's own
-     session, Decision 67's precompiled-proxy regression test).
+     reference fixture (tests/fixtures/reference_clienthello.json --
+     captured live against the local stack + netshoot, this turn, not
+     hand-typed; see that file's own "_method" field).
   3. Negotiated group: client channel matches the profile's own curve,
      internal channel always CurveP256 (verify_negotiated_groups()).
   4. steal < 5% in every execution; max CPU/memory reported.
@@ -26,8 +27,8 @@ Criteria, in the order PILOT_RUNBOOK.md lists them:
      ping.
   6. Bootstrap CI width of the per-cell median, relative to the median
      (+/-5% target) -- with a recommendation on run count if not met.
-  7. T_fluxo with vs. without tcpdump (CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES,
-     this turn's own addition) -- reports the difference if both groups
+  7. T_fluxo with vs. without tcpdump (CAMPAIGN_TCPDUMP_AB_TEST, the
+     pilot's own alternating A/B toggle) -- reports the difference if both groups
      exist in the data, or says so plainly if they don't.
   8. pcap + disk volume per execution, extrapolated to 720 executions,
      with a Git-LFS-vs-external-storage recommendation.
@@ -47,11 +48,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_run as cr  # noqa: E402 -- reuse verify_negotiated_groups etc., not reimplement
 
 BASELINE_BYTES = {"classic": 125_485, "pqc": 275_800, "hybrid": 331_639}
-BASELINE_CLIENTHELLO = {
-    "classic": {"size": 341, "sni": "mtls"},
-    "pqc": {"size": 1784, "sni": "mtls"},
-    "hybrid": {"size": 1881, "sni": "mtls"},
-}
+# Item 3 (this turn): no longer hand-typed constants -- read from a
+# fixture captured live against the local lab stack (see that file's
+# own "_method" field for exactly how), so a future re-capture is a
+# file regeneration, not a source-code edit.
+_CLIENTHELLO_FIXTURE_PATH = Path(__file__).resolve().parent / "tests" / "fixtures" / "reference_clienthello.json"
+
+
+def _load_baseline_clienthello():
+    data = json.loads(_CLIENTHELLO_FIXTURE_PATH.read_text())
+    return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+BASELINE_CLIENTHELLO = _load_baseline_clienthello()
 PROFILE_DIR = {"classic": "experiment1 - Classic", "pqc": "experiment2 - PQC", "hybrid": "experiment3 - Hybrid"}
 STEAL_THRESHOLD_PCT = 5.0
 BOOTSTRAP_CI_TARGET_PCT = 5.0
@@ -82,14 +91,24 @@ def load_runs(scenario_path):
     """Loads every runs/run*.json, sorted by run number. Also computes
     each execution's real label -- the run dict itself has NO "label"
     key (campaign_client_runner.py/run_once_timed() never add one, see
-    latency_automation.py); SSHExecutor names every per-execution file
-    (.pcap.gz/_cpu.jsonl/_gateway.log/_ping.json) as
-    "w{window:02d}_run{run_index:02d}" (campaign_run.py's own
-    run_one_execution()), while the run{NN}.json filename itself uses
-    the bare GLOBAL run index with no window prefix -- the two numbers
-    are NOT the same string, so the label has to be reconstructed from
-    the filename's run index plus the JSON's own "window" field, not
-    assumed to be present anywhere in the data.
+    latency_automation.py). The two executors name their per-execution
+    files DIFFERENTLY, confirmed by actually running both and looking
+    at what landed on disk (item 4, this turn's own real LocalExecutor
+    run against the local stack): SSHExecutor uses
+    "w{window:02d}_run{run_index:02d}" (campaign_run.py's own real-AWS
+    run_one_execution()), while LocalExecutor uses the bare
+    "run{run_index:02d}" (no window prefix at all) for the SAME files
+    (.pcap.gz/_cpu.jsonl/_gateway.log/_ping.json/.calls.jsonl) -- NOT a
+    hypothetical, this was caught live: a first version of this
+    function always assumed the SSHExecutor form and silently reported
+    N/A for every criterion on real LocalExecutor output, because
+    "w01_run01.calls.jsonl" doesn't exist when LocalExecutor actually
+    wrote "run01.calls.jsonl". Resolved by checking which one is
+    actually ON DISK (via the one file every execution always writes,
+    calls.jsonl) rather than assuming either convention; defaults to
+    the SSHExecutor form if neither is found (the real pilot/campaign
+    only ever uses SSHExecutor, so that's the right default for data
+    that doesn't exist yet to probe).
     Returns a list of (path, run_dict, run_index, label)."""
     runs = []
     for p in sorted((scenario_path / "runs").glob("run*.json")):
@@ -99,7 +118,15 @@ def load_runs(scenario_path):
         run_index = int(m.group(1))
         run = json.loads(p.read_text())
         window = run.get("window")
-        label = f"w{window:02d}_run{run_index:02d}" if window is not None else None
+        label = None
+        if window is not None:
+            ssh_label = f"w{window:02d}_run{run_index:02d}"
+            local_label = f"run{run_index:02d}"
+            if (scenario_path / "runs" / f"{local_label}.calls.jsonl").exists() and \
+                    not (scenario_path / "runs" / f"{ssh_label}.calls.jsonl").exists():
+                label = local_label
+            else:
+                label = ssh_label
         runs.append((p, run, run_index, label))
     return runs
 
@@ -285,6 +312,8 @@ def parse_reference_ping_rtt(ping_json_path):
 # ---------------------------------------------------------------------------
 def criterion_2(root):
     print("=== Criterion 2: client pcap ClientHello size+SNI == local lab ===")
+    print(f"  reference fixture ({_CLIENTHELLO_FIXTURE_PATH.name}): "
+          + ", ".join(f"{p}={v['size']}B/sni={v['sni']!r}" for p, v in BASELINE_CLIENTHELLO.items()))
     all_ok = True
     any_found = False
     for profile, scenario, scenario_path in find_scenario_dirs(root):
@@ -361,6 +390,32 @@ def _parse_proc_meminfo_raw(raw):
     return meminfo
 
 
+def _normalize_cpu_mem_sample(sample):
+    """Returns (stat_dict_or_None, mem_available_kb_or_None), regardless
+    of which executor produced the sample -- caught live (item 4, this
+    turn): SSHExecutor's sampler writes RAW /proc/stat and /proc/meminfo
+    TEXT under "proc_stat_line"/"proc_meminfo_raw"; LocalExecutor's own
+    _sample_cpu_mem_steal() writes ALREADY-PARSED dicts under "cpu"/
+    "mem" instead -- a different schema, not a variant of the same one.
+    Both schemas can legitimately carry None (SSHExecutor's text would
+    be empty/missing; LocalExecutor's own dicts are None outright on a
+    non-Linux host, e.g. this project's Windows dev machine, which has
+    no /proc at all -- confirmed live, not assumed)."""
+    if "proc_stat_line" in sample or "proc_meminfo_raw" in sample:
+        stat = _parse_proc_stat_line(sample["proc_stat_line"]) if sample.get("proc_stat_line") else None
+        mem = _parse_proc_meminfo_raw(sample["proc_meminfo_raw"]) if sample.get("proc_meminfo_raw") else {}
+        avail_str = mem.get("MemAvailable", "").split()[0] if mem.get("MemAvailable") else None
+        avail_kb = int(avail_str) if avail_str and avail_str.isdigit() else None
+        return stat, avail_kb
+    cpu, mem = sample.get("cpu"), sample.get("mem")
+    stat = {"total": cpu["total"], "idle": cpu["idle"], "steal": cpu["steal"]} if cpu else None
+    avail_kb = None
+    if mem and mem.get("MemAvailable"):
+        avail_str = mem["MemAvailable"].split()[0]
+        avail_kb = int(avail_str) if avail_str.isdigit() else None
+    return stat, avail_kb
+
+
 def criterion_4(root):
     print("=== Criterion 4: steal < 5% every execution; max CPU/memory ===")
     all_ok = True
@@ -379,25 +434,31 @@ def criterion_4(root):
                 print(f"  SKIP {profile}/{scenario}/{label}: fewer than 2 CPU samples -- "
                       f"can't compute a steal/CPU DELTA from a single snapshot")
                 continue
-            any_found = True
             max_steal_pct = 0.0
             max_cpu_pct = 0.0
             min_mem_available_kb = None
+            usable_pairs = 0
             for a, b in zip(samples, samples[1:]):
-                stat_a = _parse_proc_stat_line(a["proc_stat_line"])
-                stat_b = _parse_proc_stat_line(b["proc_stat_line"])
+                stat_a, _ = _normalize_cpu_mem_sample(a)
+                stat_b, avail_kb = _normalize_cpu_mem_sample(b)
+                if stat_a is None or stat_b is None:
+                    continue  # no /proc on this host (e.g. LocalExecutor on Windows) -- not fabricated
                 total_delta = stat_b["total"] - stat_a["total"]
                 if total_delta <= 0:
                     continue
+                usable_pairs += 1
                 steal_pct = (stat_b["steal"] - stat_a["steal"]) / total_delta * 100
                 busy_pct = 100 - (stat_b["idle"] - stat_a["idle"]) / total_delta * 100
                 max_steal_pct = max(max_steal_pct, steal_pct)
                 max_cpu_pct = max(max_cpu_pct, busy_pct)
-                mem = _parse_proc_meminfo_raw(b["proc_meminfo_raw"])
-                avail_str = mem.get("MemAvailable", "").split()[0] if mem.get("MemAvailable") else None
-                if avail_str:
-                    avail_kb = int(avail_str)
+                if avail_kb is not None:
                     min_mem_available_kb = avail_kb if min_mem_available_kb is None else min(min_mem_available_kb, avail_kb)
+            if usable_pairs == 0:
+                print(f"  SKIP {profile}/{scenario}/{label}: no /proc data in any sample pair "
+                      f"(expected on a non-Linux executor host, e.g. LocalExecutor on Windows -- "
+                      f"not computable there, not a fabricated 0%)")
+                continue
+            any_found = True
             ok = max_steal_pct < STEAL_THRESHOLD_PCT
             all_ok = all_ok and ok
             overall_max_cpu_pct = max(overall_max_cpu_pct, max_cpu_pct)
@@ -518,14 +579,19 @@ def criterion_7(root):
             d = result.get("t_fluxo_seconds")
             if d is None:
                 continue
-            if result.get("tcpdump_skipped"):
-                without_tcpdump.append(d)
-            else:
+            # tcpdump_enabled is True (capture) unless the pilot's own
+            # A/B test (CAMPAIGN_TCPDUMP_AB_TEST) was explicitly on for
+            # this run; missing entirely (data predating this field)
+            # defaults to True, matching the always-capture default.
+            enabled = result.get("tcpdump_enabled", True)
+            if enabled:
                 with_tcpdump.append(d)
+            else:
+                without_tcpdump.append(d)
     if not without_tcpdump:
-        print("  N/A -- no executions found with tcpdump deliberately skipped "
-              "(set CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES to a few global run indices, "
-              "e.g. \"9,10\", before the pilot to produce a comparison group)")
+        print("  N/A -- no executions found with tcpdump deliberately disabled "
+              "(set CAMPAIGN_TCPDUMP_AB_TEST=1 before the pilot so capture alternates "
+              "on/off one by one and produces a comparison group)")
         return None
     avg_with = sum(with_tcpdump) / len(with_tcpdump) if with_tcpdump else None
     avg_without = sum(without_tcpdump) / len(without_tcpdump)

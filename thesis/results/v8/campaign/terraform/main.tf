@@ -186,152 +186,44 @@ data "aws_subnets" "ap_northeast_2_default" {
 
 # x86_64 AL2023 -- every server/client candidate instance type discussed
 # so far (m7i-flex, c7i-flex, m6i, c6i) is Intel/AMD-based, not Graviton.
+#
+# AMI resolution (this turn): PINNED, not looked up dynamically. Until
+# now this was `data "aws_ami" { most_recent = true, owners =
+# ["amazon"], filter { name = "al2023-ami-*-kernel-*-x86_64" } ... }`,
+# one per region -- resolved FRESH on every single `plan`/`apply`. A
+# real multi-day campaign (settling + 3 windows, Decision 49) could
+# silently land on a DIFFERENT AMI build on a later `apply` than the
+# pilot used, if Amazon publishes a new AL2023 build in between (it
+# does so roughly monthly) -- undermining the "same measured
+# environment across windows" requirement the whole campaign depends
+# on, and doing so completely silently (Terraform would show it as an
+# ordinary, expected-looking instance replacement, not flag it as an
+# environment change). Pinned instead, below, to the IDs a real,
+# read-only `describe-images` query (boto3, `mockopin-pqc` profile,
+# the EXACT same name/architecture/virtualization-type filter the old
+# data sources used) returned on 2026-10-20 -- captured once, reused
+# for the whole campaign (pilot AND full run), and recorded (with this
+# same reasoning) in `v8/latency/_campaign-control/environment/` by
+# `record_environment.py` at campaign start, per instance, so a later
+# audit can directly compare what was PINNED against what was ACTUALLY
+# running. To move to a newer AMI deliberately (a real reason: a
+# security update, e.g.), re-run the same describe-images query by
+# hand and update this map explicitly -- never let Terraform re-resolve
+# it silently again.
 locals {
-  x86_ami_filter = {
-    name_filter  = ["al2023-ami-*-kernel-*-x86_64"]
-    arch         = ["x86_64"]
-    virt         = ["hvm"]
+  pinned_ami_x86_by_region = {
+    "sa-east-1"      = "ami-0c7fb00ead73effc8" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-x86_64
+    "us-east-1"      = "ami-03a2752ac82dbfc66" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-x86_64
+    "ap-northeast-1" = "ami-07908d9183aa2e0f6" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-x86_64
+    "ca-central-1"   = "ami-073c8a97e35135677" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.18-x86_64
+    "eu-north-1"     = "ami-0048d119f137c7738" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-x86_64
+    "ap-southeast-1" = "ami-012634091f2034c69" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-x86_64
+    "ap-northeast-2" = "ami-01d3141f570d67f71" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.18-x86_64
   }
-}
-
-data "aws_ami" "x86_sa_east_1" {
-  provider    = aws.sa_east_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_us_east_1" {
-  provider    = aws.us_east_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_ap_northeast_1" {
-  provider    = aws.ap_northeast_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_ca_central_1" {
-  provider    = aws.ca_central_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_eu_north_1" {
-  provider    = aws.eu_north_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_ap_southeast_1" {
-  provider    = aws.ap_southeast_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-data "aws_ami" "x86_ap_northeast_2" {
-  provider    = aws.ap_northeast_2
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = local.x86_ami_filter.name_filter
-  }
-  filter {
-    name   = "architecture"
-    values = local.x86_ami_filter.arch
-  }
-  filter {
-    name   = "virtualization-type"
-    values = local.x86_ami_filter.virt
-  }
-}
-
-# arm64 for the control instance only (t4g.micro, same free-tier pattern
-# as every discovery instance in this project).
-data "aws_ami" "arm64_sa_east_1" {
-  provider    = aws.sa_east_1
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-kernel-*-arm64"]
-  }
-  filter {
-    name   = "architecture"
-    values = ["arm64"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+  # arm64 for the control instance only (t4g.micro, same free-tier
+  # pattern as every discovery instance in this project) -- same
+  # pinning rationale, same capture date/query.
+  pinned_ami_arm64_sa_east_1 = "ami-0518be3fcd9e81858" # al2023-ami-minimal-2023.12.20261016.0-kernel-6.12-arm64
 }
 
 # ============================================================
@@ -341,7 +233,7 @@ data "aws_ami" "arm64_sa_east_1" {
 # installations are active (it's where the orchestrator itself runs).
 # ============================================================
 locals {
-  enabled_installations = toset([for s in var.enabled_client_scenarios : split("@", s)[1]])
+  enabled_installations  = toset([for s in var.enabled_client_scenarios : split("@", s)[1]])
   sa_east_1_enabled      = contains(local.enabled_installations, "sa-east-1")
   us_east_1_enabled      = contains(local.enabled_installations, "us-east-1")
   ap_northeast_1_enabled = contains(local.enabled_installations, "ap-northeast-1")
@@ -362,17 +254,17 @@ locals {
 # ============================================================
 
 module "control" {
-  source                = "./modules/campaign_instance"
-  providers              = { aws = aws.sa_east_1 }
-  name_tag              = "control"
-  role                  = "control"
-  instance_type         = var.control_instance_type
-  ami_id                = data.aws_ami.arm64_sa_east_1.id
-  vpc_id                = data.aws_vpc.sa_east_1.id
-  subnet_id             = data.aws_subnets.sa_east_1_default.ids[0]
-  key_name              = aws_key_pair.operator_sa_east_1.key_name
-  ssh_ingress_cidrs     = [var.operator_ip_cidr]
-  self_terminate_hours  = 0 # exempt, Decision 49
+  source               = "./modules/campaign_instance"
+  providers            = { aws = aws.sa_east_1 }
+  name_tag             = "control"
+  role                 = "control"
+  instance_type        = var.control_instance_type
+  ami_id               = local.pinned_ami_arm64_sa_east_1
+  vpc_id               = data.aws_vpc.sa_east_1.id
+  subnet_id            = data.aws_subnets.sa_east_1_default.ids[0]
+  key_name             = aws_key_pair.operator_sa_east_1.key_name
+  ssh_ingress_cidrs    = [var.operator_ip_cidr]
+  self_terminate_hours = 0 # exempt, Decision 49
 }
 
 # ============================================================
@@ -386,7 +278,7 @@ module "client_l0" {
   name_tag             = "client-l0"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_sa_east_1.id
+  ami_id               = local.pinned_ami_x86_by_region["sa-east-1"]
   vpc_id               = data.aws_vpc.sa_east_1.id
   subnet_id            = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the sa-east-1 server -- Decision 41
   key_name             = aws_key_pair.campaign_sa_east_1.key_name
@@ -401,7 +293,7 @@ module "client_ca_central_1_a" {
   name_tag             = "client-ca-central-1-a"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_ca_central_1.id
+  ami_id               = local.pinned_ami_x86_by_region["ca-central-1"]
   vpc_id               = data.aws_vpc.ca_central_1.id
   subnet_id            = data.aws_subnets.ca_central_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ca_central_1.key_name
@@ -416,7 +308,7 @@ module "client_ca_central_1_b" {
   name_tag             = "client-ca-central-1-b"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_ca_central_1.id
+  ami_id               = local.pinned_ami_x86_by_region["ca-central-1"]
   vpc_id               = data.aws_vpc.ca_central_1.id
   subnet_id            = data.aws_subnets.ca_central_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ca_central_1.key_name
@@ -431,7 +323,7 @@ module "client_eu_north_1" {
   name_tag             = "client-eu-north-1"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_eu_north_1.id
+  ami_id               = local.pinned_ami_x86_by_region["eu-north-1"]
   vpc_id               = data.aws_vpc.eu_north_1.id
   subnet_id            = data.aws_subnets.eu_north_1_default.ids[0]
   key_name             = aws_key_pair.campaign_eu_north_1.key_name
@@ -446,7 +338,7 @@ module "client_ap_southeast_1" {
   name_tag             = "client-ap-southeast-1"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_ap_southeast_1.id
+  ami_id               = local.pinned_ami_x86_by_region["ap-southeast-1"]
   vpc_id               = data.aws_vpc.ap_southeast_1.id
   subnet_id            = data.aws_subnets.ap_southeast_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ap_southeast_1.key_name
@@ -461,7 +353,7 @@ module "client_ap_northeast_2" {
   name_tag             = "client-ap-northeast-2"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_ap_northeast_2.id
+  ami_id               = local.pinned_ami_x86_by_region["ap-northeast-2"]
   vpc_id               = data.aws_vpc.ap_northeast_2.id
   subnet_id            = data.aws_subnets.ap_northeast_2_default.ids[0]
   key_name             = aws_key_pair.campaign_ap_northeast_2.key_name
@@ -480,7 +372,7 @@ module "client_l0_us_east_1" {
   name_tag             = "client-l0-us-east-1"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_us_east_1.id
+  ami_id               = local.pinned_ami_x86_by_region["us-east-1"]
   vpc_id               = data.aws_vpc.us_east_1.id
   subnet_id            = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 server
   key_name             = aws_key_pair.campaign_us_east_1.key_name
@@ -495,7 +387,7 @@ module "client_l0_ap_northeast_1" {
   name_tag             = "client-l0-ap-northeast-1"
   role                 = "client"
   instance_type        = var.server_client_instance_type
-  ami_id               = data.aws_ami.x86_ap_northeast_1.id
+  ami_id               = local.pinned_ami_x86_by_region["ap-northeast-1"]
   vpc_id               = data.aws_vpc.ap_northeast_1.id
   subnet_id            = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 server
   key_name             = aws_key_pair.campaign_ap_northeast_1.key_name
@@ -514,16 +406,16 @@ module "client_l0_ap_northeast_1" {
 # ============================================================
 
 module "server_sa_east_1" {
-  count         = local.sa_east_1_enabled ? 1 : 0
-  source        = "./modules/campaign_instance"
-  providers     = { aws = aws.sa_east_1 }
-  name_tag      = "server-sa-east-1"
-  role          = "server"
-  instance_type = var.server_client_instance_type
-  ami_id        = data.aws_ami.x86_sa_east_1.id
-  vpc_id        = data.aws_vpc.sa_east_1.id
-  subnet_id     = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the L0 client
-  key_name      = aws_key_pair.campaign_sa_east_1.key_name
+  count             = local.sa_east_1_enabled ? 1 : 0
+  source            = "./modules/campaign_instance"
+  providers         = { aws = aws.sa_east_1 }
+  name_tag          = "server-sa-east-1"
+  role              = "server"
+  instance_type     = var.server_client_instance_type
+  ami_id            = local.pinned_ami_x86_by_region["sa-east-1"]
+  vpc_id            = data.aws_vpc.sa_east_1.id
+  subnet_id         = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the L0 client
+  key_name          = aws_key_pair.campaign_sa_east_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
   # Item 5: one rule per ENABLED client only -- a disabled scenario's
   # module has count=0, so referencing it unconditionally would error
@@ -539,16 +431,16 @@ module "server_sa_east_1" {
 }
 
 module "server_us_east_1" {
-  count         = local.us_east_1_enabled ? 1 : 0
-  source        = "./modules/campaign_instance"
-  providers     = { aws = aws.us_east_1 }
-  name_tag      = "server-us-east-1"
-  role          = "server"
-  instance_type = var.server_client_instance_type
-  ami_id        = data.aws_ami.x86_us_east_1.id
-  vpc_id        = data.aws_vpc.us_east_1.id
-  subnet_id     = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 L0 client (Decision 53)
-  key_name      = aws_key_pair.campaign_us_east_1.key_name
+  count             = local.us_east_1_enabled ? 1 : 0
+  source            = "./modules/campaign_instance"
+  providers         = { aws = aws.us_east_1 }
+  name_tag          = "server-us-east-1"
+  role              = "server"
+  instance_type     = var.server_client_instance_type
+  ami_id            = local.pinned_ami_x86_by_region["us-east-1"]
+  vpc_id            = data.aws_vpc.us_east_1.id
+  subnet_id         = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 L0 client (Decision 53)
+  key_name          = aws_key_pair.campaign_us_east_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
   gateway_ingress_cidrs = compact([
     local.l0_us_east_1_enabled ? "${module.client_l0_us_east_1[0].private_ip}/32" : "", # co-located -- private IP, same rule as sa-east-1's L0
@@ -558,16 +450,16 @@ module "server_us_east_1" {
 }
 
 module "server_ap_northeast_1" {
-  count         = local.ap_northeast_1_enabled ? 1 : 0
-  source        = "./modules/campaign_instance"
-  providers     = { aws = aws.ap_northeast_1 }
-  name_tag      = "server-ap-northeast-1"
-  role          = "server"
-  instance_type = var.server_client_instance_type
-  ami_id        = data.aws_ami.x86_ap_northeast_1.id
-  vpc_id        = data.aws_vpc.ap_northeast_1.id
-  subnet_id     = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 L0 client (Decision 53)
-  key_name      = aws_key_pair.campaign_ap_northeast_1.key_name
+  count             = local.ap_northeast_1_enabled ? 1 : 0
+  source            = "./modules/campaign_instance"
+  providers         = { aws = aws.ap_northeast_1 }
+  name_tag          = "server-ap-northeast-1"
+  role              = "server"
+  instance_type     = var.server_client_instance_type
+  ami_id            = local.pinned_ami_x86_by_region["ap-northeast-1"]
+  vpc_id            = data.aws_vpc.ap_northeast_1.id
+  subnet_id         = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 L0 client (Decision 53)
+  key_name          = aws_key_pair.campaign_ap_northeast_1.key_name
   ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
   gateway_ingress_cidrs = compact([
     local.l0_ap_northeast_1_enabled ? "${module.client_l0_ap_northeast_1[0].private_ip}/32" : "", # co-located -- private IP
