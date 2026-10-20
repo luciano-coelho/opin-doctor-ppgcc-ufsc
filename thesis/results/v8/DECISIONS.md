@@ -4776,3 +4776,170 @@ turn the test itself ran ("não commita," that turn's own instruction,
 while Luciano was still reviewing results) and are committed THIS turn
 instead, now that he's chosen.
 
+## 74. Software-inventory audit, per role -- found and fixed three gaps that would each have failed the real campaign outright on first contact (a Python-3.9 import-time crash on EVERY execution, no delivery mechanism at all for the two client-only crypto images, no delivery mechanism at all for `insurance-server-lambdas`/`thesis/scripts`/`mock-service-os`); two more real-but-survivable gaps (fictional pip-version pins, bare remote command names that may not resolve in a non-login SSH session); an AWS-error redaction filter; pilot `terraform plan` reconfirmed 21/0/0
+
+A no-AWS-mutation turn (every finding below came from a real
+`amazonlinux:2023` container -- x86_64 AND arm64 -- or from reading
+`campaign_run.py`'s own remote commands literally; nothing applied,
+destroyed, or launched). Four items, in the order asked, but the
+findings turned out far more serious than a routine audit -- three of
+them are the kind of gap that fails 100% of real executions, not a
+conditional edge case.
+
+### Item 1 — per-role software inventory
+
+| Role | Needs | How it reaches the instance (before this turn) | How it reaches the instance (now) |
+|---|---|---|---|
+| **All three** | `docker`, `rsync`, `chrony`(`chronyc`), `tcpdump`, `ping`(iputils), `ss`(iproute), `flock`(util-linux-core), `python3-pip` | `docker`+`rsync` only (Decision 71) -- the other 6 were MISSING from the AL2023 **minimal** AMI (confirmed empirically: a real `amazonlinux:2023` container has only `python3` and `curl` out of the box) and campaign_run.py already calls `chronyc`/`ping`/`flock`/`tcpdump` remotely by bare name, with no install step and no abort-on-missing guard for 4 of those 5 | `templates/install_common_packages.sh` (renamed from `install_docker_and_rsync.sh`), one `dnf install`, all 3 roles, unconditional |
+| **Server** | `insurance-server-lambdas/` (`docker-compose.yml` + `participants.json`/`software_statement.json`/`mongod.conf`/`pg_hba.conf`), `mock-service-os/` (`certs/`+`ssa/`+`setup_ssm.sh`), `thesis/scripts/*.py` (for `switch_crypto_profile.py`'s own settling calls, which import `opin_flow.py`) + its pip deps, the 4 custom server docker images | Docker images only, via `deliver_images.sh` -- **nothing ever shipped the compose file, the config files, or the Python source at all**; confirmed by reading `start_block_proxies()`'s own remote command literally: `cd insurance-server-lambdas && ... python3 ../thesis/scripts/switch_crypto_profile.py` -- that directory never existed on a real server | New `deliver_source.sh` (operator → control → every server AND client, same relay `deliver_images.sh` already uses) + `deliver_images.sh` |
+| **Client** | `thesis/scripts/*.py` + its pip deps, `mock-service-os/certs/` (own client cert), the precompiled `tls_kem_proxy` image, the `mockopin-pqc-signer` image | Same gap as the server's Python source, PLUS: **neither crypto image had any delivery mechanism to a client, ever** -- `mockopin-pqc-signer` has no auto-build fallback in `opin_flow.py` at all (a missing image just fails `docker run` outright); `mockopin/tls_kem_proxy:precompiled` DOES auto-build on demand, but only when `TLS_KEM_PROXY_USE_PRECOMPILED=1`, which `SSHExecutor` never set -- every real remote pqc/hybrid execution was defaulting to `go run .` against a Go source directory that was never shipped either | `deliver_source.sh` (Python source + certs) + `deliver_images.sh`'s new `CLIENT_IMAGES` list (`mockopin-pqc-signer`, `mockopin/tls_kem_proxy:precompiled`) + `campaign_run.py`'s `_REMOTE_CLIENT_ENV()` now sets `TLS_KEM_PROXY_USE_PRECOMPILED=1` on every remote client invocation |
+| **Control** | `python3` (stdlib only -- `campaign_run.py` has no pip dependency), `rsync` (operator→control leg of image/source delivery), `systemd` (runs `campaign_run.py` as a service) | Already covered (Decision 71) | Unchanged |
+
+**Two more real, previously-undocumented bugs found while building the
+fix, both corrected:**
+- `cd insurance-server-lambdas && ... python3 ../thesis/scripts/switch_crypto_profile.py`
+  (server-side) and `python3 campaign_client_runner.py` (client-side, no
+  `cd` at all) assumed TWO DIFFERENT directory layouts -- the server's
+  own relative path (`../thesis/scripts/`) only resolves correctly if
+  `thesis/scripts/` and `insurance-server-lambdas/` are siblings under
+  `~`, while the client's bare invocation assumed `campaign_client_runner.py`
+  sits directly at `~` -- but `opin_flow.py` (which it imports) computes
+  `CERTS_DIR` from ITS OWN file location assuming the real repo's
+  nesting (`thesis/scripts/` two levels under the tree root), which
+  contradicts a flat `~` layout. Resolved by mirroring the repo's own
+  relative nesting under `~` on every instance (`~/thesis/scripts/`,
+  `~/insurance-server-lambdas/`, `~/mock-service-os/`) and adding the
+  one missing `cd ~/thesis/scripts &&` to all 4 of `campaign_run.py`'s
+  own remote client-invocation sites (settling, warmup, the real
+  execution, and the detached proxy-start call) -- zero changes to
+  `opin_flow.py`'s own path computation, which was already correct for
+  this layout.
+- `deliver_images.sh`'s per-image distribution loop was hardcoded to
+  `inv["servers"]` -- generalized into `deliver_image_set()`,
+  parameterized by inventory key, called once for `IMAGES`→`servers`
+  and once for the new `CLIENT_IMAGES`→`clients`.
+
+### Item 2 — AL2023's real Python, and the single most severe finding this audit turned up
+
+**Confirmed via AWS's own official documentation**
+(`docs.aws.amazon.com/linux/al2023/ug/python.html`): AL2023's
+`/usr/bin/python3` is Python **3.9**, for the whole life of the AMI, by
+design (newer versions are available side by side, namespaced, but
+3.9 is what every bare `python3` invocation this project's own remote
+commands use actually gets).
+
+**Then confirmed live, not assumed:** a real `import opin_flow` inside
+a real `amazonlinux:2023` container running real Python 3.9.25 crashed
+immediately, at MODULE LEVEL, before any function could even be
+called:
+```
+File "opin_flow.py", line 437, in <module>
+    _PQC_SIGNER_SERVICE_URL: str | None = None
+TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'
+```
+PEP 604's `X | Y` union-type syntax (also used in 3 function
+signatures in the same file) is a Python 3.10+ feature -- `opin_flow.py`
+has no `from __future__ import annotations`, so Python 3.9 tries to
+evaluate `str | None` as a real expression instead of deferring it to
+a string, and `str.__or__` doesn't exist yet. **This is the single
+worst gap this audit found: it would have failed EVERY real execution
+of the real AWS campaign, on every client, for every profile including
+classic -- not a conditional failure like the crypto-image gaps above,
+a universal one, on first contact.** `campaign_client_runner.py` (run
+on every client) imports `opin_flow.py` directly; so does
+`switch_crypto_profile.py` (now also run on every server, per item 1
+above).
+
+**Fixed with one line** (`from __future__ import annotations`, PEP
+563, at the top of `opin_flow.py`, before any other import) --
+confirmed live, the SAME real Python 3.9 container, that `import
+opin_flow` now succeeds, and that `latency_automation`/
+`campaign_client_runner`'s own transitive imports succeed too.
+`campaign_run.py` and `pilot_acceptance.py` (control's own scripts, no
+`opin_flow` dependency) were ALSO confirmed importable under real
+Python 3.9 on BOTH x86_64 and arm64 (control's own architecture) --
+neither needed any change; grepping the same union-type pattern across
+every other file in scope (`campaign_run.py`, `pilot_acceptance.py`,
+`latency_automation.py`, `campaign_client_runner.py`,
+`baseline_automation.py`, `switch_crypto_profile.py`) found zero other
+occurrences.
+
+**pip dependencies, also confirmed on both architectures:** all 6 of
+`thesis/scripts/requirements.txt`'s packages install cleanly (prebuilt
+manylinux wheels, no compiler needed) under real Python 3.9 on BOTH
+x86_64 and arm64, and `opin_flow`/`latency_automation`/
+`campaign_client_runner` all import successfully afterward -- but two
+of the six EXACT pinned versions (`requests==2.34.2`, `urllib3==2.7.0`)
+**do not exist on the real PyPI** (confirmed by actually trying to
+`pip download` each exact pin individually, not assumed from a batch
+failure) -- `pip install -r requirements.txt` would have failed
+outright on any fresh real client instance. Fixed: all six pins
+updated to the latest REAL versions confirmed to both exist and
+install together cleanly (`requests==2.32.5`, `PyJWT==2.15.1`,
+`cryptography==50.0.2`, `pyOpenSSL==26.4.0`, `urllib3==2.6.3`,
+`rfc8785==0.1.4`) -- `pyOpenSSL` kept (it IS real, and `opin_flow.py`'s
+own try/except around `urllib3.contrib.pyopenssl` still wants it
+available when possible, even though it degrades gracefully without
+it).
+
+### Item 3 — AWS error messages, redacted
+
+A real incident this session (an `AccessDeniedException` from a denied
+`pricing:DescribeServices` call printed this project's full IAM ARN --
+account ID included -- in a tool result) showed that AWS-sourced error
+text cannot be trusted to never mention the account ID, even though
+nothing asked it to. New `redact_aws_errors.py`: masks any `arn:aws:...`
+token and any standalone 12-digit number (AWS account IDs are always
+exactly 12 digits), line-buffered so it's safe to pipe a live,
+streaming command through without losing real-time visibility. Wired
+into every AWS-adjacent command whose error output this project's own
+scripts already surface to a human: `campaign_up.sh`'s two
+`terraform apply` calls, `campaign_down.sh`'s `terraform destroy` call
+and its own boto3 teardown-verification block (wrapped in a
+`try`/`except botocore.exceptions.ClientError` that redacts the
+exception text before it's ever printed or raised). `pipefail` (already
+set in both scripts) means a failing `terraform` call still fails the
+script despite now being the first stage of a pipeline.
+
+**A related, not-yet-fully-settled finding:** every bare remote
+command this project issues for a tool living in `/usr/sbin`
+(`tcpdump`, `ping`, `ss`) or relying on PATH at all (`flock`,
+`chronyc`) assumed a non-login `ssh host "cmd"` session sources
+`/etc/profile`'s own non-root `pathmunge ... after` addition of
+`/usr/sbin`/`/usr/local/sbin` -- confirmed AL2023 DOES add that for a
+LOGIN shell, but a plain non-interactive `ssh host "cmd"` (what every
+SSH call in this project actually is) is NEITHER interactive NOR a
+login shell by default, and this could not be fully confirmed one way
+or the other without a real EC2 sshd session to test against (not
+available this no-AWS-mutation turn). Hardened anyway, at zero
+ongoing cost: every one of `campaign_run.py`'s own bare invocations of
+these tools (`server_flock_wrap()`, the tcpdump start command, the
+reference-ping and chronyc-tracking calls) now uses the absolute path
+(`/usr/bin/flock`, `/usr/sbin/tcpdump`, `/usr/sbin/ping`,
+`/usr/bin/chronyc`) instead of trusting PATH -- same fix applied to
+`campaign_up.sh`'s own `chronyc tracking` connectivity check. This
+remains an OPEN finding in the sense that the underlying PATH question
+was never conclusively answered on a real instance -- but the fix
+removes any dependency on the answer either way.
+
+### Item 4 — pilot `terraform plan`, reconfirmed
+
+After every change above (`install_common_packages.sh` rename,
+`main.tf`'s locals update), `terraform validate` passes and a real
+`terraform plan` against the pilot's exact scope (`sa-east-1` only,
+`L0`+`L325` clients, control) still shows **`Plan: 21 to add, 0 to
+change, 0 to destroy`** -- unchanged from every prior pilot plan this
+session. Not applied.
+
+**Open questions, honestly stated:** none of today's fixes have been
+run against a real EC2 instance yet -- every confirmation is a real
+Python 3.9/pip/dnf test inside a real `amazonlinux:2023` container
+(x86_64 and arm64), not a real AWS boot. The PATH question for
+non-login SSH sessions (item 3) was hardened around, not resolved.
+`deliver_source.sh` has not been rehearsed live (no 3-container
+rehearsal this turn, unlike `deliver_images.sh`'s own Decision 67/69
+rehearsals) -- its tar/rsync logic was verified by actually building
+the real tarball from this real repo and inspecting its contents, not
+by a live SSH round trip. The flex-type gap from Decision 73
+(`m6i.large`/`c6i.xlarge`/`c5.2xlarge` never tested) remains open.
+

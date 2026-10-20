@@ -160,18 +160,45 @@ local check — it contains real IPs).
 Any row that doesn't match → **abort** (see criteria below), do not
 proceed to step 5.
 
-### 5. Deliver images, run settling + the acceptance battery
+### 5. Deliver source + images, run settling + the acceptance battery
+
+Software-inventory audit (v8): `deliver_images.sh` alone is not
+enough — it only ever shipped docker image tarballs. Neither
+`insurance-server-lambdas/`'s own `docker-compose.yml`/config files
+(needed on every SERVER) nor `thesis/scripts/`'s own `.py` files +
+`mock-service-os/`'s certs (needed on every SERVER *and* CLIENT) had
+any delivery mechanism before this turn — confirmed by reading
+`campaign_run.py`'s own remote commands literally (`cd
+insurance-server-lambdas && ...`, `python3 campaign_client_runner.py`),
+neither path existed on a fresh instance. Run `deliver_source.sh`
+FIRST (places the files `deliver_images.sh`'s own targets — the
+settling/warmup/execution commands — depend on, and installs the pip
+dependencies as its own last step), THEN `deliver_images.sh`:
 
 ```bash
 cd thesis/results/v8/campaign/scripts
 MOCKOPIN_CONTROL_IP_OVERRIDE="<CONTROL_IP>" \
+  bash deliver_source.sh campaign.vars.local.sh
+MOCKOPIN_CONTROL_IP_OVERRIDE="<CONTROL_IP>" \
   bash deliver_images.sh campaign.vars.local.sh
 ```
 
-**Expected final line:** `==> deliver_images.sh completed for all 4 images.`
-(the 4 custom-built images — Decision 55; the 3 stock images pull from
-their own public registries on the server directly, no delivery step
-needed for them).
+**Expected final lines:** `==> deliver_source.sh completed.` then
+`==> deliver_images.sh completed for all 6 images (4 server + 2
+client).` (the 4 custom-built server images, Decision 55, plus the 2
+client-only images this turn's audit found were never delivered to
+any client at all — `mockopin-pqc-signer`/`mockopin/tls_kem_proxy:precompiled`;
+the 3 stock server images pull from their own public registries on the
+server directly, no delivery step needed for them).
+
+**Before trusting either step succeeded, check directly** (proxied
+through control, same as every other check in this runbook):
+`ssh ... <SERVER_IP> "test -f ~/insurance-server-lambdas/docker-compose.yml && test -f ~/thesis/scripts/opin_flow.py && echo OK"`
+on each server, and `ssh ... <CLIENT_IP> "test -f ~/thesis/scripts/opin_flow.py && python3 -c 'import sys; sys.path.insert(0,\"thesis/scripts\"); import opin_flow' && echo OK"`
+on each client — the second half of the client check is the real test
+(`import opin_flow` is what actually failed, repeatedly, under AL2023's
+real Python 3.9, before this turn's `from __future__ import annotations`
+fix; a bare file-existence check alone would not have caught that).
 
 Then start the orchestrator itself (on the control instance, as a
 systemd service — `campaign_run.service`, already written) with the
