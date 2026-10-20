@@ -680,6 +680,17 @@ _SERVER_LOCKS = {name: threading.Lock() for name in SCENARIO_ROTATION}
 SSH_TIMEOUT_SECONDS = 30
 SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
 
+# Pilot acceptance criterion 7 (this turn): T_fluxo with vs. without
+# tcpdump, "some executions of each" -- comma-separated GLOBAL run
+# indices (the number in `run{NN}.json`'s own filename) to run WITHOUT
+# tcpdump, for direct within-dataset comparison by
+# `pilot_acceptance.py`. Unset (the default) means every execution
+# captures, unchanged from today's behavior -- this is an opt-in
+# comparison mechanism, not a new default.
+TCPDUMP_SKIP_RUN_INDICES = {
+    int(x) for x in os.environ.get("CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES", "").split(",") if x.strip()
+}
+
 
 class SSHExecutor:
     """Real-AWS executor -- control instance SSHing into the client
@@ -932,6 +943,43 @@ class SSHExecutor:
         $HOME->literal-path fix, so quoting would add nothing."""
         return f"sudo kill $(cat {pid_path}) 2>/dev/null; sleep 1; true"
 
+    def _cpu_mem_sampler_start_cmd(self, label, side):
+        """Pilot acceptance criterion 4 (this turn): `steal` is a DELTA
+        between two `/proc/stat` readings, not a single counter value
+        -- a single before/after-less snapshot (what this class did
+        until now) cannot compute it at all, only `LocalExecutor`'s own
+        A.9 periodic sampler could. Fixed by backgrounding a small
+        Python loop (via `python3 -c`, same safe-quoting approach as
+        the proxy-start command, A.3) that appends one JSON line per
+        second to a file for the execution's whole duration -- no
+        `sudo` needed (`/proc/stat`/`/proc/meminfo` are world-readable),
+        so none of tcpdump's sudo-PID-capture pitfalls (A.6) apply
+        here; `echo $!` directly captures the backgrounded loop's own
+        PID."""
+        home = "/home/ec2-user"
+        out_path = f"{home}/{label}.{side}.cpu_mem.jsonl"
+        pid_path = f"{home}/{label}.{side}.cpu_mem.pid"
+        sampler_script = (
+            "import time, json\n"
+            "while True:\n"
+            "    with open('/proc/stat') as f:\n"
+            "        stat_line = f.readline().strip()\n"
+            "    with open('/proc/meminfo') as f:\n"
+            "        meminfo_raw = f.read()\n"
+            "    print(json.dumps({'sampled_at_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),"
+            " 'proc_stat_line': stat_line, 'proc_meminfo_raw': meminfo_raw}), flush=True)\n"
+            "    time.sleep(1)\n"
+        )
+        inner = f"nohup python3 -c {shlex.quote(sampler_script)} > {out_path} 2>&1 & echo $! > {pid_path}"
+        remote_cmd = f"setsid sh -c {shlex.quote(inner)}"
+        return remote_cmd, pid_path, out_path
+
+    @staticmethod
+    def _cpu_mem_sampler_stop_cmd(pid_path):
+        """Same `kill`-a-real-PID pattern as `_tcpdump_stop_cmd` -- no
+        `sudo` needed here either, since the sampler never used it."""
+        return f"kill $(cat {pid_path}) 2>/dev/null; sleep 1; true"
+
     def start_block_proxies(self, installation, profile, scenarios, window):
         server_ip = self._server_ip(installation)
         # Decision 64/A.10: flock-wrapped -- the profile switch touches
@@ -1073,20 +1121,38 @@ class SSHExecutor:
             client_ip = self._client_ip(f"{scenario}@{installation}")
             server_ip = self._server_ip(installation)
             label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
+            skip_tcpdump = run_index in TCPDUMP_SKIP_RUN_INDICES
 
-            server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
-            client_tcpdump_cmd, client_pid, client_log, client_pcap = self._tcpdump_start_cmd(label, "client")
-            self._run_or_print(f"[{installation}/{scenario}] tcpdump start (server)",
-                                self._ssh_cmd(server_ip, server_tcpdump_cmd))
-            self._run_or_print(f"[{installation}/{scenario}] tcpdump start (client)",
-                                self._ssh_cmd(client_ip, client_tcpdump_cmd))
-            # A.6/Decision 63: a backgrounded start succeeding at the SSH
-            # level doesn't mean tcpdump itself is actually alive (bad
-            # interface, binary missing) -- this follow-up check aborts
-            # loudly if it isn't, same as LocalExecutor's own liveness
-            # check.
-            self._verify_tcpdump_started(server_ip, f"[{installation}/{scenario}] tcpdump (server)", server_pid)
-            self._verify_tcpdump_started(client_ip, f"[{installation}/{scenario}] tcpdump (client)", client_pid)
+            if not skip_tcpdump:
+                server_tcpdump_cmd, server_pid, server_log, server_pcap = self._tcpdump_start_cmd(label, "server")
+                client_tcpdump_cmd, client_pid, client_log, client_pcap = self._tcpdump_start_cmd(label, "client")
+                self._run_or_print(f"[{installation}/{scenario}] tcpdump start (server)",
+                                    self._ssh_cmd(server_ip, server_tcpdump_cmd))
+                self._run_or_print(f"[{installation}/{scenario}] tcpdump start (client)",
+                                    self._ssh_cmd(client_ip, client_tcpdump_cmd))
+                # A.6/Decision 63: a backgrounded start succeeding at the SSH
+                # level doesn't mean tcpdump itself is actually alive (bad
+                # interface, binary missing) -- this follow-up check aborts
+                # loudly if it isn't, same as LocalExecutor's own liveness
+                # check.
+                self._verify_tcpdump_started(server_ip, f"[{installation}/{scenario}] tcpdump (server)", server_pid)
+                self._verify_tcpdump_started(client_ip, f"[{installation}/{scenario}] tcpdump (client)", client_pid)
+            else:
+                print(f"  [{installation}/{scenario}] run {label}: tcpdump DELIBERATELY SKIPPED "
+                      f"(CAMPAIGN_TCPDUMP_SKIP_RUN_INDICES, pilot acceptance criterion 7)")
+                server_pid = client_pid = server_pcap = client_pcap = None
+
+            # Pilot acceptance criterion 4: periodic CPU/steal/mem
+            # sampling, independent of whether tcpdump itself is
+            # running this execution -- started/stopped around the
+            # SAME window as tcpdump (if any), not gated by
+            # `skip_tcpdump`.
+            server_sampler_cmd, server_sampler_pid, server_sampler_out = self._cpu_mem_sampler_start_cmd(label, "server")
+            client_sampler_cmd, client_sampler_pid, client_sampler_out = self._cpu_mem_sampler_start_cmd(label, "client")
+            self._run_or_print(f"[{installation}/{scenario}] CPU/mem sampler start (server)",
+                                self._ssh_cmd(server_ip, server_sampler_cmd))
+            self._run_or_print(f"[{installation}/{scenario}] CPU/mem sampler start (client)",
+                                self._ssh_cmd(client_ip, client_sampler_cmd))
 
             since_dt = datetime.now(timezone.utc)
             remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
@@ -1097,27 +1163,32 @@ class SSHExecutor:
             )
             until_dt = datetime.now(timezone.utc)
 
-            self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (server)",
-                                self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
-            self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (client)",
-                                self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
+            if not skip_tcpdump:
+                self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (server)",
+                                    self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
+                self._run_or_print(f"[{installation}/{scenario}] tcpdump stop (client)",
+                                    self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
 
-            # A.5: the full remote-data surface -- gateway log, CPU/
-            # steal/mem, reference ping, chronyc tracking, and the
-            # detected interfaces. Real round trips now (not previews
-            # only); results are folded into the run's own JSON/files,
-            # mirroring LocalExecutor's own artifact layout exactly so
-            # campaign_pull.sh's tree doesn't need to know which
-            # executor produced them.
+            self._run_or_print(f"[{installation}/{scenario}] CPU/mem sampler stop (server)",
+                                self._ssh_cmd(server_ip, self._cpu_mem_sampler_stop_cmd(server_sampler_pid)))
+            self._run_or_print(f"[{installation}/{scenario}] CPU/mem sampler stop (client)",
+                                self._ssh_cmd(client_ip, self._cpu_mem_sampler_stop_cmd(client_sampler_pid)))
+            server_cpu_mem_samples = self._run_or_print(f"[{installation}/{scenario}] fetch CPU/mem samples (server)",
+                                                         self._ssh_cmd(server_ip, f"cat {server_sampler_out}"))
+            client_cpu_mem_samples = self._run_or_print(f"[{installation}/{scenario}] fetch CPU/mem samples (client)",
+                                                         self._ssh_cmd(client_ip, f"cat {client_sampler_out}"))
+
+            # A.5: the full remote-data surface -- gateway log, reference
+            # ping, chronyc tracking, and the detected interfaces. Real
+            # round trips now (not previews only); results are folded
+            # into the run's own JSON/files, mirroring LocalExecutor's
+            # own artifact layout exactly so campaign_pull.sh's tree
+            # doesn't need to know which executor produced them.
             gateway_log = self._run_or_print(
                 f"[{installation}/{scenario}] fetch gateway log (server)",
                 self._ssh_cmd(server_ip, f"docker logs -t --since {since_dt.isoformat()} "
                                           f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
             )
-            server_cpu_mem = self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (server)",
-                                                 self._ssh_cmd(server_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
-            client_cpu_mem = self._run_or_print(f"[{installation}/{scenario}] sample CPU/steal/mem (client)",
-                                                 self._ssh_cmd(client_ip, "cat /proc/stat; echo ---; cat /proc/meminfo"))
             ping_output = self._run_tolerant(f"[{installation}/{scenario}] reference ping (client -> server)",
                                               self._ssh_cmd(client_ip, f"ping -c 10 -q {shlex.quote(server_ip)}"))
             server_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
@@ -1146,8 +1217,12 @@ class SSHExecutor:
                 for call in calls:
                     f.write(json.dumps(call) + "\n")
             (server_dir / f"{label}_gateway.log").write_text(gateway_log or "")
-            (server_dir / f"{label}_cpu.jsonl").write_text(json.dumps({"raw_proc_stat_and_meminfo": server_cpu_mem}) + "\n")
-            (client_dir / f"{label}_cpu.jsonl").write_text(json.dumps({"raw_proc_stat_and_meminfo": client_cpu_mem}) + "\n")
+            # Pilot acceptance criterion 4: the fetched content IS
+            # already one JSON object per line (the remote sampler's
+            # own `print()` per sample) -- written through as-is, same
+            # jsonl convention LocalExecutor's own A.9 sampler uses.
+            (server_dir / f"{label}_cpu.jsonl").write_text(server_cpu_mem_samples or "")
+            (client_dir / f"{label}_cpu.jsonl").write_text(client_cpu_mem_samples or "")
             (client_dir / f"{label}_ping.json").write_text(json.dumps({"raw_ping_output": ping_output}) + "\n")
 
             # A.8: client-vs-server drift from each side's own chronyc
@@ -1163,17 +1238,21 @@ class SSHExecutor:
             }
 
             # A.5: pcaps pulled back and gzipped locally, same as
-            # LocalExecutor's own convention.
-            for side, remote_pcap, local_dir in (("server", server_pcap, server_dir), ("client", client_pcap, client_dir)):
-                local_pcap = local_dir / f"{label}.pcap"
-                try:
-                    self._scp_pull(server_ip if side == "server" else client_ip, remote_pcap, local_pcap)
-                except RuntimeError as e:
-                    print(f"  WARNING: {e} -- continuing without this side's pcap", file=sys.stderr)
-                    continue
-                with open(local_pcap, "rb") as f_in, gzip.open(local_dir / f"{label}.pcap.gz", "wb") as f_out:
-                    f_out.write(f_in.read())
-                local_pcap.unlink()
+            # LocalExecutor's own convention. Pilot acceptance
+            # criterion 7: skipped entirely when tcpdump itself was
+            # deliberately skipped -- nothing to pull.
+            result["tcpdump_skipped"] = skip_tcpdump
+            if not skip_tcpdump:
+                for side, remote_pcap, local_dir in (("server", server_pcap, server_dir), ("client", client_pcap, client_dir)):
+                    local_pcap = local_dir / f"{label}.pcap"
+                    try:
+                        self._scp_pull(server_ip if side == "server" else client_ip, remote_pcap, local_pcap)
+                    except RuntimeError as e:
+                        print(f"  WARNING: {e} -- continuing without this side's pcap", file=sys.stderr)
+                        continue
+                    with open(local_pcap, "rb") as f_in, gzip.open(local_dir / f"{label}.pcap.gz", "wb") as f_out:
+                        f_out.write(f_in.read())
+                    local_pcap.unlink()
 
             return result
         finally:

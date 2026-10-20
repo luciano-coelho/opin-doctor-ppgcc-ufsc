@@ -64,12 +64,23 @@ locals {
     { self_terminate_hours = var.self_terminate_hours }
   ) : ""
 
-  # Item 2 (this turn): rsync, control instance only -- see
-  # templates/install_rsync.sh's own comment for why only control needs
-  # it and why it's not a hard dependency either way.
-  install_rsync_user_data = var.role == "control" ? file("${path.module}/templates/install_rsync.sh") : ""
+  # Item 2 (this turn): docker + rsync, on EVERY instance (server,
+  # client, AND control -- not role-gated any more). A real gap found
+  # this turn, not just confirmed: NEITHER package ships on the Amazon
+  # Linux 2023 base AMI by default (confirmed empirically for both --
+  # `docker run --rm amazonlinux:2023 sh -c "command -v docker"` and
+  # the same for `rsync` both find nothing). Without `docker`, NOTHING
+  # in this project's own SSH commands would have worked on a real
+  # instance at all -- none of them prefix `docker` with `sudo`
+  # (campaign_run.py's tcpdump start is the only thing that does,
+  # and that's tcpdump, not docker), so `ec2-user` must be in the
+  # `docker` group on every instance that runs one. `rsync` is
+  # included everywhere per this turn's own explicit instruction, even
+  # though today's deliver_images.sh only actually uses it for the
+  # operator->control leg (control->server stays plain `scp`).
+  install_docker_and_rsync_user_data = file("${path.module}/templates/install_docker_and_rsync.sh")
 
-  user_data_parts    = compact([local.self_terminate_user_data, local.install_rsync_user_data])
+  user_data_parts    = compact([local.self_terminate_user_data, local.install_docker_and_rsync_user_data])
   combined_user_data = length(local.user_data_parts) > 0 ? join("\n", local.user_data_parts) : ""
 }
 

@@ -54,6 +54,21 @@ export TF_VAR_operator_ip_cidr="${OPERATOR_IP}/32"
 export TF_VAR_operator_ssh_public_key="$(cat "$MOCKOPIN_OPERATOR_SSH_PUBLIC_KEY_FILE")"
 export TF_VAR_server_client_instance_type="$MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE"
 
+# Pilot runbook (this turn): a space-separated subset of scenario keys
+# (e.g. "L0@sa-east-1 L325@sa-east-1") lets this SAME script bring up
+# the pilot's smaller topology instead of the full 8-scenario one --
+# unset (the normal case) means the variable's own Terraform default
+# (all 8) applies, unchanged.
+if [ -n "${MOCKOPIN_ENABLED_CLIENT_SCENARIOS:-}" ]; then
+  TF_VAR_enabled_client_scenarios="$(python - "$MOCKOPIN_ENABLED_CLIENT_SCENARIOS" <<'PY'
+import json, sys
+print(json.dumps(sys.argv[1].split()))
+PY
+)"
+  export TF_VAR_enabled_client_scenarios
+  echo "==> enabled_client_scenarios override: $TF_VAR_enabled_client_scenarios"
+fi
+
 if [ "$MODE" = "--update-operator-ip" ]; then
   echo "==> --update-operator-ip: re-applying ONLY the control instance's security group."
   (cd "$TF_DIR" && terraform init -input=false)
@@ -177,4 +192,4 @@ if failed:
 PY
 REMOTE
 
-echo "==> campaign_up.sh completed: 10 instances up, connectivity and clock sync verified."
+echo "==> campaign_up.sh completed: instances up (12, or fewer if MOCKOPIN_ENABLED_CLIENT_SCENARIOS scoped this apply), connectivity and clock sync verified."
