@@ -13,6 +13,7 @@ module "sa_east_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  az_id          = "sae1-az1" # fixed by Luciano this turn; confirmed via describe-instance-type-offerings to offer both flex types
 }
 
 module "us_east_1" {
@@ -24,6 +25,7 @@ module "us_east_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  az_id          = "use1-az1" # fixed by Luciano this turn; confirmed via describe-instance-type-offerings to offer both flex types
 }
 
 module "ap_northeast_1" {
@@ -35,6 +37,7 @@ module "ap_northeast_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  az_id          = "apne1-az1" # fixed by Luciano this turn; confirmed via describe-instance-type-offerings to offer both flex types
 }
 
 module "ca_central_1" {
@@ -46,6 +49,12 @@ module "ca_central_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  # Client regions: Luciano asked for "a zone where both types are
+  # offered, confirmed by query" -- not fixed by him, so this is this
+  # turn's own real describe-instance-type-offerings result (first AZ
+  # ID, by AWS's own ordering, that offers BOTH m7i-flex.large and
+  # c7i-flex.large in this region).
+  az_id = "cac1-az1"
 }
 
 module "eu_north_1" {
@@ -57,6 +66,7 @@ module "eu_north_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  az_id          = "eun1-az1" # confirmed via describe-instance-type-offerings, this turn
 }
 
 module "ap_southeast_1" {
@@ -68,6 +78,7 @@ module "ap_southeast_1" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  az_id          = "apse1-az1" # confirmed via describe-instance-type-offerings, this turn
 }
 
 module "ap_northeast_2" {
@@ -79,4 +90,7 @@ module "ap_northeast_2" {
   my_ip_cidr     = var.my_ip_cidr
   ssh_public_key = var.ssh_public_key
   instance_types = var.flex_instance_types
+  # ap-northeast-2 has no az1 offering BOTH types (confirmed this turn:
+  # only apne2-az2/apne2-az4 do) -- az2 picked, first by AWS's ordering.
+  az_id = "apne2-az2"
 }

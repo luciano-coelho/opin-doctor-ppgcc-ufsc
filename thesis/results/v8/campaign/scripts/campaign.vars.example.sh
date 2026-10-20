@@ -15,9 +15,13 @@ export MOCKOPIN_AWS_PROFILE="mockopin-pqc"
 export MOCKOPIN_OPERATOR_SSH_PUBLIC_KEY_FILE="/path/to/mockopin_pqc_discovery.pub"
 export MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE="/path/to/mockopin_pqc_discovery"
 
-# No default on purpose (Decision 52) -- Decision 43's launch test hasn't
-# resolved which type to use yet. Must be set explicitly, every time.
-export MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE="REPLACE_ME"
+# Decision 43's launch test ran for real against all 7 regions, both
+# m7i-flex.large and c7i-flex.large -- both passed everywhere, Luciano
+# chose m7i-flex.large (see the Decision registering the choice and the
+# flex launch test's own table). The Terraform variable itself still has
+# NO default on purpose (Decision 52) -- this example value must still be
+# copied into campaign.vars.local.sh and set explicitly, every time.
+export MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE="m7i-flex.large"
 
 # Optional -- override the default fixed UTC window times (19:00 today/
 # tomorrow, 03:00 the next day, 11:00 that same day). ISO-8601 UTC.

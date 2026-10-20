@@ -21,11 +21,15 @@ variable "operator_ssh_public_key" {
 
 variable "server_client_instance_type" {
   description = <<-EOT
-    Still open -- Decision 43's launch test hasn't run yet. NO DEFAULT,
-    deliberately (Decision 52): an unset variable now fails
-    `terraform plan`/`apply` outright instead of silently falling back
-    to a placeholder that could get used by accident before the launch
-    test actually resolves this.
+    Decision 43's launch test ran for real (14 instances, 7 regions,
+    both m7i-flex.large and c7i-flex.large) and both passed every
+    threshold everywhere -- Luciano chose m7i-flex.large (see the
+    Decision registering that choice). Still NO DEFAULT here, on
+    purpose (Decision 52): campaign.vars.example.sh now carries the
+    chosen value as its own example, but this Terraform variable stays
+    unset so a bare `terraform plan`/`apply` still fails loudly rather
+    than silently using a value nobody explicitly passed in for THIS
+    run.
   EOT
   type        = string
 }
