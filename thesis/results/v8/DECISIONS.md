@@ -4542,3 +4542,47 @@ a deliberate, manual, documented act by design, not something to
 automate away. The flex-launch test and instance-type choice are still
 outstanding, unchanged from Decision 70.
 
+## 72. Pinned AMI architecture confirmed by direct `describe-images` lookup (not the original filtered query) for every pilot/campaign region; local lab stack torn down; no more self-scheduled reminders without Luciano's explicit ask
+
+A no-AWS-mutation turn again (every check below is a read-only
+`describe-images`/`describe-security-groups`-class call; nothing
+applied, destroyed, or launched).
+
+**(1) AMI architecture, re-confirmed independently.** Decision 71
+pinned each region's AMI from a filtered `describe-images` query
+(`architecture=x86_64`), but a filter applied at CAPTURE time doesn't
+by itself prove the captured ID is still, or was ever actually, that
+architecture to a reader of the Terraform file alone -- so this turn
+re-queried each of the 7 pinned IDs directly BY `ImageId` (not through
+the original filter) in its own region, reading the `Architecture`/
+`VirtualizationType`/`State` fields straight from AWS: all 7
+(`sa-east-1`, `us-east-1`, `ap-northeast-1`, `ca-central-1`,
+`eu-north-1`, `ap-southeast-1`, `ap-northeast-2` -- covering both the
+pilot's 2 regions, `sa-east-1` and `ap-southeast-1` via `L325`, and the
+full campaign's remaining 5) came back `x86_64`/`hvm`/`available`.
+Control's own pinned AMI (`sa-east-1`, arm64) was checked the same way
+and correctly came back `arm64` -- confirming the ONE intentional
+exception (Graviton `t4g.micro`, free-tier, control only) is still
+exactly that, not an accidental mismatch.
+
+**(2) Self-scheduled reminders.** Per Luciano's own instruction this
+turn, no further `ScheduleWakeup`/similar self-pacing calls will be
+made unless he explicitly asks for one. The one made last turn (to
+wait out the real LocalExecutor run) was a one-shot, self-consuming
+wait for a foreground task already in progress, not a standing
+reminder -- nothing recurring was ever scheduled, but the standing rule
+going forward is stricter than "nothing recurring": no self-scheduling
+at all without an explicit ask.
+
+**(3) Local lab stack torn down.** `docker compose --profile main
+down` in `insurance-server-lambdas/` -- confirmed via `docker ps -a`
+that no `insurance-server-lambdas-{mtls,auth,mockapi,psql,mongodb,
+mongo_seed,localstack}-*` container remains (only long-unrelated,
+pre-existing `cs-*` containers from months earlier are still listed,
+untouched, out of this turn's scope).
+
+**Open questions:** none new this turn -- the open items already
+recorded in Decision 70/71 (flex-launch test, instance-type choice,
+`record_environment()` unverified against a real EC2 instance) remain
+unchanged.
+
