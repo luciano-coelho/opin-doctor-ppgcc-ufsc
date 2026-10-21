@@ -24,7 +24,7 @@ COPY go.mod main.go ./
 # requirement here, but costs nothing).
 RUN CGO_ENABLED=0 go build -trimpath -o /tls_kem_proxy .
 
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 # Non-root, minimal -- this binary never needs root (the campaign's own
 # servers do, for tc/netem, but this proxy is client-side only and
 # never touches networking config, only dials outbound).

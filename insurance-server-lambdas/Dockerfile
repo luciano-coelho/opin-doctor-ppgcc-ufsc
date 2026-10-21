@@ -1,4 +1,4 @@
-FROM gradle:5.3.1-jdk11-slim as builder
+FROM gradle:5.3.1-jdk11-slim@sha256:4fdc356e8b325a12bd03d5672ca56eb9f8db862fcd24eafaaa06aca5e8397741 as builder
 COPY --chown=gradle:gradle . /home/application
 WORKDIR /home/application
 ARG AWS_ACCESS_KEY_ID
@@ -6,7 +6,7 @@ ARG AWS_SECRET_ACCESS_KEY
 ARG AWS_SESSION_TOKEN
 RUN gradle build -x test --no-daemon
 
-FROM amazonlinux:2 as graalvm
+FROM amazonlinux:2@sha256:f86b99704b49b2fde6bf42b4c5257fcb0b1e0946509da5d6cea08c4227618433 as graalvm
 # install graal to amazon linux.
 ENV LANG=en_US.UTF-8
 

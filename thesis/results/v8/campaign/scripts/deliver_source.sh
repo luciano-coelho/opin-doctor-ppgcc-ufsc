@@ -108,7 +108,13 @@ for label, ip in targets:
         "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
         f"ec2-user@{ip}",
         "tar -xzf ~/mockopin-source.tar.gz -C ~/ && rm -f ~/mockopin-source.tar.gz && "
-        "pip3 install --user -r ~/thesis/scripts/requirements.txt",
+        # --require-hashes (this turn): requirements.txt now carries a
+        # real sha256 per wheel (direct AND transitive deps) --
+        # --require-hashes makes pip REFUSE to install anything that
+        # isn't byte-for-byte one of those exact files, instead of
+        # silently accepting whatever PyPI serves for that version
+        # string at install time.
+        "pip3 install --user --require-hashes -r ~/thesis/scripts/requirements.txt",
     ]
     subprocess.run(extract_cmd, check=True, timeout=180)
 PY

@@ -231,6 +231,47 @@ _ENVIRONMENT_PROBE_SCRIPT = (
 )
 
 
+def verify_ready_marker(inventory, ssh_port=22, ssh_key_path=None):
+    """Software-inventory audit (this turn): the user-data script
+    (install_common_packages.sh) now writes /var/lib/mockopin-ready as
+    its own LAST line, only reachable if every earlier line succeeded
+    (the script's own `set -euo pipefail`, line 2). This is the
+    orchestrator's own check of that signal, run BEFORE anything else
+    in main() -- record_environment()/renew_safety_timers() calling
+    into an instance that never finished booting would fail with a
+    confusing SSH-level or command-level error; this instead aborts
+    loudly, immediately, naming every instance missing the marker (not
+    just the first one found), so a half-booted fleet is caught before
+    any real work is attempted on it. Control is checked as a local
+    file (this process already runs ON control); server/client are
+    checked over SSH."""
+    ssh_key_path = ssh_key_path or CAMPAIGN_KEY
+    missing = []
+    local_marker = Path("/var/lib/mockopin-ready")
+    if not local_marker.exists():
+        missing.append("control (local)")
+    for label, ip in all_server_client_ips(inventory):
+        r = subprocess.run(
+            ["ssh", "-i", ssh_key_path, "-p", str(ssh_port), "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes",
+             f"ec2-user@{ip}", "cat /var/lib/mockopin-ready"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            missing.append(f"{label} ({ip})")
+        else:
+            print(f"Ready: {label} ({ip}) -- user-data finished at {r.stdout.strip()}")
+    if missing:
+        sys.exit(
+            "FATAL: /var/lib/mockopin-ready missing on: " + ", ".join(missing) +
+            " -- user-data did not finish successfully there (set -euo pipefail means a failure anywhere in "
+            "install_common_packages.sh prevents this file from ever being written). Refusing to start the "
+            "campaign against a half-booted fleet. Investigate directly (SSH in, check cloud-init's own log) "
+            "before retrying."
+        )
+    print(f"Ready: control (local) -- user-data finished at {local_marker.read_text().strip()}")
+
+
 def record_environment(inventory, ssh_port=22, ssh_key_path=None):
     """Item 2 (this turn): records, once per instance, at campaign
     start, into v8/latency/_campaign-control/environment/<instance>.json
@@ -1950,6 +1991,12 @@ def main():
     # this file's own tests, never via main() -- main() always means a
     # real remote target (or a --dry-run preview of it).
     executor = SSHExecutor(inventory, dry_run=args.dry_run, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
+
+    # Software-inventory audit (this turn): checked BEFORE anything
+    # else -- a half-booted instance should abort the campaign with a
+    # clear message, not a confusing failure three steps later inside
+    # record_environment()/renew_safety_timers().
+    verify_ready_marker(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
 
     window_times = config.get("window_start_times_utc", {})
     if not window_times:

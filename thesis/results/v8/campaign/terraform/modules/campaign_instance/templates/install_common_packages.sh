@@ -86,3 +86,18 @@ if [ "$(uname -m)" = "x86_64" ]; then
 else
   echo "Skipping docker compose plugin install -- $(uname -m) is not x86_64, meaning this is the control instance, which never runs 'docker compose' (only switch_crypto_profile.py does, always on a server)."
 fi
+
+# Readiness marker, written ONLY as the very last line of this script
+# -- `set -euo pipefail` (line 2) means any failure anywhere above
+# (a dnf package not found, a checksum mismatch, an unreachable
+# download) stops the script before this line is ever reached. An
+# instance that booted but never finished its own user-data has no
+# reliable way to say so on its own otherwise (cloud-init's own exit
+# status isn't something the orchestrator, running on a DIFFERENT
+# instance, can see without SSHing in and checking something concrete
+# anyway) -- this file's mere existence IS that concrete signal,
+# checked by campaign_run.py's own verify_ready_marker() before
+# anything else runs, aborting loudly (not silently) if it's missing
+# on any instance.
+mkdir -p /var/lib
+date -u +%Y-%m-%dT%H:%M:%SZ > /var/lib/mockopin-ready

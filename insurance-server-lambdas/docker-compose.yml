@@ -68,7 +68,7 @@ services:
     profiles:
       - main
       - dev
-    image: postgres:16
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
     environment:
       - POSTGRES_PASSWORD=test
       - POSTGRES_USER=test
@@ -148,7 +148,7 @@ services:
     profiles:
       - main
       - dev
-    image: localstack/localstack:4.0
+    image: localstack/localstack:4.0@sha256:17c2f79ca4e1f804eb912291a19713d4134806325ef0d21d4c1053161dfa72d0
     ports:
       - "4566:4566"
     environment:
@@ -287,7 +287,7 @@ services:
       - main
       - dev
       - cs
-    image: mongo:latest
+    image: mongo:latest@sha256:dc28ed5a9d0fc616903c3f463bb1e53b92b49f441721b91926e87d90bf957ce8
     volumes:
       - mongo-data:/data/db
       - ../mock-service-os/certs/mongo.pem:/certs-src/mongo.pem:ro
