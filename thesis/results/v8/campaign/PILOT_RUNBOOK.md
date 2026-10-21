@@ -143,6 +143,7 @@ local check — it contains real IPs).
 
 | Check | Command (run from the control instance, or via `ssh ... <cmd>` proxied through it) | Expected |
 |---|---|---|
+| **all 7 tools install_common_packages.sh is supposed to have installed are actually present** (the FIRST check, before anything more specific below — a single fast sanity check of the whole user-data run, on EVERY instance including control) | `which chronyc tcpdump flock ping ss python3 docker` | all 7 print a path, `which`'s own exit code is 0 for all of them — **any single one missing (non-zero exit, or a line reading "no X in (...)") → abort immediately**, do not run any of the more specific checks below on that instance; investigate `install_common_packages.sh`'s own output on it first (`cloud-init-output.log`) rather than guessing |
 | cloud-init finished | `cloud-init status` | `status: done` |
 | docker installed + active | `systemctl is-active docker` | `active` |
 | `ec2-user` in the `docker` group | `groups ec2-user` | includes `docker` |
@@ -159,6 +160,16 @@ local check — it contains real IPs).
 
 Any row that doesn't match → **abort** (see criteria below), do not
 proceed to step 5.
+
+`campaign_run.py` itself also checks this automatically, every real
+run, before doing anything else: `verify_ready_marker()` confirms
+`/var/lib/mockopin-ready` exists on every instance (written by
+`install_common_packages.sh` as its own LAST line, under `set -euo
+pipefail` — only present if the whole script succeeded) and aborts
+loudly, naming every instance where it's missing, if not. The manual
+`which` check above is still worth doing by hand at this step — it
+catches the SAME class of problem earlier, before `campaign_run.py` is
+even started.
 
 ### 5. Deliver source + images, run settling + the acceptance battery
 

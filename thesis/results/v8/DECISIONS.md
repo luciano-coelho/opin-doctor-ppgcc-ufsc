@@ -4943,3 +4943,213 @@ the real tarball from this real repo and inspecting its contents, not
 by a live SSH round trip. The flex-type gap from Decision 73
 (`m6i.large`/`c6i.xlarge`/`c5.2xlarge` never tested) remains open.
 
+## 75. Full integrated rehearsal, real `amazonlinux:2023` containers from scratch -- found and fixed three more real gaps (`tar`, `python3-pip`, `docker compose` entirely missing from AL2023's own repos); a DooD-vs-DinD architecture correction found mid-rehearsal; Docker Desktop's own engine crashed under the combined load before the rehearsal reached a clean cycle; readiness-marker/hash-pinned-deps/digest-pinned-images/PILOT_RUNBOOK fixes completed without Docker; remaining rehearsal deferred to after Luciano restarts Docker Desktop
+
+A no-AWS-mutation turn. The integrated rehearsal Luciano asked for
+(real `amazonlinux:2023` containers, one per role, nothing
+pre-installed, the full real sequence: init script → `deliver_source.sh`
+→ `deliver_images.sh` → profile switch → client proxy → settling →
+warmup → real executions → `campaign_pull.sh`) got further than any
+prior rehearsal this project has run -- real user-data, real source/
+image delivery, a real attempted profile switch -- before Docker
+Desktop's own engine failed outright and the session had to stop.
+Everything found and fixed before that point is real; everything after
+is deferred, explicitly, to a fresh cycle once Luciano restarts Docker
+Desktop (this turn's own instruction).
+
+**Setup: 3 real containers, nothing pre-installed.** `control` on
+**arm64** (`--platform linux/arm64`, QEMU-emulated on this x86_64 dev
+machine) -- `openssh-server` installed and ran successfully there,
+confirming arm64 itself is not a blocker for anything control needs.
+`server`/`client` on x86_64. Real `ec2-user` + real sshd + a freshly
+generated keypair on all three -- no stand-in scripts, unlike the
+project's own earlier B.11 rehearsal (Alpine-based, fake
+`switch_crypto_profile.py`/`campaign_client_runner.py`) -- this turn's
+own point was to run the REAL ones.
+
+**Three more real, previously-undiscovered gaps, found by actually
+running the real init script in a real container, not by reading it:**
+1. **`tar` is missing from the AL2023 minimal AMI.** `deliver_source.sh`'s
+   own extraction step (`tar -xzf ~/mockopin-source.tar.gz`) failed
+   outright, "tar: command not found", on the very first real attempt.
+2. **`python3-pip` is missing too.** `deliver_source.sh`'s own last
+   step (`pip3 install --user -r requirements.txt`) would have failed
+   the same way immediately after.
+3. **`docker compose` (the v2 CLI plugin) does not exist as ANY dnf
+   package on AL2023 at all** -- `dnf search compose` returns nothing
+   relevant; `dnf install -y docker` installs the engine and CLI, never
+   the compose plugin. `switch_crypto_profile.py`'s own `docker compose
+   up -d --force-recreate ...` (every real profile switch, every
+   settling sequence, on every real server) would have failed on the
+   very first attempt with `'compose' is not a docker command` --
+   caught live, the first time this rehearsal actually tried to switch
+   a profile for real, not by reading the code. **This would have
+   failed the entire real campaign outright, unconditionally, on
+   literally the first thing it does after booting** -- the same
+   severity class as Decision 74's Python-3.9 crash.
+
+All three fixed in `install_common_packages.sh`: `tar`/`python3-pip`
+added to the existing `dnf install` line; `docker compose` installed
+from the official `docker/compose` GitHub release (`v5.6.0`), pinned
+by exact version and sha256 -- **both the x86_64 and aarch64 release
+assets were actually downloaded and re-hashed this turn** (not copied
+from GitHub's own published `.sha256` file and trusted) to confirm the
+pin before it ever shipped: `docker-compose-linux-x86_64` ->
+`40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a`,
+`docker-compose-linux-aarch64` ->
+`733ec76717ceb59052a9609b9dadfb523b2df8eab57a54212872d10a58078ea2`.
+Gated to x86_64 only, confirmed this turn by Luciano: arm64 means
+control in this project's topology, and control never runs `docker
+compose` (only `switch_crypto_profile.py` does, always on a server) --
+installing a binary control will never use would repeat the same
+unexamined "install everywhere" habit this file's own Decision 71
+rationale otherwise argues FOR being careful about.
+
+**An architecture correction found mid-rehearsal, not assumed:** the
+first attempt mounted the HOST's own docker socket into `server`/
+`client` ("DooD", Docker-outside-of-Docker) so they could reuse this
+project's own already-built images without rebuilding. That works fine
+for `deliver_images.sh` (`docker save`/`docker load`, entirely
+self-contained image content, no host-path dependency) -- **but
+`docker-compose.yml`'s own BIND MOUNTS (`../mock-service-os/certs/...`,
+etc.) are resolved by the engine that actually executes them, which
+under DooD is the HOST's daemon, against the HOST's OWN filesystem, not
+the rehearsal container's.** The real symptom, confirmed live: `cp: -r
+not specified; omitting directory '/certs-src/mongo.pem'` inside
+`mongodb`'s own entrypoint -- Docker silently creates an empty
+directory for a bind-mount source that doesn't exist at the resolved
+(host) path, instead of erroring, so every cert/config bind mount
+quietly became an empty directory, and `auth`/`mtls`/`mockapi`/
+`mongodb` all failed for different downstream reasons (`EISDIR`
+reading a JWKS file that was actually a directory; "Could not fetch
+ssa_jwk from S3"; `UnknownHostException: psql` because `psql` was never
+created at all). **Fixed by switching to real DinD** (`--privileged`
+containers, `dockerd` started directly inside each, no shared host
+socket) -- bind-mount paths then resolve against the SAME container
+that's running `docker compose`, exactly like a real EC2 instance's own
+single-machine daemon would. `deliver_source.sh`/`deliver_images.sh`
+both re-ran clean against the corrected DinD setup afterward, before
+the crash below.
+
+**Docker Desktop's own engine crashed under the combined load, before
+a clean cycle was reached.** Observed, in order: `docker stats`/`docker
+inspect` against the rehearsal containers started returning `request
+returned 500 Internal Server Error` from `dockerDesktopLinuxEngine`;
+`docker ps`/`docker version --format` (no container-specific target at
+all) then failed the same way; by the time Luciano was consulted, EVERY
+Docker API call was failing with 500, not just slow. Restarting Docker
+Desktop's own processes (`Docker Desktop.exe`, `com.docker.backend`)
+did not bring the engine back within a reasonable wait -- Luciano's own
+PC needed a full reboot. **Likely cause, stated as an analysis, not a
+proven root cause** (no Docker Desktop diagnostic bundle was captured
+before restarting, so this is inference from direct observation, not a
+confirmed log entry): two REAL nested `dockerd` instances (server's and
+client's own DinD, each independently pulling/loading the full
+MockOPIN image set -- `postgres`/`mongo`/`localstack` pulled fresh,
+plus 6 custom images `docker load`ed) running concurrently, one
+QEMU-emulated arm64 container active at the same time, and several
+hundred MB of image tarballs moving through nested SSH/scp hops
+(operator→control→server, operator→control→client) -- all sharing ONE
+WSL2 VM that also already hosted the host's own pre-existing, unrelated
+containers (`componente-siga-cypress`, `siga-core`, etc.). **Resource
+limits actually in effect:** no `.wslconfig` override exists on this
+machine, so WSL2 used its own default memory/CPU ceiling (no explicit
+`MemoryMiB`/`CPUs`/`DiskSizeMiB` keys in Docker Desktop's own
+`settings-store.json` either) against this host's real 32GiB of total
+physical RAM -- i.e., not an artificially tight limit, genuine
+concurrent resource pressure from running two full real Docker
+daemons' worth of image storage/compose orchestration simultaneously,
+on top of the host's own existing container workload sharing the same
+VM. Docker Desktop was restarted (processes killed and relaunched) with
+Luciano's explicit confirmation beforehand, since it affects every
+other container on this machine, not just the rehearsal's own three.
+
+**Completed without Docker, this turn, per Luciano's own instruction
+to keep working on what didn't need it:**
+1. **Readiness marker.** `install_common_packages.sh` writes
+   `/var/lib/mockopin-ready` (a UTC timestamp) as its own LAST line --
+   reachable only if every earlier line succeeded, since `set -euo
+   pipefail` is already line 2. `campaign_run.py` gained
+   `verify_ready_marker()`, called first thing in `main()` (before
+   `record_environment()`/`renew_safety_timers()`, which would
+   otherwise fail with a confusing SSH/command-level error against a
+   half-booted instance) -- checks the local file for control, SSH for
+   every server/client, and aborts loudly, naming every instance
+   missing the marker, not just the first one found.
+2. **`pip install --require-hashes`.** `thesis/scripts/requirements.txt`
+   now carries a real sha256 per wheel for all 6 direct dependencies
+   AND their 6 transitive ones (`certifi`, `charset-normalizer`, `idna`,
+   `typing-extensions`, `cffi`, `pycparser`) -- 18 hashes total, one set
+   captured from a REAL `pip download --platform ... --python-version
+   3.9.25 --implementation cp --abi cp39` run for x86_64 and another for
+   aarch64 (not guessed from PyPI's web UI). Pure-Python wheels resolve
+   to the identical file -- confirmed by actually diffing the hashes,
+   not assumed -- on both architectures; `cryptography`/`cffi`/
+   `charset-normalizer` compile native code and get a real, different
+   hash per architecture, both listed per package.
+   `deliver_source.sh`'s own `pip3 install` line now passes
+   `--require-hashes`.
+3. **Base images pinned by digest** -- every one confirmed via a real,
+   live query against Docker Hub's own public registry API (not
+   copied from a cached/remembered value): `insurance-server-lambdas/Dockerfile`
+   (`gradle:5.3.1-jdk11-slim`, `amazonlinux:2`, both previously
+   unpinned, vendored third-party code this project builds but has
+   pinned base images for elsewhere already, e.g. `mock_mtls`'s own
+   golang pin, for exactly this reproducibility reason);
+   `mock-service-os/mock_as/Dockerfile` (`node:24-alpine`, previously
+   unpinned -- a real inconsistency, since its sibling `pqc-signer`/
+   `tls_kem_proxy` Dockerfiles already pinned the same base image
+   family); `mock-service-os/mock_as/mongo-seed/Dockerfile` (bare
+   `FROM mongo`, previously unpinned); `thesis/scripts/tls_kem_proxy/Dockerfile`'s
+   own runtime stage (`alpine:3.20`, previously unpinned -- only its
+   OWN builder stage was already pinned); and
+   `insurance-server-lambdas/docker-compose.yml`'s three directly-pulled
+   stock images (`postgres:16`, `mongo:latest`, `localstack/localstack:4.0`).
+   **Deliberately NOT pinned, scoped out:** `docker-compose.yml`'s
+   `cs-server`/`cs-httpd`/`cs-builder` services (`openjdk:17-jdk-slim`,
+   `maven:3-openjdk-17`) -- these are the Conformance Suite's own
+   profile (`cs`/`build-only`), never created by the real campaign
+   (which only ever runs `--profile main`), out of scope for a
+   reproducibility concern about the measured experiment itself.
+4. **`PILOT_RUNBOOK.md`'s first-contact table gained its own first
+   row**, literally first in reading order: `which chronyc tcpdump
+   flock ping ss python3 docker` on every instance including control,
+   before any of the more specific checks below it -- any single tool
+   missing aborts immediately (already covered by the section's own
+   pre-existing "any row fails -> abort" rule), with a pointer to check
+   `install_common_packages.sh`'s own `cloud-init-output.log` rather
+   than guessing why.
+
+**"Depois do piloto" / resume-after-Docker-restart list, in the exact
+order Luciano specified:**
+- Only server+client in x86_64 DinD this time (control's arm64 is
+  already validated -- no need to re-run it under emulation again).
+- One DinD container at a time, loading images and cleaning between
+  stages, `docker system df` checked before and after each -- avoiding
+  this turn's own failure mode (everything running concurrently at
+  once).
+- Full real sequence: `deliver_source.sh` → `deliver_images.sh` →
+  real profile switch on the server → real client proxy start → 5 real
+  settling executions → warmup → a few real executions per profile →
+  `campaign_pull.sh` with its manifest verified.
+- Confirm `opin_flow.py`/`campaign_client_runner.py` run a COMPLETE
+  FLOW (not just import, which Decision 74 already confirmed) under
+  real Python 3.9.
+- Rehearse `deliver_source.sh` the same way `deliver_images.sh` was
+  rehearsed (Decision 67/69) -- including a real interruption and
+  resume.
+- Fix whatever's found, stop after ONE clean cycle -- anything left
+  over becomes its own "after the pilot" list, not solved by
+  over-running this same rehearsal indefinitely.
+
+**Open questions, honestly stated:** the Docker Desktop crash's root
+cause is inference from direct observation (the 500 errors appeared
+once DinD+QEMU+transfer concurrency peaked), not a confirmed line in a
+captured diagnostic bundle -- no bundle was captured before restarting.
+The real profile switch, client proxy, settling runs, warmup, real
+executions, and `campaign_pull.sh` were never reached in a clean,
+complete cycle this turn -- everything about them remains exactly as
+unverified as before this turn, except that the environment that would
+run them (user-data, image/source delivery, DinD topology) is now
+substantially more likely to work than before this turn's three fixes.
+
