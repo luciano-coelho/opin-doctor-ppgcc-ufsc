@@ -5503,3 +5503,183 @@ numbered items: investigate, decide (parser, not pcap, not a
 collection/pull fix), update the acceptance criterion, and check the
 mongo digest.
 
+## 78. Hybrid/Classic handshake-byte drift diagnosed as a real measurement-boundary artifact in `mock_mtls`'s own instrumentation, NOT a cert-chain change (open question, not resolved as a design decision); `opin_processing_ms` source found and wired into `consolidate_v8.py`, already collected/pulled, real "38 vs 42" discrepancy flagged rather than silently resolved; ClientHello SIZE confirmed extractable at the real snaplen=128 (no reassembly needed), SNI confirmed NOT extractable there (minimum snaplen measured, not changed); `pilot_acceptance.py` Criterion 2's own latent bug fixed (it would have failed on every real pilot execution)
+
+A no-AWS-mutation, no-AWS-cost turn (this turn's own opening constraint),
+calibrating collection/analysis before any instance launch. Three
+read-only investigations plus the fixes each one's own findings allowed
+or required -- nothing applied to AWS, nothing in the already-closed
+pilot plan touched.
+
+**1. Hybrid +5.52% / Classic +1.17% handshake-byte drift against v7 --
+investigated, NOT explained by a cert-chain change, STOPPING here per
+this turn's own instruction rather than deciding this myself.** Checked
+first, directly: every certificate in both chains is byte-identical to
+what v7 documented, confirmed via `pem_der_len()` against the real files
+on disk -- `client_one_hybrid.crt` 6,859 B (v7: 6,859), `client_one.crt`
+1,494 B (v7: 1,494), `client_one_pqc.crt` 5,879 B (v7: 5,879), and the
+server-side `mtls_hybrid.crt`/`mtls.crt`/`mtls_pqc.crt` the same. Neither
+Decision 6 nor Decision 14 changed anything here -- Decision 14 was
+PQC's own certificate chain specifically, never Hybrid's or Classic's.
+Also confirmed structurally, reading the real Go source: both
+`mock_mtls/main.go` (`Certificates: []tls.Certificate{{Certificate:
+[][]byte{serverBytes}}}`, line ~494) and `tls_kem_proxy/main.go`
+(`tls.LoadX509KeyPair`, a single-cert PEM file) send ONE certificate
+each in the TLS handshake, never a chain -- root/issuer CA certificates
+are never part of the handshake's own byte count at all, confirmed by
+the certs' own `pem_der_len()` requiring exactly one `BEGIN CERTIFICATE`
+block in each file. So the cert-chain hypothesis is ruled out by direct
+evidence, not assumed away.
+
+**What the drift actually is, traced via a real raw packet capture
+(tcpdump `-s 0`, tshark decode) of one real Hybrid client-facing
+connection, byte for byte:** `mtlsHandshakeBytes` for that exact
+connection (confirmed 19,011 from the gateway's own log) equals EXACTLY
+the sum of: ClientHello (1,881 B, client->server) + the server's whole
+encrypted flight -- ServerHello/EncryptedExtensions/Certificate/
+CertificateVerify/Finished bundled (7,240 B, server->client) + a further
+2,162 B write from the server IMMEDIATELY after that flight, before the
+client's own Finished arrives (structurally consistent with a TLS 1.3
+`NewSessionTicket`, which a server may send any time after its own
+Finished, not waiting for the client's) + the client's own encrypted
+flight -- Certificate/CertificateVerify/Finished (7,240 B,
+client->server) + TWO FURTHER client->server reads (260 B + 228 B) that
+arrive before `connStateHandshakeLogger` actually reads the counter.
+1,881 + 7,240 + 2,162 + 7,240 + 260 + 228 = 19,011, exact. Those last two
+reads are NOT part of the TLS handshake at all -- they are (part of) the
+connection's FIRST REAL HTTP REQUEST, already arrived and already
+counted by the time `info.handshakeBytes` is read at `ConnState ->
+StateActive` (`main.go` line ~667), because Go's own HTTP server
+transitions a connection to `StateActive` once it starts reading the
+first request, which happens strictly after the TLS `Handshake()` call
+returns server-side, by which point the client has ALREADY pipelined
+its first request's bytes onto the same connection (TLS 1.3 removes the
+extra round trip real clients rely on; `opin_flow.py`'s own client does
+exactly this). **This measurement-boundary quirk is in `mock_mtls/
+main.go` itself, unchanged since v7 -- it would have affected v7's own
+original data collection identically, same code, same boundary.** It
+explains the WITHIN-run clustering already noted in Decision 77 (5,173/
+5,179/5,233-byte groups: different connections' own first request
+happens to add a different number of bytes, since each of the flow's 6
+connection pools serves a DIFFERENT first call with a different
+encrypted-record size) and is the leading, evidence-backed explanation
+for the CROSS-run drift against v7's own 60-run median too: a real
+difference of up to ~1-2 KB between runs is well within the range a
+first-request's own JWT/JWK/JSON payload size difference could produce,
+not something a handshake-only artifact of this scale would otherwise
+be expected to show. **Not fully closed as a design decision, because
+it is not one:** this is a pre-existing measurement artifact, not a
+cert/protocol design choice, so it does not fit this turn's own
+instruction to register a cert-chain explanation in `DECISIONS.md` --
+recorded here as the investigation's real finding instead, pending
+Luciano's own call on whether `mock_mtls/main.go`'s handshake-byte
+counter should be fixed to stop at the TRUE handshake boundary (a code
+change to the gateway itself, same class of change as Decision 14,
+genuinely out of this turn's own read-only/no-AWS scope to decide
+alone). **Classic, one sentence, same mechanism:** Classic's own smaller
++1.17% drift (60 B) is the identical artifact at a smaller scale --
+Classic's own first-request payloads are smaller than Hybrid's (e.g. a
+JWKS response of 1,814 B vs. Hybrid's 4,366 B), so less of it leaks into
+the handshake-byte count, not a different cause.
+
+**2. `opin_processing_ms` (server-processing leg of the flow-time
+decomposition) -- source found, already collected, already pulled,
+only unparsed; same root pattern as Decision 77's own handshake-bytes
+finding.** `baseline_automation.py`'s `collect_gateway_metrics()`
+(`thesis/scripts/baseline_automation.py:364-417`) reads the SAME
+gateway log Decision 77 already uses, filtered to a DIFFERENT message
+(`"msg":"access log"`, `mock_mtls/main.go:790`, one line per HTTP
+REQUEST, not per connection) -- field `opinDurationMs`
+(`main.go:768`, `opinRequestEnd.Sub(opinRequestStart).Milliseconds()`).
+Real example line, captured this turn against the local stack:
+`{"time":"2026-10-22T13:03:33.685466869Z","level":"INFO","msg":"access
+log","remoteIP":"172.21.0.6:38698","host":"auth.local","request":"/jwks",
+...,"opinDurationMs":1,"mtlsHandshakeStart":...,"mtlsHandshakeDurationMs":20,
+...,"mtlsHandshakeBytes":5173,"target":"proxy:http://auth:3000/jwks"}`
+-- the SAME line also carries `mtlsHandshakeBytes`/`mtlsHandshakeDurationMs`
+for the first request on each connection, confirming "access log" is a
+strict superset of what Decision 77's own "mTLS handshake complete"
+lines carry. Already collected: `campaign_run.py` writes this exact
+file (`server/run{NN}_gateway.log`) for every real execution (same six
+call sites Decision 77 already found). Already pulled:
+`campaign_pull.sh`'s generic `find v8 -type f` manifest, same as every
+other file under `v8/`. No collection or pull-side fix was needed --
+`consolidate_v8.py` gained `parse_access_log_entries()`/
+`opin_processing_stats()`, reusing `baseline_automation.py`'s own
+`latency_stats()` directly (imported, not reimplemented) and the SAME
+client-facing-channel filter `term_handshake()` already established
+(remoteAddr correlation against the carve-out lines) -- NOT v7's own
+`clientCertBytes`-equality filter, a second, equivalent definition of
+"client-facing" was deliberately avoided in favor of reusing the one
+definition already built. Tested against the real local-flow gateway-
+log fixtures already committed (Decision 77): `requests_logged_per_run`
+now correctly comes out `[42]` (not 49, which is what it was before
+this filter -- 42 client-facing + 7 internal AS-to-RS requests, same
+structure Decision 76's flow-time section already named), matching v7's
+own real per-run figure read directly from
+`thesis/results/v7/size/.../run01_baseline_metrics.json`
+(`requests_logged: 42`, `opin_processing_ms.count: 42`, checked across
+multiple runs and all three profiles -- always 42, never a different
+number). **Open question, not silently resolved:** Luciano's own recall
+of "38 requisições registradas por cenário" does not match any real v7
+data file actually read this turn (consistently 42, in both
+`requests_logged` and `opin_processing_ms.count`, across every run
+checked) -- reported as a discrepancy, not forced to fit by inventing a
+filter that would produce 38; if there's a specific file/section with
+that number, point me to it and I'll reconcile directly, rather than
+guess at a second filtering rule with no real basis.
+
+**3. ClientHello via pcap: SIZE confirmed extractable at the real
+snaplen=128 (no reassembly ever needed); SNI confirmed NOT extractable
+at that snaplen -- snaplen NOT changed, per this turn's own
+instruction.** `pilot_acceptance.py`'s existing `find_first_clienthello()`
+already reads only the TLS record header's own 2-byte length field
+(`payload[3:5]`, `pilot_acceptance.py:290`) -- a field that is ALWAYS
+inside the very first TCP segment of the ClientHello, however many real
+TCP segments the full record spans on the wire, because the record
+necessarily starts at byte 0 of that segment and a TLS record is never
+split below its own header. Confirmed with real snaplen=128 captures
+(tcpdump against the local stack, one execution per profile, real
+`switch_crypto_profile.py` settling runs preceding each): sizes come
+back 341 / 1,784 / 1,881 (classic / pqc / hybrid) -- EXACT matches to
+the v7 reference fixture, no reassembly logic needed or added. SNI
+("mtls"), by contrast, sits at TLS-payload offset ~97 in a real
+ClientHello (measured directly: `payload.find(b"mtls") == 97` against a
+full, untruncated capture) -- at snaplen=128, only ~62 bytes of TCP
+payload actually land in the pcap (128 - 66 bytes of Ethernet/IP/TCP
+header overhead, TCP options included, measured directly from a real
+captured frame), so SNI is NEVER recoverable at the real campaign
+snaplen; confirmed the OTHER direction too, a real snaplen=256 capture
+of the same connection class recovers it exactly (`(341, 'mtls')`).
+**Minimum snaplen needed: ~168 bytes** (66 bytes of header overhead +
+101 bytes of payload to cover "mtls" in full, measured, not estimated);
+**recommended with margin: 256** (a round number comfortably above the
+measured minimum). **Real, measured cost of 128 -> 256, one real
+connection's own capture, same local stack:** 44,774 -> 66,098 bytes,
+**+47.6%** -- not extrapolated, the actual before/after file sizes.
+**Snaplen NOT changed anywhere in `campaign_run.py`** (both hardcoded
+`-s 128` call sites, lines ~1104 and ~1707, untouched) -- this is
+Luciano's own call per this turn's own instruction, reported, not
+decided.
+
+**A real, latent bug found and fixed in the process: `pilot_acceptance.py`'s
+own Criterion 2 would have failed on EVERY real pilot execution,
+unconditionally, not flakily.** It gated pass/fail on `sni ==
+baseline["sni"]` as well as size -- but SNI is now confirmed never
+extractable at the real campaign's own snaplen=128 (point 3 above), so
+that equality would never once be true against real pilot data. Fixed:
+Criterion 2 now gates ONLY on size (confirmed exact and deterministic,
+all three profiles, real local captures) and reports SNI informationally
+when present, never failing the criterion on its absence. Smoke-tested
+against a real test tree built from this turn's own real snaplen=128
+captures (classic/pqc/hybrid, one execution each): all three PASS on
+size; SNI correctly comes back `None` and is correctly NOT gated.
+
+**Depois do piloto / open items from this turn:** whether to fix
+`mock_mtls/main.go`'s own handshake-byte counting boundary (point 1,
+Luciano's own call, a gateway code change); reconciling the "38 vs 42"
+requests-logged discrepancy (point 2, needs Luciano's own source or
+further digging); whether to bump the real campaign's snaplen to 256 for
+SNI verification, given the measured +47.6% cost (point 3, Luciano's own
+call, explicitly not decided here).
+
