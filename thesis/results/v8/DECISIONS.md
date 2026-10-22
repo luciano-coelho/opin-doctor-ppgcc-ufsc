@@ -5318,3 +5318,188 @@ own instruction) and stays on Decision 75's existing resume list,
 now to be exercised against the real pilot instead of a local
 rehearsal, per this decision's own first paragraph.
 
+## 77. Decision 76's "needs a pcap extractor" classification for mTLS handshake bytes was WRONG -- the real source (`server/run{NN}_gateway.log`) was already collected, already pulled, only unparsed; `consolidate_v8.py` and `pilot_acceptance.py` corrected; OPINsize verified complete and within tolerance against v7 using only real data; `mongo:latest`'s pinned digest confirmed newer than whatever produced v7's own original data, no expected effect on bytes
+
+A no-AWS-mutation, no-AWS-cost turn (this turn's own opening constraint),
+triggered by Luciano's own read-only investigation request questioning
+Decision 76's handshake-bytes gap. The question was well-founded: Decision
+76 was wrong, and this entry corrects it on the same axis it was wrong on
+(a missing analysis tool, not a missing collection step) rather than
+quietly patching the number.
+
+**Investigation, read-only, before anything was changed (Luciano's own
+instruction):**
+1. `mock-service-os/mock_mtls/main.go`'s `countingConn` (lines 207-229)
+   and its `mtlsHandshakeBytes` field (line 680, inside the "mTLS
+   handshake complete" `slog.Info` call, line 671) are BOTH still
+   present, unchanged since v7. The gateway logs via
+   `slog.NewJSONHandler(os.Stdout, ...)` (line 1020) -- one JSON object
+   per line, to stdout, which is exactly what `docker logs` reads.
+2. `campaign_run.py` already captures this exact log, for every real
+   execution, via `docker logs -t --since/--until ...
+   insurance-server-lambdas-mtls-1`, into `server/run{NN}_gateway.log`
+   -- confirmed at SIX separate call sites (pre-flight checks, settling,
+   warmup, and both the SSHExecutor and LocalExecutor real-execution
+   paths), not a single narrow case. Collection was never missing.
+3. `campaign_pull.sh` pulls `v8/` with `find v8 -type f -print0 \| xargs
+   -0 sha256sum` -- no per-file exclusion of any kind, so
+   `server/run{NN}_gateway.log` was already in the manifest, already
+   hash-verified, the same as every other file under `v8/`. The pull
+   side needed no fix either.
+4. Neither `consolidate_v8.py` nor `METRICS_COVERAGE.md` considered this
+   source -- Decision 76's own `term_handshake()` read a
+   `gateway_metrics.handshake_bytes` field from `run{NN}.json`'s own
+   `result` dict that does not exist anywhere in this pipeline (that
+   shape was copied from v7's SEPARATE size-experiment JSON schema,
+   `compute_v7_report_data.py`, without checking whether v8's own
+   campaign actually produces an equivalent field under that name --
+   it does not, under ANY name, in `run{NN}.json` itself; the real data
+   lives in a sibling file, `run{NN}_gateway.log`, that Decision 76
+   never opened). This was an honest miss, not a deliberate choice: the
+   light flow check that produced Decision 76 ran
+   `campaign_client_runner.py` directly, outside `campaign_run.py`'s
+   own real-execution path, so no gateway log was ever captured during
+   that check in the first place -- there was nothing wrong to notice
+   with the tooling actually used that day.
+5. The real check data from the 2026-10-21 light flow check
+   (`campaign_client_runner.py`'s own JSON) has no gateway-log field at
+   all -- confirmed by inspecting its full real key set
+   (`generated_at`, `t_fluxo_seconds`, `naive_elapsed_seconds`,
+   `wasted_seconds`, `retries`, `whole_run_retries`, `call_count`,
+   `calls`). This is expected and consistent with point 4's own
+   explanation -- that script was never meant to capture the gateway's
+   own log, `campaign_run.py`'s real-execution path is.
+6. With the real source actually read (a live `docker logs -t
+   insurance-server-lambdas-mtls-1` against the local stack, one
+   capture per profile, immediately after a real `switch_crypto_profile.py`
+   settling sequence), the mTLS handshake bytes DO match v7 closely:
+   classic median 5,179 B (v7: 5,119, +1.17%); pqc median 22,607 B (v7:
+   22,607, EXACT); hybrid median 19,017 B (v7: 18,023, +5.52%). PQC's
+   exact match is not a coincidence: v7's own Consolidated_Metrics_
+   Report_FINAL.md (Section 2) already notes PQC's own handshake figure
+   was "re-measured with a single live capture after Decision 14 --
+   superseding the original 60-run figure" -- i.e., v7's own PQC number
+   is ALSO a single live capture, the same methodology used here, so an
+   exact match is the expected outcome, not luck. Classic and Hybrid's
+   v7 figures are each the median of an ORIGINAL 60-run batch with
+   "0.00% spread" (every one of 60 runs identical) -- this turn's own
+   single capture shows real variance even within its own 31-handshake
+   sample (classic: 5,112-5,233 B; hybrid: 18,950-19,071 B), so some
+   drift against that zero-spread historical median is expected, not a
+   sign of a bug; root cause of that variance not investigated further
+   this turn (candidate, unconfirmed: TLS 1.3 `NewSessionTicket`
+   messages, sent asynchronously shortly after the handshake, falling
+   inside `countingConn`'s own counting window depending on timing).
+
+**Decision: the log exists and is already collected (branch 1 of
+Luciano's own three-way instruction) -- implement the parser, use it as
+the primary source, leave pcap as independent verification only.**
+`consolidate_v8.py` gained `client_facing_handshakes()` and a rewritten
+`term_handshake()`: both reuse `campaign_run.py`'s own
+`_parse_gateway_log_lines()`/`_HANDSHAKE_COMPLETE_MSG`/`_CARVEOUT_MSG`/
+`_CLIENT_EXPECTED_CURVE`/`_CORRELATION_WINDOW_SECONDS` directly (imported,
+not reimplemented) to separate the CLIENT-FACING channel from the AS's
+own internal mTLS calls to the RS -- the same gateway logs BOTH (this
+turn's own real capture: 31 client-facing + 35 internal handshakes
+across 5 settling runs, 31/5≈6.2 and 35/5=7 per run, consistent with v7's
+own "6 client connections + 7 internal connections per flow" structure,
+Decision 76's flow-time section). A real curve mismatch among the
+client-facing group now raises loudly (same philosophy as
+`verify_negotiated_groups()`) rather than being silently averaged in.
+`term_handshake()` returns `(6, 6 x median_bytes)` per real single-
+execution run -- `len(sizes)` naturally equals 6 once given a properly
+`_slice_gateway_log_live()`-scoped single-execution log, exactly as
+`campaign_run.py` already produces one.
+
+**A second, independent real bug found in the same investigation, fixed
+the same way (real data, not assumption): N_mTLS's planned source
+(`calls.jsonl`'s own `pool_label` grouping, Decision 76's own
+METRICS_COVERAGE.md row) undercounts.** Checked directly: `pool_label`
+gives 4 distinct values where the gateway log gives 6 real TLS
+handshakes -- `opin_flow.py`'s own connection pooling reuses one pool
+label across more than one underlying handshake. Fixed: N_mTLS is now
+read from the gateway-log-derived handshake count (the real,
+authoritative source), and `pool_label`'s own count is still computed
+and reported, but ONLY as `n_mtls_pool_label_diagnostic` in
+`consolidated.json` -- visible, never silently trusted as N_mTLS.
+
+**OPINsize's complete total, all 4 real terms, verified against v7
+within a declared tolerance:** classic 77,289 B (v7: 76,929, +0.47%);
+pqc 322,895 B (v7: 322,895, EXACT); hybrid 356,441 B (v7: 350,477,
++1.70%). No profile exceeds 2%. `_FIXTURE` is gone entirely from this
+turn's own test DATA (`test_consolidate_v8.py` rewritten to use real
+`{profile}_gateway.log` captures, one execution's own window each,
+sliced from a live capture the same way `_slice_gateway_log_live()`
+would, and the test itself now asserts `"_FIXTURE" not in
+json.dumps(data)`) -- the string itself still appears in
+`pilot_acceptance.py`/`test_consolidate_v8.py`'s own CHECK logic (the
+code that looks for it), which is exactly what should contain it, not a
+leak; no data file (`*.calls.jsonl`, `*_gateway.log`, `consolidated.json`)
+under `thesis/results/v8/` contains it.
+`METRICS_COVERAGE.md` updated: OPINsize/term_handshake/mTLS-handshake-
+bytes-P50/N_mTLS flipped from "not covered"/wrong-source to "covered",
+with the corrected mechanism and the real numbers above; ClientHello as
+its own standalone byte figure remains genuinely not covered (the
+gateway logs the handshake's TOTAL bytes, no separate per-message
+field) -- this one was never a false gap, confirmed by reading
+`main.go` for a ClientHello-specific log field and finding none; the
+flow-time decomposition's handshake-duration leg is now also knowably
+available (`handshakeDurationMs`, same log line as the bytes field) but
+not yet parsed by `consolidate_v8.py` (out of this turn's own narrow
+scope), while its server-processing leg remains a real, open gap (no
+`opin_processing_ms`-equivalent field exists in `main.go`, searched for
+directly, not found).
+
+**`pilot_acceptance.py` Criterion 10 added:** fails if, at any profile's
+own L0 scenario, the 4 OPINsize terms aren't all present, the complete
+OPINsize total isn't within tolerance of v7's own figure, or a
+`_FIXTURE`-tagged value appears anywhere in data generated from real
+pilot data. **Tolerance: +/-3%, chosen and justified as follows:** this
+turn's own three real single-execution measurements against v7 (above)
+came in at +0.47%/+0.00%/+1.70% -- 3% is roughly double the largest of
+those three, tight enough that a genuine regression (this project's own
+history: Decision 11's JARM-count fix moved OPINsize by +1.6%; Decision
+14's PQC-CA fix moved it by +19.1%) would still fail loudly, while
+ordinary single-execution noise against v7's own 60-run median does
+not. Smoke-tested against a real-data tree built the same way
+`test_consolidate_v8.py` builds its own (same precedent as Decision 70's
+own synthetic-data smoke test for Criteria 1-9): all three profiles
+PASS at the stated tolerance.
+
+**Mongo digest (Decision 76's own pinning) confirmed newer than
+whatever produced v7's original data; no effect on bytes, as
+anticipated.** The pinned `mongo:latest@sha256:dc28ed5a9d0fc616903c3f
+463bb1e53b92b49f441721b91926e87d90bf957ce8` resolves to a real,
+confirmed MongoDB server v9.0.4 (`mongod --version` run directly against
+the container this turn: `"version": "9.0.4"`). This is almost certainly
+DIFFERENT from whatever `mongo:latest` resolved to when v7's own data
+was collected -- v7 predates any digest pinning, so its own `mongo:latest`
+was whatever Docker Hub's moving tag pointed to at THAT time, and
+indirect evidence already supports a real difference: the SAME local
+`mongo-data` volume this turn's own Decision 76 found stamped with
+`featureCompatibilityVersion "8.2"` (rejected by the now-pinned v9.0.4
+binary, whose own error message names '9.0'/'8.3'/'8.0' as its only
+accepted values, conspicuously NOT '8.2') was created by some EARLIER,
+unpinned `mongo:latest` pull -- a version that was NOT 9.0.4, and is
+consistent with (though not proof of) that earlier pull being closer to
+whatever produced v7's own data. **Expected effect on bytes: none, as
+anticipated.** MongoDB in this stack is a backing store for OIDC
+client/session/grant records (`mongo_seed`'s own seeded documents,
+consumed by the AS) -- it is never serialized byte-for-byte into any
+measured HTTP response, JWT, JWK, certificate, or handshake; those are
+all produced from certificate/key material on the filesystem and the
+AS/RS's own signing code, independent of which MongoDB server version
+stores the client registration backing it. This turn's own real,
+complete, successful flow runs under classic/pqc/hybrid (this entry's
+own OPINsize section above) are themselves live, functional evidence
+that v9.0.4 works correctly for this stack's actual use of Mongo, not
+just an assumption. The local volume was NOT touched beyond what
+Decision 76 already did (recreated once, to resolve the FCV mismatch) --
+no further local-only change was made this turn.
+
+**Nothing in this entry touches AWS or the already-closed pilot
+plan/campaign infrastructure** -- scope was exactly Luciano's own four
+numbered items: investigate, decide (parser, not pcap, not a
+collection/pull fix), update the acceptance criterion, and check the
+mongo digest.
+
