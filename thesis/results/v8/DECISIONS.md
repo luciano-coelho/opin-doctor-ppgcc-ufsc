@@ -2056,6 +2056,13 @@ is now a specific number) -- enough for Ethernet+IP+TCP headers plus the
 visible start of the TLS record (e.g. `ClientHello`/`ServerHello`'s
 first bytes), still far short of carrying any payload.
 
+**SUPERSEDED 2026-10-22 (see this file's own later entry) -- raised to
+256 bytes.** 128 was enough for the TLS record header (ClientHello's own
+declared SIZE, confirmed exact and unaffected by this change either way)
+but NOT enough to reach the ClientHello's own SNI extension (measured at
+TLS-payload offset ~97, needing ~101 bytes of payload where 128 only
+yields ~62 after real header overhead) -- 256 recovers it exactly.
+
 **Port 443 only; port 22 (the operator's own SSH) is explicitly excluded**
 from the capture filter -- SSH is orchestration noise, not experiment
 data, and leaving it out also means the operator's own traffic pattern
@@ -3013,6 +3020,19 @@ counts both sides instead of being ambiguous about it.
 (unchanged from Decision 37/42) -- the pilot is where a real number
 replaces this estimate, and that real number is what should actually
 decide between the two, not a projection.
+
+**UPDATED 2026-10-22 (see this file's own later entry) -- snaplen raised
+128 -> 256, estimate scaled by the real, measured ratio.** Decision 42's
+snaplen is now 256 (`TCPDUMP_SNAPLEN_BYTES`, `campaign_run.py`), not 128
+-- a real local capture measured the actual size increase directly
+(44,774 -> 66,098 bytes for one connection's own capture, +47.6%), not a
+re-derivation from the same "80 bytes/packet" reasoning Decision 37/42
+used. Applying that same real ratio to this decision's own 22-145MB
+range gives **roughly 32-214MB compressed for the whole campaign, both
+sides** -- still "a few dozen to a couple hundred MB" territory, same
+conclusion as before (Git LFS is comfortably sufficient; still deferred
+to a real pilot number before deciding between LFS and external
+storage, unchanged).
 
 ## 58. Size reports: reproducible script, derived only, variation across executions and latency levels, retries handled separately
 
@@ -5682,4 +5702,166 @@ requests-logged discrepancy (point 2, needs Luciano's own source or
 further digging); whether to bump the real campaign's snaplen to 256 for
 SNI verification, given the measured +47.6% cost (point 3, Luciano's own
 call, explicitly not decided here).
+
+## 79. Three open questions from Decision 78 closed by Luciano's own call: `main.go`'s handshake boundary stays as-is (documented limitation, not fixed); snaplen raised 128 -> 256 (campaign_run.py, README, volume estimate updated); "38 vs 42" resolved (an old Experiment 3 report, not the final v7). Pcap-based "clean" handshake extraction implemented and tested against real captures, all 3 profiles, alongside the gateway value. `pilot_acceptance.py` Criterion 11 added (gateway-vs-pcap diff per scenario, RTT-dependence signal); Criterion 2's SNI gate restored
+
+A no-AWS-mutation, no-AWS-cost turn (this turn's own opening constraint;
+`main.go` explicitly not touched, confirmed -- nothing in `mock_mtls/`
+was edited this turn). Luciano made three calls on Decision 78's own
+open questions; this entry records them and the work each one required.
+
+**Decision 1: `mock_mtls/main.go`'s handshake-byte counting boundary
+(Decision 78, point 1) will NOT be corrected.** Reason, as given: keep
+comparability with the already-validated v7 dataset -- v7's own
+historical numbers carry the identical boundary artifact (same code,
+unchanged since v7), so "fixing" it now would make v8's own gateway-
+measured handshake bytes no longer comparable to v7's on the same terms,
+trading one kind of comparability problem for another. The artifact
+itself (NewSessionTicket plus the first real request's own bytes
+leaking into `countingConn`'s counter before `connStateHandshakeLogger`
+reads it) is now a documented, understood measurement limitation
+(Decision 78), not a mystery -- `METRICS_COVERAGE.md`'s own
+term_handshake row already says so. `main.go` was not edited this turn,
+confirmed.
+
+**Decision 2: snaplen raised from 128 to 256 bytes, cost accepted as
+measured (+47.6% per pcap).** `campaign_run.py` gained a named constant,
+`TCPDUMP_SNAPLEN_BYTES = 256` (previously two separate hardcoded `"128"`
+literals, one per executor -- both now reference the same constant, so
+a future change only needs one edit). Decision 42 (the entry that
+originally fixed 128) and Decision 57 (the pcap-volume estimate) both
+got their own superseding/updating notes in place, not deleted, per this
+file's own convention. Campaign README (`campaign/scripts/../README.md`
+-- actually this file: see below) and the volume estimate (Decision 57)
+both updated: **32-214MB compressed for the whole campaign, both
+sides** (Decision 57's own 22-145MB range at snaplen=128, scaled by the
+real, measured +47.6% ratio -- not re-derived from scratch). Still Git
+LFS territory, still deferred to a real pilot number before choosing
+between LFS and external storage, same conclusion as before the change.
+
+**Decision 3: "38 vs 42" resolved -- not a real discrepancy, a stale
+reference.** Luciano's own account: 38 came from an OLD Experiment 3
+report (28 requests, a different/earlier count from a different
+collection round); the FINAL v7 figure is 42, matching exactly what this
+turn's own real data already showed (`requests_logged`/`opin_processing_
+ms.count` = 42 in every v7 run file actually read, Decision 78). No
+further code change was needed -- `consolidate_v8.py`'s own
+`opin_processing_stats()` already produces 42, confirmed correct from
+the start; this closes Decision 78's own open question about the
+figure, not a new fix.
+
+**Item 2: pcap-based "clean" handshake extraction, implemented and
+tested with real local captures, all 3 profiles, reported alongside the
+gateway value (not replacing it by default).** A circular import
+surfaced while wiring this in (`pilot_acceptance.py` already imports
+`consolidate_v8.py` for Criterion 10; `consolidate_v8.py` now needed
+pcap-parsing code that lived in `pilot_acceptance.py`) -- resolved by
+moving the shared pcap/TCP/TLS primitives (`read_pcap_packets`,
+`parse_tcp_packet`, `extract_sni`, `find_first_clienthello`,
+`find_syn_synack_rtt`, and the two new functions below) into their own
+leaf module, `pcap_utils.py`, imported by both, importing neither.
+
+`parse_tcp_packet_true_len()` (`pcap_utils.py`) reads each segment's
+TRUE TCP payload length from the IP header's own Total Length field
+(always within the first 20 bytes, so present regardless of snaplen),
+rather than from how much of the packet tcpdump actually kept -- this is
+what lets `extract_clean_handshake_bytes()` sum real wire bytes per
+connection at the real campaign's own snaplen (256), with no need for
+full packets.
+
+`extract_clean_handshake_bytes()` (`pcap_utils.py`) implements a simple
+4-phase state machine over one connection's own packet sequence --
+ClientHello, server flight, client flight, closed -- driven only by
+DIRECTION and whether a segment carries real data, never by content
+(everything after ServerHello is encrypted, so content-based dissection
+isn't available without decrypting, which this turn deliberately did
+not do: the user's own instruction said "a partir do pcap", and
+SSLKEYLOGFILE-based decryption would be a code change to `tls_kem_
+proxy/main.go`, a bigger step than asked for). Verified against a real
+raw packet trace, byte for byte, before trusting it: 1,881 (ClientHello)
++ 7,240 (server flight) + 2,162 (server's own extra write, consistent
+with a NewSessionTicket) + 7,240 (client flight) = 18,523 -- matching
+Decision 78's own hand-traced figure for the exact same real Hybrid
+connection exactly. The phase-2-closing rule ("ANY server packet, data
+or pure ACK, ends the client's own flight") was chosen over a timing-gap
+heuristic after checking: in a real local capture, the client's own
+first HTTP request follows its handshake flight within tens of
+microseconds, with NO observable gap -- a timing-based rule would not
+have worked locally and is not guaranteed to work over a real AWS RTT
+either (TCP does not block a write on a prior segment's ACK), so this
+rule relies only on DIRECTION, which holds regardless of RTT.
+
+**Real gateway-vs-pcap comparison, all 3 profiles, real matched
+pcap+gateway-log captures (same container lifetime, same connections):**
+
+| Profile | Gateway (median) | Pcap-clean (median) | Diff |
+|---|---:|---:|---:|
+| Classic | 5,179 B | 4,945 B | -4.52% |
+| PQC | 22,607 B | 20,296 B | -10.22% |
+| Hybrid | 19,017 B | 18,523 B | -2.60% |
+
+The pcap-clean value is **constant** across every one of the 7 real
+connections checked per profile (0% spread, confirmed, not assumed --
+`test_handshake_gateway_vs_pcap.py`), while the gateway's own value
+varies connection to connection (same real finding Decision 78 already
+reported) -- direct, repeatable confirmation that the pcap-clean
+measurement is the more stable of the two, independent of which
+specific first-request happened to leak into the gateway's own count.
+PQC's own gap (-10.22%) is the largest of the three and notably tighter
+internally (0.4 percentage-point spread across its 7 connections, vs.
+2.2pp for classic and 0.6pp for hybrid) -- consistent with PQC's own
+first-request payloads being both larger AND more uniform in size than
+classic's/hybrid's, though this wasn't traced further this turn.
+
+**`consolidate_v8.py` now reports BOTH values, never picks silently.**
+New `term_handshake_pcap()` (reuses `extract_clean_handshake_bytes()`
+and the SAME client-facing-channel filter `term_handshake()` already
+established -- matched by `(ip, port)`, not a second curve-based rule)
+and a new `term_handshake_gateway_vs_pcap_diff` field in the
+consolidated output. A new module constant, `HANDSHAKE_SOURCE`
+(default `"gateway"`, for comparability with v7, consistent with
+Decision 1 above), picks which one feeds OPINsize's own total --
+documented as Luciano's own call to flip, informed by Criterion 11
+below, not something either script decides automatically.
+
+**Item 3: `pilot_acceptance.py` Criterion 11 added (gateway-vs-pcap
+diff per scenario, signals RTT dependence); Criterion 2's SNI gate
+restored now that snaplen is 256.** Criterion 11 reports the diff% at
+every L0/L325 scenario found, then compares L0 against L325 per
+profile: a shift beyond `HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP` (5
+percentage points) signals a real RTT dependence and recommends (does
+not itself switch) flipping `HANDSHAKE_SOURCE` to `"pcap"`. **Threshold
+justified from this turn's own real, local, same-RTT (L0 only, ~0ms)
+measurement:** the diff% already varies by up to 2.2 percentage points
+run-to-run from ordinary per-connection noise alone (the table above) --
+5pp is more than double the largest of those three spreads, tight
+enough to catch a real effect, loose enough not to fire on noise. Not
+yet testable end to end against a real RTT difference (no L325 data
+exists locally, by construction -- this project's own local lab has no
+real network hop to vary); `pilot_acceptance.py` handles this honestly
+(prints "L325 data not available yet", returns informational `True`,
+never fabricates a comparison), confirmed via a real smoke test
+(`test_criterion_11_handshake_rtt.py`) rather than asserted blind.
+Criterion 2 (ClientHello size + SNI) is back to gating on both, as it
+originally did before Decision 77/78's own temporary size-only fix --
+confirmed PASS at the real snaplen=256 with real local captures, all 3
+profiles (`test_clienthello_snaplen128.py`, now covering both the
+historical 128 case and the current 256 one in the same file).
+
+**Testing, this turn, real data throughout:** `pytest tests/` --
+13 tests, all passing, covering: the new pcap-clean extraction and its
+gateway-comparison (2 tests), Criterion 11 end to end (1 test), the
+restored Criterion 2 SNI gate at snaplen=256 alongside the historical
+snaplen=128 case (4 tests), plus everything from Decision 76-78 (6
+tests, unaffected, still passing). `pilot_acceptance.py`'s own `main()`
+run end to end against a real combined tree (calls/gateway-log/pcap for
+all 3 profiles): all 11 criteria execute with no code error; the 2
+FAILs that do occur (Criterion 1's own old regression baseline,
+Criterion 9's missing real `campaign_pull.sh` cycle) are both expected,
+data-level results for ad-hoc local test data, not exceptions.
+
+**Nothing in this entry touches AWS, `main.go`, or the already-closed
+pilot plan/campaign infrastructure beyond the three decisions Luciano
+explicitly made** (the snaplen constant, and the new/updated acceptance
+criteria and documentation that follow from them).
 

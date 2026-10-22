@@ -65,6 +65,26 @@ runs the generator end to end against real local flow-check data
 (`tests/fixtures/light_flow_check_2026-10-21/`); run it with
 `python3 -m pytest tests/test_consolidate_v8.py` from this directory.
 
+## Pcap capture: snaplen 256, handshake measured two ways (Decision 79)
+
+`campaign_run.py`'s own `TCPDUMP_SNAPLEN_BYTES = 256` (raised from 128
+on 2026-10-22, DECISIONS.md) -- needed so the ClientHello's own SNI
+("mtls") is actually recoverable from the capture; ClientHello's own
+SIZE was never affected by snaplen either way. Real measured cost of
+this change: +47.6% pcap size per capture; campaign-wide volume
+estimate updated to **~32-214MB compressed, both sides** (Decision 57).
+
+The mTLS handshake bytes term (OPINsize's 4th term) is measured TWO
+ways, both reported, never silently merged: the gateway's own log
+(`term_handshake`, comparable with v7's own historical figures, but
+known to include some of the connection's first real request's bytes --
+Decision 78) and the client's own pcap (`term_handshake_pcap`, cleaner,
+ClientHello through the client's own Finished only). `consolidate_v8.py`'s
+`HANDSHAKE_SOURCE` constant picks which one feeds OPINsize's own total
+(default: gateway, for v7 comparability) -- `pilot_acceptance.py`'s own
+Criterion 11 is what should inform changing it, not either script
+deciding on its own.
+
 ## Caveats, registered here and in DECISIONS.md Decision 49
 
 - **Terraform state and the campaign's own SSH private key are local
