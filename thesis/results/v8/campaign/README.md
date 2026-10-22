@@ -30,6 +30,41 @@ clients (`sa-east-1` co-located for L0, `ca-central-1` x2 -- one per
 server it talks to, `eu-north-1`, `ap-southeast-1`, `ap-northeast-2`),
 1 control instance (`sa-east-1`, outside every measured path).
 
+## Light flow check (no DinD/DooD nesting) and the consolidated report (Decision 76)
+
+The heavy local rehearsal (nested Docker, one container per role) was
+abandoned (Decision 76, superseding part of Decision 75's own resume
+list) -- it does not represent the real target instance and crashed
+Docker Desktop once already. The real AWS pilot itself is now the
+delivery-and-resume rehearsal; locally, only a **light** check remains
+useful: one `amazonlinux:2023` container (the real target's own x86_64
+architecture), `--memory=8g --cpus=2` (the campaign's own
+`m7i-flex.large` sizing), `install_common_packages.sh` run for real
+inside it, then `opin_flow.py`/`campaign_client_runner.py` run for a
+COMPLETE flow (not just imported) under that container's real Python
+3.9, against the local MockOPIN stack, one profile at a time via
+`switch_crypto_profile.py`. No DinD, no nested `dockerd`: the proxy/
+signer helper containers are instead rewired, only at the test-driver's
+`subprocess.run` layer (never in `opin_flow.py` itself), to join the
+check container's own network namespace. See Decision 76 for the exact
+mechanism and what it found.
+
+**Consolidated report.** `thesis/results/v8/campaign/scripts/
+consolidate_v8.py <v8-latency-root> <output-dir>` reads the real
+`v8/latency/experiment{1,2,3} - {Classic,PQC,Hybrid}/{server}/
+{scenario}/runs/` tree this campaign produces and writes
+`consolidated.json` (source) + `CONSOLIDATED_REPORT.md` (derived), with
+the same field structure as v7's own `report_data_v7.json`/
+`Consolidated_Metrics_Report_FINAL.md` wherever v8's data supports it,
+plus the new metrics (RTT, packet-loss upper bound, CPU/steal/memory,
+a bootstrap CI of the median). `thesis/results/v8/METRICS_COVERAGE.md`
+is the full map of which v7 metric comes from which v8 file/field, what
+is and isn't covered yet, and why -- read it before trusting any
+specific row of the generated report. `tests/test_consolidate_v8.py`
+runs the generator end to end against real local flow-check data
+(`tests/fixtures/light_flow_check_2026-10-21/`); run it with
+`python3 -m pytest tests/test_consolidate_v8.py` from this directory.
+
 ## Caveats, registered here and in DECISIONS.md Decision 49
 
 - **Terraform state and the campaign's own SSH private key are local

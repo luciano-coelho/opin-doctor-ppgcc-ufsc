@@ -5153,3 +5153,168 @@ unverified as before this turn, except that the environment that would
 run them (user-data, image/source delivery, DinD topology) is now
 substantially more likely to work than before this turn's three fixes.
 
+## 76. Heavy local rehearsal abandoned in favor of the AWS pilot itself as the delivery/resume rehearsal; a light, no-DinD flow check run instead -- full real flow confirmed under Python 3.9 for all 3 profiles, 3 of OPINsize's 4 terms reproduced byte-for-byte against v7, one real local-stack bug found and fixed (stale `mongo-data` volume, unrelated to the campaign); `METRICS_COVERAGE.md` and `consolidate_v8.py` written and tested end to end
+
+A no-AWS-mutation, no-AWS-cost turn (this turn's own opening constraint).
+Supersedes Decision 75's own "depois do piloto" resume list, specifically
+the item "Only server+client in x86_64 DinD this time" -- Luciano's own
+instruction this turn was explicit: the DinD/DooD heavy rehearsal is
+discarded outright, not resumed. **Reason:** it does not represent the
+real target instance (a single real EC2 host, one `dockerd`, no nesting)
+and it crashed Docker Desktop once already (Decision 75) under the
+combined load of two nested daemons + QEMU emulation + concurrent image
+transfer -- repeating it risks the same crash for a rehearsal whose own
+fidelity to the real target was already questionable. The real AWS pilot
+itself (already planned, already budgeted, Decision 35/46) will BE the
+delivery-and-resume rehearsal: a real EC2 instance, no nesting, no
+Docker-Desktop-specific DooD path quirks to work around. Everything
+`deliver_source.sh`'s resume logic and image delivery still need to prove
+moves to the pilot, not to a second local rehearsal.
+
+**What this turn's light check actually did, in place of the heavy
+rehearsal:** one `amazonlinux:2023` container, **x86_64** (the real
+target instance's own architecture, not control's arm64), real
+`--memory=8g --cpus=2` limits (the campaign's own `m7i-flex.large`
+sizing, Decision 32), disk nominally limited to Terraform's own 30GB
+`gp3` root volume (`campaign_instance/main.tf:104-106`, uniform across
+every role -- confirmed by grep, no per-role override exists) via
+`--storage-opt size=30G`, though this flag is accepted by the Docker API
+(`docker inspect` confirms `StorageOpt=map[size:30G]`) but **not actually
+enforced** under this Docker-Desktop/WSL2 setup (`df -h /` inside the
+container still showed the full ~1007G host filesystem) -- stated
+honestly as a limitation of the check's own environment, not of the real
+EC2 target. `install_common_packages.sh` ran for real inside it (dnf
+installs succeeded; the systemd-related `docker.service` abort at the
+end is the same already-accepted, already-documented container-only
+limitation from Decision 75, not a new finding). The real repo was
+bind-mounted read-only at Docker Desktop's own
+`/run/desktop/mnt/host/c/Users/...` path specifically so `opin_flow.py`'s
+own `__file__`-relative path computations are simultaneously valid as
+normal container-filesystem reads AND as correct DooD bind-mount sources
+for `start_tls_kem_proxy()`'s own subsequent `docker run -v` call, with
+no change to `opin_flow.py`'s production code -- confirmed live with a
+real file read before trusting it for the real run. `tls_kem_proxy`'s
+own hardcoded `--network insurance-server-lambdas_default`/`-p
+127.0.0.1:8443:8443` and `pqc_signer_service`'s own missing `--network`
+flag were both rewritten, ONLY at the test driver's `subprocess.run`
+layer (never in `opin_flow.py` itself), to join the check container's
+own network namespace instead (`--network
+container:mockopin_flow_check`), stripping the now-incompatible `-p`
+flag (`--network container:X` and `-p` conflict -- confirmed live,
+real Docker: "conflicting options: port publishing and the container
+type network mode"); `REMOTE_GATEWAY_HOST=host.docker.internal` routes
+the proxy's own upstream dial to the real `mtls` container published on
+the host at `443:443`. This reuses `opin_flow.py`'s own existing,
+already-shipped `REMOTE_GATEWAY_HOST` mechanism (Decision 51) exactly as
+designed -- no new production code, only test-driver wiring.
+
+**One real bug found and fixed, local-stack-only, unrelated to the
+campaign itself:** `mongodb`'s own `mongo-data` Docker volume had been
+stamped by a NEWER MongoDB release than the one the now-digest-pinned
+`mongo:latest@sha256:...` (Decision 75) actually resolves to --
+`featureCompatibilityVersion 8.2`, which that pinned, older binary
+refuses to start against ("UPGRADE PROBLEM: ... Expected one of the
+following versions: '9.0', '8.3', '8.0'"), which in turn left `auth`
+unable to reach Mongo at all and `mtls` unable to fetch its SSA JWK from
+`localstack` (itself blocked on `auth`'s own failed-to-seed state). Fixed
+by removing the stale local volume and letting `mongo_seed` reseed it
+fresh against the pinned image -- a purely local, disposable artifact
+(not committed, not AWS, not the campaign's own data), not a code or
+pinning defect: the pin itself is correct; the volume simply predated it.
+Flagged here because it is exactly the class of problem Decision 75's
+own digest-pinning work exists to prevent going forward, caught in the
+act of actually running the pinned image for the first time since it was
+pinned.
+
+**Full real flow confirmed, all 3 profiles, real Python 3.9, real
+container:** `opin_flow.py`'s own `start_tls_kem_proxy()`/
+`start_pqc_signer_service()` and `campaign_client_runner.py`'s own
+`main()` ran a COMPLETE flow (not merely imported, which Decision 74
+already confirmed) for classic, pqc, and hybrid in turn, one profile at
+a time via `switch_crypto_profile.py` (reused, not reimplemented) between
+each. `call_count` came back exactly 42 in all three profiles, matching
+both this turn's own target and `thesis/results/v7/latency/experiment1 -
+Classic/0ms/runs/run01.json`'s own `call_count: 42` field directly
+(confirmed by reading that file) -- the SAME field v8's own
+`campaign_run.py`/`latency_automation.py` pipeline already produces.
+
+**OPINsize's real definition resolved -- it was never actually
+ambiguous, only not yet looked up this session:** `OPINsize = N_mTLS x
+handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N_PKI x
+PKI_bytes` (`Consolidated_Metrics_Report_FINAL.md` Section 3,
+`compute_v7_report_data.py:145-168`, with the JARM/PQC-CA corrections
+from `apply_jarm_correction.py`/`apply_pqc_ca_postquantum_correction.py`
+applied) -- a narrow, four-term equation over cryptographic-artifact
+sizes, NOT the sum of every byte `campaign_client_runner.py` reports
+across all 42 calls (that larger figure -- 125,065/275,380/331,219 bytes
+this turn's own classic/pqc/hybrid runs, close to but not identical to
+an unrelated historical baseline from Decision 67's own regression test,
+125,485/275,800/331,639, likely normal run-to-run JWT-claim/UUID-length
+jitter -- answers a different question and was never meant to match
+OPINsize's own 76,929/322,895/350,477 bytes). Confirmed by reading
+`thesis/results/v7/report_data_v7.json` directly: `extended_corrected`
+(classic, hybrid) / `extended_fully_corrected` (pqc) equal exactly
+76,929 / 322,895 / 350,477 bytes -- the user-stated targets, byte for
+byte. Three of the four terms are fully reproducible RIGHT NOW from
+`campaign_client_runner.py`'s own existing per-call output, confirmed
+exactly against v7, real local data, all three profiles, no fixture
+involved: `term_jwt` (sum of `calls[].jwt_sizes`) = 37,263 / 151,321 /
+200,567, matching v7's own JARM-corrected figures exactly; `term_jwk`
+(count of `"sig"`-use `calls[].jwk_sizes` entries times their size) =
+512 / 3,904 / 4,416, exact; `term_pki` (sum of the two CA-certificate
+calls' `response_bytes`, minus the 103-byte-per-response HTTP framing
+v7 already identified) = 8,440 / 32,028 / 37,356, exact. The fourth term,
+`term_handshake` (mTLS handshake bytes, median of 6 connections, from
+raw TCP/TLS capture), is NOT reproducible from this tool at all -- v7's
+own figure came from a separate, live-capture pipeline
+(`gateway_metrics.handshake_bytes`) that has no v8 equivalent yet; the
+raw `.pcap.gz` per run is already planned to be collected
+(`campaign_run.py`'s own Decision 53 layout), so this is a missing
+*analysis* step, not a missing *collection* step. The counts N_mTLS=6,
+N_JWT=28, N_JWK=2, N_PKI=4 all match this turn's own target exactly
+(N_JWT/N_JWK/N_PKI confirmed directly from the real per-call data;
+N_mTLS consistent with the data's own `pool_label` grouping, not
+independently re-derived this turn). Full detail, including what "28
+JWTs" vs the *size* experiment's separate `total_requests=28` field
+means (two different numbers, from two different v7 pipelines, that
+happen to coincide), is in `thesis/results/v8/METRICS_COVERAGE.md`.
+
+**`METRICS_COVERAGE.md` and `consolidate_v8.py` written and tested end
+to end, this turn, not merely planned:** the coverage matrix maps every
+metric in v7's own consolidated report to its v8 data source (file +
+field), status, and -- for every "not covered"/"covered with
+difference" row -- the reason and a proposed fix, exactly as this turn's
+own instruction required; the only large, deferred fix is the pcap
+handshake-bytes extractor (`term_handshake`, and therefore OPINsize's
+own total and the flow-time decomposition), explicitly on the "depois do
+piloto" list. `consolidate_v8.py` reads the real `v8/latency/...` tree
+(Decision 53's own layout) and writes `consolidated.json` +
+`CONSOLIDATED_REPORT.md`, reusing v7's own `pem_der_len()` helper
+verbatim rather than reimplementing it, and adding one genuinely new
+statistic, a bootstrap confidence interval around the median (v8's own
+30-runs-per-cell protocol, Decision 34, has less statistical power than
+v7's 60; the bootstrap is v8's response to that, not a v7 carryover).
+Tested end to end against this turn's own real check data (reshaped into
+the campaign's own `runs/run{NN}.json` + `runs/run{NN}.calls.jsonl`
+layout, `tests/fixtures/light_flow_check_2026-10-21/`, real data, clearly
+labeled): term_jwt/term_jwk/term_pki reproduce v7's own numbers exactly
+for all three profiles; OPINsize's complete-equation arithmetic is
+exercised once, for classic only, using one explicitly tagged
+`_FIXTURE` value for `term_handshake` (v7's own classic handshake figure,
+used only to drive the arithmetic, never claimed as a real v8
+measurement) and comes back exactly 76,929, matching v7; pqc/hybrid,
+with no fixture supplied, correctly come back `"incomplete_missing_
+term_handshake"` with the right partial sum rather than a silently wrong
+total. `python3 -m pytest tests/test_consolidate_v8.py` passes.
+
+**"Depois do piloto" additions from this turn:** the pcap-based
+handshake-bytes extractor (`term_handshake`, OPINsize's own complete
+total, the flow-time decomposition, and `ClientHello` as its own
+figure) -- all four blocked on the same missing tool, all four
+documented in `METRICS_COVERAGE.md` rather than attempted this turn.
+Rehearsing image delivery or `deliver_source.sh`'s own resume behavior
+remains explicitly out of scope for this turn's check (per this turn's
+own instruction) and stays on Decision 75's existing resume list,
+now to be exercised against the real pilot instead of a local
+rehearsal, per this decision's own first paragraph.
+
