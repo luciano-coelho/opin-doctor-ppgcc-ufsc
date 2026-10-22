@@ -16,10 +16,16 @@ Usage: python pilot_acceptance.py <pulled-data-root>
 Criteria, in the order PILOT_RUNBOOK.md lists them:
   1. total_bytes_exchanged per execution == the local-lab regression
      baseline (125,485 classic / 275,800 pqc / 331,639 hybrid).
-  2. Client-side pcap's ClientHello: same SIZE and SNI as the local lab
-     reference fixture (tests/fixtures/reference_clienthello.json --
-     captured live against the local stack + netshoot, this turn, not
-     hand-typed; see that file's own "_method" field).
+  2. Client-side pcap's ClientHello: same SIZE as the local lab reference
+     fixture (tests/fixtures/reference_clienthello.json). SNI is reported
+     but does NOT gate pass/fail -- at the real campaign snaplen (128
+     bytes, campaign_run.py, unchanged), SNI ("mtls", at TLS-payload
+     offset ~97) is never captured; confirmed 2026-10-22 against a real
+     local capture. Size needs only the TLS record header (first 5
+     bytes), always within the first captured segment regardless of
+     snaplen or how many real TCP segments the ClientHello spans -- no
+     reassembly needed, confirmed exactly reproducible at snaplen=128 for
+     all 3 profiles.
   3. Negotiated group: client channel matches the profile's own curve,
      internal channel always CurveP256 (verify_negotiated_groups()).
   4. steal < 5% in every execution; max CPU/memory reported.
@@ -334,9 +340,28 @@ def parse_reference_ping_rtt(ping_json_path):
 # Criterion 2: ClientHello size + SNI
 # ---------------------------------------------------------------------------
 def criterion_2(root):
-    print("=== Criterion 2: client pcap ClientHello size+SNI == local lab ===")
+    print("=== Criterion 2: client pcap ClientHello size == local lab (SNI reported, not gated) ===")
     print(f"  reference fixture ({_CLIENTHELLO_FIXTURE_PATH.name}): "
           + ", ".join(f"{p}={v['size']}B/sni={v['sni']!r}" for p, v in BASELINE_CLIENTHELLO.items()))
+    # 2026-10-22 investigation (see DECISIONS.md): the real campaign/pilot
+    # snaplen is 128 bytes (campaign_run.py, both executors, hardcoded --
+    # NOT changed by this turn's own work, per instruction). The SNI
+    # ("mtls") sits at TLS-payload offset ~97 in a real ClientHello
+    # (measured directly against a real local capture) -- at snaplen=128,
+    # only ~62 bytes of TCP payload actually land in the pcap (the rest
+    # is Ethernet/IP/TCP header overhead, TCP options included), so SNI
+    # is NEVER recoverable at this snaplen; a real snaplen=256 capture
+    # (measured directly, same connection class) DOES recover it exactly.
+    # Gating this criterion on SNI would make it fail on every real pilot
+    # execution, unconditionally -- not a flaky check, a guaranteed one.
+    # ClientHello SIZE, by contrast, only needs the TLS record header's
+    # own length field (the first 5 bytes of the record, always within
+    # the first captured segment regardless of snaplen or how many real
+    # TCP segments the full ClientHello spans on the wire) -- confirmed
+    # exactly reproducible at snaplen=128 against real local captures,
+    # all three profiles, byte for byte. So: size gates pass/fail: SNI is
+    # reported for whatever information it gives (None is expected and
+    # not itself a failure at this snaplen), never gates.
     all_ok = True
     any_found = False
     for profile, scenario, scenario_path in find_scenario_dirs(root):
@@ -350,14 +375,17 @@ def criterion_2(root):
             found = find_first_clienthello(pcap_path)
             baseline = BASELINE_CLIENTHELLO[profile]
             if found is None:
-                print(f"  FAIL {profile}/{scenario}/{label}: no ClientHello found in pcap")
+                print(f"  FAIL {profile}/{scenario}/{label}: no ClientHello found in pcap at all "
+                      f"(even the TLS record header is missing -- a real capture problem, not the "
+                      f"known SNI-at-this-snaplen limitation)")
                 all_ok = False
                 continue
             size, sni = found
-            ok = size == baseline["size"] and sni == baseline["sni"]
+            ok = size == baseline["size"]
             all_ok = all_ok and ok
+            sni_note = "" if sni is None else f", sni={sni!r} (not gated)"
             print(f"  {'PASS' if ok else 'FAIL'} {profile}/{scenario}/{label}: "
-                  f"size={size} (expected {baseline['size']}), sni={sni!r} (expected {baseline['sni']!r})")
+                  f"size={size} (expected {baseline['size']}){sni_note}")
     if not any_found:
         print("  N/A -- no client pcaps found under this data root")
         return None

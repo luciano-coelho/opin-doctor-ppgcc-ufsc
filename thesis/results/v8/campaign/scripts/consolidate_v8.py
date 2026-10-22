@@ -32,6 +32,17 @@ already uses). Pcap remains independent verification only, for whatever
 it can show that the gateway log cannot (RTT, packet loss, ClientHello
 as a standalone figure) -- not a second handshake-bytes source.
 
+opin_processing_ms (server-processing leg of the flow-time decomposition,
+investigated 2026-10-22) is read the same way, from the SAME gateway log's
+"access log" lines (one per HTTP request, not one per connection --
+`mock_mtls/main.go` line 790, field `opinDurationMs`, line 768). v7's own
+`baseline_automation.py` (`collect_gateway_metrics()`/`compute_metrics()`)
+reads this from `docker logs` live; this module reuses its own
+`dedupe_handshake_samples_by_connection()`/`filter_handshake_outliers()`/
+`latency_stats()` directly (not reimplemented) against entries parsed
+from the already-saved `server/run{NN}_gateway.log` text instead of a
+live `docker logs` call.
+
 Usage:
   consolidate_v8.py <v8-latency-root> <output-dir>
     e.g. consolidate_v8.py thesis/results/v8/latency thesis/results/v8/latency
@@ -52,6 +63,12 @@ from campaign_run import (  # reused, not reimplemented -- see module docstring 
     _CLIENT_EXPECTED_CURVE,
     _CORRELATION_WINDOW_SECONDS,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(_REPO_ROOT / "thesis" / "scripts"))
+import baseline_automation as ba  # noqa: E402 -- reused for dedupe/outlier-filter/stats, not reimplemented
+
+_ACCESS_LOG_MSG = "access log"
 
 PROFILE_TO_EXPERIMENT_DIR = {
     "classic": "experiment1 - Classic",
@@ -266,6 +283,61 @@ def term_handshake(gateway_log_text, profile):
     return len(sizes), len(sizes) * median_bytes
 
 
+def parse_access_log_entries(gateway_log_text):
+    """Offline equivalent of `baseline_automation.collect_gateway_metrics()`
+    (which runs `docker logs` live) -- same line filter (`"msg":"access
+    log"` substring + json.loads) and the same field subset, applied to an
+    already-saved `server/run{NN}_gateway.log` text instead. Kept as a thin
+    parsing-only adapter so the real work (dedup, outlier filtering, stats)
+    stays in `baseline_automation.py`, not duplicated here."""
+    entries = []
+    for line in gateway_log_text.splitlines():
+        line = line.strip()
+        if not line or f'"msg":"{_ACCESS_LOG_MSG}"' not in line:
+            continue
+        _ts, _, rest = line.partition(" ")
+        try:
+            entry = json.loads(rest)
+        except ValueError:
+            continue
+        entries.append({
+            "host": entry.get("host"), "request": entry.get("request"), "status": entry.get("status"),
+            "opinDurationMs": entry.get("opinDurationMs"),
+            "mtlsHandshakeDurationMs": entry.get("mtlsHandshakeDurationMs"),
+            "mtlsHandshakeBytes": entry.get("mtlsHandshakeBytes"),
+            "tlsVersion": entry.get("tlsVersion"), "cipherSuite": entry.get("cipherSuite"),
+            "clientCertBytes": entry.get("clientCertBytes"), "remoteIP": entry.get("remoteIP"),
+        })
+    return entries
+
+
+def opin_processing_stats(gateway_log_text, profile):
+    """Server-processing leg of the flow-time decomposition (v7's own
+    Section 4, "Where the flow's time actually goes"). NOT deduped by
+    connection -- unlike handshake bytes/duration, processing time
+    genuinely varies per REQUEST, same as `baseline_automation.compute_
+    metrics()`'s own treatment (`opin_ms` there is built from every
+    access-log entry directly, no `dedupe_handshake_samples_by_
+    connection()` call on that field).
+
+    v7's own `compute_metrics()` restricts `gateway_entries` to
+    `clientCertBytes == <the profile's own client cert size>` before
+    computing this, to exclude the AS's own internal mTLS calls to the
+    RS (a real, separate population logged on the same gateway -- same
+    issue `term_handshake()`/`client_facing_handshakes()` already solve
+    for the bytes term). Reuses THAT SAME mechanism here (remoteAddr
+    correlation against the carve-out lines) instead of hardcoding a
+    second, parallel clientCertBytes-equality constant per profile --
+    one definition of "client-facing" for both metrics, not two."""
+    if not gateway_log_text:
+        return None
+    client_facing_addrs = {h.get("remoteAddr") for h in client_facing_handshakes(gateway_log_text, profile)}
+    entries = parse_access_log_entries(gateway_log_text)
+    client_facing_entries = [e for e in entries if e.get("remoteIP") in client_facing_addrs]
+    opin_ms = [e["opinDurationMs"] for e in client_facing_entries if e.get("opinDurationMs") is not None]
+    return {"requests_logged": len(client_facing_entries), **(ba.latency_stats(opin_ms) or {})}
+
+
 def bytes_by_participant(calls):
     out = {}
     for c in calls:
@@ -343,6 +415,9 @@ def consolidate_profile_scenario(scenario_path, profile):
     # kept only as a diagnostic, never reported as N_mTLS.
     mtls_counts = {h[0] for h in handshake_known}
 
+    opin_processing_results = [opin_processing_stats(r["gateway_log"], profile) for r in clean_rows]
+    opin_processing_known = [o for o in opin_processing_results if o and o.get("p50_ms") is not None]
+
     ping_samples = [load_ping(scenario_path / "client" / f"{Path(r['run_file']).stem}_ping.json") for r in clean_rows]
     ping_samples = [p for p in ping_samples if p]
     cpu_server = [load_cpu_mem(scenario_path / "server" / f"{Path(r['run_file']).stem}_cpu.jsonl") for r in clean_rows]
@@ -366,6 +441,14 @@ def consolidate_profile_scenario(scenario_path, profile):
         "term_handshake": {
             "status": "covered" if handshake_known else "missing_gateway_log",
             "stats": stats_block([h[1] for h in handshake_known]) if handshake_known else None,
+        },
+        "opin_processing_ms": {
+            "status": "covered" if opin_processing_known else "missing_gateway_log",
+            # p50_ms per run, pooled into the same median/min/max/bootstrap
+            # block as every other v8 metric -- NOT the raw per-request
+            # values (those live in calls.jsonl's own latency_ms already).
+            "stats": stats_block([o["p50_ms"] for o in opin_processing_known]) if opin_processing_known else None,
+            "requests_logged_per_run": sorted({o["requests_logged"] for o in opin_processing_known}),
         },
         "opinsize": None,
         "bytes_by_participant": bytes_by_participant([c for calls in agg_calls_per_run for c in calls]) if agg_calls_per_run else None,

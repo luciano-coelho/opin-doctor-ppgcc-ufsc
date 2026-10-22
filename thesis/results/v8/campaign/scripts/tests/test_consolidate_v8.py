@@ -117,6 +117,18 @@ def test_consolidate_v8_end_to_end(tmp_path):
             f"{profile}: OPINsize {value:.0f} vs v7's {v7v} -- {pct_diff:.2f}% exceeds the "
             f"{OPINSIZE_TOLERANCE_PCT}% tolerance")
 
+        # opin_processing_ms (server-processing leg of the flow-time
+        # decomposition, 2026-10-22 investigation): same real gateway-log
+        # fixture already carries "access log" lines -- requests_logged
+        # must equal 42 (the client-facing count, v7's own figure), not
+        # 49 (42 client-facing + 7 internal AS-to-RS, before filtering).
+        op = m["opin_processing_ms"]
+        assert op["status"] == "covered", f"{profile}: opin_processing_ms not covered"
+        assert op["requests_logged_per_run"] == [42], (
+            f"{profile}: requests_logged {op['requests_logged_per_run']} != [42] -- internal-channel "
+            f"requests were not correctly excluded")
+        assert op["stats"]["median"] is not None and op["stats"]["median"] > 0
+
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "consolidated.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
