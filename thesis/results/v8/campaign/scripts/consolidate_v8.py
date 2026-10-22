@@ -43,11 +43,23 @@ reads this from `docker logs` live; this module reuses its own
 from the already-saved `server/run{NN}_gateway.log` text instead of a
 live `docker logs` call.
 
+term_handshake_pcap (2026-10-22, DECISIONS.md): a SECOND, independent
+measurement of the same term, from the client's own pcap
+(`client/run{NN}.pcap.gz`) via `pilot_acceptance.py`'s
+`extract_clean_handshake_bytes()` -- ClientHello through the client's
+own Finished only, excluding the first-request leakage the gateway's own
+`countingConn` boundary lets through (Decision 78). `HANDSHAKE_SOURCE`
+(module constant below) picks which one feeds OPINsize's own total;
+`pilot_acceptance.py`'s own Criterion 11 is what should inform changing
+it, based on real campaign data (not something this module decides by
+itself).
+
 Usage:
   consolidate_v8.py <v8-latency-root> <output-dir>
     e.g. consolidate_v8.py thesis/results/v8/latency thesis/results/v8/latency
 """
 import base64
+import gzip
 import json
 import random
 import re
@@ -63,12 +75,22 @@ from campaign_run import (  # reused, not reimplemented -- see module docstring 
     _CLIENT_EXPECTED_CURVE,
     _CORRELATION_WINDOW_SECONDS,
 )
+from pcap_utils import extract_clean_handshake_bytes  # noqa: E402 -- shared, see pcap_utils.py's own docstring
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_REPO_ROOT / "thesis" / "scripts"))
 import baseline_automation as ba  # noqa: E402 -- reused for dedupe/outlier-filter/stats, not reimplemented
 
 _ACCESS_LOG_MSG = "access log"
+
+# Which measurement feeds OPINsize's own handshake term. Default stays
+# "gateway" (comparability with v7's own historical figures, Decision --
+# see DECISIONS.md: the countingConn boundary artifact is a KNOWN,
+# documented limitation, deliberately not changed). Flip to "pcap" only
+# on Luciano's own call, informed by pilot_acceptance.py's Criterion 11
+# (gateway-vs-pcap diff across real scenarios at different RTT) -- not
+# something this module decides automatically.
+HANDSHAKE_SOURCE = "gateway"
 
 PROFILE_TO_EXPERIMENT_DIR = {
     "classic": "experiment1 - Classic",
@@ -283,6 +305,38 @@ def term_handshake(gateway_log_text, profile):
     return len(sizes), len(sizes) * median_bytes
 
 
+def term_handshake_pcap(client_pcap_path, gateway_log_text, profile):
+    """Independent, second measurement of term_handshake -- from the
+    client's own pcap (`extract_clean_handshake_bytes()`,
+    `pilot_acceptance.py`), ClientHello through the client's own Finished
+    only, excluding the first-request leakage `term_handshake()`'s own
+    gateway-log source carries (Decision 78). Filtered to the SAME
+    client-facing connections `term_handshake()` already identifies
+    (matched by (ip, port) -- both sides log/capture the same physical
+    TCP 4-tuple, no NAT between client and server in this project's own
+    topology), not a second, independent curve-based filter. Returns
+    (count, total_bytes) -- same median x count definition as
+    `term_handshake()`. Needs BOTH files (pcap for the real bytes, the
+    gateway log for which connections are client-facing) -- returns
+    (None, None) if either is missing, never a guess from one alone."""
+    if not client_pcap_path or not Path(client_pcap_path).is_file() or not gateway_log_text:
+        return None, None
+    client_facing_addrs = set()
+    for h in client_facing_handshakes(gateway_log_text, profile):
+        addr = h.get("remoteAddr")
+        if addr:
+            ip, _, port = addr.rpartition(":")
+            client_facing_addrs.add((ip, int(port)))
+    if not client_facing_addrs:
+        return None, None
+    pcap_connections = extract_clean_handshake_bytes(client_pcap_path)
+    sizes = [v["clean_handshake_bytes"] for key, v in pcap_connections.items() if key in client_facing_addrs]
+    if not sizes:
+        return None, None
+    median_bytes = statistics.median(sizes)
+    return len(sizes), len(sizes) * median_bytes
+
+
 def parse_access_log_entries(gateway_log_text):
     """Offline equivalent of `baseline_automation.collect_gateway_metrics()`
     (which runs `docker logs` live) -- same line filter (`"msg":"access
@@ -376,6 +430,17 @@ def load_gateway_log(scenario_path, run_stem):
     return log_path.read_text(encoding="utf-8") if log_path.is_file() else None
 
 
+def find_client_pcap(scenario_path, run_stem):
+    """Returns the client pcap's path (gzipped or plain, whichever
+    exists) or None -- never decompresses it here, `read_pcap_packets()`
+    (`pilot_acceptance.py`) auto-detects by extension."""
+    for suffix in (".pcap.gz", ".pcap"):
+        p = scenario_path / "client" / f"{run_stem}{suffix}"
+        if p.is_file():
+            return p
+    return None
+
+
 def consolidate_profile_scenario(scenario_path, profile):
     runs_dir = scenario_path / "runs"
     run_files = sorted(p for p in runs_dir.glob("run*.json"))
@@ -386,8 +451,10 @@ def consolidate_profile_scenario(scenario_path, profile):
         calls_file = runs_dir / run_file.name.replace(".json", ".calls.jsonl")
         calls = load_calls(calls_file)
         gateway_log = load_gateway_log(scenario_path, run_file.stem)
+        client_pcap = find_client_pcap(scenario_path, run_file.stem)
         rows.append({"run_file": run_file.name, "retried": bool(data.get("retried", False)),
-                      "result": result, "calls": calls, "gateway_log": gateway_log})
+                      "result": result, "calls": calls, "gateway_log": gateway_log,
+                      "client_pcap": client_pcap})
 
     clean_rows = [r for r in rows if not r["retried"]]
     retried_rows = [r for r in rows if r["retried"]]
@@ -415,6 +482,9 @@ def consolidate_profile_scenario(scenario_path, profile):
     # kept only as a diagnostic, never reported as N_mTLS.
     mtls_counts = {h[0] for h in handshake_known}
 
+    handshake_pcap_results = [term_handshake_pcap(r["client_pcap"], r["gateway_log"], profile) for r in clean_rows]
+    handshake_pcap_known = [h for h in handshake_pcap_results if h[1] is not None]
+
     opin_processing_results = [opin_processing_stats(r["gateway_log"], profile) for r in clean_rows]
     opin_processing_known = [o for o in opin_processing_results if o and o.get("p50_ms") is not None]
 
@@ -441,6 +511,15 @@ def consolidate_profile_scenario(scenario_path, profile):
         "term_handshake": {
             "status": "covered" if handshake_known else "missing_gateway_log",
             "stats": stats_block([h[1] for h in handshake_known]) if handshake_known else None,
+            "source": "server/run{NN}_gateway.log (mtlsHandshakeBytes) -- known to include some "
+                      "first-request leakage, Decision 78; kept for comparability with v7",
+        },
+        "term_handshake_pcap": {
+            "status": "covered" if handshake_pcap_known else "missing_client_pcap_or_gateway_log",
+            "stats": stats_block([h[1] for h in handshake_pcap_known]) if handshake_pcap_known else None,
+            "source": "client/run{NN}.pcap.gz (ClientHello..client Finished, no first-request leakage) "
+                      "-- a second, independent measurement of the same term, pilot_acceptance.py "
+                      "Criterion 11 is what should inform switching HANDSHAKE_SOURCE to this one",
         },
         "opin_processing_ms": {
             "status": "covered" if opin_processing_known else "missing_gateway_log",
@@ -462,22 +541,38 @@ def consolidate_profile_scenario(scenario_path, profile):
         "cpu_client": cpu_client or None,
     }
 
+    if out["term_handshake"]["stats"] and out["term_handshake_pcap"]["stats"]:
+        gw_med = out["term_handshake"]["stats"]["median"]
+        pcap_med = out["term_handshake_pcap"]["stats"]["median"]
+        out["term_handshake_gateway_vs_pcap_diff"] = {
+            "diff_bytes": pcap_med - gw_med,
+            "diff_pct": (pcap_med - gw_med) / gw_med * 100 if gw_med else None,
+        }
+    else:
+        out["term_handshake_gateway_vs_pcap_diff"] = None
+
     if jwt_sums and jwk_results and pki_results:
         term_jwt_med = out["term_jwt"]["median"]
         term_jwk_med = out["term_jwk"]["median"]
         term_pki_med = out["term_pki"]["median"]
-        if out["term_handshake"]["stats"]:
-            term_hs_med = out["term_handshake"]["stats"]["median"]
+        # HANDSHAKE_SOURCE (module constant, top of file) picks gateway
+        # or pcap -- default "gateway" for v7 comparability (Decision --
+        # the countingConn boundary is a documented limitation, not
+        # fixed); only switch on Luciano's own call per Criterion 11.
+        handshake_block = out["term_handshake"] if HANDSHAKE_SOURCE == "gateway" else out["term_handshake_pcap"]
+        if handshake_block["stats"]:
+            term_hs_med = handshake_block["stats"]["median"]
             out["opinsize"] = {
                 "status": "complete",
                 "value_bytes": term_hs_med + term_jwt_med + term_jwk_med + term_pki_med,
+                "handshake_source": HANDSHAKE_SOURCE,
             }
         else:
             out["opinsize"] = {
                 "status": "incomplete_missing_term_handshake",
                 "partial_value_bytes_excl_handshake": term_jwt_med + term_jwk_med + term_pki_med,
-                "note": "term_handshake not covered (METRICS_COVERAGE.md) -- no pcap extractor yet; "
-                        "this is the sum of term_jwt+term_jwk+term_pki only, NOT the full OPINsize.",
+                "note": f"term_handshake (source={HANDSHAKE_SOURCE}) not covered for this run -- "
+                        f"this is the sum of term_jwt+term_jwk+term_pki only, NOT the full OPINsize.",
             }
     return out
 

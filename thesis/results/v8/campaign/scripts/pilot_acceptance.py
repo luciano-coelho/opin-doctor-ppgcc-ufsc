@@ -16,16 +16,15 @@ Usage: python pilot_acceptance.py <pulled-data-root>
 Criteria, in the order PILOT_RUNBOOK.md lists them:
   1. total_bytes_exchanged per execution == the local-lab regression
      baseline (125,485 classic / 275,800 pqc / 331,639 hybrid).
-  2. Client-side pcap's ClientHello: same SIZE as the local lab reference
-     fixture (tests/fixtures/reference_clienthello.json). SNI is reported
-     but does NOT gate pass/fail -- at the real campaign snaplen (128
-     bytes, campaign_run.py, unchanged), SNI ("mtls", at TLS-payload
-     offset ~97) is never captured; confirmed 2026-10-22 against a real
-     local capture. Size needs only the TLS record header (first 5
-     bytes), always within the first captured segment regardless of
+  2. Client-side pcap's ClientHello: same SIZE and SNI as the local lab
+     reference fixture (tests/fixtures/reference_clienthello.json).
+     Snaplen is 256 bytes (TCPDUMP_SNAPLEN_BYTES, campaign_run.py, raised
+     from 128 on 2026-10-22 -- DECISIONS.md) specifically so SNI ("mtls",
+     at TLS-payload offset ~97) is recoverable; confirmed against a real
+     local capture at 256. Size needs only the TLS record header (first
+     5 bytes), always within the first captured segment regardless of
      snaplen or how many real TCP segments the ClientHello spans -- no
-     reassembly needed, confirmed exactly reproducible at snaplen=128 for
-     all 3 profiles.
+     reassembly needed either way.
   3. Negotiated group: client channel matches the profile's own curve,
      internal channel always CurveP256 (verify_negotiated_groups()).
   4. steal < 5% in every execution; max CPU/memory reported.
@@ -46,19 +45,33 @@ Criteria, in the order PILOT_RUNBOOK.md lists them:
       file's own OPINSIZE_TOLERANCE_PCT comment for why 3%), and no
       `_FIXTURE`-tagged value anywhere in the consolidated data a real
       pilot run produces.
+  11. Gateway-vs-pcap handshake-bytes diff, per scenario (L0 and L325):
+      reports the diff%, and signals if it shifts by more than
+      HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP (5 percentage points,
+      justified in that constant's own comment) between the two --
+      consistent with a real RTT dependence, not just per-connection
+      noise. Informational: it signals, it does not itself switch
+      consolidate_v8.py's own HANDSHAKE_SOURCE.
 """
-import gzip
 import json
 import math
 import random
 import re
-import struct
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_run as cr  # noqa: E402 -- reuse verify_negotiated_groups etc., not reimplement
 import consolidate_v8 as cv8  # noqa: E402 -- reuse the real OPINsize/term computation, not reimplement
+from pcap_utils import (  # noqa: E402 -- shared with consolidate_v8.py, see that module's own import comment
+    read_pcap_packets,
+    parse_tcp_packet,
+    parse_tcp_packet_true_len,
+    extract_clean_handshake_bytes,
+    extract_sni,
+    find_first_clienthello,
+    find_syn_synack_rtt,
+)
 
 BASELINE_BYTES = {"classic": 125_485, "pqc": 275_800, "hybrid": 331_639}
 # Item 3 (2026-10-22): v7's own report_data_v7.json OPINsize figures.
@@ -77,6 +90,19 @@ V7_OPINSIZE = {"classic": 76_929, "pqc": 322_895, "hybrid": 350_477}
 # +19.1%) -- would still fail loudly, while ordinary single-execution
 # noise does not.
 OPINSIZE_TOLERANCE_PCT = 3.0
+# Criterion 11 (2026-10-22): how much the gateway-vs-pcap handshake-bytes
+# diff% is allowed to shift between L0 and L325 before it's treated as
+# RTT-dependent rather than ordinary per-connection noise. Justified from
+# this turn's own real local measurement (DECISIONS.md): the diff% WITHIN
+# one scenario (same L0, same profile, 7 real connections each) already
+# spans up to 2.2 percentage points on its own (classic: -3.3% to -5.5%;
+# pqc: -10.0% to -10.4%, only 0.4pp; hybrid: -2.3% to -2.9%, 0.6pp) purely
+# from which first-request happens to leak into the gateway's own count --
+# nothing to do with RTT, since L0 has ~0ms RTT throughout. 5 percentage
+# points is more than double the largest of those three spreads: tight
+# enough to catch a real RTT-driven shift, loose enough not to fire on
+# ordinary per-connection noise alone.
+HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP = 5.0
 # Item 3 (this turn): no longer hand-typed constants -- read from a
 # fixture captured live against the local lab stack (see that file's
 # own "_method" field for exactly how), so a future re-capture is a
@@ -192,132 +218,10 @@ def criterion_1(root):
 
 
 # ---------------------------------------------------------------------------
-# Minimal pure-stdlib pcap reader -- classic libpcap format (tcpdump's
-# own `-w` default), gzip or plain. No external dependency added for
-# this (scapy/dpkt aren't in thesis/scripts/requirements.txt and this
-# project's own standing style avoids adding one for a single, narrow
-# read-only parsing need).
+# Pcap/TCP/TLS parsing primitives moved to pcap_utils.py (2026-10-22) --
+# shared with consolidate_v8.py, which would otherwise need to import
+# this module while this module already imports IT (circular).
 # ---------------------------------------------------------------------------
-def read_pcap_packets(path):
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rb") as f:
-        global_header = f.read(24)
-        if len(global_header) < 24:
-            return
-        magic = struct.unpack("<I", global_header[:4])[0]
-        if magic == 0xa1b2c3d4:
-            endian, nano = "<", False
-        elif magic == 0xd4c3b2a1:
-            endian, nano = ">", False
-        elif magic == 0xa1b23c4d:
-            endian, nano = "<", True
-        elif magic == 0x4d3cb2a1:
-            endian, nano = ">", True
-        else:
-            raise ValueError(f"{path}: not a recognized pcap file (magic {magic:#x})")
-        while True:
-            rec_header = f.read(16)
-            if len(rec_header) < 16:
-                break
-            ts_sec, ts_frac, incl_len, _orig_len = struct.unpack(endian + "IIII", rec_header)
-            data = f.read(incl_len)
-            if len(data) < incl_len:
-                break
-            ts = ts_sec + ts_frac / (1e9 if nano else 1e6)
-            yield ts, data
-
-
-def parse_tcp_packet(frame):
-    """Minimal Ethernet/IPv4/TCP parse. Returns
-    (src_ip, dst_ip, src_port, dst_port, flags, payload) or None."""
-    if len(frame) < 14:
-        return None
-    eth_type = struct.unpack(">H", frame[12:14])[0]
-    offset = 14
-    if eth_type == 0x8100:  # 802.1Q VLAN tag
-        if len(frame) < 18:
-            return None
-        eth_type = struct.unpack(">H", frame[16:18])[0]
-        offset = 18
-    if eth_type != 0x0800:  # not IPv4
-        return None
-    if len(frame) < offset + 20:
-        return None
-    ip_header = frame[offset:offset + 20]
-    ihl = (ip_header[0] & 0x0F) * 4
-    proto = ip_header[9]
-    src_ip = ".".join(str(b) for b in ip_header[12:16])
-    dst_ip = ".".join(str(b) for b in ip_header[16:20])
-    if proto != 6:  # not TCP
-        return None
-    tcp_offset = offset + ihl
-    if len(frame) < tcp_offset + 20:
-        return None
-    tcp_header = frame[tcp_offset:tcp_offset + 20]
-    src_port, dst_port = struct.unpack(">HH", tcp_header[0:4])
-    data_offset = (tcp_header[12] >> 4) * 4
-    flags = tcp_header[13]
-    payload = frame[tcp_offset + data_offset:]
-    return src_ip, dst_ip, src_port, dst_port, flags, payload
-
-
-def extract_sni(client_hello_bytes):
-    """Same minimal SNI extraction used in this project's own
-    test_tls_kem_proxy_precompiled_regression.py -- not reimplemented,
-    copied verbatim since that test file isn't importable as a module
-    (it's a standalone script)."""
-    try:
-        data = client_hello_bytes
-        idx = data.find(b"\x00\x00")
-        while idx != -1:
-            if idx + 9 <= len(data) and data[idx + 6] == 0x00:
-                name_len = int.from_bytes(data[idx + 7:idx + 9], "big")
-                name_start = idx + 9
-                if name_start + name_len <= len(data) and 0 < name_len < 256:
-                    candidate = data[name_start:name_start + name_len]
-                    if candidate.replace(b".", b"").replace(b"-", b"").isalnum():
-                        return candidate.decode("ascii", errors="replace")
-            idx = data.find(b"\x00\x00", idx + 1)
-    except Exception:
-        pass
-    return None
-
-
-def find_first_clienthello(pcap_path):
-    """First TCP payload on port 443 starting with the TLS Handshake
-    record type (0x16) -- the ClientHello is always the first byte a
-    real TLS client sends. Returns (record_size, sni) or None."""
-    for _ts, frame in read_pcap_packets(pcap_path):
-        parsed = parse_tcp_packet(frame)
-        if parsed is None:
-            continue
-        _src_ip, _dst_ip, _src_port, dst_port, _flags, payload = parsed
-        if dst_port == 443 and len(payload) >= 5 and payload[0] == 0x16:
-            record_len = int.from_bytes(payload[3:5], "big")
-            total_size = 5 + record_len  # TLS record header (5 bytes) + its own declared length
-            return total_size, extract_sni(payload)
-    return None
-
-
-def find_syn_synack_rtt(pcap_path):
-    """First SYN (dst_port 443) and its matching SYN-ACK (src_port 443,
-    SYN+ACK flags, same 4-tuple reversed) -- returns RTT in seconds or
-    None if no matching pair is found."""
-    syn_ts = None
-    syn_tuple = None
-    for ts, frame in read_pcap_packets(pcap_path):
-        parsed = parse_tcp_packet(frame)
-        if parsed is None:
-            continue
-        src_ip, dst_ip, src_port, dst_port, flags, _payload = parsed
-        if syn_ts is None and dst_port == 443 and (flags & 0x12) == 0x02:  # SYN, not SYN-ACK
-            syn_ts = ts
-            syn_tuple = (dst_ip, src_ip, dst_port, src_port)  # expected reversed tuple for the reply
-            continue
-        if syn_ts is not None and (flags & 0x12) == 0x12:  # SYN+ACK
-            if (src_ip, dst_ip, src_port, dst_port) == syn_tuple:
-                return ts - syn_ts
-    return None
 
 
 def parse_reference_ping_rtt(ping_json_path):
@@ -340,28 +244,21 @@ def parse_reference_ping_rtt(ping_json_path):
 # Criterion 2: ClientHello size + SNI
 # ---------------------------------------------------------------------------
 def criterion_2(root):
-    print("=== Criterion 2: client pcap ClientHello size == local lab (SNI reported, not gated) ===")
+    print("=== Criterion 2: client pcap ClientHello size + SNI == local lab ===")
     print(f"  reference fixture ({_CLIENTHELLO_FIXTURE_PATH.name}): "
           + ", ".join(f"{p}={v['size']}B/sni={v['sni']!r}" for p, v in BASELINE_CLIENTHELLO.items()))
-    # 2026-10-22 investigation (see DECISIONS.md): the real campaign/pilot
-    # snaplen is 128 bytes (campaign_run.py, both executors, hardcoded --
-    # NOT changed by this turn's own work, per instruction). The SNI
-    # ("mtls") sits at TLS-payload offset ~97 in a real ClientHello
-    # (measured directly against a real local capture) -- at snaplen=128,
-    # only ~62 bytes of TCP payload actually land in the pcap (the rest
-    # is Ethernet/IP/TCP header overhead, TCP options included), so SNI
-    # is NEVER recoverable at this snaplen; a real snaplen=256 capture
-    # (measured directly, same connection class) DOES recover it exactly.
-    # Gating this criterion on SNI would make it fail on every real pilot
-    # execution, unconditionally -- not a flaky check, a guaranteed one.
-    # ClientHello SIZE, by contrast, only needs the TLS record header's
-    # own length field (the first 5 bytes of the record, always within
-    # the first captured segment regardless of snaplen or how many real
-    # TCP segments the full ClientHello spans on the wire) -- confirmed
-    # exactly reproducible at snaplen=128 against real local captures,
-    # all three profiles, byte for byte. So: size gates pass/fail: SNI is
-    # reported for whatever information it gives (None is expected and
-    # not itself a failure at this snaplen), never gates.
+    # 2026-10-22: SNI gating restored now that the real campaign snaplen
+    # is 256 bytes (TCPDUMP_SNAPLEN_BYTES in campaign_run.py, raised from
+    # 128 -- DECISIONS.md). At 128, SNI ("mtls", TLS-payload offset ~97)
+    # was never recoverable (~62 bytes of payload actually captured,
+    # confirmed directly) -- gating on it then would have failed every
+    # real pilot execution unconditionally, which is why this criterion
+    # spent one turn gating on size only. At 256, a real local capture
+    # recovers SNI exactly (`(341/1784/1881, 'mtls')`, all 3 profiles),
+    # so both size and SNI gate again, same as this criterion's own
+    # original design. ClientHello size itself was never affected by
+    # snaplen either way (only needs the TLS record header's own length
+    # field, always within the first captured segment).
     all_ok = True
     any_found = False
     for profile, scenario, scenario_path in find_scenario_dirs(root):
@@ -375,15 +272,13 @@ def criterion_2(root):
             found = find_first_clienthello(pcap_path)
             baseline = BASELINE_CLIENTHELLO[profile]
             if found is None:
-                print(f"  FAIL {profile}/{scenario}/{label}: no ClientHello found in pcap at all "
-                      f"(even the TLS record header is missing -- a real capture problem, not the "
-                      f"known SNI-at-this-snaplen limitation)")
+                print(f"  FAIL {profile}/{scenario}/{label}: no ClientHello found in pcap at all")
                 all_ok = False
                 continue
             size, sni = found
-            ok = size == baseline["size"]
+            ok = size == baseline["size"] and sni == baseline["sni"]
             all_ok = all_ok and ok
-            sni_note = "" if sni is None else f", sni={sni!r} (not gated)"
+            sni_note = f", sni={sni!r} (expected {baseline['sni']!r})"
             print(f"  {'PASS' if ok else 'FAIL'} {profile}/{scenario}/{label}: "
                   f"size={size} (expected {baseline['size']}){sni_note}")
     if not any_found:
@@ -801,6 +696,64 @@ def criterion_10(root):
     return all_ok
 
 
+# ---------------------------------------------------------------------------
+# Criterion 11 (2026-10-22): gateway-vs-pcap handshake-bytes diff, per
+# scenario (L0 and L325), and whether it shifts with RTT.
+# ---------------------------------------------------------------------------
+def criterion_11(root):
+    print("=== Criterion 11: gateway-vs-pcap handshake diff, L0 vs L325 (RTT dependence) ===")
+    diffs_by_profile_scenario = {}  # (profile, scenario) -> diff_pct
+    any_found = False
+    for profile, scenario, scenario_path in find_scenario_dirs(root):
+        if scenario_path.name not in ("L0", "L325"):
+            continue
+        result = cv8.consolidate_profile_scenario(scenario_path, profile)
+        if result is None:
+            continue
+        diff = result.get("term_handshake_gateway_vs_pcap_diff")
+        if not diff or diff["diff_pct"] is None:
+            print(f"  SKIP {profile}/{scenario}: gateway and/or pcap handshake value not both available")
+            continue
+        any_found = True
+        diffs_by_profile_scenario[(profile, scenario_path.name)] = diff["diff_pct"]
+        print(f"  {profile}/{scenario}: gateway-vs-pcap diff = {diff['diff_pct']:+.2f}% "
+              f"({diff['diff_bytes']:+.0f} bytes)")
+
+    if not any_found:
+        print("  N/A -- no scenario has both a gateway handshake value and a pcap handshake value")
+        return None
+
+    any_shift = False
+    any_compared = False
+    for profile in PROFILE_DIR:
+        d0 = diffs_by_profile_scenario.get((profile, "L0"))
+        d325 = diffs_by_profile_scenario.get((profile, "L325"))
+        if d0 is None or d325 is None:
+            print(f"  {profile}: L0 and/or L325 diff% not both available -- cannot compare RTT dependence yet")
+            continue
+        any_compared = True
+        shift = abs(d325 - d0)
+        print(f"  {profile}: L0={d0:+.2f}% L325={d325:+.2f}% shift={shift:.2f}pp "
+              f"(threshold {HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP}pp)")
+        if shift > HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP:
+            any_shift = True
+            print(f"    SIGNAL: {profile}'s gateway-vs-pcap diff shifts by {shift:.2f}pp between L0 and L325, "
+                  f"above the {HANDSHAKE_DIFF_RTT_SHIFT_THRESHOLD_PP}pp threshold -- consistent with a "
+                  f"real RTT dependence, not just per-connection noise. Recommendation: set "
+                  f"consolidate_v8.py's own HANDSHAKE_SOURCE = \"pcap\" for this profile's own OPINsize "
+                  f"handshake term (Luciano's own call -- this criterion signals, it does not switch "
+                  f"the setting itself).")
+    if any_compared and not any_shift:
+        print("  No profile's gateway-vs-pcap diff shifts beyond the threshold between L0 and L325 -- "
+              "no RTT-dependence signal; HANDSHAKE_SOURCE can stay \"gateway\" (comparability with v7).")
+    elif not any_compared:
+        print("  L325 data not available yet -- RTT-dependence comparison deferred until the real pilot "
+              "produces it; the L0-only diffs above are still real and worth keeping an eye on.")
+    print("  (informational -- this criterion reports and signals, it does not itself gate pass/fail; "
+          "the signal above is what should inform changing HANDSHAKE_SOURCE, not an automatic switch.)")
+    return True
+
+
 CRITERIA = [
     ("1_total_bytes_exchanged", criterion_1),
     ("2_clienthello_size_sni", criterion_2),
@@ -812,6 +765,7 @@ CRITERIA = [
     ("8_pcap_disk_volume", criterion_8),
     ("9_pull_manifest_reverify", criterion_9),
     ("10_opinsize_complete_within_tolerance", criterion_10),
+    ("11_handshake_gateway_vs_pcap_rtt_dependence", criterion_11),
 ]
 
 

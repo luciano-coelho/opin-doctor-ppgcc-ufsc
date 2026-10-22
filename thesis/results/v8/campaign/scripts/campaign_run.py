@@ -134,6 +134,15 @@ WINDOWS_PER_CAMPAIGN = int(os.environ.get("CAMPAIGN_WINDOWS_PER_CAMPAIGN", "3"))
 PROFILES = ["classic", "pqc", "hybrid"]
 PROFILE_TO_EXPERIMENT_DIR = {"classic": "experiment1 - Classic", "pqc": "experiment2 - PQC", "hybrid": "experiment3 - Hybrid"}
 SAFETY_TIMER_RENEW_HOURS = 48  # Decision 49 -- must match the Terraform default
+# Decision -- raised from 128 to 256 (2026-10-22 investigation, DECISIONS.md):
+# 128 bytes cannot capture the ClientHello's own SNI extension (measured at
+# TLS-payload offset ~97, needing ~101 bytes of payload -- 128 only yields
+# ~62 after real Ethernet/IP/TCP(+options) header overhead); 256 recovers
+# it exactly, confirmed against a real local capture. Measured real cost of
+# this change: +47.6% pcap size for one connection's own capture (44,774 ->
+# 66,098 bytes) -- see this file's own README/storage-estimate update for
+# the extrapolated campaign-wide effect.
+TCPDUMP_SNAPLEN_BYTES = 256
 
 # Decision 40/53 -- fixed, pre-registered per server per window (NOT
 # re-derived at runtime, so a restart can't silently pick a different
@@ -1101,7 +1110,7 @@ class SSHExecutor:
         pcap_path = f"{home}/{label}.{side}.pcap"
         pid_path = f"{home}/{label}.{side}.tcpdump.pid"
         log_path = f"{home}/{label}.{side}.tcpdump.log"
-        inner = f"nohup /usr/sbin/tcpdump -i ${interface_var} -s 128 port 443 -w {pcap_path} > {log_path} 2>&1 & echo \\$! > {pid_path}"
+        inner = f"nohup /usr/sbin/tcpdump -i ${interface_var} -s {TCPDUMP_SNAPLEN_BYTES} port 443 -w {pcap_path} > {log_path} 2>&1 & echo \\$! > {pid_path}"
         iface_detect = self._iface_detect_sh(interface_var)
         remote_cmd = f'{iface_detect}; echo ${interface_var} > {home}/{label}.{side}.iface; sudo setsid sh -c "{inner}"'
         return remote_cmd, pid_path, log_path, pcap_path
@@ -1704,7 +1713,7 @@ class LocalExecutor:
             return {"process": None, "skipped": True, "skip_reason": "tcpdump not installed", "interface": interface}
 
         proc = subprocess.Popen(
-            ["sudo", "tcpdump", "-i", interface, "-s", "128", "port", "443", "-w", str(out_path)],
+            ["sudo", "tcpdump", "-i", interface, "-s", str(TCPDUMP_SNAPLEN_BYTES), "port", "443", "-w", str(out_path)],
             stderr=subprocess.PIPE, text=True,
         )
         time.sleep(0.5)
