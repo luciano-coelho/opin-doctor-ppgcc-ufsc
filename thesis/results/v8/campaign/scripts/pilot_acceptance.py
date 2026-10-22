@@ -34,6 +34,12 @@ Criteria, in the order PILOT_RUNBOOK.md lists them:
      with a Git-LFS-vs-external-storage recommendation.
   9. campaign_pull.sh's own hash-manifest cycle, re-verified here too
      (not just trusted because `.pull-verified` exists).
+  10. OPINsize's 4 terms (handshake, JWT, JWK, PKI) all present at L0
+      for every profile, the complete total within +/-3% of v7's own
+      figure (76,929/322,895/350,477 classic/pqc/hybrid -- see this
+      file's own OPINSIZE_TOLERANCE_PCT comment for why 3%), and no
+      `_FIXTURE`-tagged value anywhere in the consolidated data a real
+      pilot run produces.
 """
 import gzip
 import json
@@ -46,8 +52,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_run as cr  # noqa: E402 -- reuse verify_negotiated_groups etc., not reimplement
+import consolidate_v8 as cv8  # noqa: E402 -- reuse the real OPINsize/term computation, not reimplement
 
 BASELINE_BYTES = {"classic": 125_485, "pqc": 275_800, "hybrid": 331_639}
+# Item 3 (2026-10-22): v7's own report_data_v7.json OPINsize figures.
+V7_OPINSIZE = {"classic": 76_929, "pqc": 322_895, "hybrid": 350_477}
+# Tolerance, justified: this turn's own real local-flow measurement
+# against v7 (DECISIONS.md, the handshake-bytes-term investigation)
+# found classic +0.47%, pqc +0.00%, hybrid +1.70% -- a SINGLE real
+# execution against v7's own 60-run median, not an average of many, so
+# some run-to-run jitter against that median is expected and not itself
+# a regression. 3% is roughly double the largest of those three real
+# deviations (1.70%): tight enough that a genuine regression (a wrong
+# curve negotiated, a broken digest pin changing cert sizes, a missed
+# JARM/PKI correction) -- which this project's own history shows moves
+# OPINsize by single-digit-to-double-digit PERCENT, not fractions of a
+# percent (Decision 11's JARM fix: +1.6%; Decision 14's PQC CA fix:
+# +19.1%) -- would still fail loudly, while ordinary single-execution
+# noise does not.
+OPINSIZE_TOLERANCE_PCT = 3.0
 # Item 3 (this turn): no longer hand-typed constants -- read from a
 # fixture captured live against the local lab stack (see that file's
 # own "_method" field for exactly how), so a future re-capture is a
@@ -690,6 +713,66 @@ def criterion_9(root):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Criterion 10 (2026-10-22, follow-up to the handshake-bytes-term
+# investigation): OPINsize's 4 terms, complete and within tolerance, for
+# every profile's L0 scenario -- real data only, never a _FIXTURE.
+# ---------------------------------------------------------------------------
+def criterion_10(root):
+    print("=== Criterion 10: OPINsize complete (4 terms) and within tolerance at L0, no _FIXTURE ===")
+    all_ok = True
+    any_found = False
+    for profile, scenario, scenario_path in find_scenario_dirs(root):
+        if scenario_path.name != "L0":
+            continue  # "any profile's L0 scenario" (this criterion's own spec) -- every server's own L0, not just sa-east-1's
+        any_found = True
+        result = cv8.consolidate_profile_scenario(scenario_path, profile)
+        if result is None:
+            print(f"  FAIL {profile}/{scenario}: no clean runs found at L0")
+            all_ok = False
+            continue
+
+        term_names = {"term_handshake": result["term_handshake"]["status"] == "covered",
+                      "term_jwt": result["term_jwt"] is not None,
+                      "term_jwk": result["term_jwk"] is not None,
+                      "term_pki": result["term_pki"] is not None}
+        missing = [name for name, present in term_names.items() if not present]
+        if missing:
+            print(f"  FAIL {profile}/{scenario}: missing term(s) {missing} -- OPINsize cannot be complete")
+            all_ok = False
+            continue
+
+        opinsize = result["opinsize"]
+        if not opinsize or opinsize["status"] != "complete":
+            print(f"  FAIL {profile}/{scenario}: OPINsize status {opinsize['status'] if opinsize else None} "
+                  f"(expected 'complete')")
+            all_ok = False
+            continue
+
+        value = opinsize["value_bytes"]
+        v7v = V7_OPINSIZE[profile]
+        pct_diff = abs(value - v7v) / v7v * 100
+        ok = pct_diff <= OPINSIZE_TOLERANCE_PCT
+        all_ok = all_ok and ok
+        print(f"  {'PASS' if ok else 'FAIL'} {profile}/{scenario}: OPINsize {value:.0f} bytes "
+              f"(v7: {v7v}, diff {pct_diff:.2f}%, tolerance +/-{OPINSIZE_TOLERANCE_PCT}%)")
+
+        # Fixture leak check: scans the ACTUAL result dict this criterion
+        # just built from the pilot's own real data -- not the generator's
+        # source code -- so a future regression that silently reintroduces
+        # a fixture value is caught here, at the data, not trusted away.
+        dump = json.dumps(result)
+        if "_FIXTURE" in dump or "FIXTURE" in dump.upper():
+            print(f"  FAIL {profile}/{scenario}: a _FIXTURE-tagged value was found in data generated "
+                  f"from the real pilot -- this must never happen outside a test.")
+            all_ok = False
+
+    if not any_found:
+        print("  N/A -- no L0 scenario directories found under this data root")
+        return None
+    return all_ok
+
+
 CRITERIA = [
     ("1_total_bytes_exchanged", criterion_1),
     ("2_clienthello_size_sni", criterion_2),
@@ -700,6 +783,7 @@ CRITERIA = [
     ("7_tcpdump_overhead", criterion_7),
     ("8_pcap_disk_volume", criterion_8),
     ("9_pull_manifest_reverify", criterion_9),
+    ("10_opinsize_complete_within_tolerance", criterion_10),
 ]
 
 

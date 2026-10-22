@@ -12,14 +12,25 @@ the same definitions as `compute_v7_report_data.py`/the v7 report's own
 Section 1.5 -- only the bootstrap CI of the median is new (v8-only,
 Decision -- see METRICS_COVERAGE.md "New in v8").
 
-What this can and cannot produce, and why, is documented row-by-row in
-METRICS_COVERAGE.md -- this script implements exactly what that document
-marks "covered"; fields it marks "not covered" (term_handshake, and
-therefore OPINsize's own total, ClientHello, and the flow-time
-decomposition) come out null with an explicit note, not a fabricated
-number. A run whose `result.json`'s `gateway_metrics.handshake_bytes`
-IS present (once the pcap extractor from METRICS_COVERAGE.md's gap list
-exists) is picked up automatically -- the schema already matches v7's.
+term_handshake (the mTLS handshake bytes term) is read from
+`server/run{NN}_gateway.log`'s own "mTLS handshake complete" lines
+(`mock_mtls/main.go`'s `countingConn`, unchanged since v7, still logs
+`mtlsHandshakeBytes` per connection) -- NOT from a pcap capture. This
+was investigated and corrected (Decision -- see DECISIONS.md, the entry
+superseding Decision 76's "needs a pcap extractor" framing): the
+gateway already logs the exact field v7's own `compute_v7_report_data.py`
+read as `gateway_metrics.handshake_bytes`, and `campaign_pull.sh`
+already pulls `server/run{NN}_gateway.log` generically (`find v8 -type
+f | xargs sha256sum`, no exclusions) -- no collection or pull-side fix
+was needed, only this parser. Reuses `campaign_run.py`'s own
+`_parse_gateway_log_lines()`/`_HANDSHAKE_COMPLETE_MSG`/`_CARVEOUT_MSG`/
+`_CLIENT_EXPECTED_CURVE` rather than reimplementing the client-facing
+vs. internal-AS-to-RS-channel disambiguation (the same gateway also logs
+the AS's own internal mTLS calls to the RS, Decision 76's own flow-time
+section -- these must be excluded, same rule `verify_negotiated_groups()`
+already uses). Pcap remains independent verification only, for whatever
+it can show that the gateway log cannot (RTT, packet loss, ClientHello
+as a standalone figure) -- not a second handshake-bytes source.
 
 Usage:
   consolidate_v8.py <v8-latency-root> <output-dir>
@@ -32,6 +43,15 @@ import re
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from campaign_run import (  # reused, not reimplemented -- see module docstring above
+    _parse_gateway_log_lines,
+    _HANDSHAKE_COMPLETE_MSG,
+    _CARVEOUT_MSG,
+    _CLIENT_EXPECTED_CURVE,
+    _CORRELATION_WINDOW_SECONDS,
+)
 
 PROFILE_TO_EXPERIMENT_DIR = {
     "classic": "experiment1 - Classic",
@@ -170,23 +190,80 @@ def n_pki_and_term_pki(calls):
 
 
 def n_mtls(calls):
-    """Distinct connection pools -- v7's "3 pools per sub-flow x 2
-    sub-flows = 6" structure. `pool_label` is already a per-call field
-    in campaign_client_runner.py's own output (METRICS_COVERAGE.md,
-    "N_mTLS" row)."""
+    """DIAGNOSTIC ONLY -- not the authoritative N_mTLS (see
+    consolidate_profile_scenario()'s own comment). Distinct `pool_label`
+    values in campaign_client_runner.py's own per-call output undercount
+    the real TLS connection total (confirmed 4 vs. the gateway log's own
+    real 6, 2026-10-22 investigation): opin_flow.py's own connection
+    pooling can reuse one pool label across more than one underlying
+    TLS handshake. Kept only so a real mismatch between this and the
+    gateway-log-derived count is visible in consolidated.json, not
+    hidden."""
     return len({c["pool_label"] for c in calls if c.get("pool_label")})
 
 
-def term_handshake(run_result):
-    """Not covered yet (METRICS_COVERAGE.md): no pcap extractor exists
-    for v8. Reads the SAME schema v7 used (`gateway_metrics.handshake_
-    bytes.p50_bytes` + `.count`) so a run that DOES have it (once the
-    extractor is built) is picked up with no change to this function."""
-    gw = run_result.get("gateway_metrics") if isinstance(run_result, dict) else None
-    hb = (gw or {}).get("handshake_bytes") if gw else None
-    if not hb or "p50_bytes" not in hb or "count" not in hb:
+def client_facing_handshakes(gateway_log_text, profile, window_seconds=_CORRELATION_WINDOW_SECONDS):
+    """Parses `server/run{NN}_gateway.log` (the mtls gateway's own real
+    slog JSON output, `mock_mtls/main.go`'s `countingConn`) and returns
+    the list of "mTLS handshake complete" events for the CLIENT-FACING
+    channel only -- excluding the AS's own internal mTLS calls to the RS
+    (`InsurerAdapter.getConsent()`, also logged as handshake-complete
+    events on this same gateway). Same remoteAddr-based pairing rule as
+    `campaign_run.py`'s own `verify_negotiated_groups()` (a handshake
+    with a paired carve-out line within the window is the internal
+    channel; one with no pair is client-facing) -- reused directly, not
+    reimplemented, because duplicating that pairing logic independently
+    risks the two drifting apart silently."""
+    entries = _parse_gateway_log_lines(gateway_log_text)
+    handshakes = [(ts, obj) for ts, obj in entries if obj.get("msg") == _HANDSHAKE_COMPLETE_MSG]
+    carveouts = [(ts, obj) for ts, obj in entries if obj.get("msg") == _CARVEOUT_MSG]
+    carveouts_by_addr = {}
+    for ts, obj in carveouts:
+        carveouts_by_addr.setdefault(obj.get("remoteAddr"), []).append((ts, obj))
+    matched = set()
+    client_facing = []
+    for ts, hs in handshakes:
+        addr = hs.get("remoteAddr")
+        paired = False
+        for i, (cts, _cobj) in enumerate(carveouts_by_addr.get(addr, [])):
+            if (addr, i) in matched:
+                continue
+            if abs((cts - ts).total_seconds()) <= window_seconds:
+                matched.add((addr, i))
+                paired = True
+                break
+        if not paired:
+            client_facing.append(hs)
+    expected_curve = _CLIENT_EXPECTED_CURVE.get(profile)
+    if expected_curve:
+        off_curve = [h for h in client_facing if h.get("curveID") != expected_curve]
+        if off_curve:
+            raise ValueError(
+                f"{len(off_curve)} client-facing handshake(s) negotiated a curve other than "
+                f"{expected_curve!r} expected for profile {profile!r} -- a real negotiated-group "
+                f"regression (same class as campaign_run.py's own verify_negotiated_groups() check), "
+                f"not something this generator should silently average over.")
+    return client_facing
+
+
+def term_handshake(gateway_log_text, profile):
+    """Covered (METRICS_COVERAGE.md, corrected): reads real per-connection
+    `mtlsHandshakeBytes` values from the gateway's own log -- the SAME
+    source v7's `compute_v7_report_data.py` read as `gateway_metrics.
+    handshake_bytes` (that field just came from a different capture
+    layer in v7's own pipeline; the underlying measurement, `countingConn`
+    in `mock_mtls/main.go`, is unchanged). Returns (count, total_bytes)
+    using the MEDIAN handshake size x count, same definition as v7's own
+    `N_mTLS x handshake_bytes` term (`compute_v7_report_data.py:149`),
+    not a mean or a sum of raw values."""
+    if not gateway_log_text:
         return None, None
-    return hb["count"], hb["count"] * hb["p50_bytes"]
+    handshakes = client_facing_handshakes(gateway_log_text, profile)
+    sizes = [h["mtlsHandshakeBytes"] for h in handshakes if "mtlsHandshakeBytes" in h]
+    if not sizes:
+        return None, None
+    median_bytes = statistics.median(sizes)
+    return len(sizes), len(sizes) * median_bytes
 
 
 def bytes_by_participant(calls):
@@ -222,7 +299,12 @@ def discover_scenarios(experiment_dir_path):
     return out
 
 
-def consolidate_profile_scenario(scenario_path):
+def load_gateway_log(scenario_path, run_stem):
+    log_path = scenario_path / "server" / f"{run_stem}_gateway.log"
+    return log_path.read_text(encoding="utf-8") if log_path.is_file() else None
+
+
+def consolidate_profile_scenario(scenario_path, profile):
     runs_dir = scenario_path / "runs"
     run_files = sorted(p for p in runs_dir.glob("run*.json"))
     rows = []
@@ -231,8 +313,9 @@ def consolidate_profile_scenario(scenario_path):
         result = data.get("result", {})
         calls_file = runs_dir / run_file.name.replace(".json", ".calls.jsonl")
         calls = load_calls(calls_file)
+        gateway_log = load_gateway_log(scenario_path, run_file.stem)
         rows.append({"run_file": run_file.name, "retried": bool(data.get("retried", False)),
-                      "result": result, "calls": calls})
+                      "result": result, "calls": calls, "gateway_log": gateway_log})
 
     clean_rows = [r for r in rows if not r["retried"]]
     retried_rows = [r for r in rows if r["retried"]]
@@ -247,10 +330,18 @@ def consolidate_profile_scenario(scenario_path):
     jwt_counts = {n_jwt(c) for c in agg_calls_per_run}
     jwk_results = [term_jwk(c) for c in agg_calls_per_run]
     pki_results = [n_pki_and_term_pki(c) for c in agg_calls_per_run]
-    mtls_counts = {n_mtls(c) for c in agg_calls_per_run}
+    pool_label_counts = {n_mtls(c) for c in agg_calls_per_run}  # diagnostic only -- see n_mtls()'s own note
 
-    handshake_results = [term_handshake(r["result"]) for r in clean_rows]
+    handshake_results = [term_handshake(r["gateway_log"], profile) for r in clean_rows]
     handshake_known = [h for h in handshake_results if h[1] is not None]
+    # N_mTLS authoritative source is the real gateway-log handshake count
+    # (term_handshake's own first element), not pool_label grouping: a
+    # real cross-check (2026-10-22 investigation) found pool_label
+    # undercounts (4 distinct labels for 6 real TLS connections --
+    # opin_flow.py's own connection pooling reuses a pool label across
+    # more than one underlying handshake) -- pool_label_counts above is
+    # kept only as a diagnostic, never reported as N_mTLS.
+    mtls_counts = {h[0] for h in handshake_known}
 
     ping_samples = [load_ping(scenario_path / "client" / f"{Path(r['run_file']).stem}_ping.json") for r in clean_rows]
     ping_samples = [p for p in ping_samples if p]
@@ -271,8 +362,9 @@ def consolidate_profile_scenario(scenario_path):
         "n_pki": sorted({p[0] for p in pki_results}),
         "term_pki": stats_block([p[1] for p in pki_results]),
         "n_mtls": sorted(mtls_counts) if len(mtls_counts) == 1 else {"not_constant": sorted(mtls_counts)},
+        "n_mtls_pool_label_diagnostic": sorted(pool_label_counts),
         "term_handshake": {
-            "status": "covered" if handshake_known else "not_covered_no_pcap_extractor",
+            "status": "covered" if handshake_known else "missing_gateway_log",
             "stats": stats_block([h[1] for h in handshake_known]) if handshake_known else None,
         },
         "opinsize": None,
@@ -318,7 +410,7 @@ def build_consolidated(v8_latency_root):
         for server, scenarios in servers.items():
             out["profiles"][profile][server] = {}
             for scenario in scenarios:
-                result = consolidate_profile_scenario(exp_dir / server / scenario)
+                result = consolidate_profile_scenario(exp_dir / server / scenario, profile)
                 if result is not None:
                     out["profiles"][profile][server][scenario] = result
     return out
