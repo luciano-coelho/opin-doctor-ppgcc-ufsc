@@ -6046,3 +6046,389 @@ rule`'s own static-map-key pattern (this entry) should be documented in
 for whoever next modifies this module; the operator discovery key has
 no passphrase yet (Luciano's own choice, revisit if desired).
 
+## 81. Pilot item 1 (ENTREGA) run for real against the live instances -- `deliver_source.sh`/`deliver_images.sh` completed, interrupt+resume rehearsed for real, AMI/package/Python/Docker confirmed on all 4 hosts; 3 real delivery-transport bugs found and fixed (commit `93671aa5a8974efd7918bbeec85ae6d7203cf62a`), none a protocol change under this runbook's own criteria
+
+Real-AWS turn, Luciano present, following `PILOT_RUNBOOK.md`'s own
+sequence (Decision 80's 4 instances already up: control + server +
+`L0`/`L325` clients, `sa-east-1`). Everything below ran against those
+real instances, redacted through `redact_aws_errors.py` throughout; no
+account ID, operator IP, or key appeared in any output shown to
+Luciano.
+
+**`deliver_source.sh`** ran for real (its own header previously said
+"WRITTEN NOW, NOT EXECUTED" -- this is its first real execution):
+delivered `thesis/scripts/*.py`, `mock-service-os/{certs,ssa,setup_ssm.sh}`,
+and the `insurance-server-lambdas/` config files to control, the
+server, and both clients; `pip3 install --require-hashes` succeeded on
+all 3 targets under the real AL2023 Python 3.9.25.
+
+**Interrupt + resume rehearsed for real** (this script has no built-in
+resume logic, unlike `deliver_images.sh` -- Decision 76 deferred
+rehearsing this to the real pilot): a forced `timeout 8s` killed the
+script mid-transfer to the third host (`L325`); a full re-run
+immediately after completed cleanly (exit 0), idempotent across all 3
+hosts (`pip3`'s own "Requirement already satisfied" on every package,
+no corruption, no duplicate-install error).
+
+**`deliver_images.sh`** ran for real, 6 images (4 server + 2 client,
+~1GB compressed) -- first attempt failed outright:
+
+1. **Local `rsync` missing.** This operator machine (Windows/Git-Bash)
+   has no `rsync` binary and no ready winget package for it.
+   `have_rsync_on_control()` only ever checked the CONTROL side; the
+   actual `rsync -e ssh ...` invocation runs on the OPERATOR's own
+   machine for the operator->control leg, so the missing local binary
+   caused a hard "command not found" (exit 127) instead of reaching the
+   script's own existing split+scp fallback. Fixed: added
+   `have_rsync_locally()`, now required alongside
+   `have_rsync_on_control()` before rsync is attempted at all.
+2. **Split+scp fallback corrupted the reassembled tarball.** With the
+   fix above in place, the fallback activated for real for the first
+   time -- `cat ...part.*` on the control instance also matched each
+   part's own `.sha256` sidecar file (e.g. `...part.aa.sha256` fits
+   `...part.*` exactly as well as `...part.aa` does), concatenating
+   sidecar text into the binary tarball. Every individual part passed
+   its own sha256 check (they were intact on disk); only the pre-
+   existing FINAL whole-file sha256 check caught the corruption --
+   exactly the defense-in-depth that check exists for. No corrupted
+   image ever reached `docker load`. Fixed by narrowing the glob to
+   `part.??` (`split`'s own default 2-character suffix width, which a
+   6+-character `.sha256` suffix can never satisfy). Cleaned the
+   corrupted leftovers off control before retrying.
+
+Also found and fixed, independently of the above: **`terraform output
+-json <name>` is not wrapped in `{"value": ...}`** the way the no-
+argument form is -- the same bug already fixed in `campaign_up.sh`
+(Decision 80) was found, unfixed, in `deliver_source.sh`'s,
+`deliver_images.sh`'s, and `campaign_pull.sh`'s own `CONTROL_IP`
+extraction lines. Fixed identically in all 3.
+
+After both fixes, `deliver_images.sh` completed clean for all 6 images,
+each with matching loaded image ID across every host it was delivered
+to (recorded in `delivered_images_manifest.json` on control, per the
+script's own existing mechanism, Decision 55).
+
+**AMI/package/Python/Docker confirmed directly on all 4 real
+instances** (control, server, `L0`, `L325`): every tool
+`install_common_packages.sh` installs (`docker`, `rsync`, `chrony`,
+`tcpdump`, `ping`, `ss`, `flock`, `tar`, `pip3`) present on all 4;
+`docker compose v5.6.0` present on the 3 `x86_64` hosts and correctly
+absent on the `arm64` control instance (by the script's own
+architecture gate); Python confirmed `3.9.25` everywhere (matching the
+`cp39` wheel tags already seen in `deliver_source.sh`'s own pip
+output); Docker `25.0.14` everywhere; `/var/lib/mockopin-ready` present
+on all 4. Real AMI IDs recorded via IMDSv2: control
+`ami-0518be3fcd9e81858` (`t4g.micro`), server+`L0`
+`ami-0c7fb00ead73effc8` (`m7i-flex.large`, `sa-east-1`), `L325`
+`ami-012634091f2034c69` (`m7i-flex.large`, physically `ap-southeast-1`
+-- the scenario label names the TARGET latency, not the client's own
+region).
+
+**Commit, scoped and recorded.** Per Luciano's own condition on this
+turn's PONTO DE PARADA 1 approval: `scripts/scan_secrets.sh` run and
+passed (clean on tracked + staged + full history) BEFORE committing;
+one commit containing ONLY the 3 delivery-script fixes above (no
+docs, no data) -- `93671aa5a8974efd7918bbeec85ae6d7203cf62a` -- pushed
+to `main`. That hash was then written into the pilot's own data tree on
+control, `campaign-data/v8/latency/_campaign-control/environment/
+delivery_scripts_commit.json` (alongside the per-instance environment
+records `campaign_run.py` writes at campaign start), so the data this
+pilot produces carries its own delivery-script provenance without
+requiring a `.git` checkout on control.
+
+**Not a protocol change.** Checked against `PILOT_RUNBOOK.md`'s own
+"o que conta como mudança de protocolo" list: none of these 3 fixes
+touch `campaign_run.py`/`campaign_client_runner.py`, the instance type,
+or the content of a delivered Docker image (the glob bug corrupted a
+TRANSFER, caught before any corrupted image was ever loaded -- the
+images actually running on every host are byte-identical to what was
+built locally, confirmed via the per-host image-ID comparison above).
+This is squarely "ajuste em script de entrega/infra, não do protocolo
+de medição" -- the pilot's window 1 data remains eligible to count
+toward the full campaign under the runbook's own retention rule.
+
+README.md's Caveats section updated: local `rsync` is optional (falls
+back to split+scp either side is missing it), and that fallback's
+reassembly is whole-file sha256-verified before any `docker load`, with
+a glob narrow enough to exclude its own sidecar files.
+
+**Next:** Item 2 (EXECUÇÃO DO PILOTO) -- 60 real executions (10/profile
+x 3 profiles x 2 scenarios), per PONTO DE PARADA 1's own approval.
+
+## 82. `campaign_run.service` never existed anywhere in the repository, and `campaign_run.py` itself was never delivered to the control instance by any script -- both documented as "already written"/already in place, neither real; fixed by extending `deliver_source.sh`, not worked around with an ad hoc start mechanism (commit `57ebaafc365c72bd3ded74afcc193d243ecac91f`)
+
+Found trying to actually start the pilot's 60 real executions, right
+after Decision 81's PONTO DE PARADA 1 was approved: `README.md`/
+`PILOT_RUNBOOK.md` both describe `campaign_run.service` as "already
+written" and instruct `sudo systemctl edit campaign_run.service` on
+control. Checked directly, for real, before trusting it: `systemctl cat
+campaign_run.service` on the real control instance returned "No files
+found." Grepped the whole repository for the unit file itself -- it
+does not exist anywhere, only mentioned in prose (README, runbook,
+`campaign_run.py`'s own docstring). Checked every delivery script for
+anything that copies `campaign_run.py` (the orchestrator itself, as
+opposed to the client-side `thesis/scripts/*.py` files) to control --
+none does. `deliver_source.sh`'s own tarball reaches control only to be
+RELAYED onward to every server/client; control's own copy was deleted
+at the end of that relay, never extracted locally. The entire documented
+mechanism for starting the real campaign had never been implemented by
+any script, on top of the 3 delivery-transport bugs already found and
+fixed this same turn (Decision 81).
+
+**Stopped and reported before fixing this one** (unlike Decision 81's 3
+bugs, fixed inline) -- this is the deployment path for the script that
+produces the thesis's own real-AWS data, not a transport-layer glob/
+envelope bug; Luciano's own call on how to proceed mattered here.
+Luciano chose to fix it properly, versioned, delivered through
+`deliver_source.sh` (so a future full campaign run goes through the
+identical, by-then-tested path), with four explicit conditions:
+
+1. **`Restart=on-failure` with a low budget, justified, not
+   `Restart=no` by default.** Confirmed first, by reading the code, that
+   `campaign_run.py`'s own resume marker is real and safe: a run's
+   `runs/run{NN}.json` (`already_done()`, line ~734) is written ONLY
+   after `run_one_execution()` returns successfully (`run_window()`,
+   the write happens strictly after the call, never before or
+   concurrently) -- a crash mid-execution leaves no file, so a restart
+   never mistakes an interrupted run for a completed one, and never
+   re-runs a genuinely completed one. `RestartSec=30`,
+   `StartLimitIntervalSec=600`, `StartLimitBurst=3`: a transient SSH
+   blip recovers on its own; three failures in ten minutes exhausts the
+   budget and the unit goes `failed` outright, surfaced on the next
+   check rather than looping silently and burning pilot budget
+   unattended.
+2. **Key permissions, redaction, no AWS credential.** The campaign SSH
+   key was already `chmod 600`'d to `ec2-user` by `campaign_up.sh`; the
+   unit's own `User=ec2-user` means only that same user's session can
+   read it, nothing new needed. The unit sets no `AWS_*` environment
+   variable at all -- confirmed `campaign_run.py` never calls an AWS API
+   directly (stdlib-only imports: `subprocess`/`json`/`os`/etc., no
+   `boto3`), it only ever reaches other instances over SSH. Every
+   command used to inspect/install it this turn was piped through
+   `redact_aws_errors.py`; no account ID or operator IP appeared in any
+   output shown.
+3. **Delivered through `deliver_source.sh`, one commit, scanner before
+   push, hash recorded afterward.** New file `templates/
+   campaign_run.service` (versioned); `deliver_source.sh` extended to
+   also extract its own tarball directly onto control (previously
+   relay-only) and `sudo cp`+`daemon-reload` the unit there --
+   `campaign_run.py` added to the same tarball's file list. Verified
+   locally first (clean LF line endings, no CRLF -- this is a systemd
+   unit a Linux host parses, checked before shipping it) and that
+   `ec2-user` has passwordless sudo on control (confirmed live, not
+   assumed) before relying on it. `scripts/scan_secrets.sh` run and
+   passed (tracked + staged + full history) before committing; this
+   commit contains ONLY `deliver_source.sh`'s extension and the new unit
+   file -- `57ebaafc365c72bd3ded74afcc193d243ecac91f` -- pushed to
+   `main`. `deliver_source.sh` was then re-run for real so the code
+   that actually landed on control matches this exact commit, and
+   `_campaign-control/environment/delivery_scripts_commit.json` on
+   control was overwritten with this hash (superseding Decision 81's
+   `93671aa`, recorded as the now-stale prior value in the same file,
+   not silently replaced) -- the hash recorded is the one for the code
+   that actually ran, not the first commit found adjacent to it.
+   Installed and verified directly (`sudo systemctl cat
+   campaign_run.service` on the real instance matches the versioned
+   file byte-for-byte; `campaign_run.py` present at
+   `~/campaign/scripts/campaign_run.py`, `ast.parse()`-clean).
+4. **Documented as a real gap, not quietly patched.** This entry;
+   `README.md`'s own incorrect claim ("`campaign_up.sh` installs it")
+   corrected in place, explaining what was actually missing and how it
+   was found.
+
+**Not a protocol change**, same reasoning as Decision 81: neither commit
+touches `campaign_run.py`'s own measurement logic, the instance type, or
+delivered image content -- this is exclusively "how the orchestrator
+reaches control and gets started," which `PILOT_RUNBOOK.md`'s own
+retention rule explicitly excludes from counting as a protocol change.
+
+**Next:** start `campaign_run.service` for real (pilot env overrides:
+`CAMPAIGN_RUNS_PER_WINDOW=10`, `CAMPAIGN_WINDOWS_PER_CAMPAIGN=1`,
+`CAMPAIGN_INSTALLATIONS=sa-east-1`), proceed with the 60 executions.
+
+## 83. Five more real pre-execution blockers found and fixed in sequence trying to actually start the pilot's 60 executions; a sixth found but NOT fixed (co-located client cannot reach the server via its public IP -- AWS same-VPC-to-public-IP routing); pilot torn down clean before resolving it, no execution data exists to lose
+
+Continuation of Decision 82's own turn, same real pilot instances
+(sa-east-1 control/server, `L0`/`L325` clients), same discipline:
+stop and report on anything touching the measured system's own
+correctness or behavior, fix delivery/infra bugs inline, redact every
+output through `redact_aws_errors.py`.
+
+**Found and fixed, in order, each blocking the one before it from ever
+being exercised:**
+
+1. **`insurance-server-lambdas/docker-compose.yml`: `mockapi`'s real
+   dependency on `psql` was never declared.** `mockapi`'s own
+   `DB_URL=jdbc:postgresql://psql:...` connects eagerly at JVM boot, no
+   retry -- with no `depends_on`, Compose never started `psql` as a
+   side effect of starting `mockapi` on a genuinely fresh instance
+   (every local rehearsal before this one ran against an
+   already-persistent Docker environment where `psql` happened to
+   already be up). Full audit of every service's real host usage vs.
+   declared `depends_on` done at Luciano's own request; also fixed
+   `cs-server`'s missing `depends_on: mtls` (its "directory" alias,
+   profile `cs` only, never exercised by the campaign). Added a
+   `pg_isready` healthcheck to `psql` (`service_healthy` needs one).
+   Commit `27fc79443a6423dbc15bdfd2ca797caecfe7a2bf`.
+2. **`campaign_run.py`: `SCENARIO_ROTATION` ignored the pilot's own
+   scoped inventory.** Hardcoded to the full campaign's 4-scenario list
+   for `sa-east-1`; the pilot's inventory only has 2 of those 4
+   (`MOCKOPIN_ENABLED_CLIENT_SCENARIOS`) -- every IP lookup for the
+   missing two raised `KeyError`, on literally every block, before a
+   single real execution could run. Also: the "switch profile on
+   server" SSH call runs `switch_crypto_profile.py` end to end (up to
+   ~1 minute by its own docstring) inside the same 30s
+   `SSH_TIMEOUT_SECONDS` every short command shares -- always too
+   short, first actually exercised end to end by this same pilot run.
+   Commit `ce1e80cda6aea70ca21affbb723f31a7637861d7`.
+3. **`tls_kem_proxy`/`mockopin-pqc-signer` never delivered to the
+   SERVER.** `switch_crypto_profile.py`'s own internal settling step
+   (Decision 4) runs on the server and starts its own local proxy/
+   signer there (the script's original single-host design) -- no
+   image, no `TLS_KEM_PROXY_USE_PRECOMPILED=1`, defaulted to `go run .`
+   against Go source never delivered anywhere ("go.mod file not
+   found"). Chosen deliberately (Luciano's own call) over trimming
+   `switch_crypto_profile.py`'s documented settling behavior: deliver
+   the images to "servers" too (`deliver_images.sh`), matching the
+   client-side pattern exactly, rather than changing what that script
+   does. Also retroactively committed two `templates/campaign_run.service`
+   fixes already deployed live earlier the same turn but never
+   tracked (`StartLimitIntervalSec`/`StartLimitBurst` belong in
+   `[Unit]`, not `[Service]`; `PYTHONUNBUFFERED=1`, Python fully
+   buffers stdout under systemd, hiding real-time progress). Commit
+   `51c3ed1bb93754a07b5332ecc1b43b228e483c93`.
+4. **`opin_flow.start_tls_kem_proxy()`'s `--network` was
+   unconditional.** Always joined `insurance-server-lambdas_default` --
+   correct only on the SAME host that ran `docker compose up` for it
+   (Docker networks are per-daemon, never shared across machines); a
+   real remote CLIENT instance never created that network at all
+   ("network insurance-server-lambdas_default not found"). Fixed:
+   conditional on `REMOTE_GATEWAY_HOST` (unset keeps the exact original
+   join; set omits `--network` entirely, Docker's own default bridge
+   already NATs outbound the same way). Commit
+   `f8b9dcd11549dace0108412939a082e5ceec3c9a`.
+5. **Client proxy start timed out at 30s.** Its own internal readiness
+   poll (`_wait_for_tls_kem_proxy_ready_detached()`) is ALSO 30s,
+   leaving zero margin for the SSH connection itself once the network
+   fix above let this call actually reach that far for the first time.
+   Added `PROXY_START_TIMEOUT_SECONDS=90`. Commit
+   `cbec787bc8afd9c4cf828cbe8bee25479aa023d2`.
+
+All 8 of this directory's own standalone test scripts re-run clean
+after every one of the 5 fixes above.
+
+**Found, diagnosed, and NOT fixed this turn (Luciano's own explicit
+pause, the pilot destroyed before resolving it):**
+
+6. **`L0` (every region's own co-located client) cannot reach the
+   server via its public IP at all.** Confirmed empirically from the
+   real `L0` instance: `/dev/tcp` to the server's public IP hangs
+   (times out, RC=124); the SAME test to the server's PRIVATE IP
+   succeeds instantly (RC=0). Root cause: same-VPC traffic addressed to
+   another instance's public/Elastic IP routes out through the
+   Internet Gateway and back -- which rewrites the source to the
+   sender's OWN public IP by the time it reaches the destination's
+   security group. That security group only ever allowed `L0`'s
+   PRIVATE IP (matching `PILOT_RUNBOOK.md`'s own documented intent:
+   "one private -- L0's, co-located"), so the traffic is silently
+   dropped (a hang, not a refusal). Never caught by step 4's own
+   connectivity check, which only ever tests from `L325` (the public
+   case), never from a co-located client.
+   - **Decided fix (Luciano's own call), written but NOT applied:**
+     `campaign_run.py`'s `_server_ip()`/`_REMOTE_CLIENT_ENV()` should
+     use the server's PRIVATE ip for a co-located client, public
+     otherwise -- not just correctness, avoiding the IGW round-trip
+     also matters for `L0` specifically, whose whole point is
+     near-zero/co-located latency. The discriminator is an EXPLICIT
+     `colocated` literal added to every client's own entry in
+     `terraform/outputs.tf`'s `inventory` output (`true` for every
+     `L0@*`, `false` for every cross-region scenario) -- not derived by
+     comparing region strings. `terraform plan` confirmed this is a
+     pure output-value change, zero resources to add/change/destroy
+     ("You can apply this plan to save these new output values to the
+     Terraform state, without changing any real infrastructure").
+   - **`terraform apply` itself was refused by this harness's own
+     "Blind Apply" safety classifier**, independent of AWS/Terraform --
+     attempted once, denied outright, not worked around. The
+     `colocated` field change sits in `outputs.tf` locally, uncommitted
+     at the time Luciano called the pause below, now committed as
+     explicitly PENDING (not yet applied to real Terraform state, not
+     yet validated against real AWS).
+   - **`campaign_run.py`'s own consumer-side fix (reading `colocated`
+     to pick the IP) was deliberately NOT written** -- Luciano's own
+     pause instruction ("não continues nenhuma correção nem execução")
+     landed before it was started.
+   - **The pre-flight port-443 connectivity check (every client,
+     including `L0`, short timeout, explicit failure not a hang) was
+     NOT added** to `campaign_up.sh`/`campaign_run.py` or
+     `PILOT_RUNBOOK.md` (which still only documents testing from
+     `L325`) -- also deferred by the same pause.
+
+**Also fixed, needed to safely tear down:** `campaign_pull.sh` had the
+exact same missing-local-`rsync` gap `deliver_images.sh` already found
+and worked around earlier the same turn, but with no fallback at all --
+found live, needed to succeed before `campaign_down.sh` would destroy
+anything. Added the same `scp`-based fallback pattern (not incremental
+like rsync, but this script's own data volumes are small enough that
+this is a correctness fix, not a performance one).
+
+**Teardown (Luciano present, explicit authorization, mid-session
+pause).** Before destroying: `campaign-data` on control audited
+directly -- zero `runs/`, zero settling files, zero pcaps, zero gateway
+logs anywhere; only control-plane metadata (`_campaign-control/`:
+environment records, schedule, one window record) ever existed, because
+no block ever got past `start_block_proxies()` for real. `campaign_pull.sh`
+(with its own rsync-fallback fix above) ran and sha256-verified that
+metadata into `campaign/scripts/pilot-data-pulled/` (local-only, not
+part of the versioned `v8/latency/` tree -- there was no real
+experiment data to preserve there). `campaign_down.sh` then destroyed
+27 resources; direct AWS API verification, region by region, confirmed
+zero instances/security groups/key pairs/volumes/Elastic IPs in all 7
+regions this project ever touches (`sa-east-1`, `us-east-1`,
+`ap-northeast-1`, `ca-central-1`, `eu-north-1`, `ap-southeast-1`,
+`ap-northeast-2`) -- not just Terraform's own exit status. Local
+Terraform state/key material kept as-is (not deleted -- no explicit
+instruction to do so).
+
+**Real cost, this turn's own estimate (Luciano's own Billing-console
+check is the authoritative one -- this project's restricted IAM profile
+cannot read spend via the API, Decision 44):** instances ran far longer
+than the pilot's own original ~1-2h estimate because of how much real
+debugging this turn needed -- control/`L0`/`L325` ~9h02m each,
+`sa-east-1` server ~8h43m. Using `m7i-flex.large`'s own sourced rate
+($0.0958/hr, Decision cost table) for the 3 `m7i-flex.large` instances
+and a public, commonly-cited (not independently sourced in this repo)
+`t4g.micro` rate (~$0.0084/hr) for control, plus the ~$0.005/hr/public-
+IPv4 charge AWS applies regardless of association, for 4 addresses over
+~9h: compute ≈ $2.64, public IPv4 ≈ $0.18, **total on the order of
+$2.80** -- still small, but a few times the original sub-$1 estimate,
+entirely explained by real-time elapsed, not a cost-structure surprise.
+**Ask Luciano to confirm against the real Billing console.**
+
+**Not a protocol change**, same reasoning as Decisions 81/82: nothing
+above touches `campaign_run.py`'s own measurement logic, the instance
+type, or delivered image content. Items 1-5 are delivery/dependency/
+timeout fixes; item 6 (not yet applied) only changes which of the
+server's two already-existing IP addresses a co-located client is
+handed.
+
+**Depois do piloto / ao retomar, em ordem:**
+1. Luciano confirms the real cost via the Billing console.
+2. `campaign_run.py`'s `colocated`-aware IP selection (item 6 above) --
+   write it, matching `_REMOTE_CLIENT_ENV()`'s own existing shape.
+3. The pre-flight port-443 connectivity check (every client including
+   `L0`) in `campaign_up.sh`/`PILOT_RUNBOOK.md`.
+4. `terraform apply` for the `colocated` output field (confirmed
+   output-only, zero resource changes) -- needs Luciano's own hands
+   (this harness refuses `terraform apply`/`destroy` as a blind
+   action), or an interactive apply Luciano runs himself.
+5. Re-apply the pilot topology (21 resources, same as Decision 80),
+   re-run item 1 (ENTREGA) fresh -- the 7 fixes above are already
+   committed, so this should be the first attempt that doesn't re-hit
+   any of them.
+6. Resume item 2 (EXECUÇÃO DO PILOTO) from the start -- no partial
+   pilot data exists to resume from or discard.
+7. None of `pilot_acceptance.py`'s 11 criteria have been checked
+   against real data yet -- this pilot never produced a single real
+   execution.
+

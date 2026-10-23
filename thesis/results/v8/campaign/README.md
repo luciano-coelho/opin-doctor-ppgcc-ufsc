@@ -13,10 +13,16 @@ scripts/campaign_pull.sh scripts/campaign.vars.local.sh   # idempotent, sha256-v
 scripts/campaign_down.sh scripts/campaign.vars.local.sh   # refuses to destroy without a verified pull, unless --force
 ```
 
-`campaign_run.py` is not invoked directly by the operator -- `campaign_up.sh`
+`campaign_run.py` is not invoked directly by the operator -- `deliver_source.sh`
 installs it on the control instance as a systemd service
-(`campaign_run.service`, same directory), which starts the orchestrator
-there, not here.
+(`templates/campaign_run.service`), which starts the orchestrator there,
+not here. (Pilot item 1, this turn: this line previously credited
+`campaign_up.sh` with this, and no script actually did it at all -- the
+unit file didn't exist anywhere in the repository and `campaign_run.py`
+was never delivered to control. Found live, trying to start the pilot's
+own 60 executions; fixed by extending `deliver_source.sh`, which already
+extracts its tarball onto every server/client, to also extract it onto
+control itself and install/reload the unit there.)
 
 Window start times (Decision 34/40 -- "spread across the day") default
 to now+2h/+10h/+20h if not overridden; set
@@ -106,6 +112,27 @@ deciding on its own.
   does not run any of `campaign_down.sh`'s verification. It exists so a
   crashed orchestrator doesn't leave a billed instance running
   indefinitely, not so the operator can skip `campaign_down.sh`.
+- **`rsync` on the OPERATOR's own machine is optional, not required.**
+  `deliver_images.sh`'s image transport (operator -> control) prefers
+  `rsync --partial` when both the operator's machine AND the control
+  instance have it (`have_rsync_locally()` AND `have_rsync_on_control()`,
+  pilot item 1 -- the local check was missing before, so a local-only
+  gap silently failed instead of falling back). Either side missing it
+  falls back to a split-into-100MB-parts + plain `scp` transport instead
+  -- each part individually sha256-verified on arrival, AND the
+  reassembled whole file sha256-verified again before any `docker load`
+  is attempted (glob narrowed to `part.??` so a part's own `.sha256`
+  sidecar can never be concatenated into the reassembled tarball by
+  accident, pilot item 1 -- found live, corrupting the first real pilot
+  transfer, caught by this exact whole-file check before it reached
+  `docker load`). `campaign_pull.sh` (operator <- control, the other
+  direction) has the same optional-rsync fallback, `scp -r` instead --
+  not incremental like rsync, but correctness-equivalent (the sha256
+  manifest check is unchanged either way) and small enough data
+  volumes not to need incremental transfer in practice. A transport
+  failure anywhere in this chain aborts
+  loudly (`set -euo pipefail`), never silently ships a partial or
+  corrupted image.
 
 `campaign_run.py`'s actual per-execution step
 (`run_one_execution()`) is intentionally unimplemented -- it depends on
