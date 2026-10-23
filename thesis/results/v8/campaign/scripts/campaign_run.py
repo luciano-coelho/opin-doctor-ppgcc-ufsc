@@ -846,6 +846,16 @@ SSH_TIMEOUT_SECONDS = 30
 # tighter SSH_TIMEOUT_SECONDS, so a genuinely dead connection on a quick
 # command is still caught quickly.
 SWITCH_PROFILE_TIMEOUT_SECONDS = 240
+# Pilot item 2 (this turn): found live -- starting the client's own
+# detached tls_kem_proxy calls opin_flow._wait_for_tls_kem_proxy_ready_detached(),
+# which has its OWN internal readiness-poll budget of 30s -- wrapping
+# that in the SAME 30s SSH_TIMEOUT_SECONDS leaves zero margin for the
+# SSH connection itself, process startup, or `docker rm -f` of a stale
+# container, so this timed out for real the first time the network fix
+# above let it actually reach this far. Generous but bounded -- well
+# under SWITCH_PROFILE_TIMEOUT_SECONDS, since this call does no
+# settling runs of its own.
+PROXY_START_TIMEOUT_SECONDS = 90
 SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
 
 # Pilot acceptance criterion 7: T_fluxo with vs. without tcpdump. This
@@ -1222,6 +1232,7 @@ class SSHExecutor:
             self._run_or_print(
                 f"[{installation}/{scenario}/w{window}] start client proxy (detached)",
                 self._ssh_cmd(client_ip, remote_cmd),
+                timeout_seconds=PROXY_START_TIMEOUT_SECONDS,
             )
 
         # Settling (wired for real this turn, mirroring LocalExecutor's
