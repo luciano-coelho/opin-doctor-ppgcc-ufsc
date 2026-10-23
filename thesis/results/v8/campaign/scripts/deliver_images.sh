@@ -282,5 +282,15 @@ REMOTE
 
 deliver_image_set "servers" "${IMAGES[@]}"
 deliver_image_set "clients" "${CLIENT_IMAGES[@]}"
+# Audit (v8 pilot, this turn): switch_crypto_profile.py's own internal
+# settling step runs ON THE SERVER and starts ITS OWN tls_kem_proxy/
+# pqc-signer there too (same reasoning as the client-side one this
+# project already delivers these images for) -- found live, the first
+# time this exact code path ran against a real server with no Go
+# source and no signer image present ("go: go.mod file not found").
+# Delivered to "servers" as well as "clients" now; the per-host image-
+# ID comparison this function already does (Decision 55) covers the
+# server's own copy too, confirming it's byte-identical.
+deliver_image_set "servers" "${CLIENT_IMAGES[@]}"
 
 echo "==> deliver_images.sh completed for all $(( ${#IMAGES[@]} + ${#CLIENT_IMAGES[@]} )) images (${#IMAGES[@]} server + ${#CLIENT_IMAGES[@]} client)."

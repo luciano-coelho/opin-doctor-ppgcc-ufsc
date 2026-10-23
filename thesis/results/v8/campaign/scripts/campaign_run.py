@@ -1186,8 +1186,21 @@ class SSHExecutor:
         # server-side action that is flock-wrapped (see
         # server_flock_wrap()'s own docstring, A.10, for why individual
         # executions below are not).
+        # Audit (v8 pilot, this turn): found live -- switch_crypto_profile.py's
+        # OWN internal settling step (Decision 4, inside switch()) runs
+        # ON THE SERVER and starts its own LOCAL tls_kem_proxy (same
+        # single-host assumption that script was originally written
+        # under, before the real split-host v8 topology existed).
+        # TLS_KEM_PROXY_USE_PRECOMPILED=1 was already set for the
+        # CLIENT side (_REMOTE_CLIENT_ENV()) but never for this one --
+        # opin_flow.start_tls_kem_proxy() defaulted to `go run .`
+        # against Go source that was never delivered here either
+        # ("go.mod file not found"). deliver_images.sh now also ships
+        # CLIENT_IMAGES to "servers"; this sets the matching env var so
+        # the server actually uses what's delivered.
         switch_cmd = (
             f"cd insurance-server-lambdas && CRYPTO_PROFILE={shlex.quote(profile)} "
+            f"TLS_KEM_PROXY_USE_PRECOMPILED=1 "
             f"python3 ../thesis/scripts/switch_crypto_profile.py {shlex.quote(profile)}"
         )
         self._run_or_print(

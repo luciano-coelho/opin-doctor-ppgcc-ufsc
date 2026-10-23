@@ -10,11 +10,30 @@ Description=MockOPIN v8 campaign orchestrator (Decision 49/53)
 # ~/campaign/scripts/ alongside it, same relative layout as the repo).
 After=network-online.target
 Wants=network-online.target
+# `StartLimitIntervalSec`/`StartLimitBurst` belong in [Unit], not
+# [Service] -- found live, this turn, right after starting the real
+# pilot run: systemd silently ignored them under [Service] ("Unknown
+# key name ... ignoring"), which would have left Restart=on-failure
+# below with NO effective budget at all (unlimited retries) instead of
+# the low, deliberate one this unit is meant to have. Fixed in place
+# without restarting the already-running unit -- `daemon-reload` alone
+# updates the definition systemd uses for the NEXT restart, it does not
+# touch a process already running under the old (if sloppier) one.
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=simple
 User=ec2-user
 WorkingDirectory=/home/ec2-user
+# Found live, right after the first real start: Python fully buffers
+# stdout when it isn't a TTY (systemd's own case) -- `print()` progress
+# (settling, warmup, per-run results) was invisible in `journalctl`
+# until the buffer happened to flush, while stderr WARNINGs showed up
+# immediately (stderr is line-buffered by default). That silently
+# defeats real-time abort-criteria monitoring during a live run.
+# PYTHONUNBUFFERED=1 forces both streams unbuffered.
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /home/ec2-user/campaign/scripts/campaign_run.py
 # campaign_run.py's own per-execution resume marker (already_done(),
 # campaign_run.py line ~734: a run's own runs/run{NN}.json is written
@@ -28,8 +47,6 @@ ExecStart=/usr/bin/python3 /home/ec2-user/campaign/scripts/campaign_run.py
 # budget unattended.
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=600
-StartLimitBurst=3
 # No AWS credential of any kind -- this process only ever reaches other
 # instances over SSH (the campaign's own exclusive key, already chmod
 # 600'd to ec2-user by campaign_up.sh), never calls an AWS API itself.
