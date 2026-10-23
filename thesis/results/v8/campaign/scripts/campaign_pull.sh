@@ -39,10 +39,26 @@ ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" \
   "cd /home/ec2-user/campaign-data && find v8 -type f -print0 | xargs -0 sha256sum > /home/ec2-user/campaign-data.sha256"
 
 echo "==> rsync (idempotent -- only new/changed files transfer)..."
-rsync -avz -e "ssh ${SSH_OPTS[*]}" \
-  "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data/v8/" "$DEST/v8/"
-rsync -avz -e "ssh ${SSH_OPTS[*]}" \
-  "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data.sha256" "$DEST/campaign-data.sha256"
+# Teardown prep (this turn): found live -- this operator machine has no
+# local rsync (same gap deliver_images.sh's own have_rsync_locally()
+# fix found and worked around earlier the same way). campaign_pull.sh
+# had no fallback at all, and this pull has to succeed before
+# campaign_down.sh will destroy anything. scp -r is not incremental
+# like rsync (always re-copies everything), but this script's own data
+# volumes are small enough that this is a correctness fix, not a
+# performance one -- the sha256 verification below is unchanged and
+# still the real correctness check either way.
+if command -v rsync >/dev/null 2>&1; then
+  rsync -avz -e "ssh ${SSH_OPTS[*]}" \
+    "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data/v8/" "$DEST/v8/"
+  rsync -avz -e "ssh ${SSH_OPTS[*]}" \
+    "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data.sha256" "$DEST/campaign-data.sha256"
+else
+  echo "    rsync not available locally -- falling back to scp -r (not incremental, correctness-equivalent)."
+  mkdir -p "$DEST/v8"
+  scp -r "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data/v8/." "$DEST/v8/"
+  scp "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}:/home/ec2-user/campaign-data.sha256" "$DEST/campaign-data.sha256"
+fi
 
 echo "==> Verifying the manifest against what actually landed locally..."
 (
