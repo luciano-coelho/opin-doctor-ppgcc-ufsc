@@ -6432,3 +6432,176 @@ handed.
    against real data yet -- this pilot never produced a single real
    execution.
 
+## 84. Decision 83's own 6th bug (co-located client's public-IP path) fixed and consumer written; a pre-flight connectivity check and a time/cost budget added to the orchestrator itself; a genuinely fresh local bring-up test (no DinD, no AWS) re-confirmed Decision 83's own psql fix end to end -- no-AWS turn, code/tests/docs only
+
+Direct continuation of Decision 83, explicitly scoped to NO AWS this
+turn (no apply, no destroy, no resource query) -- code, local tests,
+and documentation only.
+
+**1. `colocated` field consumer, written.** `pick_gateway_ip()` (module-
+level, so both `SSHExecutor._server_gateway_ip()` and the new
+pre-flight check share one real implementation) picks the server's
+`private_ip` for a co-located client, `public_ip` otherwise -- fails
+loudly (never a silent default) if `colocated` is missing from a
+client's inventory entry, or if the IP it calls for isn't present on
+the server's own entry. Wired into every place a CLIENT reaches the
+server's gateway: `REMOTE_GATEWAY_HOST` (proxy start, settling, warmup,
+the real execution itself) AND the client-side reference ping (was
+pinging the server's always-public `_server_ip()`, which would have
+silently measured a DIFFERENT path than the one a co-located
+execution actually just used). `_server_ip()` itself is UNCHANGED --
+every place CONTROL reaches the server directly (profile switch,
+docker logs, tcpdump, cpu/mem sampling, scp pcap pull) keeps using it,
+a separate relationship with its own, already-correct security group
+rule.
+
+Audited everything else that depends on the server's address, per
+Luciano's own list:
+- **pcap filter**: `tcpdump ... port 443` -- no IP in the filter at
+  all, and the auto-detected capture interface is the SAME one
+  regardless of which of the server's two IPs a connection used (an
+  EC2 instance has one ENI; "public IP" is an AWS-level NAT mapping
+  onto it, not a separate interface the OS itself ever sees). Confirmed
+  address-agnostic, no bug.
+- **RTT extraction (SYN->SYN-ACK)**: `pcap_utils.find_syn_synack_rtt()`
+  derives the expected reply 4-tuple FROM the observed SYN packet
+  itself, never from a hardcoded/assumed IP constant. Confirmed
+  address-agnostic, no bug.
+- **Terraform security group rules**: confirmed statically in
+  `main.tf`'s own `gateway_ingress_cidrs` for all 3 server regions --
+  every `"L0"` entry already uses `.private_ip`, every cross-region
+  scenario already uses `.public_ip`, with an explicit `# co-located --
+  private IP` comment at each one. These were ALREADY correct before
+  Decision 83 -- only the CLIENT-side connection code was wrong.
+- **Cert/SNI independence from address**: confirmed in `mock_mtls/
+  main.go`'s own comments and `tls_kem_proxy/main.go`'s
+  `upstreamTLSConfig.ServerName` -- SNI is a fixed, hardcoded string
+  (`"mtls"` / `"matls-api.local"`), explicitly set because dialing a
+  literal IP omits SNI by default otherwise. Confirmed by design,
+  independent of which IP is actually dialed, no bug.
+
+5 new unit tests (`tests/test_server_gateway_ip.py`, fake inventories
+only, no Docker/AWS/SSH): co-located client gets the private IP,
+remote client gets the public IP, a missing `colocated` field raises,
+a missing required IP (private OR public) raises. `tests/
+rehearsal_runner.py`'s own fake inventory (a single-Docker-network
+setup with no real public/private distinction) updated to the new
+schema (`colocated: true`, reusing its one reachable hostname for both
+IP fields) so it keeps working under the new requirement.
+
+**2. Pre-flight connectivity check, every client including every
+`L0`.** `verify_gateway_connectivity()`, called right after
+`verify_ready_marker()` in `main()`, before any settling/execution
+work: opens a short-timeout (5s) TCP connection from EVERY client to
+the server's gateway on the EXACT IP `pick_gateway_ip()` would hand it,
+prints a `client / gateway_ip / result / time` table, aborts loudly
+(never hangs) if any client can't reach it. `PILOT_RUNBOOK.md`'s own
+step 4 table corrected -- it only ever tested from `L325` (the
+public-IP case), the exact gap that let Decision 83's own bug through
+undetected until real AWS minutes had already been spent on it.
+
+**3. Time/cost budget, orchestrator-enforced.**
+`PILOT_TIME_BUDGET_HOURS` (default 3h -- this pilot's own real turn
+ran ~9h against a ~1-2h estimate). Checked once per profile block
+(`check_time_budget()`, start of `run_window()`'s own per-profile
+loop) against `_CAMPAIGN_START_UTC` (set once, at the top of `main()`
+-- a systemd restart correctly resets the clock, since a restarted
+run has its own fresh real-time cost from that point). Past budget:
+BLOCKS (never exits -- exiting would just re-enter the same wait on
+the next systemd restart, burning `campaign_run.service`'s own
+restart budget for nothing), logging a reminder every 60s, until the
+operator creates `/home/ec2-user/campaign_time_budget_override` on
+control. Never destroys anything itself, never silently keeps
+spending past the budget unattended either -- the decision stays the
+operator's. Registered as a new abort criterion in
+`PILOT_RUNBOOK.md`: past budget, tear down and reassess, not debug
+with the meter still running.
+
+**4. A genuinely fresh local bring-up test -- no DinD, no AWS --
+re-confirmed Decision 83's own `psql`/`depends_on` fix end to end.**
+Decision 75/76's own prior conclusion (full DinD/DooD rehearsal
+abandoned, trusting the AWS pilot itself as the "fresh instance"
+check) is exactly what let 5 of Decision 83's own 7 bugs go
+undiscovered until real AWS time was spent on them -- this turn
+revisited a LIGHT version of that check instead of accepting the same
+gap again. DooD (the real host's own `docker.sock`, mounted into a
+`--cpus 2 --memory 8g amazonlinux:2023` driver container, `docker` +
+the same pinned `docker compose` binary `install_common_packages.sh`
+uses) -- not DinD. Isolated from the operator's own currently-running
+real `insurance-server-lambdas` dev stack three ways: a dedicated
+compose project name (`mockopin_freshcheck`), the already-built
+images re-tagged under that project's own expected names (no rebuild,
+no shared state), and a compose override (`ports: !reset []` --
+Compose's default list-merge APPENDS, so a bare `ports: []` override
+does nothing; `!reset` is the tag that actually clears it) removing
+every host port binding, since the real dev stack already held every
+one of them. Found and worked around, live, the SAME DooD relative-
+bind-mount-path translation gap Decision 75 already documented
+(`../mock-service-os/certs/` resolved inside the DRIVER container's
+own mount namespace, not the HOST's, so the real cert files appeared
+missing to `psql`'s own entrypoint) by mounting the source trees at
+IDENTICAL absolute host paths inside the driver, not a synthetic
+`/work/...` prefix.
+
+Result: a completely fresh stack (fresh volumes, fresh network, zero
+prior state) came up clean on the FIRST attempt once the mount issue
+was fixed -- `psql Healthy` before `mockapi` ever started, `mockapi`'s
+own log confirming `Startup completed ... Server Running`, no
+`UnknownHostException`. A `--force-recreate auth mtls mongo_seed
+mockapi` under `CRYPTO_PROFILE=pqc` (the exact command
+`switch_crypto_profile.py` itself runs) recreated cleanly too, `psql`/
+`mongodb` correctly left untouched (`Running`, not recreated).
+`docker system df` before/after: images and containers identical to
+the pre-test baseline; the test's own named volumes (`docker volume ls`)
+fully gone after `down -v`; a small (+3, ~68MB) volume-count delta
+belongs to other, unrelated Docker activity already running on this
+shared machine, confirmed by name -- none of it this test's own.
+
+**5/6. Variable/file audit and static validations.** The
+variable-dependency audit from Decision 83's own turn (item 1's
+`REMOTE_GATEWAY_HOST`/pcap/RTT/SG/cert-SNI check above) supersedes and
+extends the systematic one from Decision 81/82 -- no separate new
+table needed, the findings are folded into item 1 above.
+`terraform fmt -check -diff` and `terraform validate` both pass clean
+(no credentials needed for either). All 9 of this directory's own
+standalone test scripts pass (the 8 from before, plus the new
+`test_server_gateway_ip.py`). `pilot_acceptance.py` run against
+`tests/fixtures/light_flow_check_2026-10-21` (the existing local
+calibration data, Decision 76) -- runs with no Python exception at
+all; reports mostly `N/A` (expected: that fixture has no gateway logs,
+pcaps, or CPU samples, by design) and a real `FAIL` only on Criterion
+9 (no `.pull-verified` marker there, also expected, it isn't from a
+real `campaign_pull.sh` run) -- confirms the script itself has no code
+error, not that this fixture should pass the full battery.
+
+**Not a protocol change**, same reasoning as every entry since
+Decision 81: nothing here touches what `campaign_run.py` measures or
+how. Item 1 only changes which of the server's two already-existing
+IPs a co-located client is given; items 2/3 are pre-flight/safety
+additions that only ever block or warn, never alter a measurement;
+item 4 is a local-only verification exercise, no campaign code
+changed as a result of it (it confirmed Decision 83's own fix was
+already correct).
+
+**Depois do piloto / ao retomar** (supersedes Decision 83's own list --
+step "4. terraform apply for the colocated output field" there is now
+OBSOLETE: a fresh `campaign_up.sh` apply creates the whole topology,
+`colocated` field included, with no separate manual output-only apply
+needed):
+1. Luciano confirms the real cost of this turn's own pilot attempt via
+   the Billing console (Decision 83).
+2. `campaign.vars.local.sh` / operator IP / instance type / budget
+   balance confirmed current.
+3. `campaign_up.sh` -- fresh apply, 21 resources, `colocated` already
+   in the inventory this time.
+4. Item 1 (ENTREGA) fresh -- all 7 of Decision 83's own fixes plus
+   this entry's own `colocated` consumer are already committed, so
+   this should be the first attempt that doesn't re-hit any of them.
+5. `verify_gateway_connectivity()`'s own table (step 4 of the runbook,
+   now automatic) should show `OK` for every client, including `L0` --
+   if it doesn't, stop there, before spending any more real time.
+6. Resume item 2 (EXECUÇÃO DO PILOTO) -- no partial pilot data exists
+   to resume from or discard.
+7. Watch `PILOT_TIME_BUDGET_HOURS` (default 3h) -- past it, the
+   orchestrator itself will block and ask, not silently keep going.
+

@@ -60,6 +60,41 @@ Both of these must be true before step 1 below is run for real:
   below. `terraform apply`/`destroy` and any instance launch are not
   run by anyone other than Luciano, present, following this runbook.
 
+## Status: primeira tentativa real revertida (Decisions 83/84)
+
+Uma tentativa real já rodou contra este piloto's own 4 instâncias
+(sa-east-1 control/server, `L0`/`L325`) e foi revertida (teardown
+limpo, verificado região por região) antes de qualquer execução real
+acontecer -- 7 bugs reais encontrados e corrigidos ao longo da
+tentativa (entrega, orquestrador nunca implantado, `psql` nunca
+declarado como dependência, lista de cenários/timeout de SSH
+assumindo a campanha completa, imagens de proxy/signer nunca entregues
+ao servidor, rede docker fixa, timeout do proxy do cliente), e um 8º
+encontrado e já corrigido depois (cliente co-localizado não alcançava
+o servidor pelo IP público). Ver DECISIONS.md, Decisions 83/84, para o
+histórico completo.
+
+**Ao retomar, nesta ordem** (a etapa "aplicar manualmente o campo
+`colocated`" que existiu entre as duas decisões está OBSOLETA -- o
+apply normal do `campaign_up.sh` abaixo já cria o campo junto com o
+resto do inventário):
+1. Confirma o custo real da tentativa anterior no Billing console.
+2. Confirma `campaign.vars.local.sh` (IP do operador atual, tipo de
+   instância, saldo/orçamento).
+3. Passo 3 abaixo (`campaign_up.sh`) -- apply fresco, 21 recursos,
+   `colocated` já no inventário.
+4. Passo 5 (ENTREGA) -- todos os 7 bugs da Decision 83 e o consumidor
+   do `colocated` (Decision 84) já estão commitados; esta deve ser a
+   primeira tentativa que não repete nenhum deles.
+5. A tabela do `verify_gateway_connectivity()` (automática, parte do
+   passo 4 abaixo) deve mostrar `OK` para todo cliente, incluindo
+   `L0` -- se não mostrar, para ali, antes de gastar mais tempo real.
+6. Retoma a seção de execução (60 execuções) do zero -- não há dado
+   parcial do piloto para retomar ou descartar.
+7. Observa `PILOT_TIME_BUDGET_HOURS` (padrão 3h, Decision 84) -- o
+   próprio orquestrador para e pede decisão, em vez de continuar
+   sozinho além do orçamento.
+
 ## Passo a passo
 
 Every command below assumes `campaign.vars.local.sh` already exists
@@ -156,20 +191,25 @@ local check — it contains real IPs).
 | security group: clients/server accept 22 only from control's EIP | same `describe-security-groups` on each client/server's own SG | exactly one ingress rule on 22, the control instance's EIP /32 |
 | control ↔ server connectivity | `ssh -i ~/.ssh/campaign_key ec2-user@<SERVER_IP> echo ok` (from control) | `ok` |
 | control ↔ each client connectivity | same, against each client's IP | `ok` |
-| server → client network path exists (gateway's own ingress rule) | from the `L325` client: `nc -zv <SERVER_PUBLIC_IP> 443` (before the stack is even up, expect connection refused, NOT a timeout — a timeout means the security group rule is wrong, a refusal means the rule is right and nothing's listening yet) | `Connection refused` (good) or `Connection timed out` (bad — stop) |
+| server → client network path exists (gateway's own ingress rule), **every client, including `L0`** | Decision 83: an earlier version of this row tested only from `L325` (the public-IP case) — that gap let a co-located client's own path go untested until it hung mid-settling, real AWS minutes later. Test from EVERY client now, each against the IP it will actually be given (`pick_gateway_ip()` — `L0`'s own private IP, `L325`'s own public IP): `nc -zv <IP> 443` (before the stack is up, expect connection refused, NOT a timeout — a timeout means the security group rule or the IP itself is wrong, a refusal means the path is right and nothing's listening yet) | `Connection refused` (good) or `Connection timed out` (bad — stop) on EVERY client |
 
 Any row that doesn't match → **abort** (see criteria below), do not
 proceed to step 5.
 
-`campaign_run.py` itself also checks this automatically, every real
-run, before doing anything else: `verify_ready_marker()` confirms
-`/var/lib/mockopin-ready` exists on every instance (written by
-`install_common_packages.sh` as its own LAST line, under `set -euo
-pipefail` — only present if the whole script succeeded) and aborts
-loudly, naming every instance where it's missing, if not. The manual
-`which` check above is still worth doing by hand at this step — it
-catches the SAME class of problem earlier, before `campaign_run.py` is
-even started.
+`campaign_run.py` itself also checks both of these automatically,
+every real run, before doing anything else: `verify_ready_marker()`
+confirms `/var/lib/mockopin-ready` exists on every instance (written
+by `install_common_packages.sh` as its own LAST line, under `set -euo
+pipefail` — only present if the whole script succeeded); right after
+it, `verify_gateway_connectivity()` (Decision 83, pilot item 2) opens
+a short-timeout TCP connection from EVERY client to the server's
+gateway on the SAME IP that client will actually be given as
+`REMOTE_GATEWAY_HOST`, printing a `client / gateway_ip / result / time`
+table and aborting loudly (never hanging) if any client can't reach
+it. Both abort loudly, naming every instance/client where they fail,
+if not. The manual checks above are still worth doing by hand at this
+step — they catch the SAME classes of problem earlier, before
+`campaign_run.py` is even started.
 
 ### 5. Deliver source + images, run settling + the acceptance battery
 
@@ -295,6 +335,19 @@ of these happen:
 - The AWS Billing console (checked by Luciano, not inferred) shows
   spend meaningfully above this runbook's own cost estimate below
   without a clear, understood reason.
+- **`PILOT_TIME_BUDGET_HOURS` (default 3h) is exceeded** (Decision 83,
+  pilot item 3 — found the hard way: this pilot's own real debugging
+  turn ran ~9h against a ~1-2h estimate). `campaign_run.py` itself
+  checks this once per profile block and BLOCKS there — never
+  destroying anything on its own, never silently continuing past the
+  budget unattended either. Past budget: **destroy and reassess,
+  rather than keep debugging with the meter still running** — the
+  same "stop and report" standard as every other criterion here, not
+  a reason to extend the budget in place. To let a run continue past
+  budget deliberately (a known, understood reason, not a stuck
+  debugging session), create `/home/ec2-user/campaign_time_budget_override`
+  on the control instance; to tear down instead, proceed to teardown
+  below without touching that file.
 
 ## Acompanhamento de custo durante a execução
 
