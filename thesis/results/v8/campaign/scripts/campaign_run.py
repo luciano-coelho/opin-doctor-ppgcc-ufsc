@@ -831,6 +831,21 @@ _SERVER_LOCKS = {name: threading.Lock() for name in SCENARIO_ROTATION}
 
 
 SSH_TIMEOUT_SECONDS = 30
+# Pilot item 2 (this turn): found live -- the "switch profile on server"
+# SSH call runs switch_crypto_profile.py's ENTIRE switch() end to end
+# (two fixed sleeps totaling 18s, up to MTLS_READY_TIMEOUT_SECONDS=30s
+# waiting for the gateway, psql's own now-real healthcheck wait before
+# mockapi even starts, a psql CHECKPOINT health probe, then
+# SETTLING_WARMUP_RUNS=5 discarded full two-flow executions) inside the
+# SAME 30s budget every short status/docker command also uses -- always
+# too short for this one call (switch_crypto_profile.py's own docstring
+# already says "~1 minute per switch"), not something this pilot's own
+# fixes made worse so much as finally exercised for real against actual
+# AWS network/boot timing. A generous, explicit ceiling for this one
+# call only -- every other `_run_or_print()` call keeps the original,
+# tighter SSH_TIMEOUT_SECONDS, so a genuinely dead connection on a quick
+# command is still caught quickly.
+SWITCH_PROFILE_TIMEOUT_SECONDS = 240
 SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
 
 # Pilot acceptance criterion 7: T_fluxo with vs. without tcpdump. This
@@ -970,14 +985,14 @@ class SSHExecutor:
         if r.returncode != 0:
             raise RuntimeError(f"scp pull {ip}:{remote_path} -> {local_path} failed (exit {r.returncode}): {r.stderr}")
 
-    def _run_or_print(self, label, cmd):
+    def _run_or_print(self, label, cmd, timeout_seconds=SSH_TIMEOUT_SECONDS):
         if self.dry_run:
             print(f"[DRY-RUN] {label}: {shlex.join(cmd)}")
             return None
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=SSH_TIMEOUT_SECONDS)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"[{label}] SSH command timed out after {SSH_TIMEOUT_SECONDS}s") from e
+            raise RuntimeError(f"[{label}] SSH command timed out after {timeout_seconds}s") from e
         if r.returncode != 0:
             raise RuntimeError(
                 f"[{label}] SSH command failed (exit {r.returncode}):\n"
@@ -1178,6 +1193,7 @@ class SSHExecutor:
         self._run_or_print(
             f"[{installation}/w{window}] switch profile on server",
             self._ssh_cmd(server_ip, server_flock_wrap(switch_cmd)),
+            timeout_seconds=SWITCH_PROFILE_TIMEOUT_SECONDS,
         )
         # A.6: the proxy now starts detached (docker run -d, via
         # opin_flow.start_tls_kem_proxy(..., detached=True)) -- a
@@ -1862,6 +1878,34 @@ def run_window(executor, installation, window, seed):
     profile_order = PROFILES[:]
     rng.shuffle(profile_order)
     scenarios = SCENARIO_ROTATION[installation][window]
+    # Pilot item 2 (this turn): found live -- SCENARIO_ROTATION above is
+    # the FULL campaign's own hardcoded 4-scenario list for sa-east-1,
+    # with no notion of a scoped topology (MOCKOPIN_ENABLED_CLIENT_SCENARIOS,
+    # the pilot's own L0+L325-only inventory). Every downstream IP lookup
+    # (_client_ip(), "L123@sa-east-1") raised KeyError the moment it ran
+    # against this pilot's inventory -- deterministic, on literally every
+    # block, never reaching a single real execution. Filtered down to
+    # whatever this run's own inventory actually has, in the same order,
+    # rather than assuming the full list is always present.
+    # LocalExecutor (the rehearsal/regression-test executor, single-host,
+    # no multi-client inventory concept at all) has no `.inventory` --
+    # this filtering is SSHExecutor-only, found live against the real
+    # pilot's own scoped topology; LocalExecutor's own tests keep their
+    # original, unfiltered scenario list exactly as before. Checked by
+    # isinstance, not getattr/hasattr -- test_block_order.py's own bare
+    # mock.Mock() executor auto-vivifies ANY attribute access (including
+    # `.inventory`) into another Mock, which would pass a truthy getattr
+    # check and then break on `.get()` not behaving like a real dict;
+    # isinstance only ever matches the real SSHExecutor.
+    if isinstance(executor, SSHExecutor):
+        available_clients = executor.inventory.get("clients", {})
+        missing_scenarios = [s for s in scenarios if f"{s}@{installation}" not in available_clients]
+        if missing_scenarios:
+            print(f"[{installation}] window {window}: {missing_scenarios} not in this run's own inventory "
+                  f"(scoped topology, e.g. the pilot's MOCKOPIN_ENABLED_CLIENT_SCENARIOS) -- skipping them.")
+        scenarios = [s for s in scenarios if f"{s}@{installation}" in available_clients]
+        if not scenarios:
+            sys.exit(f"[{installation}] window {window}: no enabled scenario is in this run's own inventory -- nothing to do.")
     print(f"[{installation}] window {window}: profile order = {profile_order}, "
           f"scenario order = {scenarios} (seed={seed})")
 
