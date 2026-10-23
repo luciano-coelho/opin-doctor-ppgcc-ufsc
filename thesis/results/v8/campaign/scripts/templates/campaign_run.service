@@ -1,0 +1,40 @@
+[Unit]
+Description=MockOPIN v8 campaign orchestrator (Decision 49/53)
+# Software-inventory audit (pilot item 1, this turn): this file never
+# existed anywhere in the repository before -- README.md/PILOT_RUNBOOK.md
+# described it as "already written" and instructed `sudo systemctl edit
+# campaign_run.service`, but neither the unit nor campaign_run.py itself
+# (the orchestrator this unit runs) was ever delivered to the control
+# instance by any script. deliver_source.sh now delivers both (this file
+# installed to /etc/systemd/system/ there, campaign_run.py extracted to
+# ~/campaign/scripts/ alongside it, same relative layout as the repo).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+ExecStart=/usr/bin/python3 /home/ec2-user/campaign/scripts/campaign_run.py
+# campaign_run.py's own per-execution resume marker (already_done(),
+# campaign_run.py line ~734: a run's own runs/run{NN}.json is written
+# ONLY after that run completes, never before or partway through) makes
+# a restart safe -- it resumes past every already-recorded run, never
+# re-runs one, and never mistakes a crashed, unwritten run for a done
+# one. A LOW restart budget, not an unlimited one: a transient SSH blip
+# recovers on its own; a genuinely broken run (bad image, wrong curve,
+# a real abort-criterion condition) exhausts the budget and the unit
+# goes `failed` instead of looping forever and quietly burning pilot
+# budget unattended.
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=3
+# No AWS credential of any kind -- this process only ever reaches other
+# instances over SSH (the campaign's own exclusive key, already chmod
+# 600'd to ec2-user by campaign_up.sh), never calls an AWS API itself.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

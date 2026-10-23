@@ -74,12 +74,31 @@ tar -C "$REPO_ROOT" -czf "$TARBALL" \
   insurance-server-lambdas/participants.json \
   insurance-server-lambdas/software_statement.json \
   insurance-server-lambdas/mongod.conf \
-  insurance-server-lambdas/pg_hba.conf
+  insurance-server-lambdas/pg_hba.conf \
+  thesis/results/v8/campaign/scripts/campaign_run.py \
+  thesis/results/v8/campaign/scripts/templates/campaign_run.service
 size_bytes="$(stat -c%s "$TARBALL" 2>/dev/null || stat -f%z "$TARBALL")"
 echo "    $TARBALL: $size_bytes bytes"
 
 echo "==> Sending to control instance..."
 scp "${SCP_OPTS[@]}" "$TARBALL" "ec2-user@${CONTROL_IP}:~/mockopin-source.tar.gz"
+
+# Software-inventory audit (pilot item 1, this turn): found live -- this
+# tarball reached control only to be RELAYED onward to every server/
+# client below; control itself never extracted its own copy, so
+# campaign_run.py (the orchestrator THIS turn's own 60 real executions
+# depend on) and campaign_run.service had never actually been delivered
+# to control by any script, ever, despite README.md/PILOT_RUNBOOK.md
+# describing the service as "already written." Extracted here, on
+# control itself, same tarball, before it's relayed onward -- mirrors
+# the repo's own relative layout exactly like every other target.
+echo "==> Extracting onto control itself (campaign_run.py + the orchestrator's systemd unit)..."
+ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" \
+  "tar -xzf ~/mockopin-source.tar.gz -C ~/ && \
+   sudo cp ~/thesis/results/v8/campaign/scripts/templates/campaign_run.service /etc/systemd/system/campaign_run.service && \
+   sudo systemctl daemon-reload && \
+   mkdir -p ~/campaign/scripts && \
+   cp ~/thesis/results/v8/campaign/scripts/campaign_run.py ~/campaign/scripts/campaign_run.py"
 
 echo "==> Distributing to every server and client from control, extracting into each home directory..."
 ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" env MOCKOPIN_SERVER_SSH_PORT="$SSH_PORT" bash -s <<'REMOTE'
