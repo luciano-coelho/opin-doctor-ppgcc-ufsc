@@ -63,6 +63,24 @@ services:
       CRYPTO_PROFILE: ${CRYPTO_PROFILE:-classic}
     ports:
       - "8081:8080"
+    # Software-inventory audit (v8 pilot, this turn): found live, on a
+    # real, fresh EC2 instance where nothing had ever brought up the
+    # full stack before -- mockapi's own DB_URL above makes psql a real
+    # runtime dependency (its JDBC pool connects eagerly at JVM boot,
+    # DataSourceProxy.createPool), but this depends_on block never
+    # existed, so Compose never started psql as a side effect of
+    # starting mockapi (unlike auth/mtls's own depends_on on
+    # localstack/mongodb below, correctly declared already). Every
+    # local rehearsal before this one ran against an already-persistent
+    # Docker environment where psql happened to already be up from
+    # earlier work, so this never surfaced. `service_healthy` (not just
+    # `service_started`) -- psql's own healthcheck below -- waits for
+    # Postgres to actually accept connections, not just for its process
+    # to exist, since mockapi's pool connects immediately on its own
+    # boot with no retry of its own.
+    depends_on:
+      psql:
+        condition: service_healthy
 
   psql:
     profiles:
@@ -78,6 +96,15 @@ services:
     volumes:
       - ../mock-service-os/certs/:/certs-src/:ro
       - ./pg_hba.conf:/etc/postgresql-custom/pg_hba.conf:ro
+    # Added alongside mockapi's own depends_on above -- service_healthy
+    # needs this to exist at all. pg_isready is Postgres's own client
+    # tool, already in the base image, no extra install needed.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d mock"]
+      interval: 3s
+      retries: 10
+      timeout: 5s
+      start_period: 10s
     # The bind-mounted key file from the host cannot be trusted to land inside
     # the container with 0600 perms (Windows/Docker Desktop file sharing does
     # not preserve Unix permission bits), and Postgres refuses to start with a
@@ -273,8 +300,15 @@ services:
       - --fintechlabs.devmode=true
       - --fintechlabs.startredir=true
       - --fintechlabs.yacs.directory.uri=http://directory/participants
+    # Audit (v8 pilot, this turn): "directory" above is mtls's own
+    # network alias (see mtls's `networks.default.aliases`), not a
+    # separate host -- missing from here the same way psql was missing
+    # from mockapi's. Lower priority than mockapi/psql (profile "cs"
+    # only, never exercised by the campaign's own "main" profile), fixed
+    # anyway per this turn's own full audit.
     depends_on:
       - mongodb
+      - mtls
     logging:
       # limit logs retained on host
       driver: "json-file"
