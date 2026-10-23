@@ -713,10 +713,27 @@ def start_tls_kem_proxy(crypto_profile: str, detached: bool = False,
         image_argv = [TLS_KEM_PROXY_GO_IMAGE, "go", "run", "."]
         mount_argv = ["-v", f"{TLS_KEM_PROXY_SRC_DIR}:/src", "-v", f"{CERTS_DIR}:/certs:ro", "-w", "/src"]
 
+    # Pilot item 2 (v8, this turn): found live -- "--network
+    # insurance-server-lambdas_default" was unconditional, but that
+    # network only exists on the SAME docker daemon that ran `docker
+    # compose up` for it (the SERVER's own host) -- Docker networks are
+    # per-daemon, never shared across machines. On a real remote CLIENT
+    # instance (REMOTE_GATEWAY_HOST set), that network was never
+    # created there at all: "docker: Error response from daemon:
+    # network insurance-server-lambdas_default not found." Joining it
+    # is only needed in the local, single-host lab (reaching "mtls" by
+    # its compose-assigned name); the docstring's own reasoning above
+    # ("a custom bridge network still NATs to the host's own internet
+    # connection") already explains why Docker's plain DEFAULT bridge
+    # network -- what omitting --network entirely gives you -- works
+    # exactly as well for the remote case, where proxy_target is
+    # already a real IP, not a compose service name needing that
+    # network's own embedded DNS to resolve at all.
+    network_argv = [] if REMOTE_GATEWAY_HOST else ["--network", "insurance-server-lambdas_default"]
     argv = [
         "docker", "run", *run_mode_flags,
         "--name", TLS_KEM_PROXY_CONTAINER_NAME,
-        "--network", "insurance-server-lambdas_default",
+        *network_argv,
         "-p", f"127.0.0.1:{TLS_KEM_PROXY_PORT}:{TLS_KEM_PROXY_PORT}",
         *mount_argv,
         *image_argv,
