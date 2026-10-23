@@ -33,14 +33,14 @@ variable "key_name" {
 }
 
 variable "ssh_ingress_cidrs" {
-  description = "/32s allowed on port 22. For server/client roles, this is the control instance's own EIP /32 only. For the control role, this is the operator's own /32, discovered at apply time and passed in -- never written to a versioned file."
-  type        = list(string)
+  description = "/32s allowed on port 22, keyed by a static, literal label (e.g. \"control\", \"operator\") -- NOT by the CIDR value itself, which may be unknown until apply (DECISIONS.md: for_each needs its KEYS known at plan time, not its values). For server/client roles, this is the control instance's own EIP /32 only (key \"control\"). For the control role, this is the operator's own /32, discovered at apply time and passed in -- never written to a versioned file (key \"operator\")."
+  type        = map(string)
 }
 
 variable "gateway_ingress_cidrs" {
-  description = "/32s allowed on port 443 (the MockOPIN gateway). Only meaningful for role=\"server\" -- one separate rule per client this server actually serves, created once by Terraform and left in place for the whole campaign (not toggled at runtime)."
-  type        = list(string)
-  default     = []
+  description = "/32s allowed on port 443 (the MockOPIN gateway), keyed by the scenario's own static label (e.g. \"L0\", \"L325\") -- same static-key/dynamic-value reasoning as ssh_ingress_cidrs. Only meaningful for role=\"server\" -- one separate rule per client this server actually serves, created once by Terraform and left in place for the whole campaign (not toggled at runtime)."
+  type        = map(string)
+  default     = {}
 }
 
 variable "self_terminate_hours" {

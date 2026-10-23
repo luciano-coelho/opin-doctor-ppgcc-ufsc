@@ -106,7 +106,7 @@ fi
 (cd "$TF_DIR" && terraform apply -input=false -auto-approve) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
 
 echo "==> Extracting outputs..."
-CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
+CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
 TMP_KEY="$(mktemp)"
 TMP_INVENTORY="$(mktemp)"
 trap 'shred -u "$TMP_KEY" 2>/dev/null || rm -f "$TMP_KEY"; rm -f "$TMP_INVENTORY"' EXIT

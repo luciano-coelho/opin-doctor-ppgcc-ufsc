@@ -263,7 +263,7 @@ module "control" {
   vpc_id               = data.aws_vpc.sa_east_1.id
   subnet_id            = data.aws_subnets.sa_east_1_default.ids[0]
   key_name             = aws_key_pair.operator_sa_east_1.key_name
-  ssh_ingress_cidrs    = [var.operator_ip_cidr]
+  ssh_ingress_cidrs    = { "operator" = var.operator_ip_cidr }
   self_terminate_hours = 0 # exempt, Decision 49
 }
 
@@ -282,7 +282,7 @@ module "client_l0" {
   vpc_id               = data.aws_vpc.sa_east_1.id
   subnet_id            = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the sa-east-1 server -- Decision 41
   key_name             = aws_key_pair.campaign_sa_east_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -297,7 +297,7 @@ module "client_ca_central_1_a" {
   vpc_id               = data.aws_vpc.ca_central_1.id
   subnet_id            = data.aws_subnets.ca_central_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ca_central_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -312,7 +312,7 @@ module "client_ca_central_1_b" {
   vpc_id               = data.aws_vpc.ca_central_1.id
   subnet_id            = data.aws_subnets.ca_central_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ca_central_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -327,7 +327,7 @@ module "client_eu_north_1" {
   vpc_id               = data.aws_vpc.eu_north_1.id
   subnet_id            = data.aws_subnets.eu_north_1_default.ids[0]
   key_name             = aws_key_pair.campaign_eu_north_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -342,7 +342,7 @@ module "client_ap_southeast_1" {
   vpc_id               = data.aws_vpc.ap_southeast_1.id
   subnet_id            = data.aws_subnets.ap_southeast_1_default.ids[0]
   key_name             = aws_key_pair.campaign_ap_southeast_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -357,7 +357,7 @@ module "client_ap_northeast_2" {
   vpc_id               = data.aws_vpc.ap_northeast_2.id
   subnet_id            = data.aws_subnets.ap_northeast_2_default.ids[0]
   key_name             = aws_key_pair.campaign_ap_northeast_2.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -376,7 +376,7 @@ module "client_l0_us_east_1" {
   vpc_id               = data.aws_vpc.us_east_1.id
   subnet_id            = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 server
   key_name             = aws_key_pair.campaign_us_east_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -391,7 +391,7 @@ module "client_l0_ap_northeast_1" {
   vpc_id               = data.aws_vpc.ap_northeast_1.id
   subnet_id            = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 server
   key_name             = aws_key_pair.campaign_ap_northeast_1.key_name
-  ssh_ingress_cidrs    = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs    = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -416,17 +416,20 @@ module "server_sa_east_1" {
   vpc_id            = data.aws_vpc.sa_east_1.id
   subnet_id         = data.aws_subnets.sa_east_1_az1.ids[0] # same AZ ID as the L0 client
   key_name          = aws_key_pair.campaign_sa_east_1.key_name
-  ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
+  ssh_ingress_cidrs = { "control" = "${module.control.public_ip}/32" }
   # Item 5: one rule per ENABLED client only -- a disabled scenario's
   # module has count=0, so referencing it unconditionally would error
-  # ("index out of range"); compact() drops the disabled ones' empty
-  # strings instead.
-  gateway_ingress_cidrs = compact([
-    local.l0_sa_east_1_enabled ? "${module.client_l0[0].private_ip}/32" : "", # co-located -- private IP, Decision 28/41
-    local.l123_enabled ? "${module.client_ca_central_1_a[0].public_ip}/32" : "",
-    local.l219_enabled ? "${module.client_eu_north_1[0].public_ip}/32" : "",
-    local.l325_enabled ? "${module.client_ap_southeast_1[0].public_ip}/32" : "",
-  ])
+  # ("index out of range"). Keyed by each scenario's own static label
+  # (DECISIONS.md -- for_each needs known KEYS, not known values): merge()
+  # of single-key-or-empty maps keeps the resulting key set statically
+  # determined by the (plan-time-known) enabled flags alone, never by a
+  # module output's own value.
+  gateway_ingress_cidrs = merge(
+    local.l0_sa_east_1_enabled ? { "L0" = "${module.client_l0[0].private_ip}/32" } : {}, # co-located -- private IP, Decision 28/41
+    local.l123_enabled ? { "L123" = "${module.client_ca_central_1_a[0].public_ip}/32" } : {},
+    local.l219_enabled ? { "L219" = "${module.client_eu_north_1[0].public_ip}/32" } : {},
+    local.l325_enabled ? { "L325" = "${module.client_ap_southeast_1[0].public_ip}/32" } : {},
+  )
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -441,11 +444,11 @@ module "server_us_east_1" {
   vpc_id            = data.aws_vpc.us_east_1.id
   subnet_id         = data.aws_subnets.us_east_1_az1.ids[0] # same AZ ID as the us-east-1 L0 client (Decision 53)
   key_name          = aws_key_pair.campaign_us_east_1.key_name
-  ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
-  gateway_ingress_cidrs = compact([
-    local.l0_us_east_1_enabled ? "${module.client_l0_us_east_1[0].private_ip}/32" : "", # co-located -- private IP, same rule as sa-east-1's L0
-    local.l14_enabled ? "${module.client_ca_central_1_b[0].public_ip}/32" : "",
-  ])
+  ssh_ingress_cidrs = { "control" = "${module.control.public_ip}/32" }
+  gateway_ingress_cidrs = merge(
+    local.l0_us_east_1_enabled ? { "L0" = "${module.client_l0_us_east_1[0].private_ip}/32" } : {}, # co-located -- private IP, same rule as sa-east-1's L0
+    local.l14_enabled ? { "L14" = "${module.client_ca_central_1_b[0].public_ip}/32" } : {},
+  )
   self_terminate_hours = var.self_terminate_hours
 }
 
@@ -460,10 +463,10 @@ module "server_ap_northeast_1" {
   vpc_id            = data.aws_vpc.ap_northeast_1.id
   subnet_id         = data.aws_subnets.ap_northeast_1_az1.ids[0] # same AZ ID as the ap-northeast-1 L0 client (Decision 53)
   key_name          = aws_key_pair.campaign_ap_northeast_1.key_name
-  ssh_ingress_cidrs = ["${module.control.public_ip}/32"]
-  gateway_ingress_cidrs = compact([
-    local.l0_ap_northeast_1_enabled ? "${module.client_l0_ap_northeast_1[0].private_ip}/32" : "", # co-located -- private IP
-    local.l30_enabled ? "${module.client_ap_northeast_2[0].public_ip}/32" : "",
-  ])
+  ssh_ingress_cidrs = { "control" = "${module.control.public_ip}/32" }
+  gateway_ingress_cidrs = merge(
+    local.l0_ap_northeast_1_enabled ? { "L0" = "${module.client_l0_ap_northeast_1[0].private_ip}/32" } : {}, # co-located -- private IP
+    local.l30_enabled ? { "L30" = "${module.client_ap_northeast_2[0].public_ip}/32" } : {},
+  )
   self_terminate_hours = var.self_terminate_hours
 }
