@@ -58,8 +58,15 @@ CLIENT_HOST = "mockopin_rehearsal_client"
 SSH_KEY = "/root/.ssh/campaign_key"
 
 inventory = {
-    "servers": {"sa-east-1": {"public_ip": SERVER_HOST}},
-    "clients": {"L0@sa-east-1": {"public_ip": CLIENT_HOST}},
+    # Pilot item 2 (this turn): _server_gateway_ip() now requires
+    # `colocated` on every client entry (fails loudly otherwise,
+    # Decision 83) -- this single-Docker-network rehearsal has no real
+    # public/private distinction at all, so `private_ip` reuses the
+    # same reachable hostname as `public_ip` and `colocated: true`
+    # picks it, matching how this rehearsal already behaved before
+    # that field existed.
+    "servers": {"sa-east-1": {"public_ip": SERVER_HOST, "private_ip": SERVER_HOST}},
+    "clients": {"L0@sa-east-1": {"public_ip": CLIENT_HOST, "colocated": True}},
 }
 
 

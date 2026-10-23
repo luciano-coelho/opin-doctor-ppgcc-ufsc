@@ -126,6 +126,53 @@ def write_status(state, detail=""):
         }, indent=2))
     except OSError as e:
         print(f"WARNING: could not write status file {STATUS_FILE_PATH}: {e}", file=sys.stderr)
+
+
+# Pilot item 3 (this turn): a real pilot can run far longer than
+# planned while real AWS debugging happens (Decision 83's own turn:
+# ~1-2h estimated, ~9h actual) -- this budget makes that impossible to
+# miss and, critically, never lets the orchestrator decide on its own
+# to keep going OR to tear anything down. Overridable; the default (3h)
+# is deliberately short, matching this pilot's own ~1-2h estimate plus
+# margin, not the full campaign's much longer one.
+PILOT_TIME_BUDGET_HOURS = float(os.environ.get("PILOT_TIME_BUDGET_HOURS", "3"))
+TIME_BUDGET_OVERRIDE_MARKER = Path("/home/ec2-user/campaign_time_budget_override")
+TIME_BUDGET_POLL_SECONDS = 60
+_CAMPAIGN_START_UTC = None  # set once, at the top of main()
+
+
+def check_time_budget():
+    """Pilot item 3 (this turn): called once per profile block (the
+    start of run_window()'s own per-profile loop), BEFORE
+    start_block_proxies() spends any more real time/money. Past
+    PILOT_TIME_BUDGET_HOURS, this BLOCKS (not exits -- exiting would
+    just re-enter the same wait on systemd's own restart, burning the
+    unit's restart budget for no reason) until the operator creates
+    TIME_BUDGET_OVERRIDE_MARKER on control -- the orchestrator never
+    destroys anything itself and never silently keeps spending past
+    the budget unattended. Logs a reminder every
+    TIME_BUDGET_POLL_SECONDS so this is visible in journalctl, not a
+    silent hang indistinguishable from one."""
+    if _CAMPAIGN_START_UTC is None:
+        return  # defensive -- main() always sets this before run_window() is ever called
+    elapsed_hours = (datetime.now(timezone.utc) - _CAMPAIGN_START_UTC).total_seconds() / 3600
+    if elapsed_hours < PILOT_TIME_BUDGET_HOURS:
+        return
+    write_status("paused_time_budget", f"elapsed_hours={elapsed_hours:.2f} budget_hours={PILOT_TIME_BUDGET_HOURS}")
+    print(f"=== PILOT_TIME_BUDGET_HOURS ({PILOT_TIME_BUDGET_HOURS}h) EXCEEDED after {elapsed_hours:.2f}h ===")
+    print(f"    This orchestrator will NOT continue on its own and will NOT destroy anything itself.")
+    print(f"    Decide: to KEEP GOING, create {TIME_BUDGET_OVERRIDE_MARKER} on this control instance "
+          f"(e.g. 'touch {TIME_BUDGET_OVERRIDE_MARKER}'). To TEAR DOWN instead, run campaign_down.sh "
+          f"from the operator's own machine -- PILOT_RUNBOOK.md's own criterion: past budget, destroy "
+          f"and reassess, don't debug with the meter still running.")
+    while not TIME_BUDGET_OVERRIDE_MARKER.exists():
+        time.sleep(TIME_BUDGET_POLL_SECONDS)
+        elapsed_hours = (datetime.now(timezone.utc) - _CAMPAIGN_START_UTC).total_seconds() / 3600
+        print(f"    ... still waiting for {TIME_BUDGET_OVERRIDE_MARKER} (elapsed {elapsed_hours:.2f}h)")
+    print(f"    {TIME_BUDGET_OVERRIDE_MARKER} found -- continuing.")
+    TIME_BUDGET_OVERRIDE_MARKER.unlink()
+
+
 # Overridable via env var for a short rehearsal schedule (item 4) --
 # the real campaign always uses the default 10/3 (30 runs/profile/
 # scenario total, Decision 53).
@@ -179,6 +226,53 @@ def load_config():
 def load_inventory():
     raw = json.loads(INVENTORY_PATH.read_text())
     return raw["value"] if "value" in raw else raw
+
+
+def pick_gateway_ip(inventory, installation, scenario_key):
+    """Pilot item 2 (this turn): the IP a CLIENT uses to reach the
+    server's own gateway (REMOTE_GATEWAY_HOST, the client-side
+    reference ping, and the pre-flight connectivity check below) is
+    NOT always the server's public IP -- a co-located client (L0, any
+    region) cannot reach the server via its public IP at all
+    (Decision 83's real finding: same-VPC traffic to another
+    instance's public/Elastic IP hairpins through the Internet
+    Gateway, which rewrites the source to the sender's OWN public IP
+    by the time it reaches the destination's security group -- the
+    server's own SG only ever allows a co-located client's PRIVATE
+    IP, confirmed statically in terraform/main.tf's own
+    gateway_ingress_cidrs for every one of the 3 server regions).
+    SSHExecutor's own `_server_ip()` stays unchanged and correct for
+    every place CONTROL reaches the server directly (the profile
+    switch, docker logs, tcpdump, cpu/mem sampling, scp pcap pull) --
+    control's own SSH security group rule already uses the right IP
+    for THAT relationship, a separate one from a client's own path to
+    the gateway.
+
+    A module-level function, not a method, so both SSHExecutor
+    (_server_gateway_ip()) and the pre-flight connectivity check
+    (verify_gateway_connectivity(), run before any executor exists)
+    share one real implementation.
+
+    Fails loudly, never with a silent default, if `colocated` is
+    missing from this scenario's inventory entry, or if the IP it
+    calls for (private when colocated, public otherwise) isn't
+    present -- this project's standing style of never fabricating a
+    guarantee the data doesn't actually back."""
+    client = inventory["clients"][scenario_key]
+    if "colocated" not in client:
+        raise RuntimeError(
+            f"{scenario_key}: inventory has no 'colocated' field -- refusing to "
+            f"guess which of the server's IPs to use (Decision 83)."
+        )
+    server = inventory["servers"][installation]
+    ip_field = "private_ip" if client["colocated"] else "public_ip"
+    ip_value = server.get(ip_field)
+    if not ip_value:
+        raise RuntimeError(
+            f"{installation}: server inventory has no usable '{ip_field}' -- "
+            f"needed because {scenario_key}'s own colocated={client['colocated']!r}."
+        )
+    return ip_value
 
 
 def all_server_client_ips(inventory):
@@ -279,6 +373,69 @@ def verify_ready_marker(inventory, ssh_port=22, ssh_key_path=None):
             "before retrying."
         )
     print(f"Ready: control (local) -- user-data finished at {local_marker.read_text().strip()}")
+
+
+GATEWAY_CONNECTIVITY_TIMEOUT_SECONDS = 5
+
+
+def verify_gateway_connectivity(inventory, ssh_port=22, ssh_key_path=None,
+                                 timeout_seconds=GATEWAY_CONNECTIVITY_TIMEOUT_SECONDS):
+    """Pilot item 2 (this turn): confirms, before spending any real
+    time on settling/execution, that every client can actually reach
+    the server's own gateway on port 443 using the SAME IP
+    (pick_gateway_ip(), colocated-aware) this file will hand it as
+    REMOTE_GATEWAY_HOST -- exactly the check that would have caught
+    Decision 83's own real finding (a co-located client's public-IP
+    path silently hanging) before a single real AWS minute was spent
+    on it. PILOT_RUNBOOK.md's own step 4 only ever tested from L325
+    (the public-IP case); this covers every client, including every
+    co-located L0, automatically.
+
+    Explicit failure, never a hang: a short TCP connect timeout
+    (`timeout_seconds`, default 5s) inside the remote probe itself
+    (bash's own `/dev/tcp`, no extra tooling needed), wrapped in a
+    generous SSH-level timeout -- the same "abort loudly, not
+    silently" standard every other pre-flight check in this file
+    already uses. Called from main() right after verify_ready_marker(),
+    before any settling/execution work starts."""
+    ssh_key_path = ssh_key_path or CAMPAIGN_KEY
+    rows = []
+    failed = False
+    for scenario_key, client in inventory.get("clients", {}).items():
+        installation = scenario_key.split("@", 1)[1]
+        client_ip = client["public_ip"]
+        try:
+            gateway_ip = pick_gateway_ip(inventory, installation, scenario_key)
+        except RuntimeError as e:
+            rows.append((scenario_key, "N/A", "FAIL", f"inventory error: {e}"))
+            failed = True
+            continue
+        probe_cmd = f"timeout {timeout_seconds} bash -c 'echo > /dev/tcp/{gateway_ip}/443' 2>&1"
+        t0 = time.monotonic()
+        try:
+            r = subprocess.run(
+                ["ssh", "-i", ssh_key_path, "-p", str(ssh_port), "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes",
+                 f"ec2-user@{client_ip}", probe_cmd],
+                capture_output=True, text=True, timeout=timeout_seconds + 20,
+            )
+            ok = r.returncode == 0
+        except subprocess.TimeoutExpired:
+            ok = False
+        elapsed = time.monotonic() - t0
+        rows.append((scenario_key, gateway_ip, "OK" if ok else "FAIL", f"{elapsed:.2f}s"))
+        if not ok:
+            failed = True
+
+    print(f"{'client':<20} {'gateway_ip':<16} {'result':<6} {'time'}")
+    for scenario_key, gateway_ip, result, elapsed in rows:
+        print(f"{scenario_key:<20} {gateway_ip:<16} {result:<6} {elapsed}")
+    if failed:
+        sys.exit(
+            "FATAL: at least one client cannot reach the server's own gateway on port 443 "
+            "using the IP it would actually be given (see table above) -- investigate "
+            "directly before spending any real time on settling/execution."
+        )
 
 
 def record_environment(inventory, ssh_port=22, ssh_key_path=None):
@@ -934,6 +1091,12 @@ class SSHExecutor:
     def _server_ip(self, installation):
         return self.inventory["servers"][installation]["public_ip"]
 
+    def _server_gateway_ip(self, installation, scenario_key):
+        """See module-level pick_gateway_ip() for the real logic and
+        its own full docstring -- this just supplies self.inventory,
+        so every SSHExecutor call site keeps its existing shape."""
+        return pick_gateway_ip(self.inventory, installation, scenario_key)
+
     def _ssh_cmd(self, ip, remote_cmd):
         """A.3: `remote_cmd` is a single shell command STRING, built by
         the caller with shell syntax (&&, $(...), env-var prefixes) left
@@ -1226,9 +1389,10 @@ class SSHExecutor:
         # not by this process exiting.
         for scenario in scenarios:
             client_ip = self._client_ip(f"{scenario}@{installation}")
+            gateway_ip = self._server_gateway_ip(installation, f"{scenario}@{installation}")
             py_code = "import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True)" % json.dumps(profile)
             remote_argv = ["python3", "-c", py_code]
-            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
             self._run_or_print(
                 f"[{installation}/{scenario}/w{window}] start client proxy (detached)",
                 self._ssh_cmd(client_ip, remote_cmd),
@@ -1247,10 +1411,11 @@ class SSHExecutor:
         # 8-scenario topology, unlike LocalExecutor's single-host test).
         settling_scenario = scenarios[0]
         settling_client_ip = self._client_ip(f"{settling_scenario}@{installation}")
+        settling_gateway_ip = self._server_gateway_ip(installation, f"{settling_scenario}@{installation}")
         settle_start = datetime.now(timezone.utc)
         for i in range(1, SETTLING_RUNS + 1):
             remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_settling{i}"]
-            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, settling_gateway_ip))} {shlex.join(remote_argv)}"
             stdout = self._run_or_print(
                 f"[{installation}/{profile}/w{window}] settling run {i}/{SETTLING_RUNS}",
                 self._ssh_cmd(settling_client_ip, remote_cmd),
@@ -1303,9 +1468,10 @@ class SSHExecutor:
         real runs are spent on it."""
         client_ip = self._client_ip(f"{scenario}@{installation}")
         server_ip = self._server_ip(installation)
+        gateway_ip = self._server_gateway_ip(installation, f"{scenario}@{installation}")
         since_dt = datetime.now(timezone.utc)
         remote_argv = ["python3", "campaign_client_runner.py", "--label", f"w{window:02d}_warmup"]
-        remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
+        remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
         stdout = self._run_or_print(
             f"[{installation}/{scenario}/w{window}] warmup",
             self._ssh_cmd(client_ip, remote_cmd),
@@ -1343,6 +1509,7 @@ class SSHExecutor:
         try:
             client_ip = self._client_ip(f"{scenario}@{installation}")
             server_ip = self._server_ip(installation)
+            gateway_ip = self._server_gateway_ip(installation, f"{scenario}@{installation}")
             label = f"w{window:02d}_run{run_index:02d}"  # A.1: window folded into the remote label too
             tcpdump_enabled = _tcpdump_enabled_for_run(run_index)
             skip_tcpdump = not tcpdump_enabled
@@ -1380,7 +1547,7 @@ class SSHExecutor:
 
             since_dt = datetime.now(timezone.utc)
             remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
-            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, server_ip))} {shlex.join(remote_argv)}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
             stdout = self._run_or_print(
                 f"[{installation}/{scenario}] run execution {label}",
                 self._ssh_cmd(client_ip, remote_cmd),
@@ -1416,8 +1583,14 @@ class SSHExecutor:
             # Software-inventory audit (this turn): absolute paths
             # (/usr/sbin/ping, /usr/bin/chronyc) -- see server_flock_wrap()'s
             # own comment for why a bare command name isn't trusted here.
+            # Pilot item 2 (this turn): pings the same IP the client's own
+            # REMOTE_GATEWAY_HOST actually dials (gateway_ip, colocated-
+            # aware) -- pinging server_ip (always public) would silently
+            # measure a DIFFERENT path than the one the real execution
+            # just used for a co-located client, corrupting the reference
+            # RTT's own meaning.
             ping_output = self._run_tolerant(f"[{installation}/{scenario}] reference ping (client -> server)",
-                                              self._ssh_cmd(client_ip, f"/usr/sbin/ping -c 10 -q {shlex.quote(server_ip)}"))
+                                              self._ssh_cmd(client_ip, f"/usr/sbin/ping -c 10 -q {shlex.quote(gateway_ip)}"))
             server_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
                                                 self._ssh_cmd(server_ip, "/usr/bin/chronyc tracking"))
             client_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
@@ -1967,6 +2140,7 @@ def run_window(executor, installation, window, seed):
     # --dry-run never raises it in the first place (SSHExecutor._run_or_print
     # only raises when dry_run=False), so dry-run runs are unaffected.
     for profile in profile_order:
+        check_time_budget()  # pilot item 3 -- before spending any more real time/money on this block
         checks = pre_block_checks(executor, installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
 
@@ -2044,12 +2218,18 @@ def run_window(executor, installation, window, seed):
 
 
 def main():
+    global _CAMPAIGN_START_UTC
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true",
                          help="Decision 62: print every SSH command SSHExecutor would run, execute nothing.")
     args = parser.parse_args()
 
+    # Pilot item 3 (this turn): set once, here -- a restart (systemd's
+    # own Restart=on-failure) re-runs main() from scratch, which
+    # correctly resets the budget's own clock too, since a restarted
+    # run has its own fresh real-time cost from this point forward.
+    _CAMPAIGN_START_UTC = datetime.now(timezone.utc)
     write_status("starting", f"dry_run={args.dry_run}")
     config = load_config()
     inventory = load_inventory()
@@ -2074,6 +2254,14 @@ def main():
     # clear message, not a confusing failure three steps later inside
     # record_environment()/renew_safety_timers().
     verify_ready_marker(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
+
+    # Pilot item 2 (this turn): checked right after the ready marker,
+    # still before any settling/execution work -- Decision 83's own
+    # real finding (a co-located client silently hanging on the
+    # server's public IP) would have been caught here, in seconds,
+    # instead of discovered mid-settling after real AWS time was spent.
+    print("==> Verifying every client can reach the server's gateway (port 443) on its own real IP...")
+    verify_gateway_connectivity(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
 
     window_times = config.get("window_start_times_utc", {})
     if not window_times:
