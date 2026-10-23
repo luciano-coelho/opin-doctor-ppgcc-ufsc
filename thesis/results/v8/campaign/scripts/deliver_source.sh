@@ -50,7 +50,7 @@ fi
 if [ -n "${MOCKOPIN_CONTROL_IP_OVERRIDE:-}" ]; then
   CONTROL_IP="$MOCKOPIN_CONTROL_IP_OVERRIDE"
 else
-  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
+  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
 fi
 SSH_PORT="${MOCKOPIN_SSH_PORT:-22}"
 SSH_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)

@@ -70,7 +70,7 @@ fi
 if [ -n "${MOCKOPIN_CONTROL_IP_OVERRIDE:-}" ]; then
   CONTROL_IP="$MOCKOPIN_CONTROL_IP_OVERRIDE"
 else
-  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; print(json.load(sys.stdin)["value"]["control"]["public_ip"])')"
+  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
 fi
 SSH_PORT="${MOCKOPIN_SSH_PORT:-22}"
 SSH_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)
@@ -90,6 +90,21 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 have_rsync_on_control() {
   ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" "command -v rsync >/dev/null 2>&1"
+}
+
+# Pilot item 1 (this turn): found live -- `rsync --partial ... -e ssh ...`
+# below runs ON THE OPERATOR'S OWN MACHINE (it's the client side of the
+# transfer; only `-e ssh` is remote), but the old code only ever checked
+# whether CONTROL had rsync, never whether the operator's own machine did.
+# On an operator machine without rsync (confirmed live: this Windows/Git-
+# Bash environment has none, and no ready winget package either), that
+# left `have_rsync_on_control` returning true while the actual `rsync`
+# invocation failed outright with "command not found" (exit 127) --
+# never reaching the already-existing split+scp fallback below, which
+# needs nothing but split/sha256sum/scp/ssh (all present here). Both ends
+# need the binary for `-e ssh` rsync to work, so both are now checked.
+have_rsync_locally() {
+  command -v rsync >/dev/null 2>&1
 }
 
 # Refactored (this turn) into a function parameterized by WHICH
@@ -142,7 +157,7 @@ deliver_image_set() {
     fi
 
     echo "    Sending $image to control instance (resumable)..."
-    if have_rsync_on_control; then
+    if have_rsync_locally && have_rsync_on_control; then
       rsync --partial --progress -e "ssh ${SSH_OPTS[*]}" "$tarball" "$tarball.sha256" "ec2-user@${CONTROL_IP}:~/"
     else
       # Fallback: split into 100MB parts, each with its own sha256, so an
@@ -155,8 +170,19 @@ deliver_image_set() {
         (cd "$(dirname "$part")" && sha256sum "$(basename "$part")") > "$part.sha256"  # basename only -- same fix as above
         scp "${SCP_OPTS[@]}" "$part" "$part.sha256" "ec2-user@${CONTROL_IP}:~/"
       done
+      # Pilot item 1 (this turn): found live -- `cat ....part.*` (the OLD
+      # glob) also matches each part's OWN `.sha256` sidecar file (e.g.
+      # `...part.aa.sha256` fits `...part.*` just as well as `...part.aa`
+      # does), so the sidecars' plain-text content got concatenated INTO
+      # the reassembled tarball, interleaved with the real binary parts.
+      # Every individual part passed its own sha256 check (they're intact
+      # on disk); only the FINAL whole-file check caught the corruption,
+      # exactly as that check exists to do -- no corrupted image ever
+      # reached `docker load`. Fixed by matching `split`'s own default
+      # 2-character suffix width exactly (`part.??`), which a `.sha256`
+      # suffix (6+ characters) can never satisfy.
       ssh "${SSH_OPTS[@]}" "ec2-user@${CONTROL_IP}" \
-        "cd ~ && for p in $(basename "$tarball").part.*.sha256; do sha256sum -c \"\$p\"; done && cat $(basename "$tarball").part.* > $(basename "$tarball") && rm -f $(basename "$tarball").part.*"
+        "cd ~ && for p in $(basename "$tarball").part.*.sha256; do sha256sum -c \"\$p\"; done && cat $(basename "$tarball").part.?? > $(basename "$tarball") && rm -f $(basename "$tarball").part.*"
     fi
     scp "${SCP_OPTS[@]}" "$tarball.sha256" "ec2-user@${CONTROL_IP}:~/"
 
