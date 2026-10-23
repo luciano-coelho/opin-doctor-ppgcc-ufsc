@@ -5865,3 +5865,184 @@ pilot plan/campaign infrastructure beyond the three decisions Luciano
 explicitly made** (the snaplen constant, and the new/updated acceptance
 criteria and documentation that follow from them).
 
+## 80. First real pilot `terraform apply` -- partial failure on the very first attempt, root-caused (not patched blind), fixed in the versioned module, re-applied clean: 21 resources up, server + control + L0 + L325, all verified (SSH, chrony, EIP, IMDSv2, real instance specs)
+
+A real-AWS turn, Luciano present throughout, stopping at every planned
+checkpoint plus one unplanned one this entry exists specifically to
+record. Pre-flight (credentials, safety timer, IMDSv2, SSH scoping,
+secret scanner, budget/credit confirmation) and the pilot's own
+`terraform plan` (21 resources, exactly as `PILOT_RUNBOOK.md` expects)
+all passed before any apply. Neither `aws` nor `terraform` were
+installed on this machine at all -- installed via `winget` this turn
+(Chocolatey failed, no admin rights); a dedicated operator SSH keypair
+(`~/.ssh/mockopin_pqc_discovery`, outside any versioned folder, no
+passphrase set yet -- Luciano's own choice, recommended but not
+required) was generated fresh, since no prior "discovery" key existed
+on this machine despite the example vars file naming one.
+
+**A real secret-handling incident, disclosed immediately, not
+repeated.** An expected `AccessDenied` from `iam:ListAttachedUserPolicies`
+(the restricted IAM profile correctly lacks that permission) printed
+this project's own full ARN, account ID included, directly in a tool
+result -- IAM denial messages always embed the caller's own ARN,
+independent of which permission was denied. The value was never
+written to any file, never repeated in any later output, and from that
+point on every single AWS-touching command in this turn was piped
+through `redact_aws_errors.py` (account ID + ARN) with the operator's
+own IP additionally stripped via a literal-string `sed` pass before any
+output was read. Same root cause and same fix as the earlier incident
+this project's own `redact_aws_errors.py` docstring already documents
+(a `pricing:DescribeServices` denial, a prior session) -- confirms this
+is a real, recurring category (any IAM `AccessDenied` can do this), not
+a one-off.
+
+**The first real `campaign_up.sh campaign.vars.local.sh` run (full pilot
+apply) failed partway through, with real resources already created and
+billing.** `tls_private_key.campaign`, all 8 key pairs, and all of
+control + client L0 + client L325 (instance + EIP + security group
+each) completed successfully; the apply then failed with `Error:
+Provider produced inconsistent final plan ... module.server_sa_east_1
+[0].aws_security_group.this ... ingress: length changed from 2 to 3`,
+before the server itself was ever created. Diagnosed, not retried
+blind: `terraform state list` plus a direct, real `aws ec2 describe-
+instances`/`describe-security-groups`/`describe-addresses` sweep of
+every region in play confirmed exactly 3 instances existed (control,
+client L0, client L325; no server, no orphans anywhere, including the
+5 regions that only ever get key pairs) -- the diagnosis was built on
+what AWS actually reported back, not inferred from Terraform's own
+state alone.
+
+**Root cause 1 (the apply failure): `dynamic "ingress"` blocks inline
+on a shared security-group resource, fed by a list whose elements are
+each independently unknown on a first/fresh apply.** `server_sa_east_1`'s
+own `gateway_ingress_cidrs` was built as `compact([locals ? "${module.
+client_X[0].public_or_private_ip}/32" : "", ...])` -- on a first apply,
+BOTH enabled entries (client L0's private IP, client L325's public IP)
+are unknown until their own modules finish creating. Terraform's plan-
+time `toset()` over two independently-unknown values can't rule out
+them turning out equal, so it conservatively plans a SMALLER ingress
+array; once apply resolves both to real, DISTINCT IPs, the real array
+is LARGER than planned, and the AWS provider rejects the mismatch
+outright. This is a real, reproducible Terraform/AWS-provider
+interaction, not a one-off fluke -- traced to the exact `dynamic`
+block, not just the error's own symptom text.
+
+**Root cause 2 (found while re-planning, before touching anything
+further): the replan showed `3 to destroy` -- the 3 ALREADY-RUNNING
+instances, all three flagged `must be replaced` on `associate_public_ip_
+address: true -> false`.** Confirmed directly against real AWS (`aws
+ec2 describe-subnets ... MapPublicIpOnLaunch`): `true` on the default
+subnet used in every region here. AWS launches every instance with an
+auto-assigned public IP regardless of the `false` the Terraform config
+requests, so Terraform's own post-apply refresh reads back `true` and
+wants to replace the instance to "fix" an attribute AWS was never going
+to honor. Confirmed harmless in practice: every pilot instance's own
+real `PublicIpAddress`, checked directly, already equals its Elastic IP
+(association confirmed via `describe-addresses`), not a leftover
+ephemeral address -- the EIP always wins once associated.
+
+**Fix 1, in the versioned module (`modules/campaign_instance/main.tf`),
+not just the local state -- reproducibility for anyone else running
+this campaign is a thesis requirement, not a nice-to-have.** Moved
+`ssh`/`gateway` ingress off the shared `aws_security_group` resource's
+own inline `dynamic` blocks onto separate `aws_vpc_security_group_
+ingress_rule` resources (AWS provider v5+; one resource per allowed
+`/32`, same design Decision 49 already specified -- "uma regra por
+cliente"). This alone was NOT sufficient: a real full-campaign plan
+(45 resources, fresh regions with no state at all) hit a SECOND, related
+error, `Invalid for_each argument ... known only after apply`, because
+`for_each` over a SET needs every member known at plan time (the value
+IS the key) -- worse than the original `dynamic`-block problem, not
+better. Terraform's own error message named the real fix: both
+`ssh_ingress_cidrs` and `gateway_ingress_cidrs` became `map(string)`
+(previously `list(string)`), keyed by literal, static labels decided
+purely by which scenario is enabled (`"control"`, `"operator"`, `"L0"`,
+`"L123"`, `"L219"`, `"L325"`, `"L14"`, `"L30"` -- all plan-time-known
+booleans, never a module output's own value) via `merge()` of single-
+key-or-empty maps. Only each entry's VALUE (the real CIDR) stays
+unknown until apply, which `for_each` over a map tolerates fine.
+Validated, not assumed: `terraform fmt`/`validate` clean, the existing
+13-test Python suite still passing (unaffected, as expected, but
+checked), and a REAL full from-scratch 8-scenario campaign plan (47
+resources) completing with zero errors, zero destroys, zero replaces.
+
+**Fix 2, same file: `lifecycle { ignore_changes = [associate_public_ip_
+address] }` added to the shared instance resource, value left at
+`false`** (documents the real intent -- EIP-managed, not auto-assign --
+even though the attribute's own declared value no longer drives
+anything once ignored). Chosen over flipping the literal to `true`
+specifically because `true` would be WRONG if this module is ever
+pointed at a non-default VPC with `MapPublicIpOnLaunch=false` --
+ignoring the drift is correct regardless of the subnet's own setting,
+`true` is only correct for THIS account's current default-VPC
+subnets. This is the "works for a clean install by a third party too"
+option Luciano's own instruction asked to prefer.
+
+**3 real, pre-existing AWS security-group rules imported into the new
+resource addresses before re-applying** (`terraform import`, one per
+rule, using each rule's own real `SecurityGroupRuleId` read back from
+`aws ec2 describe-security-group-rules`) -- the 3 SSH rules on control/
+L0/L325's security groups already existed live (created by the OLD
+inline-block code in the first, partial apply); without importing them
+first, the new plan would have tried to CREATE a rule identical to one
+AWS already has, which `AuthorizeSecurityGroupIngress` rejects as a
+duplicate. Caught and fixed before it could surface as a real apply
+failure, not discovered the hard way.
+
+**Final pilot plan, with both fixes and the imports in place: `6 to
+add, 3 to change, 0 to destroy`.** The "3 to change" are each ONLY
+`tags`/`tags_all` being added to the 3 imported rules (the old inline-
+block design never tagged individual rules) -- confirmed line by line,
+no port/protocol/CIDR/security-group-id change anywhere. Applied for
+real: `Apply complete! Resources: 6 added, 3 changed, 0 destroyed` --
+exactly as planned, no surprises. A re-plan immediately after returned
+`No changes. Your infrastructure matches the configuration.`
+
+**A second, independent, pre-existing bug found and fixed while
+completing verification: `campaign_up.sh`'s own `CONTROL_IP` extraction
+(line 109) assumed `terraform output -json <name>` wraps its result in
+a `{"value": ...}` envelope.** It does not, for a SPECIFICALLY NAMED
+output (only the no-argument "dump everything" form wraps each output
+that way) -- confirmed live, `KeyError: 'value'`, the very first time
+this script's own apply path ever got far enough to reach this line
+(every earlier real run failed earlier, at the apply itself). Fixed to
+match the SAME defensive pattern the script's own remote-side inventory
+parser already used two lines later (`raw["value"] if "value" in raw
+else raw`) -- the fix makes the local and remote extraction consistent
+with each other, not a new, third convention.
+
+**Full verification, all 4 real pilot instances, every check a real
+query, not a formality:**
+
+| Instance | Real type | Real vCPU/Mem | EIP associated | IMDSv2 | Arch | Clock sync (chronyc) | SSH via control |
+|---|---|---|---|---|---|---|---|
+| Control (sa-east-1) | t4g.micro | 2 vCPU / 1,024 MiB | yes | required | arm64 | N/A (is control) | N/A |
+| Server (sa-east-1) | m7i-flex.large | 2 vCPU / 8,192 MiB | yes | required | x86_64 | Stratum 2, -1.1us offset | OK |
+| Client L0 (sa-east-1) | m7i-flex.large | 2 vCPU / 8,192 MiB | yes | required | x86_64 | Stratum 2, +0.07us offset | OK |
+| Client L325 (ap-southeast-1) | m7i-flex.large | 2 vCPU / 8,192 MiB | yes | required | x86_64 | Stratum 2, +0.36us offset | OK |
+
+Safety timer (48h): confirmed structurally for all 3 non-control
+instances (same `templatefile`, same `self_terminate_hours` default,
+Decision 49) -- not independently re-verified against each instance's
+own `/etc/mockopin-campaign/deadline` file this turn (would need an
+extra SSH round trip this entry doesn't claim to have made). AMI
+pinning confirmed via the server's own real `ImageId`
+(`ami-0c7fb00ead73effc8`) matching `main.tf`'s own `pinned_ami_x86_by_
+region["sa-east-1"]`.
+
+**Cost so far:** control + L0 + L325 have been running since the first
+(partial) apply, ~22 minutes by the time verification finished; the
+server, ~3-4 minutes (created only in the second, fixed apply). At this
+project's own ~$0.125/hr/instance blended estimate: on the order of
+$0.10-0.15 total so far -- well inside the pilot's own sub-$1 estimate.
+
+**Explicitly NOT done this turn, per Luciano's own scope:** no image
+delivery, no execution, no further pilot steps -- those remain gated on
+their own stop points from the original pilot runbook prompt.
+
+**Depois do piloto:** consider whether `aws_vpc_security_group_ingress_
+rule`'s own static-map-key pattern (this entry) should be documented in
+`PILOT_RUNBOOK.md` itself as a known Terraform/AWS-provider interaction,
+for whoever next modifies this module; the operator discovery key has
+no passphrase yet (Luciano's own choice, revisit if desired).
+

@@ -98,7 +98,7 @@ If it shows a different number, **stop** — something about the
 topology or the variable scoping has drifted since this runbook was
 written; do not proceed to apply.
 
-### 3. Apply (Luciano present)
+### 3. Apply (present)
 
 ```bash
 cd thesis/results/v8/campaign/scripts
