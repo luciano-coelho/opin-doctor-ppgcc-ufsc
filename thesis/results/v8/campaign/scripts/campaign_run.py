@@ -397,7 +397,18 @@ def verify_gateway_connectivity(inventory, ssh_port=22, ssh_key_path=None,
     generous SSH-level timeout -- the same "abort loudly, not
     silently" standard every other pre-flight check in this file
     already uses. Called from main() right after verify_ready_marker(),
-    before any settling/execution work starts."""
+    BEFORE the first profile switch ever runs -- which means the
+    gateway (mtls) isn't listening yet at this point in a real run
+    (PILOT_RUNBOOK.md's own standing distinction, unchanged by this
+    check): a fast "Connection refused" is the EXPECTED, GOOD outcome
+    here (the network path and security group are open, nothing is
+    listening yet), while an actual timeout (the full
+    `timeout_seconds` elapses with no refusal) means the path itself
+    is broken. Found live, the first real run of this exact check:
+    treating every nonzero exit as FAIL (ignoring this distinction)
+    made it fail loudly on the normal, expected pre-stack state every
+    single time -- fixed by checking the probe's own output for an
+    explicit refusal, not just its exit code."""
     ssh_key_path = ssh_key_path or CAMPAIGN_KEY
     rows = []
     failed = False
@@ -419,11 +430,15 @@ def verify_gateway_connectivity(inventory, ssh_port=22, ssh_key_path=None,
                  f"ec2-user@{client_ip}", probe_cmd],
                 capture_output=True, text=True, timeout=timeout_seconds + 20,
             )
-            ok = r.returncode == 0
+            connected = r.returncode == 0
+            refused = "Connection refused" in (r.stdout + r.stderr)
+            ok = connected or refused
+            outcome = "connected" if connected else ("refused -- path open, nothing listening yet" if refused else "TIMED OUT")
         except subprocess.TimeoutExpired:
             ok = False
+            outcome = "TIMED OUT (SSH-level)"
         elapsed = time.monotonic() - t0
-        rows.append((scenario_key, gateway_ip, "OK" if ok else "FAIL", f"{elapsed:.2f}s"))
+        rows.append((scenario_key, gateway_ip, "OK" if ok else "FAIL", f"{elapsed:.2f}s ({outcome})"))
         if not ok:
             failed = True
 
