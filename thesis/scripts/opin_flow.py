@@ -599,8 +599,32 @@ def _run_verifier(payload: str) -> str:
     return result.stdout.strip()
 
 
+#  Per-artifact verification wall-clock time (thesis/results/v8/
+# DECISIONS.md, "fluxo completo" follow-up) -- additive, module-level,
+# cleared by clear_verification_timings() at the start of each flow
+# execution. Measured client-side, around the SAME _run_verifier() HTTP
+# call every profile's every verification already goes through -- this
+# needs no change to mock_mtls/main.go (verification never happens
+# there at all; it's purely a client-side, post-receipt step) NOR to
+# tls_kem_proxy/main.go (the KEM handshake these two off-limits files
+# own is unrelated to JWT/JWE signature verification). Not wired into
+# campaign_client_runner.py's own JSON output yet -- that would need a
+# second, separate change to what that script reports, out of this
+# turn's own scope; get_verification_timings() exists so a future turn
+# can do that without re-deriving where the data comes from.
+_VERIFICATION_TIMINGS: list[dict] = []
+
+
+def clear_verification_timings() -> None:
+    _VERIFICATION_TIMINGS.clear()
+
+
+def get_verification_timings() -> list[dict]:
+    return list(_VERIFICATION_TIMINGS)
+
+
 def verify_jwt(token: str, *, classic_jwk: dict | None = None, pqc_jwk: dict | None = None,
-               expected_alg: str | None = None) -> dict:
+               expected_alg: str | None = None, artifact: str = "unknown") -> dict:
     """
     Verifies a compact JWS via the SAME persistent service used for
     signing (thesis/scripts/pqc-signer/signer_core.mjs's own `verify_jwt`
@@ -619,18 +643,28 @@ def verify_jwt(token: str, *, classic_jwk: dict | None = None, pqc_jwk: dict | N
     through verbatim for the single-key case and is what makes "algoritmo
     trocado" (a token whose header names a different algorithm than the
     caller expected) a real, tested rejection, not an accidental accept.
+
+    artifact: a free-form label ("jarm", "rs_response", ...) recorded
+    into _VERIFICATION_TIMINGS alongside the real wall-clock duration --
+    purely for the per-artifact timing breakdown above, never read by
+    the verification logic itself.
     """
     payload = json.dumps({
         "verify_jwt": token, "classic_jwk": classic_jwk, "pqc_jwk": pqc_jwk, "expected_alg": expected_alg,
     })
-    result = json.loads(_run_verifier(payload))
+    t0 = time.monotonic()
+    try:
+        result = json.loads(_run_verifier(payload))
+    finally:
+        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
     if not result.get("valid"):
         raise SignatureVerificationError(result.get("reason", "signature verification failed"))
     return result.get("claims")
 
 
 def decrypt_and_verify_jwt(token: str, enc_jwk: dict, *, classic_jwk: dict | None = None,
-                            pqc_jwk: dict | None = None, expected_alg: str | None = None) -> dict:
+                            pqc_jwk: dict | None = None, expected_alg: str | None = None,
+                            artifact: str = "id_token") -> dict:
     """id_token only: it is JWE-encrypted (RSA-OAEP/A256GCM, identically
     across all 3 profiles -- client_one's registered id_token_encrypted_
     response_alg, mock-service-os/mock_as/mongo-seed/init_clients.json;
@@ -638,12 +672,19 @@ def decrypt_and_verify_jwt(token: str, enc_jwk: dict, *, classic_jwk: dict | Non
     migration scope) before being signed-then-encrypted per OIDC. Decrypts
     with the client's own private "enc" JWK (load_client_encryption_key()),
     then verifies the inner compact JWS exactly like verify_jwt() above --
-    same raise-on-failure contract."""
+    same raise-on-failure contract. artifact: see verify_jwt()'s own
+    docstring -- this call's own timing INCLUDES the JWE decrypt step,
+    not just the inner signature check (both happen in the same remote
+    call, cannot be split client-side without a second round trip)."""
     payload = json.dumps({
         "decrypt_and_verify_jwt": token, "enc_jwk": enc_jwk,
         "classic_jwk": classic_jwk, "pqc_jwk": pqc_jwk, "expected_alg": expected_alg,
     })
-    result = json.loads(_run_verifier(payload))
+    t0 = time.monotonic()
+    try:
+        result = json.loads(_run_verifier(payload))
+    finally:
+        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
     if not result.get("valid"):
         raise SignatureVerificationError(result.get("reason", "id_token verification failed"))
     return result.get("claims")
@@ -1304,7 +1345,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
                 # False left in opin_flow.py).
                 try:
                     as_classic_jwk, as_pqc_jwk = self.server.as_keys  # type: ignore[attr-defined]
-                    params = verify_jwt(params["response"], classic_jwk=as_classic_jwk, pqc_jwk=as_pqc_jwk)
+                    params = verify_jwt(params["response"], classic_jwk=as_classic_jwk, pqc_jwk=as_pqc_jwk, artifact="jarm")
                 except SignatureVerificationError as e:
                     self.server.captured_error = e  # type: ignore[attr-defined]
                     self.send_response(200)
@@ -1684,7 +1725,7 @@ def parse_rs_body(response: requests.Response, rs_keys: tuple[dict | None, dict 
         if rs_keys is None:
             raise ValueError("parse_rs_body() needs rs_keys to verify a signed RS response -- see its own docstring")
         classic_jwk, pqc_jwk = rs_keys
-        return verify_jwt(body, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk)
+        return verify_jwt(body, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk, artifact="rs_response")
     return response.json()
 
 

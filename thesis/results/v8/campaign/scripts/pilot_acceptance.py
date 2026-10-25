@@ -93,21 +93,46 @@ from pcap_utils import (  # noqa: E402 -- shared with consolidate_v8.py, see tha
 # verification path (the new RS /jwks fetch, id_token/JARM decode) is the
 # correct way to refresh it, not hand-editing the numbers.
 BASELINE_BYTES = {"classic": 126_777, "pqc": 281_654, "hybrid": 339_145}
-# Item 3 (2026-10-22): v7's own report_data_v7.json OPINsize figures.
+# v8's own OPINsize reference (DECISIONS.md, "fluxo completo" follow-up,
+# 2026-10-25) -- the primary comparison for Criterion 10 from here on.
+# Computed from a real local-flow execution of the CURRENT (verification-
+# enabled, 44-call) opin_flow.py, all 4 terms real (term_handshake from
+# a properly time-windowed gateway log -- an earlier capture this same
+# turn, NOT time-windowed, wrongly folded in switch_crypto_profile.py's
+# own 5 settling executions too, inflating N_mTLS to 38; fixed by
+# scoping `docker logs` to --since/--until the measured run itself).
+# N_JWK is 4 here (was 2, pre-verification): two NEW /jwks fetches (the
+# RS's own, one per sub-flow, needed to verify RS-signed responses --
+# see Decision 87) each contribute one more counted "sig" key, same
+# definition as before (one sig key per /jwks fetch), not a per-key
+# size change. v7 is kept below, informative only now -- not what
+# Criterion 10 gates on.
+V8_OPINSIZE = {"classic": 77_801, "pqc": 326_799, "hybrid": 360_857}
+# v7's own report_data_v7.json OPINsize figures (Item 3, 2026-10-22) --
+# informative comparison only (printed, never gates Criterion 10's
+# pass/fail from this turn on): v8's own flow changed (44 calls, not
+# 42) for a real reason (signature verification needs the RS's own
+# /jwks, which v7 never fetched at all), so a direct v7 comparison is
+# context, not a regression check.
 V7_OPINSIZE = {"classic": 76_929, "pqc": 322_895, "hybrid": 350_477}
 # Tolerance, justified: this turn's own real local-flow measurement
 # against v7 (DECISIONS.md, the handshake-bytes-term investigation)
 # found classic +0.47%, pqc +0.00%, hybrid +1.70% -- a SINGLE real
-# execution against v7's own 60-run median, not an average of many, so
-# some run-to-run jitter against that median is expected and not itself
-# a regression. 3% is roughly double the largest of those three real
-# deviations (1.70%): tight enough that a genuine regression (a wrong
-# curve negotiated, a broken digest pin changing cert sizes, a missed
-# JARM/PKI correction) -- which this project's own history shows moves
-# OPINsize by single-digit-to-double-digit PERCENT, not fractions of a
-# percent (Decision 11's JARM fix: +1.6%; Decision 14's PQC CA fix:
-# +19.1%) -- would still fail loudly, while ordinary single-execution
-# noise does not.
+# execution against a fixed reference, not an average of many, so some
+# run-to-run jitter against that reference is expected and not itself a
+# regression. The SAME reasoning now applies to V8_OPINSIZE (also a
+# single real execution's own figure, not yet a many-run median): 3% is
+# roughly double the largest of those three original deviations (1.70%)
+# and already close to the largest real deviation measured against
+# V8_OPINSIZE itself this turn (hybrid, +2.96%, informative-only cross-
+# check against v7 -- not what's being gated here, but the closest real
+# data point available for how much a single real execution can drift)
+# -- tight enough that a genuine regression (a wrong curve negotiated,
+# a broken digest pin changing cert sizes, a missed JARM/PKI correction)
+# -- which this project's own history shows moves OPINsize by single-
+# digit-to-double-digit PERCENT, not fractions of a percent (Decision
+# 11's JARM fix: +1.6%; Decision 14's PQC CA fix: +19.1%) -- would still
+# fail loudly, while ordinary single-execution noise does not.
 OPINSIZE_TOLERANCE_PCT = 3.0
 # Criterion 11 (2026-10-22): how much the gateway-vs-pcap handshake-bytes
 # diff% is allowed to shift between L0 and L325 before it's treated as
@@ -729,13 +754,21 @@ def criterion_10(root):
             all_ok = False
             continue
 
+        # Gates on V8_OPINSIZE (this profile's own reference, 44-call,
+        # verification-enabled flow) -- NOT v7 -- since Decision 87
+        # (DECISIONS.md): v7 never fetched the RS's own /jwks at all, so
+        # a direct v7 comparison is context, not a regression check, from
+        # this turn on. v7 is still printed, informative only, every time.
         value = opinsize["value_bytes"]
-        v7v = V7_OPINSIZE[profile]
-        pct_diff = abs(value - v7v) / v7v * 100
-        ok = pct_diff <= OPINSIZE_TOLERANCE_PCT
+        v8v = V8_OPINSIZE[profile]
+        pct_diff_v8 = abs(value - v8v) / v8v * 100
+        ok = pct_diff_v8 <= OPINSIZE_TOLERANCE_PCT
         all_ok = all_ok and ok
+        v7v = V7_OPINSIZE[profile]
+        pct_diff_v7 = abs(value - v7v) / v7v * 100
         print(f"  {'PASS' if ok else 'FAIL'} {profile}/{scenario}: OPINsize {value:.0f} bytes "
-              f"(v7: {v7v}, diff {pct_diff:.2f}%, tolerance +/-{OPINSIZE_TOLERANCE_PCT}%)")
+              f"(v8 ref: {v8v}, diff {pct_diff_v8:.2f}%, tolerance +/-{OPINSIZE_TOLERANCE_PCT}%) "
+              f"-- informative only: v7 {v7v}, diff {pct_diff_v7:.2f}%")
 
         # Fixture leak check: scans the ACTUAL result dict this criterion
         # just built from the pilot's own real data -- not the generator's

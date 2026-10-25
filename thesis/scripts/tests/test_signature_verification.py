@@ -58,15 +58,32 @@ def _tamper_signature(compact_jwt: str) -> str:
     """Flips the LAST base64url character of the signature segment --
     guaranteed to change the decoded signature bytes (base64url's own
     alphabet has no two characters that decode identically at a fixed
-    position), without touching the PEM/JOSE framing the way a blind
-    byte-slice replacement risked (confirmed live, this turn: an earlier,
-    cruder tamper produced a framing error instead of a clean signature
-    mismatch for PEM content -- this method avoids that class of false
-    pass entirely)."""
+    position) -- NOT a character-level swap. An earlier version of this
+    function swapped the signature segment's own last base64url CHARACTER
+    (replacing it with "A" unless it already was "A") and was found, this
+    turn, to silently produce a BYTE-IDENTICAL "tampered" signature
+    roughly 25% of the time: a 256-byte (RSA-2048) signature's base64url
+    encoding ends in a 2-character group where the SECOND character's own
+    bottom 4 bits are pure padding a decoder ignores -- only its top 2
+    bits are real signature bits. Whenever that character's original
+    6-bit value already had both top bits zero (any of "A".."P", 16 of 64
+    possible values -- confirmed live: a real captured signature whose
+    last char was "A" decoded to the IDENTICAL raw bytes before and after
+    "tampering"), replacing it with "A" (value 0) changed only the
+    already-irrelevant padding bits, leaving the decoded signature
+    completely unchanged -- so `verify_jwt()` correctly accepted it,
+    and the test's own "must be rejected" assertion failed intermittently
+    for a reason that had nothing to do with opin_flow.py/signer_core.mjs
+    at all (see DECISIONS.md for the full investigation; the originally-
+    suspected "container startup timing race" was a correlation in the
+    data, not the actual cause). Decoding to real bytes and XORing the
+    LAST BYTE with 0xFF before re-encoding is immune to this class of
+    bug entirely: it is impossible for flipping every bit of a byte to
+    leave that byte unchanged, regardless of base64 alignment."""
     header_b64, payload_b64, sig_b64 = compact_jwt.rsplit(".", 2)
-    last = sig_b64[-1]
-    replacement = "A" if last != "A" else "B"
-    return f"{header_b64}.{payload_b64}.{sig_b64[:-1]}{replacement}"
+    sig = bytearray(of._b64url_decode(sig_b64))
+    sig[-1] ^= 0xFF
+    return f"{header_b64}.{payload_b64}.{of._b64url_encode(bytes(sig))}"
 
 
 def test_tampered_signature_rejected(live_artifacts):

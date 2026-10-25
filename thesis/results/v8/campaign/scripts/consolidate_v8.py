@@ -225,10 +225,33 @@ def n_jwt(calls):
 
 
 def term_jwk(calls):
-    sig_sizes = [jwk["size_bytes"] for c in calls for jwk in c.get("jwk_sizes", []) if jwk.get("use") == "sig"]
+    """Counts (and sizes) exactly one "sig" JWK per `/jwks` response.
+
+    Fixed 2026-10-25 (DECISIONS.md, "fluxo completo" follow-up): a real
+    hybrid `/jwks` response now publishes TWO "sig" entries for the SAME
+    key, confirmed live, same kid on both -- the composed `kty: "HYBRID"`
+    entry (`pk_hybrid`, 2208 bytes: classic 256-byte modulus + pqc
+    1952-byte raw key) AND a plain `kty: "RSA"` duplicate of just its
+    classical half (256 bytes), published "so a real, standards-
+    compliant JWKS consumer doing ordinary kid+alg discovery can find a
+    key that matches what a payload-extension-signed JWT's header
+    actually says" (ResponseSigningService.java's own comment). The
+    original assert here assumed exactly one "sig" entry per response --
+    true for classic/pqc, no longer true for hybrid. Takes the LARGEST
+    "sig" entry per call instead of asserting a single constant size:
+    the composed HYBRID entry is the real signing key (confirmed against
+    v7's own hybrid figure -- 2 fetches x 2208 bytes = 4,416, exactly
+    v7's `term_jwk`); the smaller plain-RSA duplicate is a discovery-
+    compatibility shim for the SAME key, not a second artifact to count
+    again."""
+    sig_sizes = []
+    for c in calls:
+        call_sig_sizes = [jwk["size_bytes"] for jwk in c.get("jwk_sizes", []) if jwk.get("use") == "sig"]
+        if call_sig_sizes:
+            sig_sizes.append(max(call_sig_sizes))
     if not sig_sizes:
         return 0, 0
-    assert len(set(sig_sizes)) == 1, f"jwk sig size not constant: {set(sig_sizes)}"
+    assert len(set(sig_sizes)) == 1, f"jwk sig size not constant across calls: {set(sig_sizes)}"
     return len(sig_sizes), len(sig_sizes) * sig_sizes[0]
 
 
