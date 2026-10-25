@@ -1580,11 +1580,36 @@ class SSHExecutor:
             since_dt = datetime.now(timezone.utc)
             remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
             remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
-            stdout = self._run_or_print(
-                f"[{installation}/{scenario}] run execution {label}",
-                self._ssh_cmd(client_ip, remote_cmd),
-                timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
-            )
+            try:
+                stdout = self._run_or_print(
+                    f"[{installation}/{scenario}] run execution {label}",
+                    self._ssh_cmd(client_ip, remote_cmd),
+                    timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                # Pilot item 3 (this turn): found live, real pilot data --
+                # tcpdump/the CPU sampler are `nohup`/`setsid`-backgrounded
+                # on the remote hosts specifically so they survive THIS
+                # SSH session ending (A.6) -- which means a failure HERE
+                # (e.g. the execution itself timing out) left them running
+                # with no cleanup at all, since the stop calls below only
+                # ran on the success path. A retry then reused the SAME
+                # label/filenames while the orphaned sampler from the
+                # failed attempt was STILL writing to them -- confirmed
+                # live: a null-byte gap in one real run's own server-side
+                # cpu.jsonl, from two processes racing on the same path.
+                # Best-effort (`_run_tolerant`, never raises) so a cleanup
+                # failure doesn't mask the real error below.
+                if not skip_tcpdump:
+                    self._run_tolerant(f"[{installation}/{scenario}] tcpdump stop (server, cleanup after failure)",
+                                        self._ssh_cmd(server_ip, self._tcpdump_stop_cmd(server_pid)))
+                    self._run_tolerant(f"[{installation}/{scenario}] tcpdump stop (client, cleanup after failure)",
+                                        self._ssh_cmd(client_ip, self._tcpdump_stop_cmd(client_pid)))
+                self._run_tolerant(f"[{installation}/{scenario}] CPU/mem sampler stop (server, cleanup after failure)",
+                                    self._ssh_cmd(server_ip, self._cpu_mem_sampler_stop_cmd(server_sampler_pid)))
+                self._run_tolerant(f"[{installation}/{scenario}] CPU/mem sampler stop (client, cleanup after failure)",
+                                    self._ssh_cmd(client_ip, self._cpu_mem_sampler_stop_cmd(client_sampler_pid)))
+                raise
             until_dt = datetime.now(timezone.utc)
 
             if not skip_tcpdump:

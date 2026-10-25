@@ -375,7 +375,26 @@ def criterion_4(root):
             cpu_path = scenario_path / "server" / f"{label}_cpu.jsonl"
             if not cpu_path.exists() or cpu_path.stat().st_size == 0:
                 continue
-            samples = [json.loads(l) for l in cpu_path.read_text().splitlines() if l.strip()]
+            # Pilot item 3 (this turn): found live, real pilot data --
+            # a sampler file can end up with a malformed line (null-byte
+            # gap from a concurrent writer -- see DECISIONS.md, the
+            # per-execution background-process cleanup gap this same
+            # turn found and fixed in campaign_run.py) when a run was
+            # interrupted and retried before this fix landed. One bad
+            # line used to crash this entire script outright, hiding
+            # every criterion after it; skipped here instead, counted
+            # and reported, not silently dropped.
+            raw_lines = [l for l in cpu_path.read_text(errors="replace").splitlines() if l.strip()]
+            samples = []
+            bad_lines = 0
+            for l in raw_lines:
+                try:
+                    samples.append(json.loads(l))
+                except json.JSONDecodeError:
+                    bad_lines += 1
+            if bad_lines:
+                print(f"  WARNING {profile}/{scenario}/{label}: {bad_lines}/{len(raw_lines)} CPU-sample "
+                      f"line(s) malformed (skipped, not fabricated) -- see DECISIONS.md for the known cause")
             if len(samples) < 2:
                 print(f"  SKIP {profile}/{scenario}/{label}: fewer than 2 CPU samples -- "
                       f"can't compute a steal/CPU DELTA from a single snapshot")

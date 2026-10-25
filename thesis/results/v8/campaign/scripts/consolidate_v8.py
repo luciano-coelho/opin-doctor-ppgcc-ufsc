@@ -183,10 +183,21 @@ def load_cpu_mem(cpu_jsonl_path):
     (campaign_run.py:638-701), one point-in-time sample per line."""
     if not cpu_jsonl_path.is_file():
         return None
+    # Pilot item 3 (this turn): found live, real pilot data -- a line
+    # can be a null-byte gap (concurrent writers to the same path when
+    # a timed-out execution's own background sampler was never stopped
+    # before a retry reused the same filename, now fixed in
+    # campaign_run.py; see DECISIONS.md). One bad line used to crash
+    # this whole script; skipped here instead, same as
+    # pilot_acceptance.py's own equivalent fix.
     samples = []
-    for line in cpu_jsonl_path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
+    for line in cpu_jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
             samples.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
     if not samples:
         return None
     cpu_totals = [s["cpu"]["total"] for s in samples if s.get("cpu")]
@@ -448,11 +459,37 @@ def consolidate_profile_scenario(scenario_path, profile):
     for run_file in run_files:
         data = json.loads(run_file.read_text(encoding="utf-8"))
         result = data.get("result", {})
-        calls_file = runs_dir / run_file.name.replace(".json", ".calls.jsonl")
+        # Pilot item 3 (this turn): found live, real pilot data -- the
+        # run's own summary file is "run{NN}.json" (no window prefix),
+        # but every AUXILIARY file campaign_run.py's own SSHExecutor
+        # writes alongside it (gateway log, client pcap, cpu/mem, ping,
+        # calls.jsonl) uses "w{window:02d}_run{NN}" as its own stem
+        # ("A.1: window folded into the remote label too" -- added to
+        # stop window 2/3 overwriting window 1's own files, but
+        # consolidate_v8.py was never updated to match it: every lookup
+        # here used the bare run_file.stem, which never matched any real
+        # SSHExecutor auxiliary file for ANY window -- term_handshake/
+        # term_jwt/term_jwk/term_pki all silently came back "missing"
+        # for every real pilot run, until caught here). LocalExecutor
+        # uses the bare stem with NO window prefix for the same files
+        # (confirmed live, pilot_acceptance.py's own load_runs() already
+        # documents and handles this exact split) -- same
+        # check-what's-actually-on-disk strategy reused here, not a
+        # second, separately-maintained guess.
+        window = data.get("window")
+        run_stem = run_file.stem
+        if window is not None:
+            ssh_stem = f"w{window:02d}_{run_file.stem}"
+            local_stem = run_file.stem
+            if (runs_dir / f"{local_stem}.calls.jsonl").exists() and not (runs_dir / f"{ssh_stem}.calls.jsonl").exists():
+                run_stem = local_stem
+            else:
+                run_stem = ssh_stem
+        calls_file = runs_dir / f"{run_stem}.calls.jsonl"
         calls = load_calls(calls_file)
-        gateway_log = load_gateway_log(scenario_path, run_file.stem)
-        client_pcap = find_client_pcap(scenario_path, run_file.stem)
-        rows.append({"run_file": run_file.name, "retried": bool(data.get("retried", False)),
+        gateway_log = load_gateway_log(scenario_path, run_stem)
+        client_pcap = find_client_pcap(scenario_path, run_stem)
+        rows.append({"run_file": run_file.name, "run_stem": run_stem, "retried": bool(data.get("retried", False)),
                       "result": result, "calls": calls, "gateway_log": gateway_log,
                       "client_pcap": client_pcap})
 
@@ -488,11 +525,11 @@ def consolidate_profile_scenario(scenario_path, profile):
     opin_processing_results = [opin_processing_stats(r["gateway_log"], profile) for r in clean_rows]
     opin_processing_known = [o for o in opin_processing_results if o and o.get("p50_ms") is not None]
 
-    ping_samples = [load_ping(scenario_path / "client" / f"{Path(r['run_file']).stem}_ping.json") for r in clean_rows]
+    ping_samples = [load_ping(scenario_path / "client" / f"{r['run_stem']}_ping.json") for r in clean_rows]
     ping_samples = [p for p in ping_samples if p]
-    cpu_server = [load_cpu_mem(scenario_path / "server" / f"{Path(r['run_file']).stem}_cpu.jsonl") for r in clean_rows]
+    cpu_server = [load_cpu_mem(scenario_path / "server" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_server = [c for c in cpu_server if c]
-    cpu_client = [load_cpu_mem(scenario_path / "client" / f"{Path(r['run_file']).stem}_cpu.jsonl") for r in clean_rows]
+    cpu_client = [load_cpu_mem(scenario_path / "client" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_client = [c for c in cpu_client if c]
 
     out = {
