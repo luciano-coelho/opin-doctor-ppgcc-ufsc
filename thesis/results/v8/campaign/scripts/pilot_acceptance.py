@@ -73,26 +73,26 @@ from pcap_utils import (  # noqa: E402 -- shared with consolidate_v8.py, see tha
     find_syn_synack_rtt,
 )
 
-# Recalibrated 2026-10-25 (DECISIONS.md, Decision 85): the previous
-# values (125,485 / 275,800 / 331,639, Decision 68) were a real capture
-# too, but from an EARLIER git revision of opin_flow.py/
-# baseline_automation.py, run before this project's own code evolved
-# between Decisions 68 and 76 -- not an environment or library-version
-# difference (confirmed: a fresh run against today's code, in a venv
-# with a DIFFERENT requests version (2.34.2) than the one pinned for
-# the real campaign (2.32.5), still reproduces the number below exactly,
-# so library version is not the variable). The values below are
-# double-verified, byte-for-byte, zero variance: (a) all 60 real pilot
-# executions (10 runs x 2 scenarios x 3 profiles, real AWS, sa-east-1)
-# produce exactly this total in every single one, and (b) a fresh local
-# run against the live local-lab stack, same day, reproduces the exact
-# same per-call bytes for all 42 calls, zero diffs. A baseline for this
-# criterion must come from a real run of the CURRENT code (local-lab or
-# real campaign, byte-for-byte identical between the two) -- re-running
-# this capture after any future change to opin_flow.py's call-recording
-# path (do_call()/_capture_hop()/header_bytes()) is the correct way to
-# refresh it, not hand-editing the numbers.
-BASELINE_BYTES = {"classic": 125_065, "pqc": 275_380, "hybrid": 331_219}
+# Recalibrated 2026-10-25 (DECISIONS.md, Decision 87 -- "fluxo completo"
+# turn): opin_flow.py now verifies every signed artifact it receives
+# (id_token, JARM, RS-signed responses), which needed ONE new real call
+# per sub-flow -- the RS's own /jwks, fetched once right after the first
+# access token (the earliest point it can be: that endpoint itself
+# requires a Bearer token, confirmed live) -- not in the original 42-call
+# count at all. call_count is now 44 (was 42), confirmed identical across
+# all 3 profiles; N_JWT stays 28 (unaffected -- the new calls aren't JWT-
+# bearing); N_JWK rises (more keys published per /jwks response now that
+# there are 4 fetches instead of 2, not 2 new keys per profile uniformly
+# -- see Decision 87's own table). The two previous values in this dict's
+# history (125,485 pre-Decision-85, 125,065 post-Decision-85) both
+# predate this change; re-verified the same way Decision 85 established
+# the method: a fresh local-lab run of the CURRENT code, same day,
+# reproducing the exact same per-call bytes as a second independent run.
+# Re-running this capture after any future change to opin_flow.py's
+# call-recording path (do_call()/_capture_hop()/header_bytes()) OR its
+# verification path (the new RS /jwks fetch, id_token/JARM decode) is the
+# correct way to refresh it, not hand-editing the numbers.
+BASELINE_BYTES = {"classic": 126_777, "pqc": 281_654, "hybrid": 339_145}
 # Item 3 (2026-10-22): v7's own report_data_v7.json OPINsize figures.
 V7_OPINSIZE = {"classic": 76_929, "pqc": 322_895, "hybrid": 350_477}
 # Tolerance, justified: this turn's own real local-flow measurement

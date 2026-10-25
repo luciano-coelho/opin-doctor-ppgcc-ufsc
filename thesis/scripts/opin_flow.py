@@ -572,6 +572,204 @@ def _run_pqc_signer_oneshot(payload: str) -> str:
     raise RuntimeError(f"pqc-signer timed out twice in a row: {last_error}")
 
 
+class SignatureVerificationError(RuntimeError):
+    """Raised by verify_jwt()/decrypt_and_verify_jwt() whenever a signature
+    doesn't check out -- tampered, wrong key, or a header/claimed algorithm
+    the caller didn't ask for. Always propagates out of the flow (never
+    caught and silently ignored anywhere in this file): a verification
+    failure means the artifact can't be trusted, which is exactly the
+    condition under which the flow must stop, not continue with unverified
+    data (thesis/results/v8/DECISIONS.md, "fluxo completo" turn)."""
+
+
+def _run_verifier(payload: str) -> str:
+    """Same persistent-service-or-one-shot-docker dispatch as
+    _run_pqc_signer() above, reused unchanged for verification requests --
+    one dispatcher, one service, for both directions. See
+    start_pqc_signer_service()'s own docstring for why this is now started
+    for every profile, not just pqc/hybrid."""
+    if _PQC_SIGNER_SERVICE_URL is not None:
+        return _run_pqc_signer_service(payload)
+    result = subprocess.run(
+        ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
+        input=payload, capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"pqc-signer verify call failed: {result.stderr}")
+    return result.stdout.strip()
+
+
+def verify_jwt(token: str, *, classic_jwk: dict | None = None, pqc_jwk: dict | None = None,
+               expected_alg: str | None = None) -> dict:
+    """
+    Verifies a compact JWS via the SAME persistent service used for
+    signing (thesis/scripts/pqc-signer/signer_core.mjs's own `verify_jwt`
+    dispatch) -- the one call site every profile's every verification goes
+    through, classic included (see start_pqc_signer_service()'s docstring
+    for why). Pass classic_jwk alone for PS256/RS256, pqc_jwk alone for
+    pure ML-DSA-65, or BOTH for a hybrid artifact -- the service itself
+    then picks Strong Nesting vs payload-extension by the token's own
+    signature shape (signer_core.mjs's own isStrongNestingShaped()), since
+    hybrid's two schemes can't be told apart by a fixed rule on this side
+    (id_token's header says plain "PS256" even when Strong-Nesting-signed
+    -- mock-service-os/mock_as/utils/opin/idTokenExternalSigningKey.js).
+
+    Raises SignatureVerificationError if the signature doesn't check out;
+    returns the verified claims dict on success. expected_alg is passed
+    through verbatim for the single-key case and is what makes "algoritmo
+    trocado" (a token whose header names a different algorithm than the
+    caller expected) a real, tested rejection, not an accidental accept.
+    """
+    payload = json.dumps({
+        "verify_jwt": token, "classic_jwk": classic_jwk, "pqc_jwk": pqc_jwk, "expected_alg": expected_alg,
+    })
+    result = json.loads(_run_verifier(payload))
+    if not result.get("valid"):
+        raise SignatureVerificationError(result.get("reason", "signature verification failed"))
+    return result.get("claims")
+
+
+def decrypt_and_verify_jwt(token: str, enc_jwk: dict, *, classic_jwk: dict | None = None,
+                            pqc_jwk: dict | None = None, expected_alg: str | None = None) -> dict:
+    """id_token only: it is JWE-encrypted (RSA-OAEP/A256GCM, identically
+    across all 3 profiles -- client_one's registered id_token_encrypted_
+    response_alg, mock-service-os/mock_as/mongo-seed/init_clients.json;
+    the encryption key exchange itself is NOT part of this project's PQC
+    migration scope) before being signed-then-encrypted per OIDC. Decrypts
+    with the client's own private "enc" JWK (load_client_encryption_key()),
+    then verifies the inner compact JWS exactly like verify_jwt() above --
+    same raise-on-failure contract."""
+    payload = json.dumps({
+        "decrypt_and_verify_jwt": token, "enc_jwk": enc_jwk,
+        "classic_jwk": classic_jwk, "pqc_jwk": pqc_jwk, "expected_alg": expected_alg,
+    })
+    result = json.loads(_run_verifier(payload))
+    if not result.get("valid"):
+        raise SignatureVerificationError(result.get("reason", "id_token verification failed"))
+    return result.get("claims")
+
+
+def load_client_encryption_key(crypto_profile: str) -> dict:
+    """The client's own private "enc" JWK, for decrypting id_token
+    (RSA-OAEP, identical across profiles -- see decrypt_and_verify_jwt()'s
+    own docstring). pqc/hybrid still use classic_one's own plain-RSA enc
+    key for hybrid (client_one.jwks, same file load_client_signing_key()
+    reads the classic signing half from); pqc uses its own
+    client_one_pqc.jwks, which carries a SEPARATE (also plain-RSA, same
+    algorithm) enc entry -- confirmed by reading both files directly, not
+    assumed identical."""
+    path = CERTS_DIR / ("client_one_pqc.jwks" if crypto_profile == "pqc" else "client_one.jwks")
+    jwks = json.loads(path.read_text(encoding="utf-8"))
+    return next(k for k in jwks["keys"] if k.get("use") == "enc")
+
+
+def _b64url_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _b64url_encode(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+
+def decompose_hybrid_jwk(hybrid_jwk: dict) -> tuple[dict, dict]:
+    """The AS/RS's own published hybrid "sig" JWK entry (kty: "HYBRID") is
+    a single composed public key -- `pk_hybrid` = classicPkBytes(256) ||
+    pqcPkBytes(1952) raw concatenation, confirmed directly against
+    mock-service-os/mock_as/utils/opin/hybridSigning.js's own composition
+    (same byte layout it builds HYBRID_KID from). Splits it back into the
+    two separate, ordinary JWKs verify_jwt()'s hybrid path needs (it wants
+    classic_jwk/pqc_jwk apart, not the composed form) -- confirmed live
+    against a real AS/RS /jwks response, both halves verify correctly."""
+    raw = _b64url_decode(hybrid_jwk["pk_hybrid"])
+    classic_bytes, pqc_bytes = raw[:256], raw[256:]
+    classic_jwk = {"kty": "RSA", "n": _b64url_encode(classic_bytes), "e": "AQAB"}
+    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_encode(pqc_bytes)}
+    return classic_jwk, pqc_jwk
+
+
+def extract_verification_keys(jwks_doc: dict) -> tuple[dict | None, dict | None]:
+    """Reads a /jwks response (AS's or RS's, any profile) and returns
+    (classic_jwk, pqc_jwk) -- whichever of the two actually exist for that
+    profile (classic: only classic_jwk; pqc: only pqc_jwk; hybrid: both,
+    decomposed from the single published "HYBRID"-kty entry). Never
+    guesses a key's role from position -- always the published kty/use."""
+    classic_jwk = None
+    pqc_jwk = None
+    for k in jwks_doc.get("keys", []):
+        if k.get("use") != "sig":
+            continue
+        if k.get("kty") == "RSA":
+            classic_jwk = k
+        elif k.get("kty") == "AKP":
+            pqc_jwk = k
+        elif k.get("kty") == "HYBRID":
+            classic_jwk, pqc_jwk = decompose_hybrid_jwk(k)
+    return classic_jwk, pqc_jwk
+
+
+def _verify_cert_signed_by_mldsa65(cert, issuer_cert) -> bool:
+    """Raw TBSCertificate + signature verify, for an issuer whose own
+    public key is ML-DSA-65 -- `cryptography` has no X.509-level backend
+    for this algorithm, so this routes through the SAME pqc-signer
+    service verify_jwt()/decrypt_and_verify_jwt() already use (its raw
+    message_b64/signature_b64 branch, unchanged, reused here rather than
+    reimplemented). issuer_cert.public_key() (an MLDSA65PublicKey object,
+    NOT the certificate) exposes public_bytes_raw() directly -- confirmed
+    live, returns exactly the 1952 raw bytes ML-DSA-65's public key is."""
+    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_encode(issuer_cert.public_key().public_bytes_raw())}
+    verify_payload = json.dumps({
+        "jwk": pqc_jwk,
+        "message_b64": base64.b64encode(cert.tbs_certificate_bytes).decode("ascii"),
+        "signature_b64": base64.b64encode(cert.signature).decode("ascii"),
+    })
+    return _run_verifier(verify_payload).strip() == "true"
+
+
+def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: str) -> None:
+    """Verifies the two PKI/CRL stand-ins this flow's own fetch_server_
+    keys_and_ca() downloads (root-ca.pem/issuer-ca.pem) are validly
+    signed -- the one cert-chain link checkable here without touching the
+    live mTLS connection's own peer certificate (out of scope: that's the
+    gateway's own mock_mtls/main.go, not touched this turn).
+
+    The two profile families use a GENUINELY DIFFERENT real relationship,
+    confirmed live by reading each cert's own subject/issuer, not assumed
+    from the file names:
+      - pqc: a real 2-level chain -- root_ca_pqc is self-signed,
+        issuer_ca_pqc is signed BY root_ca_pqc (Decision 14, thesis/
+        results/v7/DECISIONS.md -- both ML-DSA-65). Verified via
+        _verify_cert_signed_by_mldsa65() against each cert's own real
+        issuer (root_ca_pqc against itself, then issuer_ca_pqc against
+        root_ca_pqc).
+      - classic/hybrid: NOT a root->issuer chain at all -- root-ca.pem
+        and issuer-ca.pem are SIBLINGS, both signed directly by this
+        project's own real mTLS trust anchor (`ca.crt`, CN=ca, a static
+        local file, not fetched over the wire), confirmed live: both
+        certs' own issuer field names "ca", neither names the other.
+        hybrid's own live mTLS identity chains to this SAME classical
+        ca.crt per mock_mtls/main.go's caCertPool() (read, not touched).
+        Verified via `cryptography`'s own verify_directly_issued_by(),
+        each cert against ca.crt independently.
+
+    Raises SignatureVerificationError if any link doesn't verify."""
+    root_ca = x509.load_pem_x509_certificate(root_ca_pem)
+    issuer_ca = x509.load_pem_x509_certificate(issuer_ca_pem)
+
+    if crypto_profile == "pqc":
+        if not _verify_cert_signed_by_mldsa65(root_ca, root_ca):
+            raise SignatureVerificationError("root-ca.pem (root_ca_pqc) is not validly self-signed (ML-DSA-65)")
+        if not _verify_cert_signed_by_mldsa65(issuer_ca, root_ca):
+            raise SignatureVerificationError("issuer-ca.pem not validly signed by root-ca.pem (ML-DSA-65)")
+        return
+
+    anchor = x509.load_pem_x509_certificate((CERTS_DIR / "ca.crt").read_bytes())
+    for cert, name in ((root_ca, "root-ca.pem"), (issuer_ca, "issuer-ca.pem")):
+        try:
+            cert.verify_directly_issued_by(anchor)
+        except Exception as e:
+            raise SignatureVerificationError(f"{name} not validly signed by ca.crt: {e}") from None
+
+
 TLS_KEM_PROXY_SRC_DIR = THESIS_DIR / "scripts" / "tls_kem_proxy"
 TLS_KEM_PROXY_CONTAINER_NAME = "tls_kem_proxy_run"
 # Pinned by digest, not a floating "golang:1.27-rc-alpine" tag. This
@@ -854,29 +1052,35 @@ def start_pqc_signer_service(crypto_profile: str) -> bool:
     background container for the duration of one run/batch, exactly
     mirroring start_tls_kem_proxy()'s own lifecycle -- started once per
     profile (or once per single `main()` invocation), reused for every
-    ML-DSA-65 signature that profile's flow makes (8 per full flow
-    execution: client_assertion + PAR object in each of the 2 sub-flows,
-    plus response-signature verification calls in hybrid mode), torn down
-    afterwards. No-op (returns False, leaves _PQC_SIGNER_SERVICE_URL unset)
-    for classic, which never signs with ML-DSA-65 at all.
+    signature AND every signature VERIFICATION that profile's flow makes,
+    torn down afterwards.
+
+    Started for ALL THREE profiles, including classic (thesis/results/v8/
+    DECISIONS.md, "fluxo completo" turn) -- classic never SIGNS with
+    ML-DSA-65, but verify_jwt()/decrypt_and_verify_jwt() route EVERY
+    profile's verification through this same service, deliberately, so the
+    verification mechanism is identical in structure across all three
+    profiles (same call site, same HTTP-POST shape, same key source: the
+    AS/RS's own published JWKS) -- a measured timing difference then
+    reflects the algorithm, not "in-process Python" (classic) vs "separate
+    process" (pqc/hybrid). classic's PS256 verification could run via
+    pyjwt in-process just fine; it is routed here anyway, for that
+    comparability, not because it needs to be.
 
     Why this exists: previously, _run_pqc_signer_oneshot() spawned a fresh
     `docker run --rm -i` container per signature. Measured in isolation:
     ~0.79s/spawn, ~94% of the whole PQC/Híbrido latency delta over
     Clássico -- a cost of *how* the
     signer was invoked, not of ML-DSA-65 itself. server.mjs wraps the exact
-    same signing code (signer_core.mjs, shared with sign.mjs's still-used
-    one-shot mode) behind a persistent HTTP server; this function starts
-    that server once and _run_pqc_signer() then talks HTTP to it for the
-    rest of the run.
+    same signing/verification code (signer_core.mjs, shared with sign.mjs's
+    still-used one-shot mode) behind a persistent HTTP server; this
+    function starts that server once and _run_pqc_signer()/_run_verifier()
+    then talk HTTP to it for the rest of the run.
 
     A fixed container name (not --rm's auto-generated one), same reasoning
     as TLS_KEM_PROXY_CONTAINER_NAME: stop_pqc_signer_service() can
     `docker stop` it reliably even if this return value were ever lost.
     """
-    if crypto_profile not in ("pqc", "hybrid"):
-        return False
-
     global _PQC_SIGNER_SERVICE_URL
     subprocess.run(
         ["docker", "rm", "-f", PQC_SIGNER_SERVICE_CONTAINER_NAME],
@@ -1083,8 +1287,31 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             if "response" in params:
                 # JARM (response_mode=jwt, see make_request_object): the
                 # real params (code/state/error) are claims inside this
-                # signed JWT, not top-level query params.
-                params = pyjwt.decode(params["response"], options={"verify_signature": False})
+                # signed JWT, not top-level query params. as_keys (set on
+                # the server object by wait_for_authorization_code()
+                # below) is the AS's own public signing key(s) from its
+                # real /jwks. A failure here is caught and stashed on the
+                # server object (captured_error), not left to propagate
+                # out of do_GET() directly -- this handler runs inside
+                # BaseServer's own request-dispatch loop, which swallows
+                # an uncaught exception via handle_error() and keeps
+                # serving, which would otherwise silently turn a real
+                # SignatureVerificationError into an indistinguishable
+                # timeout. wait_for_authorization_code()'s own poll loop
+                # below checks captured_error and re-raises it on the
+                # main thread (thesis/results/v8/DECISIONS.md, "fluxo
+                # completo" turn: this was the last verify_signature=
+                # False left in opin_flow.py).
+                try:
+                    as_classic_jwk, as_pqc_jwk = self.server.as_keys  # type: ignore[attr-defined]
+                    params = verify_jwt(params["response"], classic_jwk=as_classic_jwk, pqc_jwk=as_pqc_jwk)
+                except SignatureVerificationError as e:
+                    self.server.captured_error = e  # type: ignore[attr-defined]
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"<html><body>Verification failed.</body></html>")
+                    return
             self.server.captured_params = params  # type: ignore[attr-defined]
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1317,7 +1544,7 @@ def simulate_login(auth_url: str, cert, login_calls: list) -> None:
 
 def wait_for_authorization_code(
     auth_url: str, cert, timeout_seconds: int = 600, attempt_timeout_seconds: int = 20, max_attempts: int = 3,
-    timing: dict | None = None, calls: list | None = None,
+    timing: dict | None = None, calls: list | None = None, as_keys: tuple[dict | None, dict | None] = (None, None),
 ) -> str:
     """
     Runs simulate_login() up to max_attempts times against the SAME local
@@ -1376,6 +1603,8 @@ def wait_for_authorization_code(
         server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), _CallbackHandler)
         server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
         server.captured_params = None  # type: ignore[attr-defined]
+        server.captured_error = None  # type: ignore[attr-defined]
+        server.as_keys = as_keys  # type: ignore[attr-defined]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
 
@@ -1387,6 +1616,8 @@ def wait_for_authorization_code(
 
                 attempt_started = time.time()
                 while server.captured_params is None:  # type: ignore[attr-defined]
+                    if server.captured_error is not None:  # type: ignore[attr-defined]
+                        raise server.captured_error  # type: ignore[attr-defined]
                     elapsed_total = time.time() - overall_started
                     if elapsed_total > timeout_seconds:
                         raise TimeoutError(
@@ -1425,23 +1656,35 @@ def wait_for_authorization_code(
     return params["code"]
 
 
-def parse_rs_body(response: requests.Response) -> dict:
+def parse_rs_body(response: requests.Response, rs_keys: tuple[dict | None, dict | None] | None = None) -> dict:
     """
     The RS (mockapi) signs every response body as a JWS Compact
-    Serialization (Content-Type: application/jwt) in BOTH classic and pqc
-    CRYPTO_PROFILE -- see insurance-server-lambdas' ResponseSigningFilter
-    and thesis/results/experiment2 - PQC/DECISIONS.md, Decision 4.
+    Serialization (Content-Type: application/jwt) in all 3 CRYPTO_PROFILE
+    values -- see insurance-server-lambdas' ResponseSigningFilter and
+    thesis/results/experiment2 - PQC/DECISIONS.md, Decision 4.
     response.json() fails on that body (it's "header.payload.signature",
     not JSON) -- empirically confirmed while testing this script: the
     consent-creation call returned 201 with a JWT body, not a JSON object.
-    The signature itself isn't verified here (PyJWT has no ML-DSA support,
-    matching the same Nimbus gap that motivated the RS's own BouncyCastle
-    workaround) -- this script only needs the claims to keep driving the
-    flow, not a security proof.
+
+    rs_keys: (classic_jwk, pqc_jwk) from the RS's own /jwks (create_and_
+    authorize_consent() fetches it once per flow execution, right after
+    the first access token -- that's the earliest point an RS call can be
+    authorized at all, since the RS's own /jwks itself requires a Bearer
+    token, confirmed live). The signature IS verified here now
+    (thesis/results/v8/DECISIONS.md, "fluxo completo" turn; PyJWT's own
+    lack of ML-DSA support, the ORIGINAL reason this used to skip
+    verification, is why verify_jwt() routes through the pqc-signer
+    service instead of pyjwt -- not a reason to keep skipping it).
+    Raises SignatureVerificationError if the signature doesn't check out.
+    None is accepted only for callers that haven't been updated yet to
+    pass real keys; every real call site in this file now does.
     """
     body = response.text
     if response.headers.get("Content-Type", "").startswith("application/jwt") or body.count(".") == 2:
-        return pyjwt.decode(body, options={"verify_signature": False})
+        if rs_keys is None:
+            raise ValueError("parse_rs_body() needs rs_keys to verify a signed RS response -- see its own docstring")
+        classic_jwk, pqc_jwk = rs_keys
+        return verify_jwt(body, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk)
     return response.json()
 
 
@@ -1527,12 +1770,19 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
 
 
 def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
+    """Returns (classic_jwk, pqc_jwk) -- the AS's own public signing
+    key(s), extracted from the real /jwks response (extract_verification_
+    keys()), for every later verify_jwt()/decrypt_and_verify_jwt() call
+    against an AS-issued artifact (JARM, id_token) to use. Also verifies
+    the fetched root-ca.pem/issuer-ca.pem chain (verify_ca_chain()) --
+    raises SignatureVerificationError if it doesn't check out."""
     # 1. GET /jwks
     call, resp = do_call(
         session, "GET", f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/jwks", cert=cert,
         host_header=AUTH_HOST, src="FetchServerKeys",
     )
     calls.append(call)
+    as_classic_jwk, as_pqc_jwk = extract_verification_keys(resp.json())
 
     # 2-3. GET root-ca.pem / issuer-ca.pem. All three profiles now resolve
     # to local stand-ins served by the gateway's "directory" host
@@ -1546,15 +1796,21 @@ def fetch_server_keys_and_ca(calls, session, cert, crypto_profile):
     # external, classical host); and thesis/results/v5/DECISIONS.md for
     # classic's own local stand-in (closing the same gap for the last
     # remaining profile still hitting crl.sandbox.pki.opinbrasil.com.br).
+    pem_bodies = {}
     for path in ("root-ca.pem", "issuer-ca.pem"):
         call, resp = do_call(
             session, "GET", f"{GATEWAY_SCHEME}://{DIRECTORY_CONNECT_HOST}/{path}", cert=None,
             host_header=DIRECTORY_HOST, src="OpinInsertMtlsCa",
         )
         calls.append(call)
+        pem_bodies[path] = resp.content
+    verify_ca_chain(pem_bodies["root-ca.pem"], pem_bodies["issuer-ca.pem"], crypto_profile)
+
+    return as_classic_jwk, as_pqc_jwk
 
 
-def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *, permissions, scope, poll_count, timing=None):
+def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, crypto_profile, *, permissions, scope,
+                                  poll_count, as_keys, timing=None):
     """
     Shared AS handshake used by both flows (insurance consents and person):
     client_credentials token, create consent, poll its status, PAR + manual
@@ -1564,6 +1820,18 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     separate OPIN API domains/plans, not a single flow with variations, by
     reading both plans' raw logs in
     thesis/results/experiment1 - Classic/0ms/.
+
+    as_keys: (classic_jwk, pqc_jwk) from fetch_server_keys_and_ca()'s own
+    real /jwks fetch -- used here to verify the JARM response (threaded
+    into wait_for_authorization_code()) and the id_token (verified
+    directly, right after the authorization_code token exchange).
+
+    Also fetches the RS's own /jwks here (one new call, right after the
+    first access token -- the RS's /jwks itself requires a Bearer token,
+    confirmed live, so this is the earliest point in the flow it CAN be
+    fetched) and returns (consent_id, consent_url, cc_access_token,
+    ac_access_token, rs_keys) -- callers need rs_keys for every
+    parse_rs_body() call downstream of this function too.
 
     timing: see wait_for_authorization_code()'s docstring -- passed through
     unchanged, plus this function's own PAR-retry loop adds to it the same
@@ -1585,6 +1853,23 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     calls.append(call)
     resp.raise_for_status()
     cc_access_token = resp.json()["access_token"]
+
+    # GET /jwks (RS's own, NOT the AS's -- fetch_server_keys_and_ca()
+    # already fetched that one) -- needed to verify every RS-signed
+    # response body (parse_rs_body()) from here on. Requires a Bearer
+    # token (confirmed live: 401 without one, same gateway-level gate
+    # every other RS-facing call goes through) -- cc_access_token, just
+    # obtained above, is the earliest token available. Not one of the
+    # pre-existing 42 calls/execution -- an intentional, documented
+    # addition (thesis/results/v8/DECISIONS.md, "fluxo completo" turn)
+    # needed to verify RS-issued signatures at all.
+    call, resp = do_call(
+        session, "GET", f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/jwks", cert=cert,
+        headers={"Authorization": f"Bearer {cc_access_token}"}, host_header=API_HOST, src="FetchServerKeys",
+    )
+    calls.append(call)
+    resp.raise_for_status()
+    rs_keys = extract_verification_keys(resp.json())
 
     # POST /open-insurance/consents/v3/consents
     expiration = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1608,7 +1893,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     )
     calls.append(call)
     resp.raise_for_status()
-    consent_id = parse_rs_body(resp)["data"]["consentId"]
+    consent_id = parse_rs_body(resp, rs_keys)["data"]["consentId"]
     consent_uid = consent_id.rsplit(":", 1)[-1]
     consent_url = f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/open-insurance/consents/v3/consents/{consent_id}"
 
@@ -1670,7 +1955,7 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
 
         auth_url = f"{GATEWAY_SCHEME}://{AUTH_CONNECT_HOST}/auth?" + urlencode({"client_id": CLIENT_ID, "request_uri": request_uri})
         try:
-            code = wait_for_authorization_code(auth_url, cert, timing=timing, calls=calls)
+            code = wait_for_authorization_code(auth_url, cert, timing=timing, calls=calls, as_keys=as_keys)
             break
         except (RequestUriExpiredError, InteractionSessionLostError) as e:
             step_name = "par_ttl" if isinstance(e, RequestUriExpiredError) else "interaction_session_lost"
@@ -1708,9 +1993,23 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, *,
     )
     calls.append(call)
     resp.raise_for_status()
-    ac_access_token = resp.json()["access_token"]
+    token_response = resp.json()
+    ac_access_token = token_response["access_token"]
 
-    return consent_id, consent_url, cc_access_token, ac_access_token
+    # id_token: present on every real authorization_code response in this
+    # flow (openid scope), but JWE-encrypted (RSA-OAEP/A256GCM, Decision --
+    # see decrypt_and_verify_jwt()'s own docstring) -- decrypted with the
+    # client's own private "enc" key, then its inner signature verified
+    # against the AS's own as_keys, exactly like every other AS-issued
+    # artifact. Raises SignatureVerificationError (propagates, stops the
+    # flow) if either step fails.
+    id_token = token_response.get("id_token")
+    if id_token:
+        enc_jwk = load_client_encryption_key(crypto_profile)
+        as_classic_jwk, as_pqc_jwk = as_keys
+        decrypt_and_verify_jwt(id_token, enc_jwk, classic_jwk=as_classic_jwk, pqc_jwk=as_pqc_jwk)
+
+    return consent_id, consent_url, cc_access_token, ac_access_token, rs_keys
 
 
 def run_insurance_flow(crypto_profile: str, timing=None):
@@ -1726,11 +2025,11 @@ def run_insurance_flow(crypto_profile: str, timing=None):
     calls = []
     session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
-    consent_id, consent_url, cc_access_token, ac_access_token = create_and_authorize_consent(
-        calls, session, cert, signing_key, kid, alg,
+    as_keys = fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
+    consent_id, consent_url, cc_access_token, ac_access_token, rs_keys = create_and_authorize_consent(
+        calls, session, cert, signing_key, kid, alg, crypto_profile,
         permissions=INSURANCE_CONSENT_PERMISSIONS, scope=INSURANCE_AUTHORIZATION_SCOPES, poll_count=3,
-        timing=timing,
+        as_keys=as_keys, timing=timing,
     )
 
     # GET consent x2 (AUTHORISED) -- this plan re-checks status after login,
@@ -1771,11 +2070,11 @@ def run_person_flow(crypto_profile: str, timing=None):
     calls = []
     session = requests.Session()
 
-    fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
-    consent_id, _consent_url, _cc_access_token, ac_access_token = create_and_authorize_consent(
-        calls, session, cert, signing_key, kid, alg,
+    as_keys = fetch_server_keys_and_ca(calls, session, cert, crypto_profile)
+    consent_id, _consent_url, _cc_access_token, ac_access_token, rs_keys = create_and_authorize_consent(
+        calls, session, cert, signing_key, kid, alg, crypto_profile,
         permissions=PERSON_CONSENT_PERMISSIONS, scope=PERSON_AUTHORIZATION_SCOPES, poll_count=1,
-        timing=timing,
+        as_keys=as_keys, timing=timing,
     )
 
     person_url = f"{GATEWAY_SCHEME}://{API_CONNECT_HOST}/open-insurance/insurance-person/v2/insurance-person"
@@ -1790,7 +2089,7 @@ def run_person_flow(crypto_profile: str, timing=None):
         calls.append(call)
         last_resp = resp
     last_resp.raise_for_status()
-    policy_id = parse_rs_body(last_resp)["data"][0]["brand"]["companies"][0]["policies"][0]["policyId"]
+    policy_id = parse_rs_body(last_resp, rs_keys)["data"][0]["brand"]["companies"][0]["policies"][0]["policyId"]
 
     for sub_resource in ("claim", "policy-info", "premium"):
         for _ in range(2):
