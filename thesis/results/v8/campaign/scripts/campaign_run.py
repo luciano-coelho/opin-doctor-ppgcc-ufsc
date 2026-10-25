@@ -1028,6 +1028,21 @@ SWITCH_PROFILE_TIMEOUT_SECONDS = 240
 # under SWITCH_PROFILE_TIMEOUT_SECONDS, since this call does no
 # settling runs of its own.
 PROXY_START_TIMEOUT_SECONDS = 90
+# Pilot item 2 (this turn): found live, mid-pilot, first time this exact
+# call ran a hybrid-profile execution cross-region (L325) -- a real
+# campaign_client_runner.py execution (insurance + person flows, several
+# HTTP round trips each, under pqc/hybrid crypto and real inter-region
+# RTT) can legitimately take more than the default 30s SSH_TIMEOUT_SECONDS,
+# which killed it mid-flight ("SSH command timed out after 30s") even
+# though the remote process was still genuinely working, not hung. This
+# timeout governs only how long the ORCHESTRATOR waits for the SSH
+# command to return -- it does not touch campaign_client_runner.py's own
+# T_fluxo measurement (a separate, monotonic clock on the remote side),
+# so raising it does not affect what gets measured, only whether a
+# legitimately slower real execution is given time to finish. Applied to
+# every call that runs campaign_client_runner.py for real: settling,
+# warmup, and the measured execution itself.
+EXECUTION_TIMEOUT_SECONDS = 120
 SETTLING_RUNS = 5  # mirrors switch_crypto_profile.py's SETTLING_WARMUP_RUNS / Decision 62's local-executor count
 
 # Pilot acceptance criterion 7: T_fluxo with vs. without tcpdump. This
@@ -1434,6 +1449,7 @@ class SSHExecutor:
             stdout = self._run_or_print(
                 f"[{installation}/{profile}/w{window}] settling run {i}/{SETTLING_RUNS}",
                 self._ssh_cmd(settling_client_ip, remote_cmd),
+                timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
             )
             if stdout is not None:  # real mode -- dry-run has nothing to parse
                 result = json.loads(stdout)
@@ -1490,6 +1506,7 @@ class SSHExecutor:
         stdout = self._run_or_print(
             f"[{installation}/{scenario}/w{window}] warmup",
             self._ssh_cmd(client_ip, remote_cmd),
+            timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
         )
         until_dt = datetime.now(timezone.utc)
         if stdout is None:
@@ -1566,6 +1583,7 @@ class SSHExecutor:
             stdout = self._run_or_print(
                 f"[{installation}/{scenario}] run execution {label}",
                 self._ssh_cmd(client_ip, remote_cmd),
+                timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
             )
             until_dt = datetime.now(timezone.utc)
 
