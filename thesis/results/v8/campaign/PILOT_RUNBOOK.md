@@ -60,40 +60,79 @@ Both of these must be true before step 1 below is run for real:
   below. `terraform apply`/`destroy` and any instance launch are not
   run by anyone other than Luciano, present, following this runbook.
 
-## Status: primeira tentativa real revertida (Decisions 83/84)
+## Status: piloto 1 completo (infraestrutura validada), NÃO usado no artigo -- piloto 2 pendente, não lançado
 
-Uma tentativa real já rodou contra este piloto's own 4 instâncias
-(sa-east-1 control/server, `L0`/`L325`) e foi revertida (teardown
-limpo, verificado região por região) antes de qualquer execução real
-acontecer -- 7 bugs reais encontrados e corrigidos ao longo da
-tentativa (entrega, orquestrador nunca implantado, `psql` nunca
-declarado como dependência, lista de cenários/timeout de SSH
-assumindo a campanha completa, imagens de proxy/signer nunca entregues
-ao servidor, rede docker fixa, timeout do proxy do cliente), e um 8º
-encontrado e já corrigido depois (cliente co-localizado não alcançava
-o servidor pelo IP público). Ver DECISIONS.md, Decisions 83/84, para o
-histórico completo.
+**Piloto 1: fluxo sem verificação de assinatura (42 chamadas), não usado
+no artigo.** Rodou de ponta a ponta, real, sa-east-1, `L0`/`L325`, 60/60
+execuções (10 runs x 2 cenários x 3 perfis) -- 10/11 critérios de
+aceitação passando, teardown limpo e verificado região por região,
+custo real ~US$0,93 (Decisions 83/84/85/86). Os dados continuam no
+repositório (`thesis/results/v8/latency/`), preservados, não apagados
+-- mas o `opin_flow.py` que os gerou NUNCA verificava nenhuma assinatura
+recebida (`verify_signature: False` em todo lugar, client_assertion/PAR
+verificados pelo AS mas nada do lado do cliente) e fazia 42 chamadas,
+não 44. Esse piloto serviu exclusivamente para validar a infraestrutura
+real da AWS (entrega, orquestrador, conectividade, cenário co-localizado,
+pull/verificação de manifesto) -- **os números em si não são os dados do
+artigo** e não devem ser citados como tal.
 
-**Ao retomar, nesta ordem** (a etapa "aplicar manualmente o campo
-`colocated`" que existiu entre as duas decisões está OBSOLETA -- o
-apply normal do `campaign_up.sh` abaixo já cria o campo junto com o
-resto do inventário):
-1. Confirma o custo real da tentativa anterior no Billing console.
-2. Confirma `campaign.vars.local.sh` (IP do operador atual, tipo de
-   instância, saldo/orçamento).
-3. Passo 3 abaixo (`campaign_up.sh`) -- apply fresco, 21 recursos,
-   `colocated` já no inventário.
-4. Passo 5 (ENTREGA) -- todos os 7 bugs da Decision 83 e o consumidor
-   do `colocated` (Decision 84) já estão commitados; esta deve ser a
-   primeira tentativa que não repete nenhum deles.
-5. A tabela do `verify_gateway_connectivity()` (automática, parte do
-   passo 4 abaixo) deve mostrar `OK` para todo cliente, incluindo
-   `L0` -- se não mostrar, para ali, antes de gastar mais tempo real.
-6. Retoma a seção de execução (60 execuções) do zero -- não há dado
-   parcial do piloto para retomar ou descartar.
-7. Observa `PILOT_TIME_BUDGET_HOURS` (padrão 3h, Decision 84) -- o
-   próprio orquestrador para e pede decisão, em vez de continuar
-   sozinho além do orçamento.
+**Piloto 2 (fluxo completo, verificação ativa): preparado, NÃO
+lançado.** `opin_flow.py` agora verifica todo artefato assinado que
+recebe (id_token, JARM, respostas do RS), nos 3 perfis, mecanismo
+único (Decisions 87/88) -- 44 chamadas por execução, não 42. Mesma
+topologia e mesmos 4 bugs já corrigidos do piloto 1 (nenhum precisa
+ser re-descoberto); a única mudança real de protocolo é o próprio
+`opin_flow.py`/`pqc-signer` entregues ao cliente.
+
+**Protocolo do piloto 2 (igual ao piloto 1 em forma, critérios
+atualizados):**
+- 10 execuções por perfil (Classic/PQC/Hybrid) x 2 cenários (`L0`,
+  `L325`), sa-east-1 -- mesma topologia, mesmas 4 instâncias
+  (control + server + 2 clientes).
+- Assentamento (5 execuções descartadas por bloco de perfil) antes das
+  10 medidas, igual ao piloto 1.
+- `call_count` esperado: **44**, não 42, em todas as execuções, todos
+  os perfis.
+- Referência de bytes/OPINsize: `BASELINE_BYTES`/`V8_OPINSIZE` em
+  `pilot_acceptance.py` (Decision 88) -- **não** os valores antigos de
+  42 chamadas.
+- `N_JWK` esperado: **4** (2 buscas de `/jwks` do AS + 2 do RS), não 2.
+- Verificação de assinatura ativa durante toda a execução -- qualquer
+  `SignatureVerificationError` real interrompe a execução (não é
+  descartada silenciosamente; conta como falha real da execução).
+- Testes negativos (`tests/test_signature_verification.py`) devem
+  rodar com sucesso contra o ambiente real da AWS antes da bateria de
+  60 execuções -- ainda não rodados contra AWS real, só contra o stack
+  local (Decisions 87/88, 60/60 repetições limpas localmente).
+- T_fluxo: reportar a ordem Classic < PQC < Hybrid com N=10 reais -- a
+  ordem ainda não foi confirmada com peso estatístico (só execuções
+  avulsas, sem assentamento, rodadas durante o desenvolvimento da
+  verificação).
+
+**O que precisa do OK do Luciano antes de lançar o piloto 2:**
+1. Confirmar que o piloto 1 realmente não deve ser apagado nem
+   re-executado -- só preservado com a nota acima.
+2. Autorizar rodar `tests/test_signature_verification.py` contra as
+   instâncias REAIS da AWS (não só o stack local) antes da bateria de
+   60 execuções -- isso significa subir a infraestrutura real primeiro
+   só para esse teste, antes de decidir lançar a campanha inteira.
+3. Confirmar que `BASELINE_BYTES`/`V8_OPINSIZE` (44 chamadas) são a
+   referência correta a usar no critério de aceitação do piloto 2, não
+   os valores do piloto 1.
+4. Confirmar presença física para o apply/destroy, mesma regra de
+   sempre (Decision 49) -- nada muda aqui.
+5. Confirmar orçamento/saldo atual no Billing console antes de
+   autorizar qualquer `apply`.
+6. Decidir se o piloto 2 roda com os MESMOS 4 bugs já corrigidos do
+   piloto 1 como suficientes, ou se quer uma rodada de rehearsal local
+   adicional antes (não obrigatória -- os bugs do piloto 1 eram todos
+   de infraestrutura, não do fluxo de verificação, que já tem 60/60
+   testes negativos limpos localmente).
+
+**Nada abaixo foi lançado.** Esta seção é só preparação -- ver
+"Pontos em que Luciano confirma antes de seguir" para a lista completa
+de autorizações que o passo a passo abaixo já exige independentemente
+do piloto 2.
 
 ## Passo a passo
 

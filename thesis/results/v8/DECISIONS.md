@@ -7098,6 +7098,12 @@ ML-DSA-65-signed, hybrid's is genuinely Strong-Nesting-signed (sigma1||
 sigma2, 4754 b64url chars, not an ordinary 342), only its OUTER envelope
 stays classical.
 
+JWE encryption of the id_token remains RSA-OAEP in all three profiles,
+since post-quantum JWE encryption is not yet standardized (IETF drafts
+are in progress); the id_token is carried inside the TLS tunnel of the
+respective profile. (Decisions: `thesis/results/v2/experiment2 - PQC/
+DECISIONS.md`, Decision 4; `thesis/results/v4/DECISIONS.md`.)
+
 **Verification mechanism -- deliberately the SAME structure in all 3
 profiles**, per Luciano's own explicit requirement: every profile's
 verification goes through the identical call site (`verify_jwt()`/
@@ -7196,9 +7202,17 @@ the stack has settled). Flagged here rather than silently re-run away.
 | call_count | 44 (was 42) | 44 | 44 |
 | total_bytes_exchanged | 126,777 | 281,654 | 339,145 |
 | N_JWT | 28 (unchanged) | 28 | 28 |
-| N_JWK | 6 (was 2) | 6 | 8 |
+| N_JWK | 4 (was 2) -- corrected, see Decision 88 | 4 | 4 |
 | N_PKI | 4 (unchanged) | 4 | 4 |
 | N_mTLS | 6 (unchanged -- no new TLS connections, confirmed architecturally: the new call reuses an existing pool) | 6 | 6 |
+
+**N_JWK correction (Decision 88 supersedes this row):** this entry's own
+`6/6/8` was a raw count of every `jwk_sizes` list entry across all calls
+(including "enc" keys, and, for hybrid, a since-discovered SECOND "sig"
+entry per response) -- not what N_JWK actually means (one "sig" key per
+`/jwks` fetch). The correct figure, all 3 profiles, is **4** (2 AS +
+2 RS fetches, one counted sig key each) -- see Decision 88 for the full
+recomputation and the `term_jwk()` fix this required.
 
 **The +2 calls (one per sub-flow) are the RS's own `/jwks`**, fetched
 once each, needed to verify RS-signed responses at all -- not possible
@@ -7272,4 +7286,142 @@ other classical algorithm remains anywhere in pqc's own traffic.
    verification failure would abort a real, paid AWS run -- not treated
    as a blocker here (reproduced zero times out of several additional
    runs), but worth keeping an eye on.
+
+## 88. The negative-test "transient flake" from Decision 87 was a bug in the TEST's own tamper() helper, not a race anywhere in opin_flow.py/signer_core.mjs -- root-caused and fixed, 60/60 repeats clean across all 3 profiles. OPINsize recomputed for the real 44-call flow and corrected a second real bug found along the way (hybrid's `/jwks` now publishes two "sig" entries for one key); V8_OPINSIZE is now Criterion 10's own reference, v7 kept informative. No AWS touched.
+
+**Item 1 -- root cause, not "didn't reproduce".** Ran the full negative-
+test battery 20 times per profile (60 runs total), fresh proxy+signer
+service each iteration, immediately after each profile switch for the
+first iteration in every batch. First pass (the ORIGINAL tamper
+helper): classic showed 5/20 iterations with the tampered signature
+WRONGLY ACCEPTED (`UNEXPECTED_PASS`) -- a real, reproducible 25% failure
+rate, not a one-off. Root cause, confirmed by direct inspection of a
+real captured signature: the original `_tamper_signature()` swapped the
+signature segment's own LAST BASE64URL CHARACTER (to "A", unless it
+already was "A") -- for a 256-byte RSA-2048 signature, that character's
+own 6-bit value has its bottom 4 bits as pure, decoder-ignored padding
+(256 bytes doesn't divide evenly into base64's 3-byte groups); only its
+top 2 bits are real signature bits. Whenever the ORIGINAL character's
+6-bit value already had both top bits zero -- any of "A".."P", 16 of 64
+possible values, exactly a 25% chance -- replacing it with "A" (value 0)
+left those two real bits unchanged, so the "tampered" signature decoded
+to the IDENTICAL raw bytes as the original. Confirmed directly: a real
+captured signature whose last character happened to be "A" produced a
+byte-for-byte identical "tampered" version (`original sig == tampered
+sig: True`), which `verify_jwt()` then correctly, legitimately accepted
+-- the test's own "must be rejected" assertion was the thing that was
+wrong, not the production code. The correlation with a slow
+`t_proxy_ready` in the original data was coincidental (different
+executions' consent claims differ, so each gets a genuinely different
+RSA signature whose own last character varies by chance independently
+of how long the proxy took to start) -- confirmed by re-running with the
+fix: **0/20 anomalies, all 3 profiles, 60/60 total**, including the
+first iteration of every batch, immediately after a fresh profile
+switch. No race exists in `opin_flow.py`'s own flow, no health-check
+fix was needed there, and none was made -- `_wait_for_pqc_signer_service_
+ready()`/`_wait_for_tls_kem_proxy_ready()` were already polling real
+readiness (an actual `/healthz`/HTTPS round trip), not a sleep, before
+this investigation and remain unchanged.
+
+Fixed `tests/test_signature_verification.py`'s `_tamper_signature()` to
+decode the signature to real bytes, XOR the LAST BYTE with `0xFF`, and
+re-encode -- immune to this class of bug by construction (flipping
+every bit of a byte cannot leave that byte unchanged, regardless of
+base64 alignment). Nothing in `opin_flow.py`/`pqc-signer/signer_core.mjs`
+changed as a result of this item -- their own logic was correct the
+whole time; the earlier investigation's "corrects to a container-
+timing race" framing (Decision 87) is superseded by this finding.
+
+**Item 2 -- OPINsize recomputed for the real 44-call flow, all 4 terms,
+all 3 profiles.** Real local executions, gateway log properly time-
+windowed to the measured run itself (`docker logs --since <run_start>
+--until <run_end>` -- an earlier attempt this same turn, without that
+windowing, wrongly folded `switch_crypto_profile.py`'s own 5 settling
+executions into the same log capture, inflating N_mTLS to 38; not an
+OPINsize bug, a capture-script bug, caught before it reached any
+committed number):
+
+| | Classic | PQC | Hybrid |
+|---|---|---|---|
+| N_mTLS / term_handshake | 6 / 31,074 | 6 / 135,642 | 6 / 114,102 |
+| N_JWT / term_jwt | 28 / 37,263 | 28 / 151,321 | 28 / 200,567 |
+| N_JWK / term_jwk | 4 / 1,024 | 4 / 7,808 | 4 / 8,832 |
+| N_PKI / term_pki | 4 / 8,440 | 4 / 32,028 | 4 / 37,356 |
+| **OPINsize** | **77,801** | **326,799** | **360,857** |
+| vs v7 (informative only) | +1.13% | +1.21% | +2.96% |
+
+term_handshake/term_jwt/term_pki are UNCHANGED from the pre-
+verification 42-call flow's own figures (confirmed: identical values) --
+none of the new verification code touches the mTLS handshake, the JWT
+population, or the PKI/CRL fetches. Only term_jwk moves, by exactly the
+2 new RS `/jwks` fetches' own contribution (classic +512, pqc +3,904,
+hybrid +4,416) -- each new fetch counts one more "sig" key, same
+definition as before, not a per-key size change.
+
+**A second real bug found computing this: `consolidate_v8.py`'s
+`term_jwk()` crashed on hybrid's own real data** (`AssertionError: jwk
+sig size not constant: {2208, 256}`). Confirmed live: a real hybrid
+`/jwks` response now publishes TWO "sig" entries sharing the SAME kid --
+the composed `kty: "HYBRID"` entry (`pk_hybrid`, 2208 bytes) and a plain
+`kty: "RSA"` duplicate of just its classical half (256 bytes), published
+by `ResponseSigningService.java` "so a real, standards-compliant JWKS
+consumer doing ordinary kid+alg discovery can find a key that matches
+what a payload-extension-signed JWT's header actually says" (that
+file's own comment). `term_jwk()`'s original assert assumed exactly one
+"sig" entry per response, true for classic/pqc, no longer true for
+hybrid. Fixed to take the LARGEST "sig" entry per call instead of
+asserting one constant size across ALL calls -- confirmed correct
+against v7's own hybrid figure (2 fetches x 2,208 bytes = 4,416, exactly
+v7's own `term_jwk`): the composed key is the real signing key, the
+smaller plain-RSA entry is a discovery-compatibility shim for the SAME
+key, not a second artifact.
+
+**`pilot_acceptance.py`:** new `V8_OPINSIZE = {"classic": 77_801, "pqc":
+326_799, "hybrid": 360_857}`, documented in its own comment. Criterion
+10 now gates on `V8_OPINSIZE` (±3%, same tolerance, re-justified: the
+largest real single-execution deviation measured this turn, hybrid's
+own +2.96% against v7, is the closest real data point available for how
+far a single execution can drift from a fixed reference, and is itself
+within the 3% band) -- `V7_OPINSIZE` is kept and still printed on every
+run, informative only, never gating pass/fail from this turn on. Spot-
+checked against the real, already-committed AWS pilot data (pre-
+verification, 42 calls): still PASSES (77,289/322,895/356,441, each
+exactly `V8_OPINSIZE` minus the 2 new JWK-term entries, 0.66-1.22% off
+the new reference) -- consistent, not a coincidence.
+
+**Verification time per artifact: instrumented, not yet collected by a
+real campaign.** `opin_flow.py` gained `_VERIFICATION_TIMINGS` (module-
+level list) + `get_verification_timings()`/`clear_verification_timings()`,
+measuring real wall-clock time around the SAME `_run_verifier()` call
+every profile's every verification already goes through, labelled by
+artifact (`"jarm"`, `"id_token"`, `"rs_response"`). This needed no change
+to `mock_mtls/main.go` (verification never happens there -- it is purely
+a client-side, post-receipt step) nor to `tls_kem_proxy/main.go` (the
+KEM handshake those files own is a different thing from JWT/JWE
+signature verification) -- both stayed untouched, confirmed by the diff.
+One real execution each (not yet a many-run median, dominated by the
+client<->pqc-signer-service HTTP round trip at this scale, not yet a
+clean per-algorithm signal): classic jarm=23.6ms id_token=30.1ms
+rs_response=16.5ms; pqc 28.0/37.7/22.2ms; hybrid 22.9/15.9/10.6ms. NOT
+yet wired into `campaign_client_runner.py`'s own JSON output -- that is
+a separate, future change (collecting it for real across a campaign),
+out of this turn's own scope; the accumulator exists so that change
+doesn't need to re-derive where the data comes from.
+
+`METRICS_COVERAGE.md` updated: OPINsize/N_JWK/call-count rows reflect
+the new 44-call figures and explain the N_JWK change; a new row
+documents the verification-timing instrumentation and its own real
+numbers.
+
+**id_token's own JWE encryption, registered in neutral terms, per
+Luciano's own wording, not treated as a pending item or a risk:** JWE
+encryption of the id_token remains RSA-OAEP in all three profiles,
+since post-quantum JWE encryption is not yet standardized (IETF drafts
+are in progress); the id_token is carried inside the TLS tunnel of the
+respective profile. (Decisions: `thesis/results/v2/experiment2 - PQC/
+DECISIONS.md`, Decision 4; `thesis/results/v4/DECISIONS.md`.) Nothing
+implemented for this -- out of scope by the same decisions as before.
+
+**Not a protocol change.** `mock_mtls/main.go`/`tls_kem_proxy/main.go`
+untouched (confirmed by diff). No AWS touched this turn.
 
