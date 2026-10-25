@@ -640,11 +640,24 @@ def criterion_8(root):
 def criterion_9(root):
     print("=== Criterion 9: campaign_pull.sh cycle -- hash manifest re-verified ===")
     root = Path(root)
-    verified_marker = root / ".pull-verified"
-    manifest_path = root / "campaign-data.sha256"
+    # campaign_pull.sh's own $DEST has ".pull-verified"/"campaign-data.sha256"
+    # directly alongside "v8/" (both root's own direct children) -- true right
+    # after a pull, before anything is reorganized. Once that data is moved
+    # into the repository's own long-term thesis/results/v8/latency/
+    # location (Decision 85), "root" for every OTHER criterion here becomes
+    # the directory ABOVE "v8/" (so find_scenario_dirs()'s own root/v8/latency
+    # still resolves) -- one level higher than where the pull itself left
+    # these two files. Checking root/v8/ as a fallback (not a replacement)
+    # keeps BOTH the original post-pull, pre-reorganization check (root IS
+    # $DEST) and the final, committed-repo check (root is $DEST's own
+    # parent, "v8" is now one path segment further down) working, instead of
+    # breaking whichever case isn't being run at a given moment.
+    base = root if (root / ".pull-verified").exists() else root / "v8"
+    verified_marker = base / ".pull-verified"
+    manifest_path = base / "campaign-data.sha256"
     if not verified_marker.exists():
-        print(f"  FAIL: {verified_marker} not found -- campaign_pull.sh either wasn't run or didn't "
-              f"complete its own verification successfully.")
+        print(f"  FAIL: {verified_marker} not found (also checked {root / '.pull-verified'}) -- "
+              f"campaign_pull.sh either wasn't run or didn't complete its own verification successfully.")
         return False
     if not manifest_path.exists():
         print(f"  FAIL: {manifest_path} not found alongside the pulled data.")
@@ -656,6 +669,12 @@ def criterion_9(root):
         if not line.strip():
             continue
         expected_hash, _, rel_path = line.partition("  ")
+        # Always relative to `root`, never `base`: the manifest's own
+        # entries are already "v8/latency/..." (campaign_pull.sh's own
+        # $DEST-relative paths, unchanged by where .pull-verified/
+        # campaign-data.sha256 themselves ended up) -- resolving them
+        # against `base` when base == root/"v8" would double up the
+        # "v8" segment.
         target = root / rel_path.strip()
         if not target.exists():
             mismatches.append((rel_path, "MISSING"))
