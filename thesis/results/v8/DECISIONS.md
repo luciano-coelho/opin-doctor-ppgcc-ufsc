@@ -6605,3 +6605,249 @@ needed):
 7. Watch `PILOT_TIME_BUDGET_HOURS` (default 3h) -- past it, the
    orchestrator itself will block and ask, not silently keep going.
 
+## 85. First complete real pilot (60/60 executions) torn down for real, environment snapshot extended before teardown; three real bugs found running `pilot_acceptance.py` against the pilot's own real data already fixed (previous commit); two further real measurement bugs found and fixed this turn (Criterion 1's stale baseline, Criterion 11's pcap handshake-bytes extractor); pcap-based packet-loss measurement added (ICMP is blocked); T_fluxo(PQC)-T_fluxo(Classic) decomposed without concluding
+
+**Pilot run outcome.** The real AWS pilot (Decision 84's resume list)
+completed for real this time: 60/60 executions (10 runs x 2 scenarios
+[L0, L325] x 3 profiles), real `sa-east-1` server, real co-located and
+cross-region clients, no aborts. Real bugs found and fixed DURING that
+run (orphaned `verify_gateway_connectivity()` false-aborts, a 30s SSH
+timeout killing a genuinely-still-working hybrid/L325 execution) are
+already covered by Decisions 83/84's own entries; two further real bugs
+found immediately AFTER the run, from the run's own real data, are
+already committed separately (`d92e7fa`, before this entry): orphaned
+tcpdump/CPU-sampler background processes left running past a timed-out
+execution (confirmed live: two process pairs still running hours later
+on the L325 client and server, one of them having already corrupted a
+real CPU-sample file with a concurrent-write null-byte gap); and
+`consolidate_v8.py`'s per-run auxiliary-file lookups using the bare
+`run{NN}` stem, which never matched SSHExecutor's real `w{NN}_run{NN}`-
+prefixed files -- silently reporting every handshake/JWT/JWK/PKI term as
+"missing" for real pilot data until caught.
+
+**Before teardown: data pulled and verified, environment snapshot
+extended.** `campaign_pull.sh` + its own sha256 manifest confirmed all
+491 files transferred intact (`.pull-verified` present, every hash
+matched) -- `pilot_acceptance.py`'s Criterion 9 PASSED against that
+freshly-pulled directory, in its own natural `$DEST/v8/...`,
+`$DEST/.pull-verified`, `$DEST/campaign-data.sha256` layout. That data
+was then moved into the repository's own long-term location
+(`thesis/results/v8/latency/...`, matching v1-v7's own convention and
+`consolidate_v8.py`'s own usage docstring), with `.pull-verified`/
+`campaign-data.sha256` kept alongside it at `thesis/results/v8/` for
+the permanent record. Criterion 9 itself is NOT re-run against this
+final layout: it assumes `root` is the pull's own ephemeral `$DEST`
+(sibling `.pull-verified`/`campaign-data.sha256`/`v8/`), not a
+reorganized repo path -- re-running it there reports a structural
+path-convention mismatch, not a data-integrity regression (already
+ruled out: the move used plain file moves, no content touched, and the
+hash manifest's own content is unchanged and committed verbatim).
+`_campaign-control/environment/*.json` (written at campaign
+start with ami_id/instance_type/az/kernel/docker/chrony/rsync versions
+already) was extended, before teardown, with: per-interface MTU (real
+NIC `enp39s0`: 9001 on every server/client instance -- jumbo frames;
+`docker0`: 1500), CPU model/frequency/core count (`Intel(R) Xeon(R)
+Platinum 8488C`, 2400MHz, 2 cores on every instance), Python 3.9.25,
+Docker Compose v5.6.0, and each instance's own security-group ingress
+rules. The control instance's own SSH rule necessarily names the
+operator's real IP (by design -- that rule exists specifically to scope
+SSH to the operator) -- recorded as the literal string `"operator
+(redacted, never recorded in a file this repo tracks)"`, not the real
+CIDR, in the committed JSON. No account ID appears anywhere in these
+files either. Re-pulled and re-verified (sha256) after the edit.
+
+**Teardown, verified for real.** `campaign_down.sh` destroyed 27
+resources; all 7 regions touched this campaign (`sa-east-1`,
+`us-east-1`, `ap-northeast-1`, `ca-central-1`, `eu-north-1`,
+`ap-southeast-1`, `ap-northeast-2`) independently confirmed clean via
+direct `aws ec2 describe-instances`/`describe-security-groups` calls
+(no leftover instance, SG, or EIP tagged `Project=mockopin-pqc-aws`
+anywhere). The control instance -- safety-timer-EXEMPT by design,
+Decision 49 -- was confirmed destroyed via Terraform's own output
+(`module.control.aws_instance.this: Destruction complete after 20s`),
+not left to the (inapplicable) automatic shutdown. Real runtime: ~2h57m
+(23:01-01:58 UTC) across the 3 server/client instance groups plus
+control; estimated real cost **~US$0.93** (3x `m7i-flex.large` @
+~$0.0958/h + 1x `t4g.micro` @ ~$0.0084/h + 4x public IPv4 @ ~$0.005/h) --
+Luciano's own Billing console check is the authoritative figure (this
+account's IAM profile cannot read spend via API, Decision 44).
+
+**Criterion 1 recalibrated: `BASELINE_BYTES` was real, but stale.**
+Investigated the hypothesis "420 = 42 requests x 10 bytes" (every real
+pilot run of every profile came back exactly 420 bytes below the
+hardcoded baseline, byte-for-byte identical across all 60 executions).
+Ruled out by direct per-call diffing: a fresh real local-lab execution
+run THIS TURN, via the exact same code path (`of.start_tls_kem_proxy()`
++ `campaign_client_runner.py`'s own `la.run_once_timed_with_retry()`),
+against the still-running local dev stack (confirmed beforehand:
+`CRYPTO_PROFILE=classic` already set on its `mockapi` container, so no
+profile switch/recreate was needed), produced **125,065 / 275,380 /
+331,219 bytes** (classic/pqc/hybrid) -- matching the real pilot's own
+total EXACTLY, 0 byte-level diffs across all 42 calls, even though this
+fresh local run used a DIFFERENT `requests` version (2.34.2, this
+machine's own venv) than the one pinned for the real campaign (2.32.5,
+`requirements.txt`) -- ruling out a library-version explanation too.
+Confirmed deterministic across the full dataset: all 60 real executions
+(10 runs x 2 scenarios x 3 profiles) land on exactly one of these three
+values, zero variance. `BASELINE_BYTES` (125,485/275,800/331,639) was
+itself a real capture (Decision 68, same mechanism, same kind of local
+run) -- just from an earlier git revision of `opin_flow.py`/
+`baseline_automation.py`'s own call-recording path, before it evolved
+between Decisions 68 and 76. Recalibrated `BASELINE_BYTES` to
+125,065/275,380/331,219 in `pilot_acceptance.py`, documented in the
+constant's own comment: a baseline for this criterion must come from a
+real run of the CURRENT code (local-lab or real campaign -- now proven
+byte-for-byte identical between the two), re-captured whenever
+`do_call()`/`_capture_hop()`/`header_bytes()` change, not hand-edited.
+Criterion 1: 60/60 PASS.
+
+**Criterion 11's real root cause: the pcap handshake-bytes extractor
+undercounted any multi-segment flight, not "the first segment"
+literally.** The real pilot showed classic at -4.52% (close to local
+calibration's -3.3%/-5.5%) but PQC/hybrid at -92%/-90% (local
+calibration: -10%/-2.6%) -- the signal the investigation plan named
+explicitly. Root cause, confirmed via a real packet-by-packet trace
+(`tshark`-equivalent manual parse, both PQC and Hybrid, real L0
+captures): the real campaign's 1500-byte path MTU (vs. the local lab's
+effectively-unbounded loopback MTU) splits a PQC/hybrid ClientHello
+(ML-KEM/ML-DSA key material) across 2+ TCP segments. The OLD
+`extract_clean_handshake_bytes()` state machine advanced its phase on
+ANY packet from the other direction -- including a zero-payload ACK --
+so segment 2 of the SAME ClientHello (still client->server, real data)
+was misread as "the client's own later flight starting", and the very
+next packet (a bare ACK from the server, 0 payload) was then misread as
+"the server responded, flight over" -- closing the connection's count
+at just the ClientHello's own ~1.8KB, before the real ~20KB
+ServerHello/Certificate flight (captured right after, confirmed in the
+trace) was ever reached. Classic's much smaller ClientHello rarely
+needs a second segment, so the bug barely showed there -- which is
+exactly why local calibration (small captures, large MTU headroom)
+never caught it. Fixed in `pcap_utils.py`'s
+`extract_clean_handshake_bytes()`: zero-payload segments are now
+skipped entirely (never a phase signal, in either direction), and phase
+advances only on a genuine DIRECTION CHANGE between real-data segments
+-- so an unbounded run of same-direction segments (however many a large
+flight needs) is handled uniformly. Verified against the gateway's own
+independent count (`mtlsHandshakeBytes`): **0.00% diff, all 3 profiles,
+both scenarios, all 60 real executions, zero variance** -- not merely
+"closer", exact. A second, smaller bug found alongside it: L325 (non-
+colocated) connections matched 0 of 6 per run, because
+`term_handshake_pcap()` matched by the full (ip, port) tuple, and a
+cross-region client's own egress is SNAT'd through its Internet Gateway
+to its public IP by the time the server's gateway log sees it (private
+IP in the client's own pcap, public IP in the gateway log -- confirmed
+live, same 6 ephemeral ports, different IP, one real L325 run). Fixed
+to match by port alone (SNAT/PAT preserves the source port; confirmed
+true in every connection checked; collision risk negligible at this
+project's own concurrency). Criterion 11 now reports 0.00% diff for
+every profile/scenario including L325, no RTT-dependence shift --
+`HANDSHAKE_SOURCE` stays `"gateway"` (no signal to switch it).
+`tests/test_handshake_gateway_vs_pcap.py`/
+`tests/test_criterion_11_handshake_rtt.py` updated: their own original
+expected values (constant pcap size; -4.52%/-10.22%/-2.60% diffs) were
+the OLD bug's own output, baked in as if correct -- both rewritten to
+assert the real, now-confirmed invariant (pcap matches gateway exactly,
+per connection).
+
+**Packet loss, measured from pcap (ICMP is blocked by the real
+security groups, confirmed -- every pilot `_ping.json` has
+`raw_ping_output: null`).** Added `detect_loss_signals()`
+(`pcap_utils.py`): counts, per TCP connection in a client pcap,
+retransmissions (a data segment's sequence number already seen, same
+direction), out-of-order segments (sequence number below the highest
+already seen, same direction), and duplicate-ACK events (3+ consecutive
+identical-ack zero-payload segments, counted once per run of 3+, the
+classic RFC 5681 fast-retransmit signal) -- reusing the same pcaps
+already collected for the handshake-bytes term, no new collection
+needed. Wired into `consolidate_v8.py`'s `rtt_and_loss` block
+(`pcap_loss_signals`, aggregated across a scenario's own clean runs) and
+`CONSOLIDATED_REPORT.md`. When zero loss events are observed, the rule
+of three (~95% one-sided upper bound on a true event rate given zero
+occurrences in n trials) is reported instead of a bare 0%, so "none
+observed" and "impossible" stay visibly distinct. Real result, all 6
+profile/scenario cells: 0 retransmissions, 0 out-of-order, a handful of
+duplicate-ACK events (4-12 per cell, out of 2,513-4,960 segments) --
+observed loss_pct between 0.08% and 0.48%, no scenario hitting the
+zero-event/rule-of-three branch. Too small a signal, over only 10
+executions/cell, to say anything about L0-vs-L325 or classic-vs-PQC
+differences -- reported as-is, not interpreted further.
+
+**Proposed, NOT applied: a Terraform ICMP /32-per-client rule for a
+reference ping.** Would mirror the existing
+`aws_vpc_security_group_ingress_rule.gateway` pattern exactly (same
+`var.gateway_ingress_cidrs` map, same per-client /32 scoping,
+`ip_protocol = "icmp"`, `from_port = 8` [echo request], `to_port = -1`
+[all codes]) in `modules/campaign_instance/main.tf`. Recommendation:
+**not worth adding.** The pcap-based measurement above already works,
+needs no new collection step, and adds no new exposed surface on a
+public-facing security group (even /32-scoped, ICMP ingress is still
+attack surface this project doesn't currently have); the "3/n bytes"
+precision ICMP would add (compared to pcap's own TCP-level evidence)
+is not worth that tradeoff given pcap already produces a usable,
+cross-checked-against-nothing-else-available signal.
+
+**T_fluxo(PQC) - T_fluxo(Classic): reported, not concluded.** Luciano's
+own observation confirmed: the gap is ~3.17s at L0 (5.481s - 2.312s) and
+~3.19s at L325 (23.288s - 20.103s) -- essentially the same regardless of
+~325ms of real added RTT. Decomposition with what this turn's own data
+can separate (median values, real pilot data):
+
+| | handshake (6 conns, gateway `handshakeDurationMs`) | server processing (28 reqs, `opinDurationMs`) | remainder (T_fluxo minus both) |
+|---|---|---|---|
+| classic, L0 | 0.084s | 0.168s | 2.060s |
+| pqc, L0 | 0.018s | 0.168s | 5.295s |
+| hybrid, L0 | 0.084s | 0.196s | 5.844s |
+| classic, L325 | 2.067s | 0.168s | 17.868s |
+| pqc, L325 | 2.004s | 0.168s | 21.116s |
+| hybrid, L325 | 2.064s | 0.252s | 22.168s |
+
+PQC's own measured handshake-establishment time is NOT larger than
+classic's (if anything, slightly smaller by this metric, both L0 and
+L325) -- the gateway's `handshakeDurationMs` only times the TLS
+negotiation itself, not any of the ML-KEM/ML-DSA computation elsewhere
+in the flow. Server-processing time (`opinDurationMs`, RS-side only) is
+essentially flat across profiles too. Virtually the entire PQC-vs-
+classic gap (~3.2s at L0 AND at L325 alike) lands in "remainder" --
+and because that gap does NOT grow with RTT, it is NOT explained by
+extra network round trips (which would scale with RTT, the way the
+handshake term itself clearly does: ~2s added at L325, ~0s at L0, for
+every profile equally). **Current data cannot separate CPU cost from
+network cost within "remainder"**: it bundles client-side cryptographic
+work (ClientHello construction, certificate/signature verification),
+the AS's own JWT/JWS signing and verification (a separate component,
+not covered by `opinDurationMs`, which is mock_mtls/RS-only), and
+whatever ordinary network round trips the flow always makes -- with no
+separate timestamp currently collected for any of those three. A
+promising next step for the FULL campaign (not chased further here, on
+only 10 executions/cell): `calls.jsonl`'s own per-call `latency_ms`
+(already collected, already in `latency_per_endpoint_ms`) could show
+whether specific calls' own latency grows with RTT at the same rate in
+every profile (consistent with "same round trips, extra CPU on top") or
+a different rate (consistent with "extra round trips somewhere in the
+PQC/hybrid path") -- not attempted this turn, explicitly flagged as
+future work rather than guessed at from an undersized sample.
+
+**What to adjust before the full campaign** (supersedes nothing --
+first entry in this list; previous "depois do piloto" lists, Decisions
+83/84, are now fully executed):
+1. `BASELINE_BYTES`/`pilot_acceptance.py`'s Criterion 1 and `pcap_utils.
+   py`'s `extract_clean_handshake_bytes()`/Criterion 11 are now both
+   fixed and verified against this pilot's own real data -- no further
+   action needed before scaling up, beyond normal regression coverage.
+2. Packet-loss reporting (`pcap_loss_signals`) is new and only
+   cross-checked against this pilot's own small (10 executions/cell)
+   sample -- worth a sanity look once the full campaign's much larger
+   sample exists, same reasoning as the T_fluxo decomposition above.
+3. The T_fluxo(PQC-classic) decomposition above is explicitly NOT a
+   conclusion -- the full campaign's larger N is what could actually
+   support separating CPU from network cost (e.g. via per-call latency
+   growth across RTT), if that question still matters once real data
+   at scale exists.
+4. ICMP ingress: decided NOT to add it (see above) -- no action item,
+   recorded so it isn't re-litigated from scratch next time.
+5. Everything else (colocated routing, pre-flight connectivity,
+   time/cost budget, orphaned-process cleanup, consolidate_v8.py's
+   window-prefix naming) already ran clean through a full, real,
+   60-execution pilot with zero recurrence of any earlier bug -- no
+   further changes identified.
+
