@@ -73,7 +73,26 @@ from pcap_utils import (  # noqa: E402 -- shared with consolidate_v8.py, see tha
     find_syn_synack_rtt,
 )
 
-BASELINE_BYTES = {"classic": 125_485, "pqc": 275_800, "hybrid": 331_639}
+# Recalibrated 2026-10-25 (DECISIONS.md, Decision 85): the previous
+# values (125,485 / 275,800 / 331,639, Decision 68) were a real capture
+# too, but from an EARLIER git revision of opin_flow.py/
+# baseline_automation.py, run before this project's own code evolved
+# between Decisions 68 and 76 -- not an environment or library-version
+# difference (confirmed: a fresh run against today's code, in a venv
+# with a DIFFERENT requests version (2.34.2) than the one pinned for
+# the real campaign (2.32.5), still reproduces the number below exactly,
+# so library version is not the variable). The values below are
+# double-verified, byte-for-byte, zero variance: (a) all 60 real pilot
+# executions (10 runs x 2 scenarios x 3 profiles, real AWS, sa-east-1)
+# produce exactly this total in every single one, and (b) a fresh local
+# run against the live local-lab stack, same day, reproduces the exact
+# same per-call bytes for all 42 calls, zero diffs. A baseline for this
+# criterion must come from a real run of the CURRENT code (local-lab or
+# real campaign, byte-for-byte identical between the two) -- re-running
+# this capture after any future change to opin_flow.py's call-recording
+# path (do_call()/_capture_hop()/header_bytes()) is the correct way to
+# refresh it, not hand-editing the numbers.
+BASELINE_BYTES = {"classic": 125_065, "pqc": 275_380, "hybrid": 331_219}
 # Item 3 (2026-10-22): v7's own report_data_v7.json OPINsize figures.
 V7_OPINSIZE = {"classic": 76_929, "pqc": 322_895, "hybrid": 350_477}
 # Tolerance, justified: this turn's own real local-flow measurement

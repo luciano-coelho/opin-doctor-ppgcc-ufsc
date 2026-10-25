@@ -75,7 +75,7 @@ from campaign_run import (  # reused, not reimplemented -- see module docstring 
     _CLIENT_EXPECTED_CURVE,
     _CORRELATION_WINDOW_SECONDS,
 )
-from pcap_utils import extract_clean_handshake_bytes  # noqa: E402 -- shared, see pcap_utils.py's own docstring
+from pcap_utils import extract_clean_handshake_bytes, detect_loss_signals  # noqa: E402 -- shared, see pcap_utils.py's own docstring
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_REPO_ROOT / "thesis" / "scripts"))
@@ -322,30 +322,81 @@ def term_handshake_pcap(client_pcap_path, gateway_log_text, profile):
     `pilot_acceptance.py`), ClientHello through the client's own Finished
     only, excluding the first-request leakage `term_handshake()`'s own
     gateway-log source carries (Decision 78). Filtered to the SAME
-    client-facing connections `term_handshake()` already identifies
-    (matched by (ip, port) -- both sides log/capture the same physical
-    TCP 4-tuple, no NAT between client and server in this project's own
-    topology), not a second, independent curve-based filter. Returns
+    client-facing connections `term_handshake()` already identifies,
+    matched by the client's own source PORT alone -- not the full (ip,
+    port) tuple as originally assumed here. Confirmed real and necessary
+    2026-10-25 (DECISIONS.md, Decision 85): a non-colocated scenario
+    (L325) routes client->server traffic over the client's own Internet
+    Gateway to the server's public IP, which SNATs the client's pcap-
+    visible private IP (e.g. `172.31.3.110`) to its own public/Elastic IP
+    (e.g. `13.228.42.155`) by the time the server's gateway log sees it --
+    confirmed live, byte for byte, same 6 ephemeral ports present on both
+    sides of a real L325 run, different IP. Standard SNAT/PAT preserves
+    the source port whenever possible (and did, in every real connection
+    checked); IP-based matching only ever happened to work for L0, where
+    `pick_gateway_ip()`'s own private-IP routing means there is no NAT to
+    begin with. A port-collision false match is not a practical risk at
+    this project's own concurrency (a handful of client-facing
+    connections per execution, ephemeral high port range). Returns
     (count, total_bytes) -- same median x count definition as
     `term_handshake()`. Needs BOTH files (pcap for the real bytes, the
     gateway log for which connections are client-facing) -- returns
     (None, None) if either is missing, never a guess from one alone."""
     if not client_pcap_path or not Path(client_pcap_path).is_file() or not gateway_log_text:
         return None, None
-    client_facing_addrs = set()
+    client_facing_ports = set()
     for h in client_facing_handshakes(gateway_log_text, profile):
         addr = h.get("remoteAddr")
         if addr:
-            ip, _, port = addr.rpartition(":")
-            client_facing_addrs.add((ip, int(port)))
-    if not client_facing_addrs:
+            _ip, _, port = addr.rpartition(":")
+            client_facing_ports.add(int(port))
+    if not client_facing_ports:
         return None, None
     pcap_connections = extract_clean_handshake_bytes(client_pcap_path)
-    sizes = [v["clean_handshake_bytes"] for key, v in pcap_connections.items() if key in client_facing_addrs]
+    sizes = [v["clean_handshake_bytes"] for (_ip, port), v in pcap_connections.items() if port in client_facing_ports]
     if not sizes:
         return None, None
     median_bytes = statistics.median(sizes)
     return len(sizes), len(sizes) * median_bytes
+
+
+def pcap_loss_summary(client_pcap_paths):
+    """Aggregates `detect_loss_signals()` (pcap_utils.py) across every
+    execution's own client pcap in a scenario, into one estimate.
+    Added 2026-10-25 (DECISIONS.md, Decision 85): the real campaign's
+    security groups block ICMP (PILOT_RUNBOOK.md's own abort-criteria
+    table), so the pre-existing ping-based loss figure above is never
+    populated against real pilot data -- this is TCP's own, always-
+    available loss evidence instead, read from the same pcaps already
+    collected for the handshake-bytes term, not a new collection need.
+
+    When zero loss events are observed across every segment seen, "0%"
+    would overstate the confidence a small sample actually supports --
+    the rule of three (the standard ~95% one-sided upper bound on a
+    true event rate, given zero occurrences in n independent trials) is
+    reported instead, so "no loss observed" and "loss is impossible"
+    stay visibly different."""
+    total_segments = 0
+    totals = {"retransmissions": 0, "out_of_order": 0, "duplicate_ack_events": 0, "loss_events": 0}
+    n_pcaps = 0
+    for p in client_pcap_paths:
+        if not p:
+            continue
+        r = detect_loss_signals(p)
+        n_pcaps += 1
+        total_segments += r["total_segments"]
+        for k in totals:
+            totals[k] += r[k]
+    if n_pcaps == 0:
+        return None
+    out = {"n_executions": n_pcaps, "total_segments": total_segments, **totals}
+    if totals["loss_events"] == 0:
+        out["loss_pct"] = None
+        out["loss_pct_upper_bound_rule_of_three"] = round(3 / total_segments * 100, 4) if total_segments else None
+    else:
+        out["loss_pct"] = round(totals["loss_events"] / total_segments * 100, 4) if total_segments else None
+        out["loss_pct_upper_bound_rule_of_three"] = None
+    return out
 
 
 def parse_access_log_entries(gateway_log_text):
@@ -527,6 +578,7 @@ def consolidate_profile_scenario(scenario_path, profile):
 
     ping_samples = [load_ping(scenario_path / "client" / f"{r['run_stem']}_ping.json") for r in clean_rows]
     ping_samples = [p for p in ping_samples if p]
+    pcap_loss = pcap_loss_summary([r["client_pcap"] for r in clean_rows])
     cpu_server = [load_cpu_mem(scenario_path / "server" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_server = [c for c in cpu_server if c]
     cpu_client = [load_cpu_mem(scenario_path / "client" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
@@ -572,8 +624,9 @@ def consolidate_profile_scenario(scenario_path, profile):
         "rtt_and_loss": {
             "n_samples": len(ping_samples),
             "rtt_avg_ms": stats_block([p["rtt_avg_ms"] for p in ping_samples if "rtt_avg_ms" in p]) if ping_samples else None,
-            "loss_pct_upper_bound_max": max((p["loss_pct_upper_bound"] for p in ping_samples if "loss_pct_upper_bound" in p), default=None),
-        } if ping_samples else None,
+            "loss_pct_upper_bound_max_from_ping": max((p["loss_pct_upper_bound"] for p in ping_samples if "loss_pct_upper_bound" in p), default=None) if ping_samples else None,
+            "pcap_loss_signals": pcap_loss,
+        } if (ping_samples or pcap_loss) else None,
         "cpu_server": cpu_server or None,
         "cpu_client": cpu_client or None,
     }
@@ -660,7 +713,20 @@ def render_report(data):
                 if m["rtt_and_loss"]:
                     rtt = m["rtt_and_loss"]["rtt_avg_ms"]
                     lines.append(f"- RTT avg: {rtt['median']:.2f}ms (median of samples)" if rtt else "- RTT: no samples")
-                    lines.append(f"- Packet loss (upper bound): {m['rtt_and_loss']['loss_pct_upper_bound_max']}%")
+                    ping_loss = m["rtt_and_loss"]["loss_pct_upper_bound_max_from_ping"]
+                    if ping_loss is not None:
+                        lines.append(f"- Packet loss (ICMP ping upper bound): {ping_loss}%")
+                    pl = m["rtt_and_loss"]["pcap_loss_signals"]
+                    if pl:
+                        if pl["loss_events"] == 0:
+                            lines.append(f"- Packet loss (TCP pcap evidence, {pl['n_executions']} executions, "
+                                          f"{pl['total_segments']} segments): 0 events observed -- "
+                                          f"upper bound {pl['loss_pct_upper_bound_rule_of_three']}% (rule of three)")
+                        else:
+                            lines.append(f"- Packet loss (TCP pcap evidence, {pl['n_executions']} executions, "
+                                          f"{pl['total_segments']} segments): {pl['loss_pct']}% "
+                                          f"({pl['retransmissions']} retransmissions, {pl['out_of_order']} "
+                                          f"out-of-order, {pl['duplicate_ack_events']} duplicate-ACK events)")
                 lines.append("")
     return "\n".join(lines)
 

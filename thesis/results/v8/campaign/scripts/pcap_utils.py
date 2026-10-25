@@ -137,29 +137,57 @@ def extract_clean_handshake_bytes(pcap_path):
     own packet sequence reproduces that trace's own manual breakdown
     exactly (18,523 B for the real Hybrid connection traced by hand).
 
-    Phases, driven only by DIRECTION and whether a segment carries data
-    (len>0) -- never by content, so this works even at the real
-    snaplen=256 capture, nothing here needs full packets:
-      0 (ClientHello):    first client->server segment with a captured
-                           byte 0x16 (plaintext -- always visible). Ends
-                           the moment it's seen.
-      1 (server flight):  consume consecutive server->client segments.
-                           A client->server segment with real data
-                           (len>0) ends this phase (pure client ACKs of
-                           the server's own data are ignored, not an
-                           end-of-phase signal).
-      2 (client flight):  consume consecutive client->server segments
-                           with real data. ANY server->client segment
-                           (data or pure ACK) ends this phase -- the
-                           server responding at all, in any form, means
-                           the client's own flight is done.
-      3 (closed):          stop summing for this connection.
+    Phases, driven by DIRECTION RUNS over real-data segments only (never
+    by content, so this works even at the real snaplen=256 capture,
+    nothing here needs full packets) -- fixed 2026-10-25 (DECISIONS.md,
+    Decision 85) after this originally "one packet = one flight" version
+    was found, against real pilot pcaps, to massively undercount PQC/
+    hybrid (-92%/-90% vs the gateway's own count) while barely affecting
+    classic (-4.5%): at the real campaign's 1500-byte path MTU (vs the
+    local lab's loopback MTU, effectively unbounded), a PQC/hybrid
+    ClientHello (large ML-KEM/ML-DSA key material) itself spans 2+ TCP
+    segments -- confirmed live, byte for byte, against a real captured
+    connection: segment 1 (1448B, starts 0x16) created the old state
+    machine's phase 1, and segment 2 (336B, same direction, still part
+    of the SAME ClientHello) was wrongly read as "the client's own later
+    flight", immediately followed by a bare ACK from the server (0
+    payload bytes) that the old phase-2 rule treated as "the server
+    responded, flight over" -- closing the connection's count at just
+    the ClientHello's own 1784 bytes, before the real ServerHello/
+    Certificate flight (captured right after, true_len=7240 in that same
+    trace) was ever reached. A zero-payload ACK carries no TLS bytes and
+    must never drive a phase transition in either direction (that half
+    of the old logic was already right for phase 1's client ACKs, just
+    not applied symmetrically to phase 2's server ACKs) -- and a single
+    logical flight can span an unbounded run of same-direction segments,
+    not just one. Fixed model: skip every zero-payload segment outright,
+    then advance phase only on an actual DIRECTION CHANGE between
+    consecutive real-data segments:
+      1 (ClientHello run):  starts at the first client->server segment
+                             with a captured byte 0x16. Consumes every
+                             following same-direction (client->server)
+                             real-data segment -- the ClientHello's own
+                             continuation segments.
+      2 (server flight run): starts at the first direction change (the
+                              first server->client real-data segment --
+                              ServerHello onward). Consumes every
+                              following same-direction segment.
+      3 (client flight run): starts at the next direction change (the
+                              client's own Certificate/CertificateVerify/
+                              Finished). Consumes every following same-
+                              direction segment.
+      4 (closed):            starts at the next direction change (the
+                              server responding again, post-handshake --
+                              Decision 78's own first-request-leakage
+                              boundary). This triggering segment's bytes
+                              are deliberately NOT added, same as the old
+                              model's phase-2-to-3 closing transition.
 
     Returns a dict per distinct client-facing TLS connection (4-tuple)
     found in the file: {"clean_handshake_bytes": int, "n_packets": int,
     "client_tuple": (ip, port), "server_tuple": (ip, port)}, keyed by
     the client's own (ip, port). A connection whose ClientHello is never
-    found, or that never reaches phase 3, is omitted -- never reported
+    found, or that never reaches phase 4, is omitted -- never reported
     with a guessed/partial value."""
     connections = {}  # (client_ip, client_port) -> state dict
     results = {}
@@ -174,38 +202,31 @@ def extract_clean_handshake_bytes(pcap_path):
             client_key, is_from_client = (dst_ip, dst_port), False
         else:
             continue
+        if true_len == 0:
+            continue  # pure ACK/SYN/FIN control segment -- no TLS bytes, never a phase signal
 
         state = connections.get(client_key)
         if state is None:
             if not is_from_client or len(captured) < 1 or captured[0] != 0x16:
                 continue  # waiting for this connection's own ClientHello
-            state = {"phase": 1, "bytes": true_len, "n": 1,
-                     "server_ip": dst_ip if is_from_client else src_ip,
-                     "server_port": dst_port if is_from_client else src_port}
+            state = {"phase": 1, "bytes": true_len, "n": 1, "last_from_client": True,
+                     "server_ip": dst_ip, "server_port": dst_port}
             connections[client_key] = state
             continue
-        if state["phase"] == 3:
+        if state["phase"] == 4:
             continue  # already closed -- later packets on this connection are ignored
 
-        if state["phase"] == 1:
-            if is_from_client and true_len > 0:
-                state["phase"] = 2
-                state["bytes"] += true_len
-                state["n"] += 1
-            elif not is_from_client:
-                state["bytes"] += true_len
-                state["n"] += 1
-            # a client pure-ACK during phase 1 contributes 0 bytes either way -- skip silently
-        elif state["phase"] == 2:
-            if is_from_client and true_len > 0:
-                state["bytes"] += true_len
-                state["n"] += 1
-            elif not is_from_client:
-                state["phase"] = 3  # any server response at all closes the client's own flight
-            # a client pure-ACK during phase 2: ignore, same reasoning as phase 1
+        same_direction = is_from_client == state["last_from_client"]
+        if not same_direction:
+            state["phase"] += 1
+            state["last_from_client"] = is_from_client
+            if state["phase"] == 4:
+                continue  # the closing run's own first segment is excluded, not counted
+        state["bytes"] += true_len
+        state["n"] += 1
 
     for client_key, state in connections.items():
-        if state["phase"] != 3:
+        if state["phase"] != 4:
             continue  # never saw the server respond after the client's flight -- not a complete sample
         results[client_key] = {
             "clean_handshake_bytes": state["bytes"],
@@ -273,3 +294,116 @@ def find_syn_synack_rtt(pcap_path):
             if (src_ip, dst_ip, src_port, dst_port) == syn_tuple:
                 return ts - syn_ts
     return None
+
+
+def parse_tcp_packet_seq_ack(frame):
+    """Same Ethernet/IPv4/TCP parse as `parse_tcp_packet_true_len()`, plus
+    the TCP header's own sequence and ack numbers -- needed for
+    `detect_loss_signals()` below, nothing else here needs them so they
+    aren't added to the two existing parse functions. Returns (src_ip,
+    dst_ip, src_port, dst_port, flags, true_payload_len, seq, ack) or
+    None."""
+    if len(frame) < 14:
+        return None
+    eth_type = struct.unpack(">H", frame[12:14])[0]
+    offset = 14
+    if eth_type == 0x8100:
+        if len(frame) < 18:
+            return None
+        eth_type = struct.unpack(">H", frame[16:18])[0]
+        offset = 18
+    if eth_type != 0x0800:
+        return None
+    if len(frame) < offset + 20:
+        return None
+    ip_header = frame[offset:offset + 20]
+    ihl = (ip_header[0] & 0x0F) * 4
+    total_len = struct.unpack(">H", ip_header[2:4])[0]
+    proto = ip_header[9]
+    src_ip = ".".join(str(b) for b in ip_header[12:16])
+    dst_ip = ".".join(str(b) for b in ip_header[16:20])
+    if proto != 6:
+        return None
+    tcp_offset = offset + ihl
+    if len(frame) < tcp_offset + 20:
+        return None
+    tcp_header = frame[tcp_offset:tcp_offset + 20]
+    src_port, dst_port = struct.unpack(">HH", tcp_header[0:4])
+    seq, ack = struct.unpack(">II", tcp_header[4:12])
+    data_offset = (tcp_header[12] >> 4) * 4
+    flags = tcp_header[13]
+    true_payload_len = max(0, total_len - ihl - data_offset)
+    return src_ip, dst_ip, src_port, dst_port, flags, true_payload_len, seq, ack
+
+
+def detect_loss_signals(pcap_path):
+    """Packet-loss evidence from a pcap, without ICMP (the real campaign's
+    security groups block it -- Decision 85, PILOT_RUNBOOK.md): TCP
+    itself already signals loss on the wire, in three independent ways,
+    each counted per TCP connection (4-tuple) found in the file, client-
+    facing or not (the caller filters by connection if it needs to):
+
+      - retransmissions: a data-bearing segment (true_len > 0) whose
+        starting sequence number was already seen, same direction, same
+        connection -- the sender re-sent something already on the wire.
+      - out-of-order segments: a data-bearing segment whose sequence
+        number is BELOW the highest sequence number already seen, same
+        direction -- arrived behind a segment sent after it.
+      - duplicate-ACK events: three or more CONSECUTIVE zero-payload
+        segments, same direction, with the identical ack number -- the
+        classic fast-retransmit trigger (RFC 5681), counted once per run
+        of 3+, not once per packet (so one real loss event isn't
+        inflated into many).
+
+    Returns {"total_segments": int, "retransmissions": int,
+    "out_of_order": int, "duplicate_ack_events": int, "loss_events":
+    int} -- loss_events is the sum of the three signal counts, meant to
+    be read against total_segments (e.g. via the rule-of-three upper
+    bound when it's 0 -- pilot_acceptance.py/consolidate_v8.py's own
+    callers do that, not this function, which only counts)."""
+    seen_seqs = {}       # (4-tuple, direction) -> set of seq numbers seen
+    max_seq = {}         # (4-tuple, direction) -> highest seq number seen
+    last_dup_ack = {}     # (4-tuple, direction) -> (ack_number, run_length)
+    retransmissions = 0
+    out_of_order = 0
+    duplicate_ack_events = 0
+    total_segments = 0
+
+    for _ts, frame in read_pcap_packets(pcap_path):
+        parsed = parse_tcp_packet_seq_ack(frame)
+        if parsed is None:
+            continue
+        src_ip, dst_ip, src_port, dst_port, _flags, true_len, seq, ack = parsed
+        if dst_port != 443 and src_port != 443:
+            continue
+        total_segments += 1
+        conn_key = frozenset(((src_ip, src_port), (dst_ip, dst_port)))
+        direction = (src_ip, src_port)
+        dir_key = (conn_key, direction)
+
+        if true_len > 0:
+            seqs = seen_seqs.setdefault(dir_key, set())
+            if seq in seqs:
+                retransmissions += 1
+            elif dir_key in max_seq and seq < max_seq[dir_key]:
+                out_of_order += 1
+            seqs.add(seq)
+            max_seq[dir_key] = max(max_seq.get(dir_key, seq), seq)
+            last_dup_ack.pop(dir_key, None)
+        else:
+            prev = last_dup_ack.get(dir_key)
+            if prev and prev[0] == ack:
+                run_length = prev[1] + 1
+                if run_length == 3:  # count the EVENT once, when the 3rd identical ACK confirms it
+                    duplicate_ack_events += 1
+                last_dup_ack[dir_key] = (ack, run_length)
+            else:
+                last_dup_ack[dir_key] = (ack, 1)
+
+    return {
+        "total_segments": total_segments,
+        "retransmissions": retransmissions,
+        "out_of_order": out_of_order,
+        "duplicate_ack_events": duplicate_ack_events,
+        "loss_events": retransmissions + out_of_order + duplicate_ack_events,
+    }

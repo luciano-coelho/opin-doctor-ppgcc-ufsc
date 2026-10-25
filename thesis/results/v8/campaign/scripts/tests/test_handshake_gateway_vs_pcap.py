@@ -1,11 +1,20 @@
 """Regression test for the 2026-10-22 investigation into measuring the
-mTLS handshake bytes term independently from pcap (DECISIONS.md):
-confirms `consolidate_v8.py`'s `term_handshake_pcap()` produces a real,
-stable value from real local captures, and that it is consistently
-LOWER than the gateway's own `term_handshake()` -- the direction the
-investigation's own packet trace predicted (the gateway's own counter
-includes some of the first real request's bytes; the pcap-derived value
-does not).
+mTLS handshake bytes term independently from pcap (DECISIONS.md), and
+for the 2026-10-25 fix that superseded its own original conclusion
+(Decision 85): `extract_clean_handshake_bytes()`'s original phase state
+machine treated ANY packet from the other direction -- including a bare
+zero-payload ACK, and including a same-direction continuation segment
+of a still-in-progress ClientHello/flight -- as ending a phase. That
+silently undercounted every connection whose ClientHello or own flight
+spanned more than one TCP segment (barely visible on this project's own
+small local captures, catastrophic on the real campaign's PQC/hybrid
+captures at a real 1500-byte path MTU: -92%/-90% vs the gateway's own
+count). Fixed to advance phase only on a genuine direction change
+between real-data (non-zero-payload) segments. Confirmed here, on these
+SAME local fixtures: the pcap-derived value is not a separate, lower,
+"request-leakage-free" constant as originally believed -- it now
+matches the gateway's own per-connection value EXACTLY, because they
+are the same real quantity, measured two different ways.
 
 Fixtures: real `tcpdump -s 256` client pcaps + their MATCHED
 `server/run{NN}_gateway.log` (same container lifetime, same connections
@@ -45,36 +54,39 @@ def test_term_handshake_pcap_covered_and_below_gateway_value():
 
         gw_median = gw_total / gw_count
         pcap_median = pcap_total / pcap_count
-        # The investigation's own real packet trace (DECISIONS.md) found
-        # the gateway's own value is always >= the pcap-clean one, for
-        # every profile checked, because the gateway's own boundary lets
-        # some of the first real request's bytes in. A real regression
-        # (e.g. a bug flipping the phase-transition logic) would most
-        # likely show as pcap > gateway, which should never happen.
-        assert pcap_median <= gw_median, (
-            f"{profile}: pcap-clean handshake ({pcap_median}) should never exceed "
+        # Decision 85 (2026-10-25): the fixed extractor's pcap-derived
+        # value matches the gateway's own value EXACTLY on these
+        # fixtures (and on all 60 real pilot executions) -- not merely
+        # "never exceeds it", the original, now-superseded expectation.
+        assert pcap_median == gw_median, (
+            f"{profile}: pcap-clean handshake ({pcap_median}) should equal "
             f"the gateway's own value ({gw_median}) -- re-check the phase state machine")
 
         diff_pct = (pcap_median - gw_median) / gw_median * 100
         print(f"{profile}: gateway={gw_median:.0f} pcap={pcap_median:.0f} diff={diff_pct:+.2f}%")
 
 
-def test_term_handshake_pcap_deterministic_within_one_scenario():
-    """Same real finding the investigation reported: term_handshake_pcap
-    is the SAME value across every connection in one profile/scenario
-    (0% spread, like v7's own original classic/hybrid figures), while
-    the gateway's own value varies connection to connection -- because
-    the pcap-clean value never includes the (variable) first-request
-    leakage. Confirmed here via the same fixtures, not re-asserted by
-    assumption."""
+def test_term_handshake_pcap_matches_gateway_per_connection():
+    """Supersedes this file's own original "deterministic/constant"
+    expectation (Decision 85): that was an artifact of the pre-fix
+    extractor truncating every connection at the same fixed point (the
+    end of the ClientHello's own first segment), not a real property of
+    the handshake. The real, now-confirmed invariant is per-connection
+    EQUALITY with the gateway's own (genuinely variable, connection to
+    connection) value -- checked here individually, not just via the
+    median in the test above."""
     import pcap_utils as pu
     for profile in ("classic", "pqc", "hybrid"):
         gw_text = (FIXTURES / PROFILE_GATEWAY_LOG[profile]).read_text(encoding="utf-8")
-        client_facing_addrs = {
-            tuple([h["remoteAddr"].rsplit(":", 1)[0], int(h["remoteAddr"].rsplit(":", 1)[1])])
-            for h in cv8.client_facing_handshakes(gw_text, profile)
-        }
+        gw_by_addr = {}
+        for h in cv8.client_facing_handshakes(gw_text, profile):
+            ip, _, port = h["remoteAddr"].rpartition(":")
+            gw_by_addr[(ip, int(port))] = h["mtlsHandshakeBytes"]
         pcap_path = FIXTURES / PROFILE_PCAP[profile]
         connections = pu.extract_clean_handshake_bytes(pcap_path)
-        sizes = {v["clean_handshake_bytes"] for k, v in connections.items() if tuple(k) in client_facing_addrs}
-        assert len(sizes) == 1, f"{profile}: pcap-clean handshake size should be constant, got {sizes}"
+        matched = {k: v["clean_handshake_bytes"] for k, v in connections.items() if k in gw_by_addr}
+        assert len(matched) == len(gw_by_addr), (
+            f"{profile}: expected {len(gw_by_addr)} matched connections, got {len(matched)}")
+        for key, pcap_bytes in matched.items():
+            assert pcap_bytes == gw_by_addr[key], (
+                f"{profile}/{key}: pcap={pcap_bytes} != gateway={gw_by_addr[key]}")

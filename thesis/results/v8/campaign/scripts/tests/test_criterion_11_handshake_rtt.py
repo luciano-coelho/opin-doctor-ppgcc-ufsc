@@ -3,6 +3,15 @@ DECISIONS.md): gateway-vs-pcap handshake diff, per scenario, RTT
 dependence signal. Builds a real L0-only tree from this turn's own real
 captures (no L325 data exists locally -- that's expected and asserted
 explicitly, not papered over).
+
+EXPECTED_DIFF_PCT updated to 0.0 for all three profiles 2026-10-25
+(Decision 85): the original values (-4.52/-10.22/-2.60) came from the
+pre-fix `extract_clean_handshake_bytes()`, which undercounted any
+connection whose ClientHello or own flight spanned more than one TCP
+segment -- confirmed, against the real AWS pilot's own PQC/hybrid
+captures (1500-byte path MTU), to undercount by -92%/-90%. The fixed
+extractor matches the gateway's own value exactly, on these same
+fixtures and on all 60 real pilot executions alike.
 """
 import json
 import sys
@@ -16,9 +25,10 @@ FIXTURES = Path(__file__).parent / "fixtures" / "light_flow_check_2026-10-21"
 FLOW = {"classic": "classic_real_local_flow.json", "pqc": "pqc_real_local_flow.json", "hybrid": "hybrid_real_local_flow.json"}
 PCAP = {"classic": "classic_clienthello_s256.pcap.gz", "pqc": "pqc_clienthello_s256.pcap.gz", "hybrid": "hybrid_clienthello_s256.pcap.gz"}
 GWLOG = {"classic": "classic_gateway_s256_matched.log", "pqc": "pqc_gateway_s256_matched.log", "hybrid": "hybrid_gateway_s256_matched.log"}
-# Real diffs this turn measured (DECISIONS.md) -- asserted with a small
-# tolerance since they come from a live capture, not hand-typed.
-EXPECTED_DIFF_PCT = {"classic": -4.52, "pqc": -10.22, "hybrid": -2.60}
+# Real diffs measured with the fixed extractor (DECISIONS.md, Decision
+# 85) -- asserted with a small tolerance since they come from a live
+# capture, not hand-typed.
+EXPECTED_DIFF_PCT = {"classic": 0.0, "pqc": 0.0, "hybrid": 0.0}
 
 
 def _build_l0_tree(root):
