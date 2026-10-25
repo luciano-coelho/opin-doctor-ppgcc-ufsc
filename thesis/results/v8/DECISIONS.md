@@ -6851,3 +6851,207 @@ first entry in this list; previous "depois do piloto" lists, Decisions
    60-execution pilot with zero recurrence of any earlier bug -- no
    further changes identified.
 
+## 86. The "-420 bytes = 42 x 10" question resolved by git archaeology, not guessed: the old `BASELINE_BYTES` never matched v7's own real data at all (classic/hybrid: zero gap, confirmed against `report_data_v7.json` directly); PQC's real ~15.8KB gap is v7's own Decision 14 (post-quantum certs), already known, not a v8 regression. Pcap handshake extractor's independence from the gateway confirmed by a full run-by-run reconstruction. CPU-instrumentation evaluated, not implemented. Criterion 9 fixed for the final repo layout. No AWS touched.
+
+**Item 1 -- where the "10 bytes x 42 requests" actually came from.**
+Investigated by git archaeology, not assumption, per Luciano's own
+instruction to report before recalibrating anything further:
+
+- `BASELINE_BYTES = {"classic": 125_485, "pqc": 275_800, "hybrid":
+  331_639}` was introduced bare, with no comment and no citation, in
+  `f627e2b` (2026-10-19, the commit that first wrote
+  `pilot_acceptance.py`). `git log -S` across the ENTIRE repository
+  history (all refs) confirms the string `125_485`/`125,485`/`125485`
+  never appears anywhere BEFORE that commit in any form that traces to
+  a real measurement file -- the closest prior reference is this
+  project's own Decision 61 (2026-10-13 regression note, DECISIONS.md),
+  which already asserts "matches... local-lab baseline exactly
+  (classic 125,485...)" without citing where that baseline itself came
+  from. **It is not v7's own real figure**: `thesis/results/v7/
+  report_data_v7.json`'s own `size.classic.total_bytes_corrected`
+  field -- the actual, official, thesis-cited number -- is **125065**,
+  and `size.hybrid.total_bytes_corrected` is **331219** -- both EXACT
+  matches to this turn's own recalibration (previous entry, Decision
+  85), zero byte difference, for both profiles.
+- Confirmed live, not inferred: extracted `opin_flow.py`/
+  `latency_automation.py` at commit `20aa2f3` (2026-09-28 -- the exact
+  revision whose own code fed `4035ea6`'s "re-collect v7 latency
+  dataset" the very next day, i.e. the real v7-final client code) into
+  a throwaway copy, ran it live today against the still-running local
+  lab stack, classic profile: **125,065 bytes, 42 calls** -- not
+  125,485. The literal v7-final client code, run today, reproduces
+  today's number exactly, not the old hardcoded constant. (
+  `baseline_automation.py`, which does the actual byte counting, has
+  not changed at all since that commit -- confirmed, empty `git diff`.)
+  **Conclusion: there is no commit or Decision that introduced a real
+  10-bytes-per-request drift for classic/hybrid, because no such drift
+  exists against v7's own real data.** The old constant was a
+  transcription/measurement artifact from early-to-mid October,
+  apparently never reconciled against `report_data_v7.json` itself,
+  and this turn's recalibration already corrected it.
+- **PQC is different: a real, substantial, ALREADY-DOCUMENTED gap.**
+  v7's own `total_bytes_corrected` for pqc is **259552** -- NOT
+  275,380 (today's value, confirmed again this turn by running the
+  v7-final client code live: identical 275,380). The ~15.8KB
+  difference is v7's own **Decision 14** (`thesis/results/v7/
+  DECISIONS.md`: "PQC's certificate chain made genuinely post-quantum
+  end-to-end", commit `478bda5`, 2026-09-29): `client_one_pqc.crt`/
+  `mtls_pqc.crt`/`op_pqc.crt` were reissued to be signed by the
+  post-quantum root CA instead of the classical `ca.crt`, closing an
+  asymmetry an external review flagged. Confirmed directly: today's
+  `client_one_pqc.crt` DER is exactly **5879 bytes**, matching
+  `report_data_v7.json`'s own `client_cert_der_corrected: 5879` field
+  bit for bit -- that specific field WAS updated by Decision 14's own
+  `apply_pqc_ca_postquantum_correction.py`. But `478bda5` landed AFTER
+  `4035ea6`'s own latency re-collection that same day (`git merge-base
+  --is-ancestor 478bda5 4035ea6` → no) -- so `total_bytes_corrected`
+  itself, for pqc, was never refreshed with the new cert's real
+  on-wire size; only specific OPINsize-feeding fields were corrected
+  analytically. Today's code (and the real AWS pilot) correctly use
+  the CURRENT, Decision-14, fully-post-quantum cert -- 275,380 is the
+  right, up-to-date figure; v7's own 259,552 is the one that's stale
+  for this specific aggregate field. v7's own published report is
+  unchanged by this finding (official, closed, per standing project
+  policy) -- flagged here as context for v8's own baseline, not a
+  request to revisit it.
+- **No further `BASELINE_BYTES` change needed**: this turn's
+  archaeology CONFIRMS (does not merely re-assert) Decision 85's own
+  recalibration for all three profiles.
+
+**Item 2 -- the fixed pcap extractor's independence confirmed, not
+adjusted to match.** Reconstructed, by hand, the full directional-run
+sequence (every real-data TCP segment, grouped into same-direction
+runs, exactly what `extract_clean_handshake_bytes()` computes
+internally) for one real classic and one real pqc connection (pilot
+L0, run01):
+
+| | run 1 (ClientHello) | run 2 (server flight) | run 3 (client flight) | run 4+ (excluded) |
+|---|---|---|---|---|
+| classic | 341B, 1 seg | 2469B, 1 seg | 2363B, 3 seg | 1877B @ t+17ms, then the real flow's own HTTP traffic |
+| pqc | 1784B, 2 seg | 11272B, 2 seg | 9545B, 8 seg | 4156B @ t+6ms, then a ~493ms gap before the next client data |
+
+Sum of runs 1-3: **5173 (classic) / 22601 (pqc)** -- both match the
+gateway's own `mtlsHandshakeBytes` for that SAME connection EXACTLY,
+not just in aggregate. This reconstruction never reads the gateway's
+own value at any point -- it is built purely from TCP direction and
+payload length -- so the 0.00% match is the extractor correctly
+measuring the same real quantity the gateway measures, not an
+adjustment tuned to agree with it.
+
+**What the extractor actually measures, and the real limit on going
+further.** It measures ClientHello through the client's own last
+pre-response data run ("client Finished", by direction-boundary
+construction) -- run 4 in both examples above is excluded by design.
+Whether run 4 specifically IS a NewSessionTicket cannot be determined
+from the pcap alone: TLS 1.3 encrypts everything after ServerHello as
+opaque ApplicationData (0x17) at the record layer -- ClientHello/
+ServerHello are the only messages a passive capture can type by
+content; everything else is only distinguishable by DIRECTION, SIZE,
+and TIMING, never by decrypting it. Run 4's own signature (a small
+server-initiated push arriving a few ms after the client's own flight
+ends, before the client sends anything else) is consistent with Go's
+default behavior of pushing session tickets proactively -- but this is
+an inference from timing, not a certainty, and is reported as such.
+Either way, whatever run 4 actually is, it is excluded identically by
+direction alone, and the resulting total matches the gateway exactly
+in every one of the 60 real executions checked.
+
+**Decision 78's "first-request leakage" is not showing up in this real
+data.** That reasoning (gateway's own `countingConn` boundary reads its
+counter slightly after the handshake, letting a little of the first
+real request's bytes in) predates this turn's own extractor fix, and
+was itself based on comparing against the OLD, undercounting pcap
+figure -- which this turn's own root-cause finding (Decision 85) shows
+was the one that was wrong, not the gateway. With the extractor fixed,
+zero leakage of any kind is observable in any of the 60 real
+executions (0.00% diff, not merely "within tolerance"). Not re-litigated
+further here -- `HANDSHAKE_SOURCE` already stays `"gateway"`
+(Decision 85), and this is additional support for that choice, not a
+reason to revisit it.
+
+**Item 3 -- client-side CPU instrumentation (signing/verifying/KEM):
+evaluated only, NOT implemented, per Luciano's own explicit hold.**
+
+- **Signing (classical + hybrid's outer envelope): cheap to
+  instrument, low risk.** `opin_flow.py`'s own `pyjwt.encode(...,
+  algorithm="PS256"/"RS256", ...)` calls (two call sites) run
+  in-process, in Python -- wrapping each in `time.perf_counter()`
+  before/after is a 2-4-line, purely additive change per site, the
+  same pattern Decision 61 already used for `start_utc`/`end_utc`
+  (measured overhead there: ~2.97us/call, ~0.004% of a typical run's
+  T_fluxo -- not a candidate confound). Low risk to v7 comparability:
+  purely additive, changes nothing about what is actually sent.
+- **PQC signing (ML-DSA-65): instrumenting the CLIENT side only
+  measures a round trip, not pure CPU time.** The actual signing runs
+  inside a SEPARATE process (`_run_pqc_signer_service()`'s own
+  Node.js container, reached over a local HTTP call) -- wrapping that
+  `requests.post()` call measures loopback IPC + the signer's own
+  processing bundled together, not isolated CPU cost. Getting a clean
+  CPU-only number needs the signer service's OWN code instrumented
+  (its `server.mjs`) and that measurement returned in its response
+  payload -- a small protocol change, not just a client-side wrapper.
+  Moderate complexity, low risk (additive, doesn't change what's
+  signed).
+- **KEM (key exchange): lives in a different process entirely, in Go,
+  not Python.** The actual KEM/handshake crypto for pqc/hybrid happens
+  inside `tls_kem_proxy`'s own Go binary (`tls_kem_proxy/main.go` --
+  NOT `mock_mtls/main.go`, a different file; Luciano's own standing
+  "don't touch main.go" instruction is confirmed scoped to the
+  gateway's `mock_mtls/main.go` only, but this distinction should be
+  confirmed explicitly before any work here, since both files share a
+  name). Instrumenting it means new Go code around its own `tls.Dial()`
+  call, plus a new way to report that measurement back (a parseable
+  log line, mirroring the gateway's own access-log pattern, or a
+  side-channel HTTP endpoint). Classic has no KEM step at all (N/A for
+  that profile). Moderate-to-higher complexity than the Python-side
+  cases; still additive/low risk to comparability if done this way.
+- **Verification: does NOT exist in the flow today at all -- not an
+  instrumentation question, a prior, separate one.** Every JWT the
+  client receives is decoded with `pyjwt.decode(..., options=
+  {"verify_signature": False})` (confirmed, both call sites) -- the
+  simulated client never cryptographically verifies anything it
+  receives, today, in v7 OR v8. Instrumenting "time to verify" requires
+  first ADDING real verification to the flow -- a functional change
+  that would make the client do MORE work than it does today (and than
+  v7 ever did), changing T_fluxo itself, not merely observing it. This
+  needs Luciano's own explicit decision before it's even an
+  instrumentation question -- flagged, not assumed.
+- **Overhead/risk summary:** wrapping an existing call is negligible
+  (microseconds, Decision 61's own measured precedent). The real
+  tradeoffs are (a) PQC-signing and KEM isolation both need a second
+  process's own code touched, not just the Python client, and (b)
+  verification isn't instrumentation at all -- it's a methodology
+  decision about whether to add new client-side work, which would
+  itself change what's being measured. **Waiting on Luciano's own call
+  on all three before writing any code.**
+
+**Item 4 -- Criterion 9 fixed for the final repo layout, without
+weakening the check.** `criterion_9()` (`pilot_acceptance.py`) assumed
+`root` IS campaign_pull.sh's own ephemeral `$DEST` (`.pull-verified`/
+`campaign-data.sha256`/`v8/` as direct siblings) -- true right after a
+pull, false once that data moves into `thesis/results/v8/latency/`
+(Decision 85), where `root` for every OTHER criterion becomes `thesis/
+results` (one level above "v8"). Fixed: `criterion_9()` now checks
+`root/.pull-verified` first (the original, pre-reorganization case),
+falling back to `root/v8/.pull-verified` (the final, committed-repo
+case) -- the manifest's own file-path entries (always "v8/latency/...")
+are still resolved against `root` either way, not the marker's own
+location, so a real hash mismatch is still caught regardless of which
+layout is in play. Re-run against `thesis/results` (the real,
+committed pilot data): **all 10 applicable criteria now PASS**
+(Criterion 7 stays N/A -- no tcpdump-A/B-toggle data in this pilot, as
+already documented). Test suite: 13/13 still pass.
+
+**Not a protocol change.** Nothing here touches what `campaign_run.py`
+measures or how; `mock_mtls/main.go` was not touched (only read, for
+the record of what Decision 14's `caCertPool()` change already does).
+No AWS touched this turn.
+
+**Open questions for Luciano:** (1) which of the three CPU-
+instrumentation items above, if any, to actually implement, and in
+what order; (2) whether "don't touch main.go" extends to `tls_kem_
+proxy/main.go` as well as `mock_mtls/main.go`, given KEM instrumentation
+would need the former; (3) whether real client-side JWT verification
+should ever be added to the simulated flow at all, independent of any
+instrumentation question.
+
