@@ -92,6 +92,29 @@ python latency_automation.py 0 --runs 10 --results-version v7 --experiment-numbe
 one-shot scripts under `scripts/` regenerate the individual proof artifacts
 under `results/v7/artifacts/<profile>/`.
 
+**v8 data is this thesis's own article data** (real AWS inter-region
+latency, `results/v8/`); v7 remains the pre-qualification historical
+experiment (simulated latency) and is not superseded.
+
+**Signature verification (v8, "fluxo completo" turn).** `opin_flow.py`
+cryptographically verifies every signed artifact it receives (id_token,
+JARM, RS-signed responses) in all 3 `CRYPTO_PROFILE` values, through one
+uniform mechanism (`verify_jwt()`/`decrypt_and_verify_jwt()`, always
+routed through `pqc-signer/`'s own persistent service, classic included,
+so a measured timing difference reflects the algorithm, not the
+verification architecture) -- `verify_signature=False` no longer appears
+anywhere in this file. `pqc-signer/signer_core.mjs` auto-detects hybrid's
+two independently-evolved dual-signature schemes (Strong Nesting for
+id_token/JARM, payload extension for RS responses) by signature shape.
+Mandatory negative tests (tampered signature, wrong key, wrong
+algorithm) live in `tests/test_signature_verification.py`, run per
+profile: `CRYPTO_PROFILE=<classic|pqc|hybrid> python -m pytest
+tests/test_signature_verification.py` (needs the local stack up). Full
+detail, the per-artifact/per-profile audit table, and the one documented
+exception (id_token's own JWE encryption stays classical in every
+profile, a pre-existing, deliberate decision) are in `results/v8/
+DECISIONS.md`, Decision 87.
+
 ## Metrics collected
 
 - **OPINsize** — the flow's total cryptographic-material size: mTLS

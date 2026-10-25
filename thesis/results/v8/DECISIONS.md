@@ -7055,3 +7055,221 @@ would need the former; (3) whether real client-side JWT verification
 should ever be added to the simulated flow at all, independent of any
 instrumentation question.
 
+## 87. Decision (registered per Luciano's own instruction): the v8 data, measured on real AWS, is the article's data; v7 stays the pre-qualification historical experiment. v8's flow is now COMPLETE end to end -- every signed artifact the client receives is cryptographically verified, in all 3 profiles, through one uniform mechanism; `verify_signature=False` no longer exists anywhere in `opin_flow.py`. No AWS touched.
+
+**Decision, as stated by Luciano, registered verbatim for the record:**
+the article's own reported numbers are v8's (real AWS inter-region
+latency); v7 remains in the thesis as the historical, pre-qualification
+experiment (simulated latency), not superseded, not deleted. Because of
+this, v8's own flow had to become genuinely complete before any further
+campaign data collection: every signature issued in the flow must be
+verified by whoever receives it, for all 3 profiles, with real negative
+tests proving a tampered/wrong-key/wrong-algorithm artifact is actually
+rejected -- not merely that a correct one passes.
+
+### Item 1 -- every signed artifact in the 42(+2)-call flow
+
+| Artifact | Signs | Should verify | Verified before this turn | Verified now |
+|---|---|---|---|---|
+| id_token | AS (classic: PS256; pqc: ML-DSA-65; hybrid: Strong Nesting, `idTokenExternalSigningKey.js`) | client | NO (`verify_signature: False`) | YES -- decrypted (JWE, see below) then signature-verified |
+| JARM (`response=` callback param) | AS (classic: PS256; pqc: ML-DSA-65; hybrid: Strong Nesting, `rehybridizeJwt()`) | client | NO (`verify_signature: False`) | YES |
+| RS-signed responses (consent/person bodies) | RS (classic: PS256; pqc: ML-DSA-65; hybrid: payload extension, `ResponseSigningService.java`) | client | NO (`parse_rs_body()`'s own docstring said so explicitly) | YES |
+| client_assertion | client | AS | YES (already, server-side -- `clientHybridAuth.js`) | unchanged -- not this script's own artifact to verify |
+| PAR request object | client | AS | YES (already, server-side) | unchanged, same reasoning |
+| access_token | AS | n/a | n/a | **not a JWT at all** -- confirmed live, opaque bearer string (e.g. `RFFxgM6ZBGBhWCwtP0GKCf1M-dw4sHtYtI4u2_Xd_vE`), introspected server-side by the gateway on every RS-facing call (`mock_mtls/main.go`'s own 401-on-no/bad-Authorization path, read not touched) -- nothing for the client to cryptographically verify |
+| JWKS response (AS's, RS's) | n/a (the key source itself) | n/a | n/a | not itself signed in this project -- the root of trust for everything else above, protected by the mTLS channel it's fetched over |
+| root-ca.pem / issuer-ca.pem (PKI/CRL stand-ins) | classic/hybrid: `ca.crt` (common anchor); pqc: `root_ca_pqc.crt` (real 2-level chain) | client | NO | YES -- `verify_ca_chain()`, new |
+
+**id_token's own JWE encryption (RSA-OAEP/A256GCM) is classical in ALL
+THREE profiles, including pqc -- confirmed live.** This is NOT a gap
+introduced or left open by this turn: it is a pre-existing, deliberate,
+already-documented decision (`thesis/results/v2/experiment2 - PQC/
+DECISIONS.md`, Decision 4; reaffirmed in `thesis/results/v4/DECISIONS.md`:
+"encryption already documented as staying classical across profiles...
+decided with the user: out of scope"). Migrating it would mean
+decrypting with the AS's key, re-signing, and re-encrypting with the
+CLIENT's own public key instead -- a materially bigger change than any
+other artifact here, explicitly deferred, not something this turn
+revisits. `id_token`'s INNER signature (once decrypted) DOES correctly
+follow each profile's own algorithm (`idTokenExternalSigningKey.js`,
+Decision 10, closes the gap the v4 entry above still described as open
+at the time) -- confirmed live: pqc's decrypted id_token is genuinely
+ML-DSA-65-signed, hybrid's is genuinely Strong-Nesting-signed (sigma1||
+sigma2, 4754 b64url chars, not an ordinary 342), only its OUTER envelope
+stays classical.
+
+**Verification mechanism -- deliberately the SAME structure in all 3
+profiles**, per Luciano's own explicit requirement: every profile's
+verification goes through the identical call site (`verify_jwt()`/
+`decrypt_and_verify_jwt()` in `opin_flow.py`), the identical call shape
+(one JSON HTTP POST to the SAME persistent Node service this project
+already used for pqc/hybrid SIGNING -- `thesis/scripts/pqc-signer/`), and
+the identical key source (the AS's/RS's own published `/jwks`).
+`start_pqc_signer_service()` is now started for classic too (previously
+a no-op there) -- classic's PS256 verification COULD run in-process via
+pyjwt directly; it is routed through this same service anyway, so a
+measured timing difference reflects the algorithm, not the architecture.
+`signer_core.mjs` gained: a unified `verify_jwt` dispatch (classic/pqc
+single-key via `jose.jwtVerify()`; hybrid auto-detects Strong Nesting vs
+payload extension by SIGNATURE LENGTH, not header.alg -- id_token's own
+header says plain "PS256" even when genuinely Strong-Nesting-signed,
+confirmed live, the same header-looks-ordinary asymmetry already
+documented for client_assertion/PAR, Decision 9) and a
+`decrypt_and_verify_jwt` dispatch (JWE unwrap via `jose.compactDecrypt()`,
+then the same verify path on the inner JWS). The hybrid dual-signature
+logic (`verifyStrongNesting()`, `verifyPayloadExtension()`) is DUPLICATED
+from `mock-service-os/mock_as/utils/opin/hybridVerification.js`/
+`payloadExtensionVerification.js`, not imported -- same precedent as
+`thesis/scripts/hybrid_verify.py`'s own existing mirror of the first one
+(separately deployed Node packages, no shared import path).
+
+**Real bugs found and fixed while building this, live:** (1) the RS's
+own `/jwks` is gated behind the SAME Bearer-token/introspection check as
+every other RS-facing call (confirmed: 401 without one) -- not fetchable
+before the first access token exists, so it is now fetched once per
+sub-flow, right after `cc_access_token`, not at the same point as the
+AS's own `/jwks`. (2) `isStrongNestingShaped()`'s first version crashed
+(uncaught `TypeError`) on a malformed/wrong-kty `classic_jwk` -- a REAL
+case, not hypothetical: a key-confusion negative test hits it directly.
+Fixed to fail closed (`{valid:false,...}`), with `handleRequest()`
+itself now wrapping both verify paths in try/catch so NO input can ever
+crash the service into an uncaught 500 instead of a clean rejection.
+
+**Negative tests, all mandatory cases, real artifacts, real local stack
+(`thesis/scripts/tests/test_signature_verification.py`), one process per
+profile (`CRYPTO_PROFILE=<profile> python -m pytest ...`):**
+
+| Profile | Tampered signature | Wrong key | Wrong algorithm | Scheme confusion (hybrid only) |
+|---|---|---|---|---|
+| classic | REJECTED | REJECTED | REJECTED | n/a |
+| pqc | REJECTED | REJECTED | REJECTED | n/a |
+| hybrid | REJECTED | REJECTED | n/a (dispatches by signature shape, not a declared alg) | REJECTED |
+
+One transient flake observed once during this turn's own testing
+(`test_tampered_signature_rejected`, classic, failed once inside a full-
+suite run immediately after a profile switch's own settling runs, passed
+every other time including immediately re-run alone and re-run as part
+of the full suite again) -- consistent with container/proxy startup
+timing right after `switch_crypto_profile.py`, not a logic defect
+(confirmed: the SAME test, SAME artifacts, passes deterministically once
+the stack has settled). Flagged here rather than silently re-run away.
+
+### Item 2 -- migration audit, real traffic, all 3 profiles
+
+| | Classic | PQC | Hybrid |
+|---|---|---|---|
+| mTLS KEM group (real, negotiated) | secp384r1 | mlkem1024 | secp384r1mlkem1024 |
+| mTLS client cert chain | `ca.crt` (RSA) | `root_ca_pqc.crt` (ML-DSA-65, self-signed) -> `client_one_pqc.crt` | `ca.crt` (RSA) + ML-DSA-65 alt-signature extension (`mock_mtls/main.go`, read only) |
+| client_assertion / PAR request object | PS256 | ML-DSA-65 | RS256 + payload-extension `pqc` claim (ML-DSA-65) |
+| JARM | PS256 | ML-DSA-65 | Strong Nesting (header genuinely `MLDSA65-RSA2048-PSS-SHA256`) |
+| RS-signed responses | PS256 | ML-DSA-65 | RS256 + payload-extension `pqc` claim (ML-DSA-65) |
+| id_token inner signature | PS256 | ML-DSA-65 | Strong Nesting (header says "PS256", real sig is sigma1\|\|sigma2) |
+| id_token outer encryption | RSA-OAEP/A256GCM | **RSA-OAEP/A256GCM (classical)** | RSA-OAEP/A256GCM |
+| AS /jwks "sig" entry kty | RSA | AKP | HYBRID (composed, decomposes to RSA+AKP) |
+| PKI/CRL stand-in chain | `ca.crt` signs both root-ca.pem/issuer-ca.pem (siblings, NOT a root->issuer chain) | real 2-level: root_ca_pqc self-signed, issuer_ca_pqc signed by it | same as classic (`ca.crt`) |
+
+**Verdict per profile, against Luciano's own stated criterion:**
+- **Classic: CONFIRMED.** No post-quantum algorithm anywhere, any
+  artifact, any channel -- confirmed by the table above, every row.
+- **PQC: CONFIRMED, with ONE documented, pre-existing exception.**
+  id_token's own JWE encryption (RSA-OAEP) is classical -- the one
+  classical algorithm remaining anywhere in this profile's own traffic,
+  already decided out of scope (Decision 4, `thesis/results/v2/
+  experiment2 - PQC/DECISIONS.md`; reaffirmed `thesis/results/v4/
+  DECISIONS.md`). Every other artifact and channel (mTLS KEM, mTLS
+  client cert chain, client_assertion, PAR, JARM, RS responses, id_token's
+  own inner signature, PKI/CRL chain) is fully ML-DSA-65/mlkem1024, zero
+  classical.
+- **Hybrid: CONFIRMED** against its own design (Decision 14 and
+  predecessors): every artifact that is supposed to carry BOTH a
+  classical and a post-quantum signature does (Strong Nesting for
+  id_token/JARM, payload extension for client_assertion/PAR/RS
+  responses), confirmed live, both halves independently verified,
+  AND-gated. id_token's own JWE encryption is classical here too, by the
+  SAME already-documented, profile-independent decision above -- not a
+  hybrid-specific gap.
+
+### Item 3 -- local recalibration, all 3 profiles, real runs
+
+| | Classic | PQC | Hybrid |
+|---|---|---|---|
+| call_count | 44 (was 42) | 44 | 44 |
+| total_bytes_exchanged | 126,777 | 281,654 | 339,145 |
+| N_JWT | 28 (unchanged) | 28 | 28 |
+| N_JWK | 6 (was 2) | 6 | 8 |
+| N_PKI | 4 (unchanged) | 4 | 4 |
+| N_mTLS | 6 (unchanged -- no new TLS connections, confirmed architecturally: the new call reuses an existing pool) | 6 | 6 |
+
+**The +2 calls (one per sub-flow) are the RS's own `/jwks`**, fetched
+once each, needed to verify RS-signed responses at all -- not possible
+to avoid (that key was never fetched anywhere in the original 42-call
+sequence) and not free: +1,712 bytes for classic (2 small RSA JWKS
+responses), proportionally similar for pqc/hybrid (their own larger
+keys). N_JWT is unaffected (the new calls aren't JWT-bearing). N_JWK
+rises because there are now 4 `/jwks` fetches total (2 AS + 2 RS, one
+pair per sub-flow) instead of 2, each contributing its own key count --
+not a uniform "+4" across profiles, since hybrid's own `/jwks` responses
+publish more keys per fetch (the composed HYBRID entry plus a
+standards-compatible plain RSA/AKP entry alongside it).
+
+**`BASELINE_BYTES`** (`thesis/results/v8/campaign/scripts/
+pilot_acceptance.py`) updated to `{"classic": 126_777, "pqc": 281_654,
+"hybrid": 339_145}`, documented in the constant's own comment. No other
+`pilot_acceptance.py`/`consolidate_v8.py` criterion hardcodes
+`call_count`/`N_JWK` against a fixed expected value (checked directly) --
+only this constant needed updating. The REAL AWS pilot data already
+committed (`thesis/results/v8/latency/`, Decision 85) was collected with
+the PRE-verification opin_flow.py (42 calls) -- it is now stale relative
+to this new baseline and would fail Criterion 1 if re-checked; this is
+expected, not a regression, and is exactly why the "what to adjust
+before the full campaign" list below exists. `consolidate_v8.py`'s own
+`term_jwk`/`n_jwk`/OPINsize computation reads these fields generically
+from whatever `calls.jsonl` actually contains, so it does not need a
+code change for the new counts -- only a future real campaign's own
+collected data will reflect them.
+
+**T_fluxo order (Classic < PQC < Hybrid): NOT re-confirmed with new
+statistical weight this turn.** Single-execution wall-clock times
+captured incidentally while validating the full flow (classic 3.59s,
+pqc 2.78s, hybrid 4.05s) do NOT show this order -- but these are ONE
+execution each, dominated by this run's own container/connection warm-up
+noise (no settling runs preceded these specific timed calls the way a
+real campaign's own protocol requires), not a comparable measurement.
+Not treated as evidence either way; a real T_fluxo comparison needs the
+existing, already-validated campaign protocol (settling runs, N>=10,
+warmup discarded), not a one-off call from this turn's own verification
+testing.
+
+**Full test suite:** `thesis/results/v8/campaign/scripts/tests/` --
+13/13 pass (unaffected by this turn, no campaign-script code touched).
+`thesis/scripts/tests/test_signature_verification.py` -- all mandatory
+cases pass, all 3 profiles (see table above).
+
+### Item 4 -- verdict
+
+**Fluxo completo: CONFIRMED.** Every signed artifact the client receives
+is now verified, in all 3 profiles, through one uniform mechanism;
+`verify_signature=False` no longer exists anywhere in `opin_flow.py`;
+all mandatory negative tests pass in all 3 profiles.
+
+**Migração total: CONFIRMED for classic and hybrid; CONFIRMED for pqc
+with one documented, pre-existing, out-of-scope exception** (id_token's
+JWE encryption, RSA-OAEP, Decision 4/thesis/results/v2 and v4) -- no
+other classical algorithm remains anywhere in pqc's own traffic.
+
+**What's missing / what to adjust before the next full campaign:**
+1. The real AWS pilot data already committed (Decision 85) predates this
+   turn's verification wiring (42 calls, old `BASELINE_BYTES`) -- a
+   future real campaign run will produce 44-call data under the NEW
+   baseline; the two are not directly comparable call-for-call without
+   accounting for the 2 new RS `/jwks` fetches per execution.
+2. T_fluxo's own Classic<PQC<Hybrid ordering needs re-confirming under
+   the new, verification-enabled flow, with the real campaign's own
+   protocol (N>=10, settling runs) -- not assumed unchanged just because
+   the flow's own shape is similar.
+3. The one transient test flake (classic, this turn) is worth a second
+   look if it recurs during real campaign execution, where a false
+   verification failure would abort a real, paid AWS run -- not treated
+   as a blocker here (reproduced zero times out of several additional
+   runs), but worth keeping an eye on.
+
