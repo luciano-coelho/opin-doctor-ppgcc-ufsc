@@ -18,11 +18,11 @@ superseded — but their numbers are not the ones to cite.
 
 Three cryptographic profiles of the same OPIN consent flow are compared:
 
-| Profile | Signatures | TLS key exchange |
-|---|---|---|
-| Classic | RSA (PS256) | ECDHE, single P-384 curve |
-| PQC | Pure ML-DSA-65 (NIST FIPS 204); certificates issued by an RSA CA | Pure ML-KEM-1024 (NIST FIPS 203) |
-| Hybrid | RSA + ML-DSA-65 combined (dual-signed certificates, payload-extension JWTs, Strong Nesting on the `id_token`/JARM) | SecP384r1MLKEM1024 (P-384 + ML-KEM-1024) |
+| Profile | X.509 certificate signature | JWT signature | TLS key exchange |
+|---|---|---|---|
+| Classic | RSA, PKCS1v1.5/SHA-256 (`sha256WithRSAEncryption` — X.509 almost never uses RSA-PSS) | PS256 (RSASSA-PSS) | ECDHE, single P-384 curve |
+| PQC | ML-DSA-65 (NIST FIPS 204) end to end — leaf certificate self-signed by an ML-DSA-65 root (no classical signature anywhere in the chain) | ML-DSA-65 | Pure ML-KEM-1024 (NIST FIPS 203) |
+| Hybrid | RSA, PKCS1v1.5/SHA-256 — **the same as Classic**. ML-DSA-65 material is present only as three inert, non-critical X.509 extensions the TLS handshake itself never reads (confirmed in `mock_mtls/main.go`) | Dual-signed, at the JWT layer only: `RS256` for client-issued artifacts (payload-extension, the ML-DSA-65 signature rides as an embedded `pqc` claim) and the composite `MLDSA65-RSA2048-PSS-SHA256` for AS-issued artifacts (Strong Nesting) | SecP384r1MLKEM1024 (P-384 + ML-KEM-1024) — the key EXCHANGE is genuinely hybrid; only the certificate's own signature stays classical |
 
 Each profile drives the same complete flow (consent, PAR, automated login,
 token exchange, resource queries — 28 HTTP calls across two sub-flows) and

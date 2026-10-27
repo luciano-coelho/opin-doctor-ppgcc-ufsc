@@ -7889,3 +7889,124 @@ AWS. Testes: 27 (`pytest tests/`) + 10 (`test_campaign_down_local_state.sh`)
 + 6 (`test_latin_square_order.py`, incluído nos 27) + 5
 (`test_validation_gate.py`, incluído nos 27) -- todos passando.
 
+## 91. Atestado de perfis (Classic/PQC/Hybrid), medido em execução real contra a stack local, sem AWS -- grupo TLS/versão/algoritmo de assinatura/JWT/JWKS/verificação/hash de config/teste negativo, com quantificação em bytes do custo real da extensão ML-DSA inerte do Hybrid; achado de imagem Docker única; nenhuma FALHA sem explicação concreta -- piloto 3 e campanha NÃO bloqueados
+
+`thesis/results/v8/PROFILE_ATTESTATION.md` (novo). Metodologia: uma
+execução real por perfil contra a stack local (sem AWS -- nada aqui
+precisava), com captura real de pacotes (sidecar `nicolaka/netshoot`
+rodando `tcpdump`/`tshark` no MESMO namespace de rede do container
+`insurance-server-lambdas-mtls-1`, via `--network container:...` --
+pacotes reais, não sintéticos) cruzada contra o log estruturado real do
+próprio gateway (`curveID`/`tlsVersion`/`cipherSuite`/
+`mtlsHandshakeBytes`/`clientCertBytes`) e contra os arquivos de
+certificado puxados DO CONTAINER RODANDO (`docker exec ... cat
+certs/...`, não da cópia local do repo). Commit medido:
+`ba63354f56a4b0860ec1c138cc65339cd01c08dd`; hashes de
+`opin_flow.py`/`mock_mtls/main.go`/`tls_kem_proxy/main.go`/
+`signer_core.mjs` registrados no próprio atestado.
+
+**Achados principais, todos PASSA depois da correção de redação abaixo**:
+- Grupo TLS negociado: Classic `CurveP384`/grupo IANA 24; PQC
+  `MLKEM1024`/grupo 514; Hybrid `SecP384r1MLKEM1024`/grupo 4589 --
+  confirmado por DUAS fontes reais independentes (pcap via `tshark` e
+  log do gateway), concordando exatamente nos 3 perfis. TLS 1.3 e
+  cipher `TLS_AES_128_GCM_SHA256` em todos.
+- Certificado X.509 (handshake): PKCS1v1.5/SHA-256 nos três perfis
+  (Classic e Hybrid, RSA-4096; PQC, ML-DSA-65). Nenhuma cadeia de 3
+  níveis existe -- é sempre folha->raiz direto (2 níveis); os arquivos
+  `root-ca.pem`/`issuer-ca.pem` servidos pelo Directory mock são
+  SEPARADOS da cadeia real do handshake mTLS, não fazem parte dela.
+- JWT/JWKS: PS256 (Classic), ML-DSA-65 (PQC), e no Hybrid dois
+  algoritmos reais distintos (`RS256` para artefatos emitidos pelo
+  cliente -- payload-extension, Decision 13; `MLDSA65-RSA2048-PSS-
+  SHA256` para artefatos emitidos pelo AS -- Strong Nesting, Decision
+  9) -- confirmado em JWTs reais capturados e em `/jwks` reais buscados
+  ao vivo. O `/jwks` do RS do Hybrid publica 2 entradas `sig`
+  (composta + cópia RS256, Decision 88, reconfirmado ao vivo); o do AS
+  publica só 1.
+- Verificação: 7 eventos reais de verificação por execução (das 44
+  chamadas, 7 carregam artefato assinado verificável), 21/21 sem
+  exceção nas 3 execuções reais desta sessão.
+- Hashes vs v7: certificados de servidor e de cliente de Classic/Hybrid
+  idênticos à v7. O certificado de CLIENTE PQC mudou (commit `478bda5`,
+  depois do fechamento oficial da v7) -- motivo real e já documentado
+  (fecha uma assimetria: a cadeia PQC da v7 tinha assinatura de CA
+  ainda clássica/RSA apesar da chave ser ML-DSA-65; agora é ML-DSA-65
+  ponta a ponta). `docker-compose.yml` também mudou (commit `27fc794`)
+  -- só ordem de boot, confirmado sem efeito no que é medido.
+- Teste negativo: os 3 perfis, como cliente, falharam o handshake real
+  contra um servidor de outro perfil -- `tls_kem_proxy`'s own log:
+  `remote error: tls: handshake failure`, alerta TLS real, não um
+  timeout de rede genérico.
+
+**Correção de redação (pedido explícito, mesma rodada)**: a primeira
+versão deste atestado marcou FALHA em 2 linhas por uma formulação de
+expectativa que conflava camadas -- corrigido tanto no atestado quanto
+em `thesis/README.md`'s própria tabela de perfis (coluna única
+"Signatures" dividida em "X.509 certificate signature" e "JWT
+signature", e a célula do PQC que dizia "certificates issued by an RSA
+CA" -- verdadeira antes do commit `478bda5`, falsa agora -- corrigida
+para refletir a cadeia ML-DSA-65 ponta a ponta atual). A regra, agora
+explícita nos dois lugares: PS256 é o algoritmo do JWT, não do
+certificado (que usa PKCS1v1.5 nos 3 perfis); no Hybrid, a troca de
+chaves TLS é híbrida, a autenticação do handshake (certificado) é RSA
+puro, e a assinatura dupla (Strong Nesting) vale só na camada JWT -- a
+extensão ML-DSA no certificado é inerte no handshake, lida mas nunca
+usada pelo `crypto/tls` (confirmado lendo `mock_mtls/main.go`, não
+alterado).
+
+**Quantificação em bytes (seção 7 do atestado)**:
+- O que a extensão ML-DSA soma ao termo de handshake do Hybrid: as 3
+  extensões X.509 custom (`2.5.29.72/73/74`) somam exatamente 5.301
+  bytes POR CERTIFICADO (medido via DER real, `mtls_hybrid.crt` e
+  `client_one_hybrid.crt` -- idêntico nos dois). Como mTLS transmite
+  os dois certificados (servidor + cliente) em cada um dos 6
+  handshakes client-facing do fluxo, isso soma **10.602 bytes/handshake
+  só da extensão** -- **76,6%** do delta real medido entre Classic e
+  Hybrid nos próprios `mtlsHandshakeBytes` do gateway nesta sessão
+  (5.112 B vs 18.950 B, delta 13.838 B). O restante (3.236 B) vem do
+  key share SecP384r1MLKEM1024 em si (maior que P-384 puro) mais 128 B
+  de overhead estrutural não-ML-DSA. Conclusão: a maior parte do custo
+  extra de bytes do handshake Hybrid é a extensão inerte, não a troca
+  de chaves PQC.
+- Efeito da correção do certificado de cliente PQC no OPINsize vs v7:
+  delta real medido do certificado em si, +2.926 bytes (DER: v7 2.953
+  B -> atual 5.879 B). O desvio total já PUBLICADO do OPINsize PQC
+  entre v7 (322.895 B) e `V8_OPINSIZE` (326.799 B) é +3.904 B (+1,21%,
+  dentro de ±3%). **Tensão real, registrada em aberto, não
+  reconciliada**: propagar o delta do certificado de cliente sozinho
+  pelos 6 handshakes client-facing (mesmo método da seção 7a) previra
+  um efeito de +17.556 B só nesse componente -- bem maior que o +3.904 B
+  total já publicado. Resolver essa tensão exigiria rodar
+  `consolidate_v8.py` de novo com os dois conjuntos de certificado lado
+  a lado, uma execução/mudança de código fora do que esta rodada
+  autorizou ("não altera código", pedido explícito). Hipótese mais
+  provável, não confirmada: o artefato de fronteira de medição do
+  `countingConn` já documentado em `METRICS_COVERAGE.md` (o contador é
+  lido em `ConnState -> StateActive`, que o servidor HTTP do Go só
+  alcança depois que a primeira requisição real já começou a chegar)
+  pode fazer `mtlsHandshakeBytes` não capturar o certificado inteiro de
+  forma linear ao seu tamanho real. Fica para investigação futura, não
+  decidida aqui.
+
+**Imagem Docker única**: confirmado via `docker inspect` com os 3
+perfis testados na mesma sessão -- `insurance-server-lambdas-mtls`
+(`sha256:6f8cbcfb45fb...`) é A MESMA imagem nos 3 perfis; o que muda é
+só `CRYPTO_PROFILE` (env var) + os arquivos de certificado que o
+binário Go carrega em tempo de execução. Não existem "3 imagens, uma
+por perfil".
+
+**Decisão (registrada agora, NÃO implementada nesta rodada --
+"não altera código" foi pedido explicitamente nesta mesma instrução):**
+`campaign_run.py`'s `run_window()` deve passar a gravar o digest/sha256
+da imagem do gateway (`insurance-server-lambdas-mtls`) em
+`window{NN}.json`, junto do que já grava (seed, profile_order,
+scenario_rotation) -- rastreabilidade de que a MESMA imagem rodou em
+toda janela/perfil da campanha, não assumida. Fica como item para a
+próxima rodada que tocar `campaign_run.py`.
+
+**Conclusão**: nenhuma FALHA sem explicação concreta -- piloto 3 e a
+campanha NÃO estão bloqueados por este atestado. As duas tensões
+registradas em aberto (seção 7b do atestado) são sinalizadas para
+investigação futura, não resolvidas por suposição.
+
