@@ -60,14 +60,16 @@ Both of these must be true before step 1 below is run for real:
   below. `terraform apply`/`destroy` and any instance launch are not
   run by anyone other than Luciano, present, following this runbook.
 
-## Status: piloto 1 completo (infraestrutura validada), NÃO usado no artigo -- piloto 2 pendente, não lançado
+## Status: piloto 1 completo (infraestrutura validada), NÃO usado no artigo -- piloto 2 completo, rodou real na AWS (2026-10-27)
 
 **Piloto 1: fluxo sem verificação de assinatura (42 chamadas), não usado
 no artigo.** Rodou de ponta a ponta, real, sa-east-1, `L0`/`L325`, 60/60
 execuções (10 runs x 2 cenários x 3 perfis) -- 10/11 critérios de
 aceitação passando, teardown limpo e verificado região por região,
 custo real ~US$0,93 (Decisions 83/84/85/86). Os dados continuam no
-repositório (`thesis/results/v8/latency/`), preservados, não apagados
+repositório (`thesis/results/v8/latency-pilot1-no-verification/`,
+renomeada 2026-10-27 para abrir espaço ao piloto 2 -- ver abaixo),
+preservados, não apagados
 -- mas o `opin_flow.py` que os gerou NUNCA verificava nenhuma assinatura
 recebida (`verify_signature: False` em todo lugar, client_assertion/PAR
 verificados pelo AS mas nada do lado do cliente) e fazia 42 chamadas,
@@ -76,63 +78,46 @@ real da AWS (entrega, orquestrador, conectividade, cenário co-localizado,
 pull/verificação de manifesto) -- **os números em si não são os dados do
 artigo** e não devem ser citados como tal.
 
-**Piloto 2 (fluxo completo, verificação ativa): preparado, NÃO
-lançado.** `opin_flow.py` agora verifica todo artefato assinado que
-recebe (id_token, JARM, respostas do RS), nos 3 perfis, mecanismo
+**Piloto 2 (fluxo completo, verificação ativa): completo, rodou real
+na AWS em 2026-10-27.** `opin_flow.py` verifica todo artefato assinado
+que recebe (id_token, JARM, respostas do RS), nos 3 perfis, mecanismo
 único (Decisions 87/88) -- 44 chamadas por execução, não 42. Mesma
-topologia e mesmos 4 bugs já corrigidos do piloto 1 (nenhum precisa
-ser re-descoberto); a única mudança real de protocolo é o próprio
-`opin_flow.py`/`pqc-signer` entregues ao cliente.
+topologia do piloto 1 (control + server + 2 clientes, sa-east-1),
+nenhum dos 4 bugs de infraestrutura do piloto 1 recorreu.
 
-**Protocolo do piloto 2 (igual ao piloto 1 em forma, critérios
-atualizados):**
-- 10 execuções por perfil (Classic/PQC/Hybrid) x 2 cenários (`L0`,
-  `L325`), sa-east-1 -- mesma topologia, mesmas 4 instâncias
-  (control + server + 2 clientes).
-- Assentamento (5 execuções descartadas por bloco de perfil) antes das
-  10 medidas, igual ao piloto 1.
-- `call_count` esperado: **44**, não 42, em todas as execuções, todos
-  os perfis.
-- Referência de bytes/OPINsize: `BASELINE_BYTES`/`V8_OPINSIZE` em
-  `pilot_acceptance.py` (Decision 88) -- **não** os valores antigos de
-  42 chamadas.
-- `N_JWK` esperado: **4** (2 buscas de `/jwks` do AS + 2 do RS), não 2.
-- Verificação de assinatura ativa durante toda a execução -- qualquer
-  `SignatureVerificationError` real interrompe a execução (não é
-  descartada silenciosamente; conta como falha real da execução).
-- Testes negativos (`tests/test_signature_verification.py`) devem
-  rodar com sucesso contra o ambiente real da AWS antes da bateria de
-  60 execuções -- ainda não rodados contra AWS real, só contra o stack
-  local (Decisions 87/88, 60/60 repetições limpas localmente).
-- T_fluxo: reportar a ordem Classic < PQC < Hybrid com N=10 reais -- a
-  ordem ainda não foi confirmada com peso estatístico (só execuções
-  avulsas, sem assentamento, rodadas durante o desenvolvimento da
-  verificação).
+**O que realmente aconteceu:**
+- 27 recursos Terraform criados e verificados; fonte/imagens
+  entregues e verificadas; testes negativos
+  (`tests/test_signature_verification.py`) rodaram com sucesso contra
+  o ambiente REAL da AWS, nos 3 perfis, logo após cada troca de
+  perfil -- não apenas localmente, confirmando a cobertura que faltava
+  no protocolo original.
+- 60/60 execuções reais coletadas (10 por perfil x 2 cenários,
+  `L0`/`L325`), `call_count=44` em todas, dados puxados e verificados
+  por sha256.
+- Bateria de aceitação (`pilot_acceptance.py`, saída de terminal, não
+  gravada em arquivo): 10/11 critérios PASS.
+- Teardown: 27 recursos destruídos, todas as 7 regiões confirmadas
+  limpas via AWS API direta (instâncias/SGs/key pairs/volumes/EIPs =
+  0 em todas, incluindo o controle em sa-east-1). Custo real estimado
+  ~US$1,10 (infraestrutura em pé por ~3h40min) -- Luciano confirma o
+  valor exato no console de Billing.
+- **Achado em investigação, não interpretado aqui:** T_fluxo real
+  mostrou Hybrid mais RÁPIDO que PQC (L0: Hybrid mediana 9,030s IC
+  [8,946, 9,457] vs PQC mediana 10,524s IC [10,346, 10,822] --
+  intervalos não se sobrepõem), contrariando a ordem esperada Classic
+  < PQC < Hybrid. Ver DECISIONS.md para o registro formal e a seção de
+  diagnóstico local (sem AWS) que investigou possíveis artefatos de
+  ordem/aquecimento antes de qualquer conclusão causal.
 
-**O que precisa do OK do Luciano antes de lançar o piloto 2:**
-1. Confirmar que o piloto 1 realmente não deve ser apagado nem
-   re-executado -- só preservado com a nota acima.
-2. Autorizar rodar `tests/test_signature_verification.py` contra as
-   instâncias REAIS da AWS (não só o stack local) antes da bateria de
-   60 execuções -- isso significa subir a infraestrutura real primeiro
-   só para esse teste, antes de decidir lançar a campanha inteira.
-3. Confirmar que `BASELINE_BYTES`/`V8_OPINSIZE` (44 chamadas) são a
-   referência correta a usar no critério de aceitação do piloto 2, não
-   os valores do piloto 1.
-4. Confirmar presença física para o apply/destroy, mesma regra de
-   sempre (Decision 49) -- nada muda aqui.
-5. Confirmar orçamento/saldo atual no Billing console antes de
-   autorizar qualquer `apply`.
-6. Decidir se o piloto 2 roda com os MESMOS 4 bugs já corrigidos do
-   piloto 1 como suficientes, ou se quer uma rodada de rehearsal local
-   adicional antes (não obrigatória -- os bugs do piloto 1 eram todos
-   de infraestrutura, não do fluxo de verificação, que já tem 60/60
-   testes negativos limpos localmente).
-
-**Nada abaixo foi lançado.** Esta seção é só preparação -- ver
-"Pontos em que Luciano confirma antes de seguir" para a lista completa
-de autorizações que o passo a passo abaixo já exige independentemente
-do piloto 2.
+**Diferenças conhecidas do protocolo original (documentadas, não
+escondidas):** o piloto rodou com UMA única janela (não 3), ordem de
+perfil sorteada por essa janela (seed registrado em
+`_campaign-control/windows/sa-east-1/window01.json`) -- suficiente
+para validar o fluxo completo e coletar os 44-call data, mas
+insuficiente, por construção, para separar um efeito de ordem de um
+efeito real de algoritmo nessa amostra isolada (ver investigação
+local).
 
 ## Passo a passo
 
@@ -510,6 +495,16 @@ células do zero, sob o protocolo corrigido.
 onde `campaign_pull.sh` os deixou, e `campaign_up.sh` (outcome A acima)
 simplesmente continua a numeração de janelas/execuções a partir daí —
 nenhuma recoleta das 2 células do piloto é necessária.
+
+**Nota 2026-10-27 (pós-piloto 2):** os dois pilotos reais já executados
+vivem em pastas próprias, não em `v8/latency/` puro --
+`thesis/results/v8/latency-pilot1-no-verification/` (42 chamadas, não
+usado no artigo) e `thesis/results/v8/latency-pilot2-full-flow/` (44
+chamadas, verificação ativa, dados do artigo). Qualquer "continuar a
+numeração a partir daí" para uma futura campanha completa (N=30) deve
+apontar para `latency-pilot2-full-flow/`, não para o `v8/latency/`
+genérico que os parágrafos acima ainda mencionam -- essa reorganização
+de pastas é posterior ao texto original desta seção.
 
 ## Manter as instâncias de pé até a campanha, ou derrubar: comparação para Luciano decidir
 

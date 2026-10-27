@@ -7425,3 +7425,225 @@ implemented for this -- out of scope by the same decisions as before.
 **Not a protocol change.** `mock_mtls/main.go`/`tls_kem_proxy/main.go`
 untouched (confirmed by diff). No AWS touched this turn.
 
+## 89. Piloto 2 completo na AWS real (60/60 execuções, 44 chamadas, verificação ativa) -- achado de ordem (Hybrid mais rápido que PQC) registrado como observação em investigação, NÃO interpretado; diagnóstico local (sem AWS) separou parte do confundimento; dois bugs reais do orquestrador corrigidos com testes; verificação-timing e Criterion 6/N=30 fechados.
+
+**Piloto 2 rodou real, ponta a ponta.** 27 recursos Terraform criados e
+verificados; testes negativos (`tests/test_signature_verification.py`)
+passaram contra a AWS real nos 3 perfis, logo após cada troca; 60/60
+execuções reais coletadas (10/perfil x 2 cenários, `call_count=44` em
+todas); dados puxados e verificados por sha256; bateria de aceitação
+10/11 PASS; teardown completo, 27 recursos destruídos, as 7 regiões
+confirmadas limpas via `aws ec2 describe-instances`/sg/key-pair/volume/
+EIP direto (não só o exit code do `terraform destroy`), incluindo o
+controle (sa-east-1). Custo real estimado ~US$1,10 (infraestrutura em
+pé ~3h40min) -- Luciano confere o valor exato no Billing console.
+
+**Reorganização de pastas (decisão do Luciano, não minha escolha
+unilateral):** piloto 1 e piloto 2 usavam o MESMO caminho
+(`thesis/results/v8/latency/experiment{1,2,3}.../sa-east-1/{L0,L325}/`)
+-- copiar o piloto 2 para lá teria sobrescrito os arquivos reais do
+piloto 1, que o `PILOT_1_NOTE.md` e o runbook dizem explicitamente que
+devem ser preservados. Perguntado antes de tocar em qualquer arquivo;
+Luciano escolheu pastas próprias para os dois:
+`thesis/results/v8/latency-pilot1-no-verification/` (42 chamadas, não
+usado no artigo, intocado) e
+`thesis/results/v8/latency-pilot2-full-flow/` (44 chamadas,
+verificação ativa, dados do artigo) -- `consolidated.json`/
+`CONSOLIDATED_REPORT.md` regenerados no novo caminho com o
+`consolidate_v8.py` já corrigido desta rodada (números idênticos ao
+que já estava gravado; só o schema ganhou o campo novo de verification
+timing, ver abaixo).
+
+**O achado (registrado aqui como observação, não como conclusão
+causal):** T_fluxo real mostrou Hybrid mais RÁPIDO que PQC, intervalos
+de confiança bootstrap (95%) não se sobrepondo em L0: Hybrid mediana
+9,030s [8,946, 9,457] vs PQC mediana 10,524s [10,346, 10,822]; em L325
+os intervalos quase não se sobrepõem (Hybrid [28,499, 28,819] vs PQC
+[28,805, 29,151]). Contraria a ordem esperada Classic < PQC < Hybrid.
+
+**Diagnóstico local (sem AWS), pedido antes de qualquer interpretação
+causal -- "não concluas antes de testar todas as hipóteses":**
+
+1. *Efeito de ordem/janela, com os dados reais do piloto 2 em si.*
+   `_campaign-control/windows/sa-east-1/window01.json` confirma: UMA
+   única janela rodou (não as 3 do protocolo completo), com ordem de
+   perfil sorteada (seed=1806032845) e resultado PQC -> Classic ->
+   Hybrid -- PQC rodou primeiro (logo após a entrega+assentamento da
+   instância recém-criada), Hybrid rodou último. Com uma única janela,
+   ordem e identidade do perfil são PERFEITAMENTE confundidos nesta
+   amostra: não há como separar estatisticamente "PQC é lento por ser
+   PQC" de "PQC é lento por ter rodado primeiro" só com estes dados.
+   Dentro de cada bloco de 10, não há tendência de queda clara (run01
+   não é sistematicamente o mais lento do seu próprio bloco, exceto
+   levemente em classic) -- o assentamento de 5 execuções antes da
+   coleta parece ter absorvido o grosso do aquecimento DENTRO de cada
+   bloco; o que não dá pra descartar é um efeito de aquecimento da
+   INSTÂNCIA como um todo (CPU credit/frequency scaling de uma EC2
+   recém-lançada), que afetaria o bloco que roda primeiro
+   (PQC) mais que os que rodam depois, independente do algoritmo.
+
+2. *Decomposição por chamadas/servidor/CPU, dados reais do piloto 2.*
+   Em L0: soma das 44 `latency_ms` de `calls.jsonl` é pequena e
+   PARECIDA entre perfis (classic 469,5ms / pqc 427,6ms / hybrid
+   509,4ms mediana) -- ou seja, 90-96% do T_fluxo de cada perfil NÃO
+   está nas chamadas HTTP em si, mas num resíduo ("gap" = T_fluxo menos
+   soma das chamadas) de 5.034,9 / 10.101,6 / 8.519,8ms
+   (classic/pqc/hybrid). `opin_processing_ms` (perna do servidor,
+   `consolidate_v8.py`'s `opin_processing_stats()`) é minúsculo e
+   igual entre perfis (6,0 / 6,0 / 7,5ms mediana) -- não é o servidor.
+   Duração do handshake mTLS também pequena e sem favorecer hybrid
+   (14,0 / 3,0 / 14,0ms) -- não é o handshake. CPU do cliente é
+   PARECIDA entre pqc e hybrid (22,33% / 21,22% médio) e mais alta que
+   classic (16,79%) -- ou seja, o custo de CPU em si não diferencia
+   pqc de hybrid; a diferença de ~1,58s no "gap" entre os dois não é
+   explicada por nenhuma perna medida (chamadas, servidor, handshake,
+   CPU) -- sobra para operações locais de assinatura/verificação via
+   o serviço `pqc-signer` (Node.js, chamadas HTTP locais ao
+   `signer_core.mjs`, não instrumentadas em `calls.jsonl`) e/ou para o
+   efeito de ordem do item 1.
+
+3. *Auditoria de assimetria de arquitetura.* Tabela operação x perfil:
+   verificação de CADA artefato assinado recebido (id_token, JARM,
+   resposta do RS) passa pelo MESMO serviço `pqc-signer` nos 3 perfis
+   (inclusive classic, que não usa `pyjwt.decode()` para isso) -- mas
+   hybrid faz o dobro de checagens de assinatura por artefato
+   (Strong Nesting: sigma1 clássica + sigma2 ML-DSA-65) contra UMA
+   checagem do PQC puro; o lado servidor espelha isso (hybrid compõe
+   e publica DUAS entradas "sig" no `/jwks`, Decision 88). Ou seja,
+   arquiteturalmente hybrid faz um SUPERCONJUNTO do trabalho
+   criptográfico do PQC puro (nunca menos) -- o achado real (hybrid
+   mais rápido) é inconsistente com uma explicação pura de "custo de
+   algoritmo", e consistente com um confundimento de ordem/posição
+   (item 1).
+
+4. *Teste local controlado, ordem ABBA alternada.* `switch_crypto_profile.py`/
+   `latency_automation.run_once_timed_with_retry()` reaproveitados
+   (sem nenhuma mudança em `opin_flow.py`/`main.go` -- confirmado por
+   diff), stack local, padrão Classic/PQC/Hybrid/Hybrid/PQC/Classic
+   repetido 5 vezes (30 slots, 2 execuções/slot, troca de container só
+   quando o perfil muda de fato -- 60 execuções reais, N=20/perfil; um
+   soluço real de infra no meio -- CHECKPOINT do psql em 6,21s,
+   limiar 5,0s -- tratado reiniciando o container psql e retomando a
+   partir do slot interrompido, sem perder dados já gravados).
+   Resultado real, com bootstrap 95% CI:
+   - classic: mediana 3,265s, IC [3,112, 3,453]
+   - pqc: mediana 2,701s, IC [2,629, 2,826]
+   - hybrid: mediana 3,456s, IC [3,148, 3,701]
+
+   Ordem local (sem latência WAN): **PQC < Classic < Hybrid** -- nem a
+   ordem esperada da literatura (Classic < PQC < Hybrid) nem a ordem
+   real da AWS (Hybrid < PQC) se reproduzem aqui. O que importa para o
+   achado: IC de hybrid [3,148, 3,701] e de pqc [2,629, 2,826] NÃO se
+   sobrepõem -- com ordem sorteada/alternada e N=20/perfil (bem mais
+   poder estatístico que os N=10 da AWS), **hybrid é
+   significativamente MAIS LENTO que PQC localmente**, o oposto exato
+   do que o piloto 2 mostrou na AWS real.
+
+   Efeito de posição/troca checado diretamente: comparando a primeira
+   execução de um slot que trocou de perfil contra a primeira execução
+   de um slot encadeado (mesmo perfil do slot anterior, sem troca), não
+   há penalidade sistemática de "primeiro depois da troca" em nenhum
+   perfil (hybrid até inverteu: slots encadeados vieram mais lentos que
+   os que trocaram, n pequeno por célula, provavelmente ruído). Por
+   ciclo (1 a 5, cobrindo os ~45 minutos do teste todo) a mediana não
+   cai monotonicamente -- 3,396 / 3,080 / 2,881 / 3,157 / 3,361s --
+   sem um padrão claro de aquecimento do processo como um todo.
+
+**Conclusão:** o achado real da AWS (hybrid mais rápido que PQC) **não
+se sustenta** quando a ordem é controlada/alternada e o N sobe para 20
+por perfil -- localmente a relação se INVERTE (hybrid significativamente
+mais lento que PQC), batendo com o que a auditoria de arquitetura
+(item 3) já apontava: hybrid faz um superconjunto do trabalho
+criptográfico do PQC puro (duas verificações de assinatura por
+artefato contra uma), nunca deveria ser mais rápido num ambiente sem
+confundimento. O teste local também não achou evidência de uma
+penalidade simples de "primeiro-depois-da-troca" que explicasse o
+achado da AWS por si só. A explicação mais parcimoniosa com as
+evidências reunidas: o resultado da AWS é um artefato da JANELA ÚNICA,
+NÃO ROTACIONADA, do piloto 2 (PQC sorteado primeiro, Hybrid sorteado
+por último, nenhuma repetição com outra ordem) combinado com algum
+efeito específico daquele ambiente/execução (ex.: throttling de CPU de
+uma instância EC2 recém-lançada ainda não estabilizada durante o
+PRIMEIRO bloco de perfil, que por acaso foi o do PQC) -- não uma
+propriedade real do algoritmo ML-DSA-65 puro vs. híbrido. Isso é uma
+hipótese bem fundamentada pelos dados reunidos, não uma certeza: os
+dados reais do piloto continuam sendo os dados reais, e a única forma
+de confirmar ou refutar isso de verdade é repetir a medição na AWS com
+múltiplas janelas de ordem sorteada independentemente (ver abaixo).
+
+**O que falta confirmar na AWS real:** rodar o piloto 2 (ou a campanha
+completa) com as 3 janelas do protocolo original e ordem sorteada
+INDEPENDENTEMENTE por janela (já suportado por
+`campaign_run.py`'s `profile_order = PROFILES[:]; rng.shuffle(...)`) --
+só com múltiplas janelas, cada uma com uma ordem diferente, dá pra
+separar estatisticamente ordem de algoritmo nos dados REAIS de rede;
+o teste local acima testa se o efeito aparece numa rede sem latência
+WAN, não se ele se reproduz com latência real.
+
+**Correções (item 3):**
+
+1. `campaign_run.py`'s `run_window()`: uma instalação sem nenhum
+   cenário habilitado no inventário deste run (ex.: piloto escopado só
+   para sa-east-1, rodando contra a lista completa de instalações da
+   campanha) chamava `sys.exit()` -- abortava o processo inteiro do
+   orquestrador, não só aquela instalação. Confirmado real no piloto 2
+   (us-east-1, sem cenário habilitado, veio depois de sa-east-1 na
+   ordem de iteração) -- inofensivo NESTA execução só porque
+   sa-east-1 já tinha terminado as 60 execuções antes da iteração
+   chegar em us-east-1; numa campanha com mais de uma instalação
+   escopada de forma desigual, teria matado o restante de instalações
+   já saudáveis também. Corrigido: agora imprime um aviso e `return`
+   (pula só aquela instalação/janela), sem abortar a campanha.
+   `tests/test_installation_skip.py` (novo): 3 cenários de inventário
+   falso -- piloto só sa-east-1 (confirma us-east-1 pulado sem
+   SystemExit e sa-east-1 seguindo normal), campanha completa
+   (confirma nenhuma instalação pulada), instalação totalmente ausente
+   do inventário (mesmo resultado do caso 1). `test_block_order.py`
+   (existente) confirmado ainda passando.
+
+2. `already_done()`/o loop round-robin (`campaign_run.py`, já
+   existente, não alterado): confirmado por leitura direta do código
+   que `Restart=on-failure` NÃO repete execuções já gravadas -- cada
+   `(window, scenario, global_run_index)` é checado contra
+   `run{NN}.json` já existente em disco antes de rodar; um restart
+   reentra no mesmo loop e só "resume past it" pelas que faltam.
+   Comportamento pré-existente, correto, não precisou de correção
+   nem de teste novo -- só verificação.
+
+3. Verificação-timing por artefato: `campaign_client_runner.py` agora
+   chama `of.clear_verification_timings()` antes de cada execução
+   cronometrada e anexa `of.get_verification_timings()` ao resultado
+   (`result["verification_timings"]`, lista de `{artifact,
+   duration_ms}`) -- os MESMOS timers que `verify_jwt()`/
+   `decrypt_and_verify_jwt()` já gravavam, só agora surfaçados.
+   `consolidate_v8.py` agrega por artefato (`verification_timings_ms.
+   per_artifact`, mediana/min/max/bootstrap CI) e reporta no
+   `CONSOLIDATED_REPORT.md`; dados reais do piloto 2 (anteriores a
+   esta mudança) corretamente marcados `"missing (run predates
+   campaign_client_runner.py wiring)"`, não um zero falso. Overhead do
+   cronômetro medido diretamente (`timeit`, 100k repetições): 0,737
+   microssegundos por chamada de verificação (dois `time.monotonic()`
+   + um `list.append()`) -- com 3-6 verificações por execução, overhead
+   total por execução ~2-4 microssegundos, desprezível contra um
+   T_fluxo de segundos (menos de 1 parte em 1 milhão). Não altera o que
+   T_fluxo mede além deste overhead já existente antes desta mudança
+   (a instrumentação em si já rodava dentro da janela cronometrada;
+   só a exposição no JSON é nova). Validado localmente, de ponta a
+   ponta: uma execução real (classic) produziu `verification_timings`
+   com 7 entradas reais (3 `rs_response`, 2 `jarm`, 2 `id_token`); um
+   diretório de cenário sintético com 3 execuções, passado por
+   `consolidate_profile_scenario()`, produziu medianas/IC bootstrap
+   por artefato corretamente (ex.: `id_token` mediana 12,5ms sobre 3
+   execuções).
+
+4. Criterion 6 (`pilot_acceptance.py`): limiar de ±5% NÃO alterado.
+   Documentado que o piloto usa N=10/célula e a campanha completa usa
+   N=30/célula (`RUNS_PER_WINDOW=10` x `WINDOWS_PER_CAMPAIGN=3`).
+   Projeção via bootstrap (resample a N=30 a partir dos 10 valores
+   reais do piloto 2, 2000 resamples, mesmo método de
+   `bootstrap_median_ci()`): a ÚNICA célula que falha hoje em N=10
+   (hybrid/L0, largura 5,7% do IC) projeta 3,8% em N=30 -- dentro do
+   alvo. Todas as outras células já passam em N=10 e projetam ainda
+   mais estreitas em N=30 (ex.: pqc/L0 4,5% -> 2,1%). N=30 deve ser
+   suficiente para o alvo de ±5% sem precisar mudar o limiar.
+
