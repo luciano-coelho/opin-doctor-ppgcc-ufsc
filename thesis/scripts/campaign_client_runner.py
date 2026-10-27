@@ -39,9 +39,19 @@ def main():
         sys.exit("REMOTE_GATEWAY_HOST must be set -- this script is for remote/campaign execution only.")
 
     whole_run_retries = []
+    of.clear_verification_timings()
     result = la.run_once_timed_with_retry(crypto_profile, args.label, whole_run_retries, return_calls=True)
     result["whole_run_retries"] = whole_run_retries
     result["retried"] = bool(result.get("retries"))
+    # Pilot 2 (this turn), item 3: per-artifact verification timing
+    # (id_token/jarm/rs_response), from the SAME timers opin_flow.py's
+    # verify_jwt()/decrypt_and_verify_jwt() already recorded during this
+    # run's own T_fluxo window -- not a second measurement pass, just
+    # surfacing what was already captured. Does not change what T_fluxo
+    # measures: the instrumentation (two time.monotonic() reads + one list
+    # append per verification call, already present before this wiring)
+    # was already running inside the timed window either way.
+    result["verification_timings"] = of.get_verification_timings()
     print(json.dumps(result))
 
 

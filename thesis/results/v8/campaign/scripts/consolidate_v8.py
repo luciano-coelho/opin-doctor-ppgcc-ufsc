@@ -607,6 +607,20 @@ def consolidate_profile_scenario(scenario_path, profile):
     cpu_client = [load_cpu_mem(scenario_path / "client" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_client = [c for c in cpu_client if c]
 
+    # Pilot 2 (this turn), item 3: per-artifact client-side verification
+    # time (opin_flow.py's verify_jwt()/decrypt_and_verify_jwt(), wired
+    # into campaign_client_runner.py's own JSON output this same turn).
+    # Absent (None per run) for any run{NN}.json written before this
+    # wiring existed -- real pilot 2 data included -- so "covered" here
+    # means "at least one run in this scenario/profile/server cell has
+    # the field", not "all of them do".
+    verification_rows = [r["result"].get("verification_timings") for r in clean_rows]
+    verification_rows = [v for v in verification_rows if v]
+    per_artifact_durations = {}
+    for run_timings in verification_rows:
+        for entry in run_timings:
+            per_artifact_durations.setdefault(entry["artifact"], []).append(entry["duration_ms"])
+
     out = {
         "runs_used": len(clean_rows),
         "runs_retried_excluded": len(retried_rows),
@@ -652,6 +666,13 @@ def consolidate_profile_scenario(scenario_path, profile):
         } if (ping_samples or pcap_loss) else None,
         "cpu_server": cpu_server or None,
         "cpu_client": cpu_client or None,
+        "verification_timings_ms": {
+            "status": "covered" if verification_rows else "missing (run predates campaign_client_runner.py wiring)",
+            "runs_with_data": len(verification_rows),
+            "per_artifact": {
+                artifact: stats_block(durations) for artifact, durations in sorted(per_artifact_durations.items())
+            } if per_artifact_durations else None,
+        },
     }
 
     if out["term_handshake"]["stats"] and out["term_handshake_pcap"]["stats"]:
@@ -750,6 +771,12 @@ def render_report(data):
                                           f"{pl['total_segments']} segments): {pl['loss_pct']}% "
                                           f"({pl['retransmissions']} retransmissions, {pl['out_of_order']} "
                                           f"out-of-order, {pl['duplicate_ack_events']} duplicate-ACK events)")
+                vt = m["verification_timings_ms"]
+                if vt["status"] == "covered":
+                    per_artifact_str = ", ".join(
+                        f"{artifact} {s['median']:.2f}ms" for artifact, s in vt["per_artifact"].items()
+                    )
+                    lines.append(f"- Verification timing ({vt['runs_with_data']} runs with data): {per_artifact_str}")
                 lines.append("")
     return "\n".join(lines)
 

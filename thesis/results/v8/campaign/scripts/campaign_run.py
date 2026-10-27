@@ -2160,7 +2160,23 @@ def run_window(executor, installation, window, seed):
                   f"(scoped topology, e.g. the pilot's MOCKOPIN_ENABLED_CLIENT_SCENARIOS) -- skipping them.")
         scenarios = [s for s in scenarios if f"{s}@{installation}" in available_clients]
         if not scenarios:
-            sys.exit(f"[{installation}] window {window}: no enabled scenario is in this run's own inventory -- nothing to do.")
+            # Pilot 2 (this turn, item 3): this used to be sys.exit(), a hard
+            # abort of the WHOLE campaign process the moment iteration
+            # reached the first installation with zero enabled scenarios in
+            # a scoped-topology run (e.g. a pilot inventory covering only
+            # sa-east-1, while PROFILES/installations still lists every
+            # full-campaign server). Confirmed live: harmless for a
+            # single-installation pilot only because that installation's
+            # own window had already completed in full before iteration
+            # reached the next, empty one -- for any run with more than one
+            # installation and an uneven scoped inventory, this would have
+            # killed already-healthy installations' remaining windows too.
+            # A missing scenario set for ONE installation is not a reason to
+            # stop every other installation's own campaign -- skip with a
+            # warning and let the caller's per-installation loop continue.
+            print(f"[{installation}] window {window}: no enabled scenario is in this run's own inventory "
+                  f"-- skipping this installation for this window (not aborting the campaign).")
+            return
     print(f"[{installation}] window {window}: profile order = {profile_order}, "
           f"scenario order = {scenarios} (seed={seed})")
 
