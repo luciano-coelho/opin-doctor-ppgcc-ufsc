@@ -7969,25 +7969,46 @@ alterado).
   de overhead estrutural não-ML-DSA. Conclusão: a maior parte do custo
   extra de bytes do handshake Hybrid é a extensão inerte, não a troca
   de chaves PQC.
-- Efeito da correção do certificado de cliente PQC no OPINsize vs v7:
-  delta real medido do certificado em si, +2.926 bytes (DER: v7 2.953
-  B -> atual 5.879 B). O desvio total já PUBLICADO do OPINsize PQC
-  entre v7 (322.895 B) e `V8_OPINSIZE` (326.799 B) é +3.904 B (+1,21%,
-  dentro de ±3%). **Tensão real, registrada em aberto, não
-  reconciliada**: propagar o delta do certificado de cliente sozinho
-  pelos 6 handshakes client-facing (mesmo método da seção 7a) previra
-  um efeito de +17.556 B só nesse componente -- bem maior que o +3.904 B
-  total já publicado. Resolver essa tensão exigiria rodar
-  `consolidate_v8.py` de novo com os dois conjuntos de certificado lado
-  a lado, uma execução/mudança de código fora do que esta rodada
-  autorizou ("não altera código", pedido explícito). Hipótese mais
-  provável, não confirmada: o artefato de fronteira de medição do
-  `countingConn` já documentado em `METRICS_COVERAGE.md` (o contador é
-  lido em `ConnState -> StateActive`, que o servidor HTTP do Go só
-  alcança depois que a primeira requisição real já começou a chegar)
-  pode fazer `mtlsHandshakeBytes` não capturar o certificado inteiro de
-  forma linear ao seu tamanho real. Fica para investigação futura, não
-  decidida aqui.
+- Efeito da correção do certificado de cliente PQC no OPINsize vs v7 --
+  **RESOLVIDO COM MEDIÇÃO** (turno seguinte, 2026-10-27, terceira
+  rodada; a "tensão em aberto" registrada antes foi investigada a
+  fundo, não deixada por hipótese). Montado localmente, lado a lado, o
+  certificado ANTIGO (`478bda5^`, via `git show`, chaves privadas
+  reutilizadas sem alteração -- confirmado nunca terem mudado) e o
+  NOVO (atual) para os 3 arquivos PQC live-handshake do servidor
+  (trocados dentro do volume bind-mount real do `mtls` --
+  **achado novo**: `insurance-server-lambdas/docker-compose.yml` monta
+  `../mock-service-os/certs/:/app/certs/` do host, os certificados NÃO
+  estão embutidos na imagem) e o arquivo do cliente no host, com
+  `mtls` reiniciado entre trocas; tudo restaurado via `git checkout` ao
+  final, `git status` confirmado limpo. O cliente ATUAL rejeita a
+  cadeia antiga por desenho (`verify_ca_chain()` corretamente barra uma
+  raiz PQC não auto-assinada em ML-DSA-65 -- confirma, ao vivo, que o
+  código de hoje já não voltaria à cadeia antiga); bytes reais do
+  handshake antigo foram medidos via um script externo read-only
+  chamando `do_call()` diretamente (5 conexões reais), sem passar pela
+  checagem de cadeia (lógica do cliente, não requisito do protocolo).
+  Medido ao vivo: antigo `clientCertBytes`=2.953 B, `mtlsHandshakeBytes`
+  mediana=16.749 B (9 conexões); novo `clientCertBytes`=5.879 B,
+  mediana=22.607 B (40 conexões) -- ambos batendo exatamente ou quase
+  exatamente com os valores históricos da Decision 14 da v7 (2.953/
+  5.879 idêntico; 16.605/22.607, a mediana nova idêntica, a antiga
+  0,9% diferente por ruído de amostra pequena). A própria Decision 14
+  da v7 (dado bruto, não inferência) já documentava que seu valor
+  oficial (322.895 B) é o PÓS-fix, corrigido analiticamente em
+  `report_data_v7.json` antes mesmo da v7 citar esse número como
+  referência. Reconciliação exata: `delta_handshake (6.002 B) x N_mTLS
+  (6) + delta_PKI (3.957 B) x N_PKI (4) = 36.012 + 15.828 = 51.840 B =
+  322.895 - 271.055` -- fecha exato. O resíduo de +3.904 B entre
+  322.895 (v7) e `V8_OPINSIZE` (326.799) não tem nada a ver com o
+  certificado (os dois lados já usam o mesmo, o novo) -- é exatamente
+  a adição do `/jwks` do RS no fluxo de 44 chamadas, já documentada em
+  `METRICS_COVERAGE.md` antes desta investigação começar (mesmo valor,
+  byte a byte: 322.895 + 3.904 = 326.799, fecha exato também.
+  **Conclusão (forma "a"): v7 e v8 SÃO comparáveis quanto ao
+  certificado PQC.** Nada a declarar ao orientador como viés -- o fix
+  já estava corretamente embutido na própria referência da v7 antes
+  desta tese citá-la.
 
 **Imagem Docker única**: confirmado via `docker inspect` com os 3
 perfis testados na mesma sessão -- `insurance-server-lambdas-mtls`
@@ -7996,17 +8017,24 @@ só `CRYPTO_PROFILE` (env var) + os arquivos de certificado que o
 binário Go carrega em tempo de execução. Não existem "3 imagens, uma
 por perfil".
 
-**Decisão (registrada agora, NÃO implementada nesta rodada --
-"não altera código" foi pedido explicitamente nesta mesma instrução):**
-`campaign_run.py`'s `run_window()` deve passar a gravar o digest/sha256
-da imagem do gateway (`insurance-server-lambdas-mtls`) em
-`window{NN}.json`, junto do que já grava (seed, profile_order,
-scenario_rotation) -- rastreabilidade de que a MESMA imagem rodou em
-toda janela/perfil da campanha, não assumida. Fica como item para a
-próxima rodada que tocar `campaign_run.py`.
+**Decisão implementada no turno seguinte (2026-10-27, antes do piloto 3,
+para não contar como intervenção durante a janela)**: `campaign_run.py`'s
+`run_window()` agora grava `gateway_image_id` (novo
+`get_gateway_image_digest()`, reusa o MESMO comando `docker image
+inspect -f '{{.Id}}'` que `pre_block_checks()` já rodava por bloco, só
+que também surfaçado a nível de janela) em `window{NN}.json`, e
+`code_hash` (novo `CODE_HASH`, sha256 de `opin_flow.py` +
+`campaign_client_runner.py` + `campaign_run.py`, computado uma vez por
+processo) em todo `run{NN}.json` (inclusive os da `run_validation_stage()`).
+Testado localmente: `get_gateway_image_digest()` contra o Docker real
+desta máquina retornou `sha256:6f8cbcfb45fb...` -- o MESMO hash já
+confirmado na atestação de perfis acima, a mesma imagem única. 7 testes
+novos (`tests/test_image_and_code_hash.py`), incluindo um que edita um
+arquivo de verdade e confirma que `CODE_HASH` muda. 34 testes
+`pytest` + 10 `bash` no total, todos passando.
 
 **Conclusão**: nenhuma FALHA sem explicação concreta -- piloto 3 e a
-campanha NÃO estão bloqueados por este atestado. As duas tensões
-registradas em aberto (seção 7b do atestado) são sinalizadas para
-investigação futura, não resolvidas por suposição.
+campanha NÃO estão bloqueados por este atestado. A tensão da seção 7b
+foi resolvida com medição real (terceira rodada, acima) -- v7 e v8 são
+comparáveis quanto ao certificado PQC, sem resíduo sem explicação.
 

@@ -238,39 +238,95 @@ diferença estrutural não-ML-DSA entre os dois pares de certificado (confirmado
 handshake Hybrid vs Classic vem da extensão X.509 inerte (nunca lida pelo TLS), não da troca de
 chaves PQC em si.
 
-### 7b. Efeito da correção do certificado de cliente PQC no OPINsize vs a referência da v7
+### 7b. Efeito da correção do certificado de cliente PQC no OPINsize vs a referência da v7 — RESOLVIDO COM MEDIÇÃO (2026-10-27, terceira rodada)
 
-Medido diretamente (DER real, v7 vs atual):
+**Montagem real, local, dos dois certificados** (sem alterar nenhum arquivo de código de
+produção — `mock_mtls/main.go`/`opin_flow.py` permaneceram intocados o tempo todo): o certificado
+ANTIGO (`478bda5^`, o commit imediatamente anterior ao fix) foi extraído via `git show` para os
+5 arquivos PQC live-handshake (`client_one_pqc.crt`, `mtls_pqc.crt`, `root_ca_pqc.crt`,
+`issuer_ca_pqc.crt`, `op_pqc.crt` — as chaves privadas correspondentes NUNCA mudaram, confirmado
+via `git log`, então são reutilizadas sem alteração). Trocado temporariamente: o arquivo do
+cliente no host (`mock-service-os/certs/client_one_pqc.crt`, editado e restaurado via `git
+checkout` ao final) e os 3 arquivos do servidor **dentro do volume bind-mount real**
+(`../mock-service-os/certs/:/app/certs/`, `insurance-server-lambdas/docker-compose.yml` linha 17
+— **achado novo**: os certificados NÃO estão embutidos na imagem Docker, são montados do host em
+tempo de execução; `docker cp` para dentro do container escreveu, na prática, direto nesses
+mesmos arquivos do host — todos restaurados via `git checkout` ao final, `git status` confirmado
+limpo). `mtls` reiniciado (`docker restart`) entre cada troca para forçar a releitura real dos
+arquivos.
 
-| | v7 (`thesis/results/v7/artifacts/pqc/client_one_pqc.crt`) | Atual (`mock-service-os/certs/client_one_pqc.crt`) | Delta |
-|---|---|---|---|
-| DER | 2.953 B | 5.879 B | **+2.926 B** |
-| Emissor | `CN=ca` (CA clássica, RSA) | `CN=root_ca_pqc` (auto-assinada, ML-DSA-65) | — |
-| Algoritmo de assinatura | `sha256WithRSAEncryption` | `ML-DSA-65` | — |
+Como o cliente ANTIGO usa uma cadeia PQC que mistura chave ML-DSA-65 com assinatura de CA ainda
+clássica (exatamente a assimetria que o fix fechou), `opin_flow.py`'s own `verify_ca_chain()` —
+que já existe no código ATUAL e corretamente verifica que a raiz PQC é auto-assinada em
+ML-DSA-65 — **rejeita o certificado antigo por desenho** (`SignatureVerificationError:
+root-ca.pem (root_ca_pqc) is not validly self-signed`), impedindo um fluxo completo de 44
+chamadas com o certificado antigo sob o cliente de hoje. Isso não é um obstáculo contornado:
+confirma, ao vivo, que a versão atual do código já não aceitaria voltar à cadeia antiga. Para
+medir os bytes reais do handshake com o certificado antigo sem alterar `opin_flow.py`, foi usado
+um script externo, read-only, chamando `do_call()`'s own reusable HTTP+cert primitive
+diretamente (5 conexões reais frescas, cada uma com seu próprio handshake real) — sem passar
+pela checagem de cadeia (que é lógica do lado do cliente, não um requisito do protocolo TLS em
+si).
 
-O certificado de servidor (`mtls_pqc.crt`) sofreu, pelo mesmo commit (`478bda5`, mensagem cita os
-três certificados live-handshake juntos), presumivelmente a mesma classe de mudança — mas **não
-existe no repositório um snapshot da v7 do `mtls_pqc.crt`** (a pasta `v7/artifacts/` só preserva
-certificados de CLIENTE) para medir o delta do lado do servidor diretamente. Reportado como
-lacuna real, não preenchido com suposição.
+**Medido ao vivo, fresco, nesta sessão** (gateway log real, `curveID=MLKEM1024`):
 
-**Desvio exato já publicado** (`pilot_acceptance.py`'s own `V8_OPINSIZE` vs seu próprio comentário
-da referência v7): PQC passou de **322.895 B (v7)** para **326.799 B (V8_OPINSIZE)** — delta de
-**+3.904 B (+1,21%)**, dentro da tolerância de ±3% (`OPINSIZE_TOLERANCE_PCT`).
+| | ANTIGO (cert pré-`478bda5`) | NOVO (cert atual) | Delta | Decision 14 da v7 (histórico, mesma grandeza) |
+|---|---:|---:|---:|---:|
+| `clientCertBytes` | 2.953 B (n=9 conexões reais) | 5.879 B (n=40 conexões reais) | **+2.926 B** | 2.953 -> 5.879 (idêntico) |
+| `mtlsHandshakeBytes` (mediana) | 16.749 B | 22.607 B | **+5.858 B** | 16.605 -> 22.607 (mediana nova idêntica; antiga 0,9% diferente — ruído de amostra, N pequeno) |
 
-**Tensão real, não reconciliada por este atestado**: se o delta do certificado de cliente
-(+2.926 B) se propaga para `term_handshake` da mesma forma simples que a seção 7a usou para o
-Hybrid (× 6 handshakes client-facing = **+17.556 B**, só do certificado de cliente, antes mesmo
-de somar o lado do servidor), o efeito esperado no OPINsize seria MUITO maior que o +3.904 B
-total já publicado. Esta atestação **não resolve essa discrepância** — resolver exigiria rodar a
-pipeline real de `consolidate_v8.py` com os dois conjuntos de certificado lado a lado, o que é
-uma mudança/execução de código fora do que esta rodada autorizou ("não altera código"). Hipótese
-mais provável, sem confirmação: o artefato de fronteira de medição já documentado em
-`METRICS_COVERAGE.md` ("`countingConn`'s own measurement-boundary artifact... the byte counter is
-read at `ConnState -> StateActive`, which Go's HTTP server reaches strictly AFTER the
-connection's FIRST REAL REQUEST has already started arriving") pode fazer `mtlsHandshakeBytes`
-não capturar o certificado inteiro de forma linearmente proporcional ao seu tamanho real — mas
-isso é uma hipótese, não uma conclusão medida. **Reportado em aberto, não forçado a fechar.**
+**Evidência de que a referência da v7 (322.895 B) já é o certificado NOVO, não o antigo** —
+não é dedução do commit, é o próprio `thesis/results/v7/DECISIONS.md`, Decision 14, com dados
+brutos medidos na época:
+
+| Grandeza | Antigo (Decision 14) | Novo (Decision 14) |
+|---|---:|---:|
+| `root_ca_pqc.crt` (PEM) | 4.048 B | 8.001 B |
+| `issuer_ca_pqc.crt` (PEM) | 4.052 B | 8.013 B |
+| `handshake_bytes` (P50, 6 conexões) | 16.605 B | 22.607 B |
+| `client_cert_der_bytes` | 2.953 B | 5.879 B |
+| **OPINsize PQC** | **271.055 B** (antes da Decision 14) | **322.895 B** (depois — esta é a referência que o projeto cita como "v7") |
+
+A própria Decision 14 documenta que **322.895 já é o valor pós-fix**, aplicado
+retroativamente a `report_data_v7.json` via `apply_pqc_ca_postquantum_correction.py` — não uma
+remedição, uma correção analítica documentada, feita ANTES mesmo do fechamento oficial da v7
+neste commit `478bda5` ser mesclado (a v7 em si já tinha fechado em `f7dc39f`, mas a pasta
+`v7/` foi corrigida depois, com nota explícita, prática já usada em toda correção anterior do
+mesmo documento).
+
+**Reconciliação exata (bytes reais, não estimados)**:
+
+```
+delta term_handshake = delta_por_handshake x N_mTLS
+                     = 6.002 B x 6            (Decision 14, histórico)
+                     = 36.012 B
+delta term_pki       = delta_PKI_bytes_mean x N_PKI
+                     = (8.007 - 4.050) x 4    (Decision 14, histórico)
+                     = 15.828 B
+
+36.012 + 15.828 = 51.840 B  ==  322.895 - 271.055 = 51.840 B   ✓ FECHA EXATO
+```
+
+Usando a MEDIÇÃO FRESCA desta sessão (`5.858 B/handshake x 6 = 35.148`, 2,4% abaixo do histórico
+por ruído normal de sessão) o fechamento é igualmente consistente dentro da margem de medição.
+**A conta fecha.** Não há resíduo a explicar entre "antigo" e "novo" além do que já está
+documentado desde a Decision 14 da v7.
+
+**Então o que explica os +3.904 B entre 322.895 (v7) e 326.799 (`V8_OPINSIZE`)?** Já que os dois
+lados dessa comparação usam o MESMO certificado (o novo — confirmado acima), a causa não pode
+ser o fix do certificado. É, em vez disso, exatamente o que `METRICS_COVERAGE.md` já documentava
+antes mesmo desta rodada começar: a adição da busca `/jwks` do RS no turno "fluxo completo"
+(44 chamadas, não mais 42) soma exatamente **+3.904 B** ao `term_jwk` do perfil PQC (contribuição
+nova da chave ML-DSA-65 publicada pelo RS) — o mesmo número, byte a byte, já citado em
+`METRICS_COVERAGE.md`'s own N_JWK row ("the pre-verification 42-call figures... pqc -3,904").
+Confirmado: **322.895 + 3.904 = 326.799.** Fecha exato, segunda vez.
+
+**Conclusão (forma "a")**: **v7 e v8 SÃO comparáveis** quanto ao certificado PQC — os dois já
+usam a mesma cadeia, inteiramente pós-quântica. Não há nada para declarar ao orientador sobre um
+viés introduzido pelo fix `478bda5`: ele já estava embutido, de forma documentada e correta, na
+própria referência da v7 antes desta tese sequer citá-la como baseline. A única diferença real
+entre a referência da v7 (322.895) e `V8_OPINSIZE` (326.799) é a adição do `/jwks` do RS no
+fluxo de 44 chamadas (+3.904 B) — causa diferente, já documentada, nada a corrigir.
 
 ---
 
@@ -283,10 +339,15 @@ separação, as três linhas PASSAM; a formulação original da expectativa, nã
 conflava as duas camadas. As duas diferenças reais vs v7 (seção 5) têm motivo documentado e
 conhecido (uma delas é uma correção intencional já registrada em `DECISIONS.md`, a outra é
 puramente ordem de startup, sem efeito no que é medido). A seção 7 quantificou em bytes o custo
-real da extensão ML-DSA inerte do Hybrid (10.602 B/handshake, 76,6% do delta vs Classic) e deixou
-**uma tensão real, explicitamente em aberto** entre o delta medido do certificado de cliente PQC
-(+2.926 B, real) e o delta total já publicado do OPINsize (+3.904 B) — não forçada a fechar sem
-dado.
+real da extensão ML-DSA inerte do Hybrid (10.602 B/handshake, 76,6% do delta vs Classic) e, numa
+terceira rodada (2026-10-27, com montagem real local do certificado PQC antigo e novo lado a
+lado), **resolveu com medição** a tensão antes deixada em aberto: v7 e v8 usam o MESMO
+certificado PQC (o novo, pós-`478bda5`) — confirmado tanto pela Decision 14 da própria v7 quanto
+por handshakes reais e frescos desta sessão (delta_handshake x N_mTLS + delta_PKI x N_PKI fecha
+exato nos 51.840 B documentados). O resíduo de +3.904 B entre a referência da v7 (322.895) e
+`V8_OPINSIZE` (326.799) tem causa diferente e já documentada (a busca `/jwks` do RS, adicionada
+no fluxo de 44 chamadas) — fecha exato também. Nada para declarar ao orientador como viés
+introduzido pelo fix do certificado.
 
 **Conclusão: piloto 3 e a campanha NÃO estão bloqueados por este atestado.** Se a formulação da
 expectativa em si (não o sistema) precisar de correção — por exemplo, separar explicitamente

@@ -82,6 +82,7 @@ not have been "prepared"; testing them for real, once there was
 something real to test against, is.
 """
 import gzip
+import hashlib
 import json
 import os
 import random
@@ -934,6 +935,59 @@ def warmup_done(scenario_path, window):
 # list entry for mtls.
 GATEWAY_IMAGE_NAME = "insurance-server-lambdas-mtls:latest"
 DELIVERED_IMAGES_MANIFEST_PATH = Path("/home/ec2-user/delivered_images_manifest.json")
+
+
+def get_gateway_image_digest(executor, installation):
+    """Order/image-provenance turn (item 4, thesis/results/v8/DECISIONS.md,
+    Decision 91 -- the profile attestation's own real finding that all 3
+    profiles share ONE gateway image, switched only by CRYPTO_PROFILE at
+    runtime, prompted this): the real image ID of the gateway container
+    this installation is currently running, recorded once per window
+    (window{NN}.json) so a pulled dataset can later confirm the SAME
+    image ran throughout the campaign, never silently rebuilt or swapped
+    mid-run. Reuses the exact inspect command pre_block_checks() already
+    runs once per block (GATEWAY_IMAGE_NAME, `docker image inspect -f
+    '{{.Id}}'`) -- not a second, separately-maintained check, just also
+    surfaced at the window level, not only the per-block pre-flight."""
+    inspect_cmd = f"docker image inspect -f {shlex.quote('{{.Id}}')} {shlex.quote(GATEWAY_IMAGE_NAME)}"
+    if isinstance(executor, SSHExecutor):
+        server_ip = executor._server_ip(installation)
+        digest = executor._run_tolerant(
+            f"[{installation}] window: inspect gateway image",
+            executor._ssh_cmd(server_ip, inspect_cmd),
+        )
+        return (digest or "").strip() or None
+    # LocalExecutor: same inspect command, run locally -- "server" and this
+    # control process are the same machine, no SSH hop needed.
+    result = subprocess.run(["docker", "image", "inspect", "-f", "{{.Id}}", GATEWAY_IMAGE_NAME],
+                             capture_output=True, text=True)
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+# Order/image-provenance turn (item 4, Decision 91): a single sha256 over
+# this control instance's own copy of the scripts that actually determine
+# what a run measures (opin_flow.py, the campaign_client_runner.py every
+# client deploys and runs, and this orchestrator itself) -- computed once
+# per process (code does not change mid-campaign; a restart recomputes it
+# fresh, which is correct: Restart=on-failure after a real code fix SHOULD
+# produce a different hash) and stamped on every run{NN}.json for per-run
+# traceability, not just a one-time campaign-start note.
+def _compute_code_hash():
+    paths = [
+        THESIS_SCRIPTS_DIR / "opin_flow.py",
+        THESIS_SCRIPTS_DIR / "campaign_client_runner.py",
+        Path(__file__),
+    ]
+    h = hashlib.sha256()
+    for p in paths:
+        try:
+            h.update(p.read_bytes())
+        except FileNotFoundError:
+            h.update(b"MISSING:" + str(p).encode())
+    return h.hexdigest()
+
+
+CODE_HASH = _compute_code_hash()
 
 
 def pre_block_checks(executor, installation, profile):
@@ -2297,6 +2351,7 @@ def run_validation_stage(executor, installations):
                     (out_dir / "run01.json").write_text(json.dumps({
                         "started_at_utc": datetime.now(timezone.utc).isoformat(),
                         "server": installation, "client": scenario, "profile": profile,
+                        "code_hash": CODE_HASH,  # item 4, Decision 91 -- same convention as run_window()'s own runs
                         "result": result,
                     }, indent=2))
             finally:
@@ -2377,6 +2432,10 @@ def run_window(executor, installation, window, seed, profile_order):
         "seed": seed,
         "profile_order": profile_order,
         "scenario_rotation": scenarios,
+        # Item 4 (Decision 91): the real image ID the gateway is running
+        # for this installation, this window -- not assumed identical
+        # across windows, actually re-checked every window.
+        "gateway_image_id": get_gateway_image_digest(executor, installation),
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
     }, indent=2))
 
@@ -2471,6 +2530,14 @@ def run_window(executor, installation, window, seed, profile_order):
                         "profile_position_in_window": block_position,
                         "server": installation,
                         "client": scenario,
+                        # Item 4 (Decision 91): sha256 over this control
+                        # process's own opin_flow.py/campaign_client_runner.py/
+                        # campaign_run.py, computed once at process start --
+                        # stamped per run so a mid-campaign code change
+                        # (an operator intervention or a Restart=on-failure
+                        # after a real fix) is visible per execution, not
+                        # just inferred from timestamps.
+                        "code_hash": CODE_HASH,
                         "result": result,
                     }, indent=2))
         finally:

@@ -69,6 +69,7 @@ def _run_window_recording(installation, inventory_clients, window=1):
          mock.patch.object(cr, "stop_block_proxies", fake_stop_block_proxies), \
          mock.patch.object(cr, "run_warmup", fake_run_warmup), \
          mock.patch.object(cr, "run_one_execution", fake_run_one_execution), \
+         mock.patch.object(cr, "get_gateway_image_digest", lambda executor, installation: "sha256:fake"), \
          mock.patch.object(cr, "RUNS_PER_WINDOW", 1):
         try:
             cr.run_window(executor, installation, window=window, seed=42, profile_order=cr.PROFILES[:])
