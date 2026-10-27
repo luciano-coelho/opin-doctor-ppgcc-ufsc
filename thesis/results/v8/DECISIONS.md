@@ -7647,3 +7647,245 @@ WAN, não se ele se reproduz com latência real.
    mais estreitas em N=30 (ex.: pqc/L0 4,5% -> 2,1%). N=30 deve ser
    suficiente para o alvo de ±5% sem precisar mudar o limiar.
 
+## 90. Contabilidade completa do T_fluxo (novas categorias signing/setup/wait, resíduo caracterizado via cProfile real); ordem balanceada por quadrado latino + aquecimento de instância + posição como covariável; portões de validação (24 execuções) e de aceite da janela 1; campaign_down.sh sem prompt interativo. Sem AWS -- só código, testes locais, docs.
+
+Turno de 4 itens, todos sem tocar AWS, `mock_mtls/main.go` ou
+`tls_kem_proxy/main.go` (confirmado por diff ao final de cada item).
+
+### Item 1 — Contabilidade completa do T_fluxo
+
+`opin_flow.py` já tinha `_VERIFICATION_TIMINGS` (turno anterior). Esta
+sessão acrescentou duas categorias novas e confirmou uma terceira como
+"efetivamente zero por construção":
+
+- **`_SIGNING_TIMINGS`** (novo): `sign_jwt()` agora cronometra a si
+  mesmo (um único ponto de wrap cobre os 3 ramos -- PS256 via pyjwt,
+  ML-DSA-65 via `_run_pqc_signer()`, hybrid via `_sign_jwt_hybrid()`,
+  que por sua vez chama `_run_pqc_signer()` de novo), com um parâmetro
+  `artifact` livre (mesma convenção de `verify_jwt()`). `make_client_
+  assertion()`/`make_request_object()` passam esse `artifact` adiante;
+  os 4 pontos de chamada reais (`/token` client_credentials, PAR
+  request_object, PAR assertion, `/token` authorization_code) recebem
+  rótulos distintos (`client_assertion:token_cc`,
+  `request_object:par`, `client_assertion:par`,
+  `client_assertion:token_ac`).
+- **`_WAIT_TIMINGS`** (novo): o ÚNICO `time.sleep()` dentro da janela
+  medida de T_fluxo é o loop de poll em `wait_for_authorization_code()`
+  esperando o callback local -- cronometrado só no caminho de SUCESSO
+  (o caminho de retry/descarte já é excluído de T_fluxo via
+  `wasted_seconds`, cronometrá-lo de novo aqui seria contar o mesmo
+  tempo duas vezes). Todo outro `time.sleep()` do arquivo roda FORA da
+  janela medida (dentro de `start_tls_kem_proxy()`/`start_pqc_signer_
+  service()`, chamados uma vez por BLOCO, não por execução) ou dentro
+  do caminho já descartado.
+- **`_SETUP_TIMINGS`** (novo, achado real via profiling, não previsto
+  no pedido original): uma primeira validação local (classic, 3
+  perfis) mostrou um resíduo (T_fluxo menos a soma de HTTP+signing+
+  verification+wait) de **~75% do T_fluxo** -- muito alto para aceitar
+  sem investigar. Um `cProfile` real de uma execução local (classic)
+  identificou 3 custos reais, específicos, nunca antes instrumentados,
+  nenhum deles assinatura/verificação/KEM/chamada HTTP:
+  - `load_signing_key` -- construção do objeto de chave RSA a partir
+    do JWK de assinatura do cliente (`cryptography`'s own
+    `RSAPrivateNumbers.private_key()`), ~0,42s/chamada, 2x/execução
+    (uma por sub-fluxo, dentro de `load_client_signing_key()`).
+  - `generate_callback_cert` -- geração de um keypair RSA-2048
+    descartável para o certificado TLS auto-assinado do callback OIDC
+    local (`_generate_callback_tls_cert()`), ~0,26s/chamada,
+    2x/execução.
+  - `callback_server_teardown` -- `socketserver.serve_forever()` da
+    stdlib do Python faz poll via `select()` com `poll_interval=0,5s`
+    fixo; `shutdown()` precisa esperar o poll EM CURSO retornar antes
+    de parar, pagando até ~0,5s por chamada -- não é código deste
+    projeto, é um detalhe da stdlib nunca visto antes porque nunca
+    tinha sido cronometrado.
+  Nenhum dos três é assinatura, verificação, operação KEM, ou chamada
+  HTTP a uma parte do OPIN -- é scaffolding do próprio harness de
+  teste (geração de cert/chave local, ciclo de vida do servidor HTTPS
+  de callback), por isso ganhou categoria própria em vez de ficar
+  escondido dentro do resíduo.
+
+**Resultado após instrumentar `_SETUP_TIMINGS`**: resíduo caiu de ~75%
+para **14-24% do T_fluxo**, nos 3 perfis, validado com 3 execuções
+reais cada (classic, pqc, hybrid) contra a stack local -- não um
+único ponto, uma amostra pequena mas real. Números medianos (segundos,
+3 execuções/perfil):
+
+| perfil | T_fluxo | http | signing | verification | wait | setup | resíduo | resíduo % |
+|---|---|---|---|---|---|---|---|---|
+| classic | 3,22 | 0,57 | 0,07 | 0,11 | ~0 | 1,98 | 0,48 | 14,7% |
+| pqc | 2,65 | 0,56 | 0,12 | 0,12 | ~0 | 1,15 | 0,62 | 23,5% |
+| hybrid | 3,40 | 0,58 | 0,18 | 0,10 | ~0 | 1,92 | 0,52 | 14,7% |
+
+(mediana de 3 execuções cada; variação execução-a-execução observada
+entre 14,5% e 24,1% nas 9 execuções reais -- máquina de desenvolvimento
+com ~20 outros containers Docker não relacionados rodando
+concorrentemente, ruído de fundo real, não um bug.)
+
+**Resíduo remanescente (14-24%), explicado, não instrumentado
+separadamente**: o mesmo `cProfile` confirmou que custo de SSL/TLS
+(`load_verify_locations`, `connect()`, `load_cert_chain`,
+`enum_certificates`) já está DENTRO do intervalo medido de cada
+chamada HTTP (`do_call()`'s own `start`/`end` em volta de
+`session.request()`) -- não é um gap adicional, é por isso que
+`http_calls_seconds` já é maior do que RTTs puros de loopback
+sugeririam. O que resta de fato não-instrumentado é: (a) o handshake
+mTLS/KEM em si, que acontece dentro de `tls_kem_proxy`/`mock_mtls`
+(Go, off-limits este turno) sem ponto de instrumentação do lado
+cliente possível sem tocar `main.go`; (b) overhead geral de
+interpretador Python/JSON/dict ao longo de ~230 mil chamadas de função
+por execução; (c) o ruído de fundo da máquina já citado. Nenhum desses
+é uma categoria que valha inventar sem dados reais -- reportado como
+resíduo caracterizado, não um número misterioso.
+
+**Overhead dos próprios cronômetros** (`timeit`, 200k repetições de
+`time.monotonic()` + montar dict + `list.append()`): 0,397
+microssegundos/chamada. Uma execução real tem ~23 desses eventos (8
+signing + 7 verification + 2 wait + ~6 setup) -> overhead total
+~0,009ms/execução, **~0,0003% de um T_fluxo de ~3s** -- não altera o
+que é medido de forma perceptível.
+
+**Erro de ambiente encontrado e corrigido no caminho** (não é um bug
+deste turno, é um achado operacional): a validação local inicial para
+o perfil `pqc` falhou com `ValueError: Unknown key type:
+2.16.840.1.101.3.4.3.18` (o OID do ML-DSA-65) dentro de
+`_verify_cert_signed_by_mldsa65()`. Investigado e confirmado: o
+`python` do PATH deste shell é o Python de sistema
+(`C:\Python313\python.exe`, `cryptography==46.0.3`, sem suporte a
+ML-DSA), não o `.venv` do projeto (`thesis/scripts/.venv`,
+`cryptography==50.0.0`, pinado em `requirements.txt` como `50.0.2`).
+Confirmado reproduzindo o MESMO erro contra o código ORIGINAL (não
+modificado), via `git stash` -- não é uma regressão desta sessão.
+Corrigido daqui em diante usando `.venv/Scripts/python.exe`
+explicitamente para toda validação local (classic/pqc/hybrid, todas
+as 3 reconfirmadas limpas depois da correção).
+
+`consolidate_v8.py`: novos blocos `signing_timings_ms`, `setup_timings_
+ms`, `wait_timings_ms`, `phase_accounting` (todos seguindo o mesmo
+padrão `status`/`runs_with_data`/estatística agregada de
+`verification_timings_ms`, incluindo `"missing (run predates ...)"`
+para dados anteriores a este turno, nunca um zero falso). Validado
+contra os 11 testes existentes (`test_consolidate_v8.py`, continua
+passando sem alteração) e contra uma verificação sintética própria
+(3 execuções reais repetidas num diretório de cenário temporário,
+confirma que o dado sai por execução E que mediana/IC saem por
+célula). `METRICS_COVERAGE.md` atualizado com a linha nova e os
+números reais acima.
+
+### Item 2 — Ordem balanceada (quadrado latino) + aquecimento de instância
+
+`run_window()` sorteava `profile_order` de forma independente por
+janela (`rng.shuffle`) -- exatamente o que confundiu identidade de
+perfil com posição/janela no piloto 2 real (Decision 89: a única
+janela real sorteou PQC primeiro e Hybrid por último). Substituído por
+`build_latin_square_profile_orders(seed)`: UMA semente para a campanha
+toda (não mais uma por janela) sorteia uma permutação-base dos 3
+perfis e uma direção de rotação (+1/-1); as 3 janelas são a base e suas
+2 rotações cíclicas nessa direção -- um quadrado latino circulante, que
+garante de graça a restrição de coluna (cada posição também vê cada
+perfil exatamente uma vez) sem rejection sampling. 6 bases x 2 direções
+= 12 quadrados possíveis, o total exato de quadrados latinos 3x3 --
+todos alcançáveis pela semente. `campaign_up.sh` agora grava
+`latin_square_seed` (uma chave) em vez de `window_seeds` (uma por
+janela) no `campaign_schedule.json`.
+
+`profile_position_in_window` (0/1/2, `enumerate(profile_order)`) agora
+é gravado em todo `run{NN}.json` real, junto do `window` que já
+existia -- a covariável que faltava para separar efeito de ordem de
+efeito real sem precisar do teste ABBA local inteiro de novo.
+`consolidate_v8.py` agrega isso em `t_fluxo_by_window_position.series`
+por célula, pronto para a análise usar sem reler cada `run{NN}.json`
+manualmente.
+
+**Aquecimento de instância** (`run_instance_warmup()`, novo): uma vez
+por instalação, antes do PRIMEIRO bloco da campanha inteira -- 180s
+(3 minutos) de fluxos descartáveis (perfil classic) via o mesmo
+`run_warmup()` já existente, gravados em
+`_campaign-control/instance_warmup/`, nunca na árvore real de dados.
+180s não foi escolhido depois de ver resultado nenhum: é uma margem de
+50% sobre os ~2 minutos que a Decision 4 (`switch_crypto_profile.py`)
+já tinha medido para o fechamento da janela de *settling* de uma
+RECRIAÇÃO DE CONTAINER (perturbação mais leve que o boot de uma
+instância EC2 nova de verdade, que ainda tem disco EBS frio, cache de
+página do SO frio, caches de JIT/interpretador frios).
+
+Testes novos (`tests/test_latin_square_order.py`, 6 casos): o quadrado
+é de fato um quadrado latino (linha E coluna, 200 sementes diferentes),
+determinístico por semente, não degenerado a uma única ordem, rejeita
+`len(PROFILES) != WINDOWS_PER_CAMPAIGN`; `run_instance_warmup()` roda
+pelo tempo configurado e depois desliga os proxies, grava fora da
+árvore real, pula instalação sem cenário disponível no inventário
+(mesma filosofia "pula, não aborta" do item 3 de turnos anteriores).
+
+### Item 3 — Portões de validação e de aceite da janela 1
+
+`run_validation_stage()` (novo): 1 execução por perfil em cada um dos 8
+cenários da campanha completa (4 sa-east-1 + 2 us-east-1 + 2
+ap-northeast-1 = 8; x 3 perfis = 24 execuções), ANTES da janela 1,
+gravadas em `_campaign-control/validation_stage/`, nunca na árvore
+real. Depois de escritas, bloqueia em
+`wait_for_operator_gate("validation_stage")`. `wait_for_operator_gate()`
+(novo) espera indefinidamente (sem timeout, de propósito) um arquivo
+marcador (`_campaign-control/gates/<nome>.approved`) que SÓ o operador
+cria, depois de puxar a amostra via `campaign_pull.sh` e rodar
+`pilot_acceptance.py` contra ela fora da instância -- o orquestrador
+em si não tem acesso a pcaps/dados já puxados para rodar isso ele
+mesmo (só roda NA instância de controle). Mesmo mecanismo reaplicado
+depois da janela 1 inteira completar (`wait_for_operator_gate(
+"window1_acceptance")`), antes da janela 2 começar -- aceite completo
+sobre o dataset real, não só a amostra de 24.
+
+Testado com inventários falsos (`tests/test_validation_gate.py`, 5
+casos): inventário de campanha completa roda exatamente 24 execuções e
+chama o portão 1 vez; inventário de piloto (só sa-east-1) roda 6 (3
+perfis x 2 cenários), pulando as outras 2 instalações sem abortar;
+instalação totalmente ausente do inventário não roda nenhuma execução
+mas ainda chega ao portão; o portão retorna na hora se o marcador já
+existe, e bloqueia de fato até o marcador aparecer (thread separada
+criando o arquivo depois de um delay, confirmado por tempo decorrido).
+
+`PILOT_RUNBOOK.md`: nova seção "Portões da campanha completa" com os 3
+passos (aquecimento, validação, aceite da janela 1), o que o operador
+precisa fazer em cada um, estimativa rotulada de tempo por etapa
+(mesma metodologia das Decisions 47/54/55, não um número exato), e o
+critério de aborto específico (se `pilot_acceptance.py` reportar
+`OVERALL: FAIL` contra a amostra ou contra a janela 1, o operador NÃO
+cria o marcador -- investiga e corrige primeiro).
+
+### Item 4 — `campaign_down.sh` sem prompt interativo
+
+O prompt final (`read -r -p ...`, perguntando se apaga o state/chave
+local) foi substituído por um comportamento padrão não-interativo:
+sem a flag `--delete-local-state`, o script MANTÉM o state/chave local
+(o lado seguro -- ambos já são local-only, no `.gitignore`, nunca
+commitados, Decision 49, então manter não custa nada) e reporta
+exatamente quais arquivos permanecem e onde. Com `--delete-local-state`,
+remove e reporta exatamente o que removeu. Lógica extraída para uma
+função nomeada (`report_and_handle_local_state()`) especificamente para
+ser testável sem terraform/AWS: `tests/test_campaign_down_local_state.sh`
+extrai essa função real do arquivo (não duplica a lógica) e a testa
+contra diretórios falsos -- mantém por padrão, remove só com a flag,
+não erra com diretório vazio em nenhum dos dois modos, e (o ponto
+central do bug original) retorna imediatamente com stdin redirecionado
+de `/dev/null`, em vez de bloquear ou falhar com "Inappropriate ioctl
+for device".
+
+**O que ficou da execução anterior** (teardown real do piloto 2,
+turno anterior, antes desta correção existir): `terraform.tfstate`
+(0 recursos -- destroy real já tinha funcionado), `terraform.tfstate.
+backup`, `.terraform/`, `.terraform.lock.hcl`, todos em
+`thesis/results/v8/campaign/terraform/`, local-only, no `.gitignore`.
+Deixados como estão (comportamento padrão, nenhuma ação tomada agora)
+-- Luciano pode rodar `rm -rf thesis/results/v8/campaign/terraform/
+{.terraform,.terraform.lock.hcl,terraform.tfstate,terraform.tfstate.backup}`
+manualmente se quiser limpá-los, ou deixar para a próxima campanha
+(Terraform recria o que precisar).
+
+### Fechamento
+
+`scan_secrets.sh` passou antes do commit. Dois commits separados
+(código, docs) -- nenhum dado de piloto neste turno, nenhuma chamada
+AWS. Testes: 27 (`pytest tests/`) + 10 (`test_campaign_down_local_state.sh`)
++ 6 (`test_latin_square_order.py`, incluído nos 27) + 5
+(`test_validation_gate.py`, incluído nos 27) -- todos passando.
+

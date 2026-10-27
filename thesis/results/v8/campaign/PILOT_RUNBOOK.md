@@ -414,6 +414,58 @@ not a script, at:
   `c7i-flex` class, or an instance left running far longer than
   planned).
 
+## Portões da campanha completa (validação pré-janela-1 e aceite pós-janela-1)
+
+Válido a partir de 2026-10-27 (validation-gate turn, `DECISIONS.md`) --
+aplica-se à CAMPANHA COMPLETA (`campaign_run.py`'s own `main()`), não ao
+piloto em si (o piloto roda `--runs` reduzido via
+`CAMPAIGN_WINDOWS_PER_CAMPAIGN=1`, não passa por estes dois portões).
+Dois pontos de parada, nenhum deles opcional, nenhum com timeout --
+`campaign_run.py` bloqueia indefinidamente em cada um até o operador
+criar o marcador correspondente (não há "passar no timeout"; uma
+campanha sem supervisão nunca deve "aprovar" um portão que ninguém de
+fato revisou):
+
+1. **Aquecimento de instância** (uma vez por instalação, antes do
+   primeiro portão) -- `run_instance_warmup()`: 180s de fluxos
+   descartáveis (perfil classic) por instalação, registrados em
+   `_campaign-control/instance_warmup/`, nunca nos dados reais. Tempo:
+   até 3 instalações x 180s ≈ **9 minutos** (sequencial, não paralelo).
+2. **Portão de validação** (antes da janela 1) -- `run_validation_stage()`:
+   1 execução por perfil em cada um dos 8 cenários da campanha completa
+   (sa-east-1: L0/L123/L219/L325; us-east-1: L0/L14; ap-northeast-1:
+   L0/L30) = 24 execuções, gravadas em
+   `_campaign-control/validation_stage/`, nunca na árvore real de dados.
+   Depois de escritas, o processo bloqueia em
+   `wait_for_operator_gate("validation_stage")`. **O que o operador faz**:
+   roda `campaign_pull.sh` para trazer só essa amostra, aplica
+   `pilot_acceptance.py` contra ela (fora da instância -- o orquestrador
+   não tem acesso aos pcaps/dados já puxados para rodar isso ele mesmo),
+   e só então `touch` o arquivo marcador que o próprio log do orquestrador
+   imprime (`_campaign-control/gates/validation_stage.approved`, dentro
+   de `DATA_ROOT` na instância de controle). Tempo estimado: 9 blocos
+   (3 perfis x 3 instalações, cada bloco com troca de perfil + 5 execuções
+   de settling) + 24 execuções reais ≈ **45min-1h30** (mesma metodologia
+   de estimativa rotulada das Decisions 47/54/55, não um número preciso).
+3. **Portão de aceite da janela 1** (depois da janela 1 completa, antes
+   da janela 2) -- mesma mecânica (`wait_for_operator_gate("window1_acceptance")`),
+   agora sobre o dataset real e completo da janela 1 (as 10
+   execuções/perfil/cenário de TODAS as instalações, não a amostra de
+   24). O operador puxa os dados da janela 1 inteira, roda
+   `pilot_acceptance.py` contra elas, e só então cria
+   `_campaign-control/gates/window1_acceptance.approved`. Tempo: o tempo
+   da própria janela 1 (≈1/3 da campanha completa) mais o tempo de
+   revisão do operador (não cronometrado pelo orquestrador).
+
+**Critérios de aborto específicos destes portões** (além dos já listados
+na seção "Critérios de aborto" abaixo, que seguem valendo): se
+`pilot_acceptance.py` reportar `OVERALL: FAIL` contra a amostra de
+validação OU contra os dados da janela 1, o operador NÃO cria o
+marcador -- investiga e corrige primeiro (mesmo "para e me reporta" de
+sempre). Criar o marcador é uma decisão humana explícita, nunca
+automática; não existe um caminho de "continuar mesmo assim" sem esse
+arquivo.
+
 ## Os dois desfechos
 
 **(A) Seguir para a campanha completa.** Run `campaign_up.sh` again,
