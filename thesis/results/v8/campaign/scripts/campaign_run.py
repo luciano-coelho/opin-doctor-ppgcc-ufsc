@@ -179,6 +179,19 @@ def check_time_budget():
 RUNS_PER_WINDOW = int(os.environ.get("CAMPAIGN_RUNS_PER_WINDOW", "10"))
 WINDOWS_PER_CAMPAIGN = int(os.environ.get("CAMPAIGN_WINDOWS_PER_CAMPAIGN", "3"))
 PROFILES = ["classic", "pqc", "hybrid"]
+# Item 2 (order/warm-up turn, thesis/results/v8/DECISIONS.md): a freshly
+# launched EC2 instance's own cold-start (cold EBS reads, cold OS page
+# cache, cold interpreter/JIT caches, a not-yet-settled network stack) is
+# a broader disturbance than a container recreation on an already-warm
+# instance -- Decision 4 (switch_crypto_profile.py) found THAT settling
+# window closed by about the 7th-8th execution, ~2 minutes of wall-clock.
+# This instance-level warmup runs once per installation, before the
+# campaign's first block, for a fixed TIME instead of a fixed count --
+# 180s is a 50% margin over Decision 4's own ~2-minute figure for a
+# strictly lighter disturbance, not a number picked after looking at
+# results from this fixed-time warmup itself.
+INSTANCE_WARMUP_SECONDS = int(os.environ.get("CAMPAIGN_INSTANCE_WARMUP_SECONDS", "180"))
+INSTANCE_WARMUP_PROFILE = "classic"
 PROFILE_TO_EXPERIMENT_DIR = {"classic": "experiment1 - Classic", "pqc": "experiment2 - PQC", "hybrid": "experiment3 - Hybrid"}
 SAFETY_TIMER_RENEW_HOURS = 48  # Decision 49 -- must match the Terraform default
 # Decision -- raised from 128 to 256 (2026-10-22 investigation, DECISIONS.md):
@@ -2128,10 +2141,177 @@ def run_one_execution(executor, installation, scenario, profile, window, run_ind
     return executor.run_one_execution(installation, scenario, profile, window, run_index, scenario_path)
 
 
-def run_window(executor, installation, window, seed):
+def build_latin_square_profile_orders(seed: int) -> dict:
+    """Item 2 (order/warm-up turn, thesis/results/v8/DECISIONS.md):
+    replaces run_window()'s former independent-per-window
+    `rng.shuffle(profile_order)` -- which confounded profile identity
+    with window/position (Decision 89: pilot 2's single real window drew
+    PQC first and Hybrid last, every time, by construction) -- with a
+    proper 3x3 Latin square across the campaign's WINDOWS_PER_CAMPAIGN
+    windows: each profile occupies each of the 3 within-window block
+    positions (1st/2nd/3rd) exactly once over the 3 windows.
+
+    ONE seed, registered once per campaign (not once per window): draws
+    a uniformly random base permutation of PROFILES (1 of 3! = 6) and a
+    uniformly random rotation direction (+1 or -1); the windows' own
+    profile_order are the base permutation and its cyclic rotations in
+    that direction. A circulant Latin square this way automatically
+    satisfies the column constraint too (each position also sees every
+    profile exactly once) with no rejection sampling -- 6 base
+    permutations x 2 directions = 12, the full count of 3x3 Latin
+    squares, every one of them reachable by this seed."""
+    if len(PROFILES) != WINDOWS_PER_CAMPAIGN:
+        raise ValueError(
+            f"build_latin_square_profile_orders() needs len(PROFILES) == WINDOWS_PER_CAMPAIGN "
+            f"({len(PROFILES)} != {WINDOWS_PER_CAMPAIGN}) -- the Latin-square guarantee (each "
+            f"profile once per window AND once per position) only holds for a square matrix."
+        )
     rng = random.Random(seed)
-    profile_order = PROFILES[:]
-    rng.shuffle(profile_order)
+    base = PROFILES[:]
+    rng.shuffle(base)
+    direction = rng.choice([1, -1])
+    n = len(base)
+    return {
+        window: base[(direction * (window - 1)) % n:] + base[:(direction * (window - 1)) % n]
+        for window in range(1, WINDOWS_PER_CAMPAIGN + 1)
+    }
+
+
+def _pick_instance_warmup_scenario(executor, installation):
+    """Reuses run_window()'s own inventory-scoping rule (SSHExecutor
+    only -- see its own comment) to pick ONE scenario the instance
+    warmup can safely run, instead of hardcoding SCENARIO_ROTATION's
+    window-1 entry and risking a KeyError against a scoped pilot
+    inventory that doesn't happen to include it. Returns None (caller
+    skips the warmup for this installation, with a warning -- same
+    "don't abort the whole campaign over one installation" philosophy
+    as item 3's orchestrator fix) when nothing in SCENARIO_ROTATION's
+    own window-1 list is available."""
+    candidates = SCENARIO_ROTATION[installation][1]
+    if isinstance(executor, SSHExecutor):
+        available_clients = executor.inventory.get("clients", {})
+        candidates = [s for s in candidates if f"{s}@{installation}" in available_clients]
+    return candidates[0] if candidates else None
+
+
+def run_instance_warmup(executor, installation, duration_seconds=INSTANCE_WARMUP_SECONDS):
+    """Item 2 (order/warm-up turn, thesis/results/v8/DECISIONS.md): a
+    freshly launched EC2 instance's own cold-start (cold EBS reads, cold
+    OS page cache, cold interpreter/JIT caches, a not-yet-settled network
+    stack) is a broader disturbance than a container recreation on an
+    already-warm instance -- see INSTANCE_WARMUP_SECONDS's own module-
+    level comment for the 180s figure's justification. Runs once per
+    installation, before the campaign's very first block (main() calls
+    this before the window loop starts).
+
+    Reuses run_warmup() unchanged (same negotiated-group verification it
+    already does for a real block) in a loop keyed by wall-clock time
+    instead of a fixed count -- NOT run_one_execution()/the real
+    runs/run{NN}.json numbering, and NOT scenario_dir()'s own real-data
+    tree: every throwaway flow here writes into its own side directory
+    under _campaign-control/instance_warmup/, so it can never be mistaken
+    for real campaign data by a later pull or consolidation pass.
+    start_block_proxies()/stop_block_proxies() give it the same profile-
+    switch-and-settle lifecycle a real block gets (window=0 is a
+    sentinel, distinct from every real window 1..WINDOWS_PER_CAMPAIGN)."""
+    scenario = _pick_instance_warmup_scenario(executor, installation)
+    if scenario is None:
+        print(f"[{installation}] instance warmup: no scenario in this run's own inventory -- skipping "
+              f"(not aborting the campaign).")
+        return
+    warmup_dir = DATA_ROOT / "v8" / "latency" / "_campaign-control" / "instance_warmup" / installation
+    warmup_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[{installation}] instance warmup: {duration_seconds}s of disposable "
+          f"{INSTANCE_WARMUP_PROFILE}/{scenario} flows before the campaign's first block "
+          f"(recorded separately under {warmup_dir}, never in a scenario's real data)")
+    start_block_proxies(executor, installation, INSTANCE_WARMUP_PROFILE, [scenario], window=0)
+    try:
+        deadline = time.monotonic() + duration_seconds
+        i = 0
+        while time.monotonic() < deadline:
+            i += 1
+            run_warmup(executor, installation, scenario, INSTANCE_WARMUP_PROFILE, window=i, scenario_path=warmup_dir)
+    finally:
+        stop_block_proxies(executor, installation, INSTANCE_WARMUP_PROFILE, [scenario], window=0)
+    print(f"[{installation}] instance warmup: {i} disposable flow(s) run in {duration_seconds}s")
+
+
+def wait_for_operator_gate(gate_name: str, poll_seconds: int = 60) -> None:
+    """Validation-gate turn (item 3, thesis/results/v8/DECISIONS.md):
+    blocks until the operator creates this gate's own marker file -- the
+    orchestrator itself cannot run pilot_acceptance.py against the gate's
+    sample (that needs a PULLED data root, campaign_pull.sh's own
+    rsync+manifest layout, reviewed off-instance -- this process only
+    ever runs ON the control instance, which never holds the pcaps
+    itself). No timeout: an unattended campaign must never silently
+    "pass" a gate nobody actually reviewed."""
+    marker_path = DATA_ROOT / "v8" / "latency" / "_campaign-control" / "gates" / f"{gate_name}.approved"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    write_status("waiting_operator", f"gate={gate_name}: touch {marker_path} to continue")
+    print(f"=== GATE: {gate_name} -- waiting for operator approval ===")
+    print(f"    Pull this stage's own sample (campaign_pull.sh), run pilot_acceptance.py against it "
+          f"off-instance, then on the control instance: touch {marker_path}")
+    while not marker_path.exists():
+        time.sleep(poll_seconds)
+    print(f"=== GATE: {gate_name} -- approved (marker found), continuing ===")
+
+
+def run_validation_stage(executor, installations):
+    """Item 3 (validation-gate turn, thesis/results/v8/DECISIONS.md): ONE
+    execution per profile, in every one of the campaign's 8 scenarios
+    (SCENARIO_ROTATION[installation][1] is already each installation's
+    full, non-rotated scenario set -- 4 sa-east-1 + 2 us-east-1 + 2
+    ap-northeast-1 = 8; x 3 profiles = 24 executions total), BEFORE
+    window 1's own first block. Written to its own side directory under
+    _campaign-control/validation_stage/, never a real scenario_dir()
+    path -- this sample is for the operator's own pilot_acceptance.py
+    review (wait_for_operator_gate() below), not for pooling into the
+    campaign's real 30-runs-per-cell dataset.
+
+    Mirrors run_window()'s own block loop (switch profile once per
+    profile via start_block_proxies()/stop_block_proxies(), round-robin
+    scenarios inside it) at N=1 instead of RUNS_PER_WINDOW -- same
+    inventory-scoping rule as run_window() (SSHExecutor only), same
+    "skip an installation with nothing available in this run's own
+    inventory, don't abort the whole campaign" philosophy as the earlier
+    installation-skip orchestrator fix."""
+    for installation in installations:
+        scenarios = SCENARIO_ROTATION[installation][1]
+        if isinstance(executor, SSHExecutor):
+            available_clients = executor.inventory.get("clients", {})
+            scenarios = [s for s in scenarios if f"{s}@{installation}" in available_clients]
+        if not scenarios:
+            print(f"[{installation}] validation stage: no scenario in this run's own inventory -- skipping "
+                  f"(not aborting the campaign).")
+            continue
+        for profile in PROFILES:
+            check_time_budget()
+            pre_block_checks(executor, installation, profile)
+            start_block_proxies(executor, installation, profile, scenarios, window=0)
+            try:
+                for scenario in scenarios:
+                    out_dir = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
+                               / installation / profile / scenario)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    result = run_one_execution(executor, installation, scenario, profile, 0, 1, out_dir)
+                    (out_dir / "run01.json").write_text(json.dumps({
+                        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "server": installation, "client": scenario, "profile": profile,
+                        "result": result,
+                    }, indent=2))
+            finally:
+                stop_block_proxies(executor, installation, profile, scenarios, window=0)
+    print("=== validation stage: 24 executions complete (see _campaign-control/validation_stage/) ===")
+    wait_for_operator_gate("validation_stage")
+
+
+def run_window(executor, installation, window, seed, profile_order):
+    """profile_order: this window's row of the campaign-wide Latin square
+    (build_latin_square_profile_orders(), item 2) -- no longer derived
+    here from an independent per-window shuffle; `seed` is kept as a
+    parameter purely so window{NN}.json below can still record which
+    seed produced the square this window's row came from (traceability),
+    not to re-derive the order itself."""
     scenarios = SCENARIO_ROTATION[installation][window]
     # Pilot item 2 (this turn): found live -- SCENARIO_ROTATION above is
     # the FULL campaign's own hardcoded 4-scenario list for sa-east-1,
@@ -2189,6 +2369,11 @@ def run_window(executor, installation, window, seed):
     (meta_dir / f"window{window:02d}.json").write_text(json.dumps({
         "installation": installation,
         "window": window,
+        # Item 2: this is the campaign-wide latin_square_seed (same value
+        # across all 3 windows and all installations), not a per-window
+        # seed any more -- kept here so this window's own row is still
+        # traceable back to the square it came from without needing
+        # build_latin_square_profile_orders() re-run to confirm it.
         "seed": seed,
         "profile_order": profile_order,
         "scenario_rotation": scenarios,
@@ -2213,7 +2398,7 @@ def run_window(executor, installation, window, seed):
     # uncaught-exception handler (nonzero exit, traceback on stderr).
     # --dry-run never raises it in the first place (SSHExecutor._run_or_print
     # only raises when dry_run=False), so dry-run runs are unaffected.
-    for profile in profile_order:
+    for block_position, profile in enumerate(profile_order):
         check_time_budget()  # pilot item 3 -- before spending any more real time/money on this block
         checks = pre_block_checks(executor, installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
@@ -2278,6 +2463,12 @@ def run_window(executor, installation, window, seed):
                         "started_at_utc": started,
                         "window": window,
                         "window_local_run_index": i,
+                        # Item 2: this profile's position (0/1/2) within
+                        # this window's own Latin-square row -- the
+                        # covariate pilot 2's single-window data couldn't
+                        # provide (profile identity and position were
+                        # perfectly confounded there, Decision 89).
+                        "profile_position_in_window": block_position,
                         "server": installation,
                         "client": scenario,
                         "result": result,
@@ -2359,16 +2550,51 @@ def main():
     record_environment(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)
 
     renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # at startup, before any waiting
+
+    # Order/warm-up turn (item 2, thesis/results/v8/DECISIONS.md): once
+    # per installation, before the campaign's first block of window 1 --
+    # see run_instance_warmup()'s own docstring. Must happen before
+    # wait_until() below blocks for window 1's own scheduled start time,
+    # not after, so the instance has already settled by the time the
+    # first real block begins.
+    for installation in installations:
+        write_status("running", f"instance_warmup installation={installation}")
+        run_instance_warmup(executor, installation)
+
+    # Validation-gate turn (item 3, thesis/results/v8/DECISIONS.md):
+    # 24 executions (1/profile x 8 scenarios), then block for an explicit
+    # operator marker -- see run_validation_stage()/wait_for_operator_gate()'s
+    # own docstrings. After the instance warmup (so the validation sample
+    # itself isn't measuring cold-instance noise) and before window 1's
+    # own wait_until(), so the gate's wait time doesn't eat into window
+    # 1's scheduled start.
+    write_status("running", "validation_stage")
+    run_validation_stage(executor, installations)
+
+    # ONE seed for the whole campaign (not one per window, see
+    # build_latin_square_profile_orders()'s own docstring) -- read once,
+    # before the window loop, so every window's row comes from the same
+    # registered square.
+    latin_square_seed = config.get("latin_square_seed", int(time.time()))
+    profile_orders_by_window = build_latin_square_profile_orders(latin_square_seed)
+
     for window in range(1, WINDOWS_PER_CAMPAIGN + 1):
         start_time = window_times.get(str(window))
         if not start_time:
             sys.exit(f"campaign_schedule.json is missing window_start_times_utc['{window}'].")
         wait_until(start_time)
         renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # again right before each window
-        seed = config.get("window_seeds", {}).get(str(window), int(time.time()))
         for installation in installations:
             write_status("running", f"window={window} installation={installation}")
-            run_window(executor, installation, window, seed)
+            run_window(executor, installation, window, latin_square_seed, profile_orders_by_window[window])
+        if window == 1:
+            # Validation-gate turn (item 3): same stop as the pre-window-1
+            # gate above, this time over window 1's own full, real
+            # dataset (every installation's own 10 runs/profile/scenario)
+            # instead of the 24-execution smoke sample -- full acceptance
+            # before spending window 2/3's own time/money.
+            print("=== window 1 complete for every installation -- full acceptance gate before window 2 ===")
+            wait_for_operator_gate("window1_acceptance")
     write_status("completed", f"windows={WINDOWS_PER_CAMPAIGN}")
 
 

@@ -106,8 +106,9 @@ def run():
             mocked_time.monotonic = __import__("time").monotonic
 
             executor = _make_executor()
+            profile_orders = cr.build_latin_square_profile_orders(seed=42)
             for window in (1, 2, 3):
-                cr.run_window(executor, INSTALLATION, window, seed=42)
+                cr.run_window(executor, INSTALLATION, window, seed=42, profile_order=profile_orders[window])
 
             scenarios = set()
             for w in cr.SCENARIO_ROTATION[INSTALLATION].values():

@@ -43,7 +43,7 @@ def run():
          mock.patch.object(cr, "run_one_execution", fake_run_one_execution), \
          mock.patch.object(cr, "RUNS_PER_WINDOW", 1):
         executor = mock.Mock()
-        cr.run_window(executor, "sa-east-1", window=1, seed=42)
+        cr.run_window(executor, "sa-east-1", window=1, seed=42, profile_order=cr.PROFILES[:])
 
     print("=== recorded call order ===")
     for c in calls:

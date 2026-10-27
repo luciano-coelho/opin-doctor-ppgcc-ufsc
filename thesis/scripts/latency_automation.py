@@ -100,8 +100,37 @@ def run_once_timed(crypto_profile: str, return_calls: bool = False) -> dict:
     function's own, unrelated callers (latency_automation.py's own
     main(), unchanged) paying for a bigger run{NN}.json than they
     already write today -- default False keeps every existing call site
-    byte-for-byte identical."""
+    byte-for-byte identical.
+
+    T_fluxo full accounting (item 1, thesis/results/v8/DECISIONS.md):
+    this is the one place every caller of run_once_timed_with_retry()
+    goes through, so it is where opin_flow.py's four per-phase timing
+    accumulators (_VERIFICATION_TIMINGS, _SIGNING_TIMINGS,
+    _WAIT_TIMINGS, _SETUP_TIMINGS) are cleared (so a retried whole-run
+    attempt never leaks a discarded attempt's partial timings into the
+    one that succeeds) and collected. `phase_accounting` below adds
+    together every phase this script can independently time -- HTTP
+    calls (`calls.jsonl`'s own `latency_ms`, already collected), signing,
+    verification, the one explicit wait inside the measured window, and
+    client-side setup/teardown (RSA key construction, throwaway callback-
+    cert generation, local callback-server shutdown -- see
+    _SETUP_TIMINGS's own docstring in opin_flow.py for why these needed
+    their own category instead of being left inside the residual) --
+    against T_fluxo itself; what's left over (`residual_seconds`) is
+    everything NOT separately timed (the TLS-KEM-proxy hop and the mTLS/
+    KEM handshake it performs -- no client-side instrumentation point
+    exists for either without touching tls_kem_proxy/main.go, which this
+    turn does not touch; Python/interpreter overhead) by subtraction, not
+    measured directly. Adding these monotonic-clock reads and list
+    appends per timed event does not change what T_fluxo measures beyond
+    their own overhead -- quantified in thesis/results/v8/DECISIONS.md,
+    not reported here since it needs no runtime data, only a count of
+    events."""
     timing = {"wasted_seconds": 0.0, "retries": []}
+    of.clear_verification_timings()
+    of.clear_signing_timings()
+    of.clear_wait_timings()
+    of.clear_setup_timings()
     t_start = time.monotonic()
     insurance_calls = of.run_insurance_flow(crypto_profile, timing=timing)
     person_calls = of.run_person_flow(crypto_profile, timing=timing)
@@ -109,16 +138,49 @@ def run_once_timed(crypto_profile: str, return_calls: bool = False) -> dict:
 
     naive_elapsed_seconds = t_end - t_start
     t_fluxo_seconds = naive_elapsed_seconds - timing["wasted_seconds"]
+
+    all_calls = insurance_calls + person_calls
+    verification_timings = of.get_verification_timings()
+    signing_timings = of.get_signing_timings()
+    wait_timings = of.get_wait_timings()
+    setup_timings = of.get_setup_timings()
+
+    http_calls_seconds = sum(c["latency_ms"] for c in all_calls) / 1000.0
+    signing_seconds = sum(s["duration_ms"] for s in signing_timings) / 1000.0
+    verification_seconds = sum(v["duration_ms"] for v in verification_timings) / 1000.0
+    explicit_wait_seconds = sum(w["duration_ms"] for w in wait_timings) / 1000.0
+    setup_seconds = sum(s["duration_ms"] for s in setup_timings) / 1000.0
+    accounted_seconds = (
+        http_calls_seconds + signing_seconds + verification_seconds + explicit_wait_seconds + setup_seconds
+    )
+    residual_seconds = t_fluxo_seconds - accounted_seconds
+
     result = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "t_fluxo_seconds": round(t_fluxo_seconds, 6),
         "naive_elapsed_seconds": round(naive_elapsed_seconds, 6),
         "wasted_seconds": round(timing["wasted_seconds"], 6),
         "retries": timing["retries"],
-        "call_count": len(insurance_calls) + len(person_calls),
+        "call_count": len(all_calls),
+        "verification_timings": verification_timings,
+        "signing_timings": signing_timings,
+        "wait_timings": wait_timings,
+        "setup_timings": setup_timings,
+        "phase_accounting": {
+            "http_calls_seconds": round(http_calls_seconds, 6),
+            "signing_seconds": round(signing_seconds, 6),
+            "verification_seconds": round(verification_seconds, 6),
+            "explicit_wait_seconds": round(explicit_wait_seconds, 6),
+            "setup_seconds": round(setup_seconds, 6),
+            "accounted_seconds": round(accounted_seconds, 6),
+            "residual_seconds": round(residual_seconds, 6),
+            "residual_pct_of_t_fluxo": (
+                round(100 * residual_seconds / t_fluxo_seconds, 3) if t_fluxo_seconds else None
+            ),
+        },
     }
     if return_calls:
-        result["calls"] = insurance_calls + person_calls
+        result["calls"] = all_calls
     return result
 
 

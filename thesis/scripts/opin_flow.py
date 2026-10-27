@@ -460,6 +460,37 @@ PQC_SIGNER_SERVICE_PORT = 8901
 _PQC_SIGNER_SERVICE_URL: str | None = None
 
 
+#  Client-side setup/teardown wall-clock time (item 1 of the T_fluxo
+# full-accounting turn, thesis/results/v8/DECISIONS.md) -- same shape as
+# _VERIFICATION_TIMINGS/_SIGNING_TIMINGS/_WAIT_TIMINGS. Added after a
+# real cProfile run of one local classic execution (residual 76.7% of
+# T_fluxo before this category existed) showed three genuine, specific,
+# previously-uninstrumented costs, none of them an HTTP call, a
+# signature, a verification, or a flow-level wait: constructing the RSA
+# key object from the client's own signing JWK (load_client_signing_key,
+# ~0.42s/call -- cryptography's own RSAPrivateNumbers.private_key(), not
+# this project's code), generating the throwaway self-signed TLS cert
+# for the local OIDC callback listener (_generate_callback_tls_cert,
+# ~0.26s/call -- a fresh RSA-2048 keypair), and shutting the same local
+# callback HTTPS server back down (Python stdlib socketserver's
+# serve_forever() polls via select() on a fixed poll_interval=0.5s --
+# shutdown() must wait for the CURRENT poll to return, paying up to
+# ~0.5s per call it is not this project's code either). Each happens
+# once per sub-flow (2x/run). None of these is a signature, a
+# verification, a KEM operation, or an HTTP call to an OPIN party --
+# they are this test harness's own local-callback-server scaffolding,
+# named here so the residual bucket below isn't a catch-all for them.
+_SETUP_TIMINGS: list[dict] = []
+
+
+def clear_setup_timings() -> None:
+    _SETUP_TIMINGS.clear()
+
+
+def get_setup_timings() -> list[dict]:
+    return list(_SETUP_TIMINGS)
+
+
 def load_client_signing_key(crypto_profile: str):
     """
     Returns (signing_key, kid, alg). classic: signing_key is a pyjwt-usable
@@ -486,23 +517,29 @@ def load_client_signing_key(crypto_profile: str):
     still being PS256-only) -- closed here once the AS gained its own
     inbound verification (utils/opin/clientHybridAuth.js).
     """
-    if crypto_profile == "pqc":
-        path = CERTS_DIR / "client_one_pqc.jwks"
+    t0 = time.monotonic()
+    try:
+        if crypto_profile == "pqc":
+            path = CERTS_DIR / "client_one_pqc.jwks"
+            jwks = json.loads(path.read_text(encoding="utf-8"))
+            jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
+            return jwk, jwk["kid"], "ML-DSA-65"
+        if crypto_profile == "hybrid":
+            classic_jwks = json.loads((CERTS_DIR / "client_one.jwks").read_text(encoding="utf-8"))
+            classic_jwk = next(k for k in classic_jwks["keys"] if k.get("use") == "sig")
+            classic_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(classic_jwk))
+            pqc_jwks = json.loads((CERTS_DIR / "client_one_pqc.jwks").read_text(encoding="utf-8"))
+            pqc_jwk = next(k for k in pqc_jwks["keys"] if k.get("use") == "sig")
+            return (classic_key, pqc_jwk), classic_jwk["kid"], "hybrid"
+        path = CERTS_DIR / "client_one.jwks"
         jwks = json.loads(path.read_text(encoding="utf-8"))
         jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
-        return jwk, jwk["kid"], "ML-DSA-65"
-    if crypto_profile == "hybrid":
-        classic_jwks = json.loads((CERTS_DIR / "client_one.jwks").read_text(encoding="utf-8"))
-        classic_jwk = next(k for k in classic_jwks["keys"] if k.get("use") == "sig")
-        classic_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(classic_jwk))
-        pqc_jwks = json.loads((CERTS_DIR / "client_one_pqc.jwks").read_text(encoding="utf-8"))
-        pqc_jwk = next(k for k in pqc_jwks["keys"] if k.get("use") == "sig")
-        return (classic_key, pqc_jwk), classic_jwk["kid"], "hybrid"
-    path = CERTS_DIR / "client_one.jwks"
-    jwks = json.loads(path.read_text(encoding="utf-8"))
-    jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
-    key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
-    return key, jwk["kid"], "PS256"
+        key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
+        return key, jwk["kid"], "PS256"
+    finally:
+        _SETUP_TIMINGS.append(
+            {"phase": "load_signing_key", "duration_ms": round((time.monotonic() - t0) * 1000, 3)}
+        )
 
 
 def _run_pqc_signer(payload: str) -> str:
@@ -607,11 +644,13 @@ def _run_verifier(payload: str) -> str:
 # needs no change to mock_mtls/main.go (verification never happens
 # there at all; it's purely a client-side, post-receipt step) NOR to
 # tls_kem_proxy/main.go (the KEM handshake these two off-limits files
-# own is unrelated to JWT/JWE signature verification). Not wired into
-# campaign_client_runner.py's own JSON output yet -- that would need a
-# second, separate change to what that script reports, out of this
-# turn's own scope; get_verification_timings() exists so a future turn
-# can do that without re-deriving where the data comes from.
+# own is unrelated to JWT/JWE signature verification). Cleared and
+# collected by latency_automation.py's run_once_timed() itself (the one
+# place every caller -- campaign_client_runner.py and
+# latency_automation.py's own main() -- goes through), alongside
+# _SIGNING_TIMINGS/_WAIT_TIMINGS (see sign_jwt()/wait_for_authorization_
+# code()), feeding the T_fluxo full-accounting breakdown in that
+# function's own result dict.
 _VERIFICATION_TIMINGS: list[dict] = []
 
 
@@ -1182,16 +1221,46 @@ def stop_pqc_signer_service(started: bool) -> None:
     _PQC_SIGNER_SERVICE_URL = None
 
 
-def sign_jwt(claims: dict, headers: dict, signing_key, alg: str) -> str:
-    if alg == "PS256":
-        return pyjwt.encode(claims, signing_key, algorithm="PS256", headers=headers)
-    if alg == "ML-DSA-65":
-        # signing_key is the raw private JWK here (see load_client_signing_key).
-        payload = json.dumps({"jwk": signing_key, "headers": headers, "claims": claims})
-        return _run_pqc_signer(payload)
-    if alg == "hybrid":
-        return _sign_jwt_hybrid(claims, headers, signing_key)
-    raise ValueError(f"unsupported signing alg: {alg}")
+# Per-artifact client-side signing wall-clock time (item 1 of the
+# T_fluxo full-accounting turn, thesis/results/v8/DECISIONS.md) -- same
+# shape and same reasoning as _VERIFICATION_TIMINGS above: additive,
+# module-level, cleared once per flow execution by
+# clear_signing_timings(). Measured around sign_jwt()'s own body, the
+# single call site every client_assertion/request_object signature
+# already goes through regardless of alg (PS256 via pyjwt, ML-DSA-65 via
+# _run_pqc_signer(), hybrid via _sign_jwt_hybrid(), which itself calls
+# _run_pqc_signer() once more) -- no change to mock_mtls/main.go or
+# tls_kem_proxy/main.go, purely a client-side timing of work this
+# process already does.
+_SIGNING_TIMINGS: list[dict] = []
+
+
+def clear_signing_timings() -> None:
+    _SIGNING_TIMINGS.clear()
+
+
+def get_signing_timings() -> list[dict]:
+    return list(_SIGNING_TIMINGS)
+
+
+def sign_jwt(claims: dict, headers: dict, signing_key, alg: str, *, artifact: str = "unknown") -> str:
+    """artifact: free-form label ("client_assertion:token_cc", ...) recorded
+    into _SIGNING_TIMINGS alongside the real wall-clock duration -- same
+    convention as verify_jwt()'s own `artifact` parameter, never read by
+    the signing logic itself."""
+    t0 = time.monotonic()
+    try:
+        if alg == "PS256":
+            return pyjwt.encode(claims, signing_key, algorithm="PS256", headers=headers)
+        if alg == "ML-DSA-65":
+            # signing_key is the raw private JWK here (see load_client_signing_key).
+            payload = json.dumps({"jwk": signing_key, "headers": headers, "claims": claims})
+            return _run_pqc_signer(payload)
+        if alg == "hybrid":
+            return _sign_jwt_hybrid(claims, headers, signing_key)
+        raise ValueError(f"unsupported signing alg: {alg}")
+    finally:
+        _SIGNING_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
 
 
 def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
@@ -1233,7 +1302,7 @@ def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
     return pyjwt.encode(claims_with_pqc, classic_key, algorithm="RS256", headers=rs256_headers)
 
 
-def make_client_assertion(signing_key, kid, alg, audience: str) -> str:
+def make_client_assertion(signing_key, kid, alg, audience: str, *, artifact: str = "client_assertion") -> str:
     now = int(time.time())
     claims = {
         "sub": CLIENT_ID,
@@ -1243,7 +1312,7 @@ def make_client_assertion(signing_key, kid, alg, audience: str) -> str:
         "iat": now,
         "jti": secrets.token_urlsafe(18),
     }
-    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg)
+    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg, artifact=artifact)
 
 
 def make_pkce_pair():
@@ -1252,7 +1321,8 @@ def make_pkce_pair():
     return verifier, challenge
 
 
-def make_request_object(signing_key, kid, alg, *, scope: str, state: str, nonce: str, code_challenge: str) -> str:
+def make_request_object(signing_key, kid, alg, *, scope: str, state: str, nonce: str, code_challenge: str,
+                         artifact: str = "request_object") -> str:
     now = int(time.time())
     claims = {
         "iss": CLIENT_ID,
@@ -1278,7 +1348,7 @@ def make_request_object(signing_key, kid, alg, *, scope: str, state: str, nonce:
         "nbf": now,
         "exp": now + 300,
     }
-    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg)
+    return sign_jwt(claims, {"kid": kid, "alg": alg}, signing_key, alg, artifact=artifact)
 
 
 def _generate_callback_tls_cert():
@@ -1290,6 +1360,7 @@ def _generate_callback_tls_cert():
     browser will show a security warning on first hit; that's expected and
     part of the manual-login protocol below (click through it once).
     """
+    t0 = time.monotonic()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
     cert = (
@@ -1305,6 +1376,9 @@ def _generate_callback_tls_cert():
             critical=False,
         )
         .sign(key, hashes.SHA256())
+    )
+    _SETUP_TIMINGS.append(
+        {"phase": "generate_callback_cert", "duration_ms": round((time.monotonic() - t0) * 1000, 3)}
     )
     cert_file = tempfile.NamedTemporaryFile(suffix=".crt", delete=False)
     key_file = tempfile.NamedTemporaryFile(suffix=".key", delete=False)
@@ -1583,6 +1657,30 @@ def simulate_login(auth_url: str, cert, login_calls: list) -> None:
         pass  # server-side callback already recorded before this response finishes streaming back
 
 
+#  Explicit-wait wall-clock time (item 1 of the T_fluxo full-accounting
+# turn, thesis/results/v8/DECISIONS.md) -- same shape as
+# _VERIFICATION_TIMINGS/_SIGNING_TIMINGS above. The only explicit pause
+# inside the measured T_fluxo window (every other time.sleep() in this
+# file either runs before t_start in run_once_timed(), inside
+# start_tls_kem_proxy()'s/start_pqc_signer_service()'s own readiness
+# polling, or inside a DISCARDED login-race attempt already excluded via
+# timing["wasted_seconds"] -- recording that one too would double-count
+# time that never contributes to T_fluxo in the first place) is the
+# poll loop below, while it waits for the local callback server to
+# receive the simulated browser's redirect -- recorded only for the
+# attempt that actually succeeds (the `else` branch of the `while`,
+# right below).
+_WAIT_TIMINGS: list[dict] = []
+
+
+def clear_wait_timings() -> None:
+    _WAIT_TIMINGS.clear()
+
+
+def get_wait_timings() -> list[dict]:
+    return list(_WAIT_TIMINGS)
+
+
 def wait_for_authorization_code(
     auth_url: str, cert, timeout_seconds: int = 600, attempt_timeout_seconds: int = 20, max_attempts: int = 3,
     timing: dict | None = None, calls: list | None = None, as_keys: tuple[dict | None, dict | None] = (None, None),
@@ -1656,6 +1754,7 @@ def wait_for_authorization_code(
                 simulate_login(auth_url, cert, attempt_login_calls)
 
                 attempt_started = time.time()
+                poll_t0 = time.monotonic()
                 while server.captured_params is None:  # type: ignore[attr-defined]
                     if server.captured_error is not None:  # type: ignore[attr-defined]
                         raise server.captured_error  # type: ignore[attr-defined]
@@ -1677,15 +1776,22 @@ def wait_for_authorization_code(
                 else:
                     if calls is not None:
                         calls.extend(attempt_login_calls)
+                    _WAIT_TIMINGS.append(
+                        {"phase": "callback_poll", "duration_ms": round((time.monotonic() - poll_t0) * 1000, 3)}
+                    )
                     break  # captured_params was set -- success, stop retrying
             else:
                 raise TimeoutError(f"No callback received after {max_attempts} simulated login attempts")
 
             params = server.captured_params  # type: ignore[attr-defined]
         finally:
+            teardown_t0 = time.monotonic()
             server.shutdown()
             thread.join(timeout=5)
             server.server_close()
+            _SETUP_TIMINGS.append(
+                {"phase": "callback_server_teardown", "duration_ms": round((time.monotonic() - teardown_t0) * 1000, 3)}
+            )
     finally:
         os.unlink(cert_path)
         os.unlink(key_path)
@@ -1880,7 +1986,8 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, cr
     measurement-environment noise, not real flow cost).
     """
     # POST /token (client_credentials)
-    assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
+    assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token",
+                                       artifact="client_assertion:token_cc")
     body = {
         "grant_type": "client_credentials",
         "scope": "consents",
@@ -1978,9 +2085,10 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, cr
         verifier, challenge = make_pkce_pair()
         request_object = make_request_object(
             signing_key, kid, alg, scope=f"{scope} consent:urn:raidiaminsurance:{consent_uid}",
-            state=state, nonce=nonce, code_challenge=challenge,
+            state=state, nonce=nonce, code_challenge=challenge, artifact="request_object:par",
         )
-        par_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request")
+        par_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/request",
+                                               artifact="client_assertion:par")
         par_body = {
             "request": request_object,
             "client_id": CLIENT_ID,
@@ -2019,7 +2127,8 @@ def create_and_authorize_consent(calls, session, cert, signing_key, kid, alg, cr
     calls.append(par_call)
 
     # POST /token (authorization_code)
-    ac_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token")
+    ac_assertion = make_client_assertion(signing_key, kid, alg, audience=f"https://{AUTH_MTLS_HOST_HEADER}/token",
+                                          artifact="client_assertion:token_ac")
     token_body = {
         "grant_type": "authorization_code",
         "code": code,

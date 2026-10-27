@@ -10,17 +10,33 @@
 # security groups, key pairs, volumes, Elastic IPs, AND the control
 # instance specifically.
 #
-# Usage: campaign_down.sh [path to campaign.vars.example-style env file] [--force] [local pulled-data dir]
+# Usage: campaign_down.sh [path to campaign.vars.example-style env file] [--force] [--delete-local-state] [local pulled-data dir]
+#
+# --delete-local-state (item 4, validation-gate turn, thesis/results/v8/
+# DECISIONS.md): opts into removing the local Terraform state + the
+# campaign's own SSH key material after a verified-clean teardown.
+# Without it, the default is to KEEP them (the safe side -- both are
+# already local-only, gitignored, never committed, Decision 49, so
+# keeping them costs nothing but disk) and print exactly which files
+# remain. This replaces an interactive `read -r -p` prompt that used to
+# run at the very end: it blocked forever (or failed outright under
+# `set -e` with no TTY attached -- "read error: 0: Inappropriate ioctl
+# for device", confirmed live) with no way to finish teardown without a
+# human physically present and typing at that exact moment -- the
+# default must not depend on an answer.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="$SCRIPT_DIR/../terraform"
 
 FORCE=0
+DELETE_LOCAL_STATE=0
 ARGS=()
 for a in "$@"; do
   if [ "$a" = "--force" ]; then
     FORCE=1
+  elif [ "$a" = "--delete-local-state" ]; then
+    DELETE_LOCAL_STATE=1
   else
     ARGS+=("$a")
   fi
@@ -109,16 +125,52 @@ echo
 echo "==> Teardown verified clean. Decision 52: once nothing remains in AWS,"
 echo "    the local Terraform state and the campaign's own SSH key material"
 echo "    (both already local-only, gitignored, never committed -- Decision 49)"
-echo "    no longer protect anything real. Delete them now?"
-read -r -p "    Type 'delete' to remove local state + key files, or anything else to keep them: " CLEANUP_CONFIRM
-if [ "$CLEANUP_CONFIRM" = "delete" ]; then
-  rm -f "$TF_DIR"/terraform.tfstate "$TF_DIR"/terraform.tfstate.backup "$TF_DIR"/*.tfplan
-  rm -rf "$TF_DIR"/.terraform
-  echo "    Removed local Terraform state/cache. (The campaign SSH private key lived only in that"
-  echo "    state and in the control instance's own ~/.ssh/campaign_key, which no longer exists"
-  echo "    now that the control instance itself is destroyed -- nothing further to delete for it.)"
-else
-  echo "    Kept as-is -- local state/cache left in place."
-fi
+echo "    no longer protect anything real."
+
+# Item 4 (validation-gate turn, thesis/results/v8/DECISIONS.md): no
+# interactive prompt -- the default (no flag) is to KEEP local state/key
+# material and report exactly what remains and where. Pass
+# --delete-local-state explicitly to opt into removing it instead; the
+# removal path, when taken, reports exactly what it removed too (never
+# a silent "deleted" with nothing to show for it). Factored into its own
+# function (tests/test_campaign_down_local_state.sh extracts and calls
+# this exact function body against fake directories -- no AWS, no
+# terraform -- rather than duplicating its logic in the test).
+report_and_handle_local_state() {
+  local tf_dir="$1" delete_flag="$2"
+  local local_state_files=()
+  for f in "$tf_dir"/terraform.tfstate "$tf_dir"/terraform.tfstate.backup "$tf_dir"/*.tfplan; do
+    [ -e "$f" ] && local_state_files+=("$f")
+  done
+  local local_state_dirs=()
+  [ -d "$tf_dir/.terraform" ] && local_state_dirs+=("$tf_dir/.terraform")
+
+  if [ "$delete_flag" = "1" ]; then
+    if [ "${#local_state_files[@]}" -eq 0 ] && [ "${#local_state_dirs[@]}" -eq 0 ]; then
+      echo "    --delete-local-state given, but nothing to delete -- no local state/cache files found."
+    else
+      echo "    --delete-local-state given -- removing:"
+      for f in "${local_state_files[@]}" "${local_state_dirs[@]}"; do
+        echo "      - $f"
+      done
+      rm -f "$tf_dir"/terraform.tfstate "$tf_dir"/terraform.tfstate.backup "$tf_dir"/*.tfplan
+      rm -rf "$tf_dir"/.terraform
+      echo "    Removed. (The campaign SSH private key lived only in that state and in the control"
+      echo "    instance's own ~/.ssh/campaign_key, which no longer exists now that the control"
+      echo "    instance itself is destroyed -- nothing further to delete for it.)"
+    fi
+  else
+    echo "    Default: kept as-is (pass --delete-local-state to remove). Remaining local files:"
+    if [ "${#local_state_files[@]}" -eq 0 ] && [ "${#local_state_dirs[@]}" -eq 0 ]; then
+      echo "      (none -- no local Terraform state/cache files exist at $tf_dir)"
+    else
+      for f in "${local_state_files[@]}" "${local_state_dirs[@]}"; do
+        echo "      - $f"
+      done
+    fi
+  fi
+}
+
+report_and_handle_local_state "$TF_DIR" "$DELETE_LOCAL_STATE"
 
 echo "==> campaign_down.sh completed."

@@ -144,7 +144,17 @@ import json, random, sys
 w1, w2, w3 = sys.argv[1:4]
 print(json.dumps({
     "window_start_times_utc": {"1": w1, "2": w2, "3": w3},
-    "window_seeds": {str(w): random.SystemRandom().randrange(2**31) for w in (1, 2, 3)},
+    # Order turn (item 2, thesis/results/v8/DECISIONS.md): ONE seed for
+    # the whole campaign, not one per window -- it picks which 3x3 Latin
+    # square of profile orders (classic/pqc/hybrid x 3 window positions)
+    # campaign_run.py's build_latin_square_profile_orders() uses, so each
+    # profile occupies each of the 3 within-window block positions
+    # exactly once across the 3 windows (replaces the old per-window
+    # independent shuffle, which confounded profile identity with
+    # position -- the single-window pilot 2 data that first surfaced this,
+    # Decision 89). The per-window "window_seeds" key this replaces is no
+    # longer read by campaign_run.py.
+    "latin_square_seed": random.SystemRandom().randrange(2**31),
 }, indent=2))
 PY
 echo "    window 1: $MOCKOPIN_WINDOW1_START_UTC"

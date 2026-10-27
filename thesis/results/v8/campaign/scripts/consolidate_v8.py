@@ -565,7 +565,13 @@ def consolidate_profile_scenario(scenario_path, profile):
         client_pcap = find_client_pcap(scenario_path, run_stem)
         rows.append({"run_file": run_file.name, "run_stem": run_stem, "retried": bool(data.get("retried", False)),
                       "result": result, "calls": calls, "gateway_log": gateway_log,
-                      "client_pcap": client_pcap})
+                      "client_pcap": client_pcap, "window": window,
+                      # Order turn (item 2, thesis/results/v8/DECISIONS.md):
+                      # which of the 3 within-window block positions this
+                      # profile occupied -- the covariate pilot 2's single
+                      # window couldn't provide (Decision 89). Absent (None)
+                      # on any run{NN}.json written before this turn.
+                      "profile_position_in_window": data.get("profile_position_in_window")})
 
     clean_rows = [r for r in rows if not r["retried"]]
     retried_rows = [r for r in rows if r["retried"]]
@@ -621,6 +627,51 @@ def consolidate_profile_scenario(scenario_path, profile):
         for entry in run_timings:
             per_artifact_durations.setdefault(entry["artifact"], []).append(entry["duration_ms"])
 
+    # T_fluxo full-accounting turn (item 1, thesis/results/v8/DECISIONS.md):
+    # same "covered iff at least one run in this cell has the field" rule
+    # as verification_rows above -- signing_timings/setup_timings/
+    # wait_timings and phase_accounting are all absent (None) on any
+    # run{NN}.json written before this turn's wiring existed.
+    signing_rows = [r["result"].get("signing_timings") for r in clean_rows]
+    signing_rows = [v for v in signing_rows if v]
+    per_artifact_signing_durations = {}
+    for run_timings in signing_rows:
+        for entry in run_timings:
+            per_artifact_signing_durations.setdefault(entry["artifact"], []).append(entry["duration_ms"])
+
+    setup_rows = [r["result"].get("setup_timings") for r in clean_rows]
+    setup_rows = [v for v in setup_rows if v]
+    per_phase_setup_durations = {}
+    for run_timings in setup_rows:
+        for entry in run_timings:
+            per_phase_setup_durations.setdefault(entry["phase"], []).append(entry["duration_ms"])
+
+    wait_rows = [r["result"].get("wait_timings") for r in clean_rows]
+    wait_rows = [v for v in wait_rows if v]
+    per_phase_wait_durations = {}
+    for run_timings in wait_rows:
+        for entry in run_timings:
+            per_phase_wait_durations.setdefault(entry["phase"], []).append(entry["duration_ms"])
+
+    phase_accounting_rows = [r["result"].get("phase_accounting") for r in clean_rows]
+    phase_accounting_rows = [v for v in phase_accounting_rows if v]
+
+    # Order turn (item 2, thesis/results/v8/DECISIONS.md): per-execution
+    # (window, profile_position_in_window, t_fluxo_seconds) triples for
+    # this profile/scenario/server cell -- so the order/position-as-
+    # covariate analysis Decision 89 called for can be done straight from
+    # consolidated.json, without re-reading every run{NN}.json by hand.
+    t_fluxo_by_window_position = [
+        {
+            "window": r["window"],
+            "profile_position_in_window": r["profile_position_in_window"],
+            "t_fluxo_seconds": r["result"].get("t_fluxo_seconds"),
+        }
+        for r in clean_rows
+        if r["window"] is not None and r["profile_position_in_window"] is not None
+        and "t_fluxo_seconds" in r["result"]
+    ]
+
     out = {
         "runs_used": len(clean_rows),
         "runs_retried_excluded": len(retried_rows),
@@ -672,6 +723,54 @@ def consolidate_profile_scenario(scenario_path, profile):
             "per_artifact": {
                 artifact: stats_block(durations) for artifact, durations in sorted(per_artifact_durations.items())
             } if per_artifact_durations else None,
+        },
+        "signing_timings_ms": {
+            "status": "covered" if signing_rows else "missing (run predates T_fluxo full-accounting wiring)",
+            "runs_with_data": len(signing_rows),
+            "per_artifact": {
+                artifact: stats_block(durations)
+                for artifact, durations in sorted(per_artifact_signing_durations.items())
+            } if per_artifact_signing_durations else None,
+        },
+        "setup_timings_ms": {
+            "status": "covered" if setup_rows else "missing (run predates T_fluxo full-accounting wiring)",
+            "runs_with_data": len(setup_rows),
+            "per_phase": {
+                phase: stats_block(durations) for phase, durations in sorted(per_phase_setup_durations.items())
+            } if per_phase_setup_durations else None,
+        },
+        "wait_timings_ms": {
+            "status": "covered" if wait_rows else "missing (run predates T_fluxo full-accounting wiring)",
+            "runs_with_data": len(wait_rows),
+            "per_phase": {
+                phase: stats_block(durations) for phase, durations in sorted(per_phase_wait_durations.items())
+            } if per_phase_wait_durations else None,
+        },
+        # phase_accounting (item 1, thesis/results/v8/DECISIONS.md): per-run
+        # T_fluxo breakdown (http/signing/verification/wait/setup/residual)
+        # written by latency_automation.py's run_once_timed() itself --
+        # pooled here into the same median/min/max/bootstrap stats_block()
+        # every other v8 metric uses, one block per seconds-denominated
+        # component plus the residual-as-percentage-of-T_fluxo series.
+        # residual_pct_of_t_fluxo is NOT a threshold gate (no automatic
+        # pass/fail here) -- pilot_acceptance.py / DECISIONS.md is where a
+        # human reads this and judges whether the residual is explained.
+        "phase_accounting": {
+            "status": "covered" if phase_accounting_rows else "missing (run predates T_fluxo full-accounting wiring)",
+            "runs_with_data": len(phase_accounting_rows),
+            "http_calls_seconds": stats_block([p["http_calls_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "signing_seconds": stats_block([p["signing_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "verification_seconds": stats_block([p["verification_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "explicit_wait_seconds": stats_block([p["explicit_wait_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "setup_seconds": stats_block([p["setup_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "accounted_seconds": stats_block([p["accounted_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "residual_seconds": stats_block([p["residual_seconds"] for p in phase_accounting_rows]) if phase_accounting_rows else None,
+            "residual_pct_of_t_fluxo": stats_block([p["residual_pct_of_t_fluxo"] for p in phase_accounting_rows if p.get("residual_pct_of_t_fluxo") is not None]) if phase_accounting_rows else None,
+        },
+        "t_fluxo_by_window_position": {
+            "status": "covered" if t_fluxo_by_window_position else "missing (run predates the order/position-covariate turn)",
+            "runs_with_data": len(t_fluxo_by_window_position),
+            "series": t_fluxo_by_window_position or None,
         },
     }
 
@@ -777,6 +876,30 @@ def render_report(data):
                         f"{artifact} {s['median']:.2f}ms" for artifact, s in vt["per_artifact"].items()
                     )
                     lines.append(f"- Verification timing ({vt['runs_with_data']} runs with data): {per_artifact_str}")
+                st = m["signing_timings_ms"]
+                if st["status"] == "covered":
+                    per_artifact_str = ", ".join(
+                        f"{artifact} {s['median']:.2f}ms" for artifact, s in st["per_artifact"].items()
+                    )
+                    lines.append(f"- Signing timing ({st['runs_with_data']} runs with data): {per_artifact_str}")
+                setup_t = m["setup_timings_ms"]
+                if setup_t["status"] == "covered":
+                    per_phase_str = ", ".join(
+                        f"{phase} {s['median']:.2f}ms" for phase, s in setup_t["per_phase"].items()
+                    )
+                    lines.append(f"- Client setup/teardown timing ({setup_t['runs_with_data']} runs with data): {per_phase_str}")
+                pa = m["phase_accounting"]
+                if pa["status"] == "covered":
+                    lines.append(
+                        f"- T_fluxo phase accounting ({pa['runs_with_data']} runs with data): "
+                        f"http {pa['http_calls_seconds']['median']:.3f}s, "
+                        f"signing {pa['signing_seconds']['median']:.3f}s, "
+                        f"verification {pa['verification_seconds']['median']:.3f}s, "
+                        f"explicit wait {pa['explicit_wait_seconds']['median']:.3f}s, "
+                        f"setup/teardown {pa['setup_seconds']['median']:.3f}s, "
+                        f"residual {pa['residual_seconds']['median']:.3f}s "
+                        f"({pa['residual_pct_of_t_fluxo']['median']:.1f}% of T_fluxo, median)"
+                    )
                 lines.append("")
     return "\n".join(lines)
 

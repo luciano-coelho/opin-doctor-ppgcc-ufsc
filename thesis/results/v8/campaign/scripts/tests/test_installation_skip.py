@@ -71,7 +71,7 @@ def _run_window_recording(installation, inventory_clients, window=1):
          mock.patch.object(cr, "run_one_execution", fake_run_one_execution), \
          mock.patch.object(cr, "RUNS_PER_WINDOW", 1):
         try:
-            cr.run_window(executor, installation, window=window, seed=42)
+            cr.run_window(executor, installation, window=window, seed=42, profile_order=cr.PROFILES[:])
         except SystemExit as e:
             raised = e
     return calls, raised
