@@ -8450,3 +8450,69 @@ em vez de um "normal" tecnicamente verdadeiro mas sem sentido.
 sobre dados já coletados) e `METRICS_COVERAGE.md`/`DECISIONS.md`. Sem
 AWS tocado.
 
+## 95. Correção da fração do handshake sobre T_fluxo (Decision 94): deve ser a SOMA dos N_mTLS handshakes do fluxo, não a mediana de uma única conexão -- achado pelo próprio Luciano, corrigido no mesmo dia, antes de qualquer uso real; valores recalculados. Jitter: definição registrada em uma linha. scipy fixado em 1.16.0 no README. Sem alterar código de medição.
+
+**Causa raiz do erro:** `handshake_duration_stats()` (Decision 94)
+calculava a MEDIANA das durações das 6 conexões client-facing de um run
+e usava esse valor único no numerador da fração -- Schardong et al.
+definem a fração como o tempo total gasto em TODOS os handshakes do
+fluxo (soma), dividido pelo T_fluxo, não o tempo de uma única conexão.
+Isso subestimava a fração em ~6x (N_mTLS=6).
+
+**Corrigido:** nova função `handshake_duration_sum_ms()` (mesma fonte,
+mesmo filtro client-facing, soma em vez de mediana). A fração
+(`mtls_handshake_fraction_of_t_fluxo_pct`) agora usa a soma; a mediana
+por conexão (`mtls_handshake_duration_ms`) continua existindo, mas
+só como figura informativa separada, nunca mais usada na fração --
+novo campo `mtls_handshake_duration_sum_ms` registra a soma
+explicitamente. Testado contra a fixture real já usada pela Decision
+94 (`test_handshake_gateway_vs_pcap.py`'s própria fixture, pcap+log
+casados): soma real por run 117/102/119 ms (classic/pqc/hybrid, 6
+conexões reais cada) -- novo teste de regressão
+(`test_handshake_duration_sum_ms_real_fixture`,
+`tests/test_schardong_coverage.py`), confirma soma > mediana (a
+distinção que esta correção depende de existir de fato nos dados reais,
+não só em teoria).
+
+**Valores recalculados contra o piloto 1 (dado real, não fixture
+sintética):**
+
+| Perfil | L0 (co-localizado) | L325 |
+|---|---|---|
+| Classic | 3,76% | 10,26% |
+| PQC | 0,37% | 8,59% |
+| Hybrid | 1,43% | 8,44% |
+
+A versão anterior (mediana de 1 conexão) reportava algo da ordem de
+0,6% para `L0` em todos os perfis -- pequeno demais para mostrar
+qualquer diferença real entre cenários. Com a soma, a fração cresce
+claramente de `L0` para `L325` em todos os 3 perfis, como esperado (o
+RTT de rede de cada uma das 6 conexões cresce com o cenário; o tempo de
+HTTP/assinatura do lado do cliente não escala do mesmo jeito) -- o
+padrão que a versão com mediana era pequena demais para evidenciar.
+
+**Jitter, definição em uma linha (pedido explícito):** jitter = média
+das diferenças absolutas entre RTTs consecutivos (SYN->SYN-ACK) das
+conexões reais de um mesmo run, mesma definição que a RFC 3550 §6.4.1
+usa para jitter de RTP, adaptada aqui a handshakes TCP (não há tráfego
+RTP neste projeto). Perda continua vindo do pcap real
+(`detect_loss_signals()`/`pcap_loss_summary()`), não alterado.
+
+**scipy fixado:** `thesis/results/v8/campaign/README.md` agora pede
+`pip install scipy==1.16.0` (a versão real contra a qual este pipeline
+foi testado), não mais uma instalação sem versão.
+
+**Testado, não só revisado:** suíte completa de
+`thesis/results/v8/campaign/scripts/tests/` re-executada (50/50
+passando, incluindo o novo teste de regressão da soma);
+`consolidate_v8.py` reexecutado ponta a ponta contra o piloto 1
+completo, novos números conferidos acima diretamente do
+`consolidated.json` gerado, não estimados.
+
+**Nada do código de medição foi alterado** -- só
+`consolidate_v8.py`/`pcap_utils.py` (que não captura nada, só
+reprocessa dados já coletados), `METRICS_COVERAGE.md`,
+`DECISIONS.md` e o README. Sem AWS tocado. Sem apply/destroy nesta
+etapa -- a retomada do piloto 3 (parte 2 do pedido) segue em paradas
+separadas, abaixo.
+

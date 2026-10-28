@@ -41,6 +41,11 @@ PROFILE_GATEWAY_LOG = {
 # directly this turn, not assumed) -- a change here means the parsing
 # logic changed, not that the fixture did.
 EXPECTED_HANDSHAKE_DURATION_MEDIAN_MS = {"classic": 19.5, "pqc": 18.0, "hybrid": 20.0}
+# Decision 95 (correction): the SUM across a run's own N_mTLS client-
+# facing handshakes -- what the fraction-of-T_fluxo metric actually uses,
+# per Schardong et al.'s own definition (not the per-connection median
+# above, kept only as its own separate, informational figure).
+EXPECTED_HANDSHAKE_DURATION_SUM_MS = {"classic": 117, "pqc": 102, "hybrid": 119}
 
 
 def test_handshake_duration_stats_real_fixture():
@@ -52,9 +57,29 @@ def test_handshake_duration_stats_real_fixture():
             f"{EXPECTED_HANDSHAKE_DURATION_MEDIAN_MS[profile]}ms")
 
 
+def test_handshake_duration_sum_ms_real_fixture():
+    """Decision 95: the fraction-of-T_fluxo metric must be built from this
+    sum, not from handshake_duration_stats()'s own per-connection median
+    -- summing N_mTLS (6) connections' real durations, not one of them."""
+    for profile in ("classic", "pqc", "hybrid"):
+        gw_text = (FIXTURES / PROFILE_GATEWAY_LOG[profile]).read_text(encoding="utf-8")
+        sum_ms = cv8.handshake_duration_sum_ms(gw_text, profile)
+        assert sum_ms == EXPECTED_HANDSHAKE_DURATION_SUM_MS[profile], (
+            f"{profile}: handshake duration sum {sum_ms} != "
+            f"{EXPECTED_HANDSHAKE_DURATION_SUM_MS[profile]}ms")
+        # The sum must be strictly greater than the single-connection
+        # median whenever more than one real connection is present --
+        # otherwise the "sum vs median" distinction this fix depends on
+        # would not actually exist in the real data.
+        median_ms = cv8.handshake_duration_stats(gw_text, profile)
+        assert sum_ms > median_ms
+
+
 def test_handshake_duration_missing_log_returns_none():
     assert cv8.handshake_duration_stats("", "classic") is None
     assert cv8.handshake_duration_stats(None, "classic") is None
+    assert cv8.handshake_duration_sum_ms("", "classic") is None
+    assert cv8.handshake_duration_sum_ms(None, "classic") is None
 
 
 def test_rtt_jitter_real_fixture_positive_and_small():

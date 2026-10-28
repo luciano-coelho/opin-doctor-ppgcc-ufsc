@@ -462,9 +462,11 @@ def handshake_duration_stats(gateway_log_text, profile):
     on the identical JSON line, already collected and already pulled,
     only unparsed until now -- same pattern as term_handshake's own
     2026-10-22 fix). Returns this run's own MEDIAN handshake duration
-    (ms) across its client-facing connections, or None if the log is
-    missing/empty -- mirrors term_handshake()'s median-not-mean, one-
-    value-per-run convention so the two terms pair up run-for-run."""
+    (ms) across its client-facing connections -- an informational,
+    single-connection figure, NOT what feeds the fraction-of-T_fluxo
+    metric below (see `handshake_duration_sum_ms()` and Decision 95 for
+    why median was the wrong aggregation for that one). None if the log
+    is missing/empty."""
     if not gateway_log_text:
         return None
     handshakes = client_facing_handshakes(gateway_log_text, profile)
@@ -472,6 +474,28 @@ def handshake_duration_stats(gateway_log_text, profile):
     if not durations:
         return None
     return statistics.median(durations)
+
+
+def handshake_duration_sum_ms(gateway_log_text, profile):
+    """Decision 95 (2026-10-28, correction): what the handshake-fraction-
+    of-T_fluxo metric actually needs -- the SUM of all N_mTLS client-
+    facing handshake durations in ONE run (typically 6 real connections),
+    not a single connection's median. Luciano's own correction, matching
+    Schardong et al.'s own definition: the fraction is "time spent across
+    every mTLS handshake in the flow" over "total flow time", not "one
+    handshake's time" over total flow time -- `handshake_duration_stats()`
+    above (median, one connection) was the wrong aggregation for this
+    specific metric, kept only as its own separate, informational,
+    per-connection figure. Same source/filter as `handshake_duration_
+    stats()`, same field, sum instead of median. None if the log is
+    missing/empty."""
+    if not gateway_log_text:
+        return None
+    handshakes = client_facing_handshakes(gateway_log_text, profile)
+    durations = [h["handshakeDurationMs"] for h in handshakes if "handshakeDurationMs" in h]
+    if not durations:
+        return None
+    return sum(durations)
 
 
 def term_handshake_pcap(client_pcap_path, gateway_log_text, profile):
@@ -737,18 +761,23 @@ def consolidate_profile_scenario(scenario_path, profile):
     handshake_pcap_results = [term_handshake_pcap(r["client_pcap"], r["gateway_log"], profile) for r in clean_rows]
     handshake_pcap_known = [h for h in handshake_pcap_results if h[1] is not None]
 
-    # Decision 94 (Schardong-coverage check): mTLS handshake DURATION
-    # (ms), per run, paired 1:1 with that SAME run's own t_fluxo_seconds
-    # below -- answers "what fraction of the total flow time is spent in
-    # the TLS handshake", per profile/scenario, which term_handshake's
-    # bytes-only figure cannot.
+    # Decision 94/95 (Schardong-coverage check + correction): mTLS
+    # handshake DURATION (ms), per run. handshake_duration_results is an
+    # informational, single-connection (median) figure. handshake_
+    # duration_sum_results -- the SUM of all N_mTLS client-facing
+    # handshakes in that SAME run -- is what the fraction-of-T_fluxo
+    # metric actually needs (Decision 95: Schardong et al.'s own
+    # definition is total handshake time across the flow's own several
+    # mTLS connections, over total flow time, not one connection's time).
+    # Both paired 1:1 with that same run's own t_fluxo_seconds.
     handshake_duration_results = [handshake_duration_stats(r["gateway_log"], profile) for r in clean_rows]
-    handshake_fraction_pct = []
-    for r, dur_ms in zip(clean_rows, handshake_duration_results):
-        tf_this_run = r["result"].get("t_fluxo_seconds")
-        if dur_ms is not None and tf_this_run:
-            handshake_fraction_pct.append(100 * (dur_ms / 1000.0) / tf_this_run)
     handshake_duration_known = [d for d in handshake_duration_results if d is not None]
+    handshake_duration_sum_results = [handshake_duration_sum_ms(r["gateway_log"], profile) for r in clean_rows]
+    handshake_fraction_pct = []
+    for r, sum_ms in zip(clean_rows, handshake_duration_sum_results):
+        tf_this_run = r["result"].get("t_fluxo_seconds")
+        if sum_ms is not None and tf_this_run:
+            handshake_fraction_pct.append(100 * (sum_ms / 1000.0) / tf_this_run)
 
     opin_processing_results = [opin_processing_stats(r["gateway_log"], profile) for r in clean_rows]
     opin_processing_known = [o for o in opin_processing_results if o and o.get("p50_ms") is not None]
@@ -879,9 +908,20 @@ def consolidate_profile_scenario(scenario_path, profile):
             "stats": stats_block(handshake_duration_known) if handshake_duration_known else None,
             "source": "server/run{NN}_gateway.log, same 'mTLS handshake complete' line as term_handshake, "
                       "field handshakeDurationMs instead of mtlsHandshakeBytes",
+            "note": "per CONNECTION median (one of N_mTLS handshakes) -- informational only, "
+                    "NOT what mtls_handshake_fraction_of_t_fluxo_pct below is built from (Decision 95)",
+        },
+        "mtls_handshake_duration_sum_ms": {
+            "status": "covered, new 2026-10-28 (Decision 95 correction)" if handshake_fraction_pct else "missing_gateway_log",
+            "stats": stats_block([d for d in handshake_duration_sum_results if d is not None]) if any(d is not None for d in handshake_duration_sum_results) else None,
+            "source": "same as mtls_handshake_duration_ms, SUM across that run's own N_mTLS "
+                      "client-facing handshakes instead of the median of one",
         },
         "mtls_handshake_fraction_of_t_fluxo_pct": {
-            "status": "covered, new 2026-10-28" if handshake_fraction_pct else "missing (needs both gateway log and t_fluxo_seconds on the same run)",
+            "status": "covered, new 2026-10-28, corrected 2026-10-28 (Decision 95)" if handshake_fraction_pct else "missing (needs both gateway log and t_fluxo_seconds on the same run)",
+            "definition": "sum of all N_mTLS client-facing handshake durations in a run, divided by "
+                          "that run's own T_fluxo -- Schardong et al.'s own definition, corrected from an "
+                          "earlier single-connection-median version that undercounted this fraction",
             "stats": stats_block(handshake_fraction_pct) if handshake_fraction_pct else None,
         },
         "opinsize": None,

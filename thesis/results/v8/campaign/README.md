@@ -62,12 +62,16 @@ consolidate_v8.py <v8-latency-root> <output-dir>` reads the real
 `consolidated.json` (source) + `CONSOLIDATED_REPORT.md` (derived), with
 the same field structure as v7's own `report_data_v7.json`/
 `Consolidated_Metrics_Report_FINAL.md` wherever v8's data supports it,
-plus the new metrics (RTT, packet-loss upper bound, RTT jitter,
+plus the new metrics (RTT, packet-loss upper bound, RTT jitter --
+defined here as the mean absolute difference between consecutive real
+SYN/SYN-ACK RTT samples within one run's own pcap, the same definition
+RFC 3550 S6.4.1 uses for RTP jitter, adapted to TCP handshakes --
 CPU/steal/memory, a bootstrap CI of the median, a distribution summary
 + Shapiro-Wilk per cell, and Mann-Whitney U between profiles). The last
-two need `scipy` installed locally (`pip install scipy`) -- the one
-external dependency anywhere in this analysis pipeline, never installed
-on any EC2 server/client; without it those two fields report an honest
+two need `scipy` installed locally (`pip install scipy==1.16.0`, the
+exact version this pipeline was tested against) -- the one external
+dependency anywhere in this analysis pipeline, never installed on any
+EC2 server/client; without it those two fields report an honest
 `"status": "scipy not installed"` instead of failing the whole run.
 `thesis/results/v8/METRICS_COVERAGE.md`
 is the full map of which v7 metric comes from which v8 file/field, what
