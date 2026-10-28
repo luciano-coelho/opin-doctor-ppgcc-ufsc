@@ -17,6 +17,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="$SCRIPT_DIR/../terraform"
 
+# Decision 93 (same real incident as campaign_up.sh's own fix): resolve a
+# LOCAL python that actually runs, not just one `command -v` finds on
+# PATH (a Windows Store `python` stub can satisfy the latter while failing
+# to execute at all). Only used for the one local CONTROL_IP lookup below
+# -- every other `python3` in this file runs inside an `ssh ... <<REMOTE`
+# heredoc, on the EC2 instances themselves, which already have a real one.
+resolve_python() {
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "print(1)" >/dev/null 2>&1; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+PYTHON_BIN="$(resolve_python)" || {
+  echo "FATAL: no working python3/python interpreter found on PATH (tried: python3, python)." >&2
+  exit 1
+}
+
 if [ -n "${1:-}" ]; then
   # shellcheck source=/dev/null
   source "$1"
@@ -70,7 +90,7 @@ fi
 if [ -n "${MOCKOPIN_CONTROL_IP_OVERRIDE:-}" ]; then
   CONTROL_IP="$MOCKOPIN_CONTROL_IP_OVERRIDE"
 else
-  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
+  CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | "$PYTHON_BIN" -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
 fi
 SSH_PORT="${MOCKOPIN_SSH_PORT:-22}"
 SSH_OPTS=(-i "$MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o BatchMode=yes)

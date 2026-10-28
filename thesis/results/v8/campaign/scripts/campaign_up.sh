@@ -24,13 +24,56 @@
 #       IP and re-applies ONLY the control instance's SSH ingress rule
 #       (Decision 52) -- for when the operator's IP changed since the last
 #       apply and a full re-apply isn't needed or wanted.
+#   campaign_up.sh [vars file] --allow-destructive   -- Decision 93 (real
+#       incident, 2026-10-28: a stale MOCKOPIN_ENABLED_CLIENT_SCENARIOS
+#       left set from a previous, smaller pilot made this script's own
+#       terraform apply destroy 38 real resources -- 8 full instances --
+#       it had no business touching). Without this flag, the script now
+#       runs `terraform plan` FIRST, prints the effective variables and
+#       the add/change/destroy summary, and ABORTS before ever calling
+#       `apply` if the plan shows any destroy (a replace counts as both
+#       an add and a destroy in that count, so it's covered too) or if
+#       MOCKOPIN_ENABLED_CLIENT_SCENARIOS is set to a strict subset of
+#       the full 8-scenario topology. Pass this flag only when a
+#       destroy/replace or a scoped-down topology is the actual intent,
+#       reviewed by a human first -- never as a default, never to make
+#       an abort "go away."
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="$SCRIPT_DIR/../terraform"
 
-VARS_FILE="${1:-}"
-MODE="${2:-}"
+# Decision 93: the exact failure mode found live -- `python3` resolved to
+# nothing on this operator's PATH, and a bare `python` resolved to the
+# Windows Store's own stub (exists on PATH, "succeeds" at being found,
+# fails at being Python) rather than a real interpreter. `command -v`
+# alone would NOT have caught this -- it only checks PATH presence, not
+# whether the candidate actually runs -- so this probes execution too.
+resolve_python() {
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "print(1)" >/dev/null 2>&1; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+PYTHON_BIN="$(resolve_python)" || {
+  echo "FATAL: no working python3/python interpreter found on PATH (tried: python3, python) -- needed for this script's own JSON/redaction helpers. Fix PATH before retrying; this is not something to work around." >&2
+  exit 1
+}
+
+ALLOW_DESTRUCTIVE=0
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--allow-destructive" ]; then
+    ALLOW_DESTRUCTIVE=1
+  else
+    ARGS+=("$a")
+  fi
+done
+VARS_FILE="${ARGS[0]:-}"
+MODE="${ARGS[1]:-}"
 if [ -n "$VARS_FILE" ]; then
   # shellcheck source=/dev/null
   source "$VARS_FILE"
@@ -49,36 +92,99 @@ if [ -z "$OPERATOR_IP" ]; then
   echo "FATAL: could not discover operator IP -- refusing to apply with a stale/missing value." >&2
   exit 1
 fi
-echo "    operator IP: ${OPERATOR_IP}/32"
+echo "    operator IP: <redacted -- standing rule, never printed in full>"
 export TF_VAR_operator_ip_cidr="${OPERATOR_IP}/32"
 export TF_VAR_operator_ssh_public_key="$(cat "$MOCKOPIN_OPERATOR_SSH_PUBLIC_KEY_FILE")"
 export TF_VAR_server_client_instance_type="$MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE"
 
-# Pilot runbook (this turn): a space-separated subset of scenario keys
-# (e.g. "L0@sa-east-1 L325@sa-east-1") lets this SAME script bring up
-# the pilot's smaller topology instead of the full 8-scenario one --
-# unset (the normal case) means the variable's own Terraform default
-# (all 8) applies, unchanged.
+# Decision 93: the full 8-scenario set, for the reduction check below --
+# must be kept in sync with terraform/variables.tf's own default list
+# by hand (no single source of truth to read it from at this layer
+# without invoking terraform first, which this runs before init).
+FULL_SCENARIOS="L0@sa-east-1 L123@sa-east-1 L219@sa-east-1 L325@sa-east-1 L0@us-east-1 L14@us-east-1 L0@ap-northeast-1 L30@ap-northeast-1"
+
+# Pilot runbook: a space-separated subset of scenario keys (e.g.
+# "L0@sa-east-1 L325@sa-east-1") lets this SAME script bring up a
+# smaller topology instead of the full 8-scenario one -- unset (the
+# normal case) means the variable's own Terraform default (all 8)
+# applies, unchanged. Decision 93 (real incident): this is EXACTLY the
+# variable a stale vars file left set, which turned the next
+# "full-topology" apply into an unintended destroy of the other 6
+# scenarios' worth of resources -- see the reduction check right below.
 if [ -n "${MOCKOPIN_ENABLED_CLIENT_SCENARIOS:-}" ]; then
-  TF_VAR_enabled_client_scenarios="$(python - "$MOCKOPIN_ENABLED_CLIENT_SCENARIOS" <<'PY'
+  TF_VAR_enabled_client_scenarios="$("$PYTHON_BIN" - "$MOCKOPIN_ENABLED_CLIENT_SCENARIOS" <<'PY'
 import json, sys
 print(json.dumps(sys.argv[1].split()))
 PY
 )"
   export TF_VAR_enabled_client_scenarios
   echo "==> enabled_client_scenarios override: $TF_VAR_enabled_client_scenarios"
+
+  # Decision 93: is this a REDUCTION from the full topology? Compare as
+  # sets, not strings (order/whitespace shouldn't matter). A reduction
+  # is exactly the condition that destroyed real infrastructure last
+  # time, unreviewed -- require the same explicit flag a destructive
+  # plan requires, not a second, differently-named one.
+  REDUCTION_CHECK="$("$PYTHON_BIN" - "$MOCKOPIN_ENABLED_CLIENT_SCENARIOS" "$FULL_SCENARIOS" <<'PY'
+import sys
+scoped = set(sys.argv[1].split())
+full = set(sys.argv[2].split())
+print("REDUCED" if scoped < full else "FULL_OR_SUPERSET")
+PY
+)"
+  if [ "$REDUCTION_CHECK" = "REDUCED" ] && [ "$ALLOW_DESTRUCTIVE" != "1" ]; then
+    echo "FATAL: MOCKOPIN_ENABLED_CLIENT_SCENARIOS (\"$MOCKOPIN_ENABLED_CLIENT_SCENARIOS\") is a strict subset of the full 8-scenario topology." >&2
+    echo "        If this apply is meant to run against an already-FULLER topology, this would destroy whatever isn't in that subset (Decision 93 -- this exact mistake already happened once)." >&2
+    echo "        Re-run with --allow-destructive only after a human has reviewed this on purpose." >&2
+    exit 1
+  fi
 fi
 
 if [ "$MODE" = "--update-operator-ip" ]; then
   echo "==> --update-operator-ip: re-applying ONLY the control instance's security group."
   (cd "$TF_DIR" && terraform init -input=false)
-  (cd "$TF_DIR" && terraform apply -input=false -auto-approve -target=module.control.aws_security_group.this) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
-  echo "==> Done -- control instance now accepts SSH from ${OPERATOR_IP}/32 only."
+  (cd "$TF_DIR" && terraform apply -input=false -auto-approve -target=module.control.aws_security_group.this) 2>&1 | "$PYTHON_BIN" "$SCRIPT_DIR/redact_aws_errors.py"
+  echo "==> Done -- control instance now accepts SSH from the operator's (redacted) IP only."
   exit 0
 fi
 
 echo "==> terraform init"
 (cd "$TF_DIR" && terraform init -input=false)
+
+echo
+echo "==> Effective variables for this apply (Decision 93 -- always shown,"
+echo "    never assumed from memory):"
+echo "    server_client_instance_type = $MOCKOPIN_SERVER_CLIENT_INSTANCE_TYPE"
+if [ -n "${MOCKOPIN_ENABLED_CLIENT_SCENARIOS:-}" ]; then
+  echo "    enabled_client_scenarios    = $MOCKOPIN_ENABLED_CLIENT_SCENARIOS  (SCOPED, not the full 8)"
+else
+  echo "    enabled_client_scenarios    = (unset -- Terraform default, full 8-scenario topology)"
+fi
+echo "    operator_ip_cidr            = <redacted>"
+echo "    operator_ssh_public_key     = <redacted, from $MOCKOPIN_OPERATOR_SSH_PUBLIC_KEY_FILE>"
+
+echo
+echo "==> terraform plan (Decision 93 -- always run and checked BEFORE any apply,"
+echo "    never skipped): aborting below if it shows any destroy/replace, unless"
+echo "    --allow-destructive was given."
+PLAN_OUT="$(mktemp)"
+(cd "$TF_DIR" && terraform plan -input=false -no-color \
+  -var="operator_ip_cidr=$TF_VAR_operator_ip_cidr" \
+  -var="operator_ssh_public_key=$TF_VAR_operator_ssh_public_key" \
+  -var="server_client_instance_type=$TF_VAR_server_client_instance_type" \
+  ${TF_VAR_enabled_client_scenarios+-var="enabled_client_scenarios=$TF_VAR_enabled_client_scenarios"}) \
+  > "$PLAN_OUT" 2>&1 || { "$PYTHON_BIN" "$SCRIPT_DIR/redact_aws_errors.py" < "$PLAN_OUT"; rm -f "$PLAN_OUT"; echo "FATAL: terraform plan itself failed -- see above." >&2; exit 1; }
+"$PYTHON_BIN" "$SCRIPT_DIR/redact_aws_errors.py" < "$PLAN_OUT" | grep -A2 "^Plan:" || true
+PLAN_SUMMARY="$(grep "^Plan:" "$PLAN_OUT" || echo "Plan: 0 to add, 0 to change, 0 to destroy.")"
+echo "    $PLAN_SUMMARY"
+TO_DESTROY="$(echo "$PLAN_SUMMARY" | grep -oE '[0-9]+ to destroy' | grep -oE '^[0-9]+' || echo 0)"
+rm -f "$PLAN_OUT"
+if [ "${TO_DESTROY:-0}" != "0" ] && [ "$ALLOW_DESTRUCTIVE" != "1" ]; then
+  echo "FATAL: this plan would destroy $TO_DESTROY resource(s) (a replace counts here too -- it's both an add and a destroy)." >&2
+  echo "        Decision 93: this is exactly the failure mode that destroyed 38 real resources unreviewed. Re-run with" >&2
+  echo "        --allow-destructive only after a human has reviewed the plan above and confirms this destroy is intended." >&2
+  exit 1
+fi
 
 echo
 echo "==> BEFORE APPLYING: confirm you have personally checked, in the AWS"
@@ -103,10 +209,10 @@ fi
 # -- a failed apply's own error text can embed this account's full ARN
 # (confirmed live elsewhere this session). pipefail (set at the top of
 # this file) means a failing `terraform apply` still fails this script.
-(cd "$TF_DIR" && terraform apply -input=false -auto-approve) 2>&1 | python3 "$SCRIPT_DIR/redact_aws_errors.py"
+(cd "$TF_DIR" && terraform apply -input=false -auto-approve) 2>&1 | "$PYTHON_BIN" "$SCRIPT_DIR/redact_aws_errors.py"
 
 echo "==> Extracting outputs..."
-CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | python -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
+CONTROL_IP="$(cd "$TF_DIR" && terraform output -json inventory | "$PYTHON_BIN" -c 'import json,sys; raw=json.load(sys.stdin); print((raw["value"] if "value" in raw else raw)["control"]["public_ip"])')"
 TMP_KEY="$(mktemp)"
 TMP_INVENTORY="$(mktemp)"
 trap 'shred -u "$TMP_KEY" 2>/dev/null || rm -f "$TMP_KEY"; rm -f "$TMP_INVENTORY"' EXIT
@@ -139,7 +245,7 @@ if [ -z "$MOCKOPIN_WINDOW1_START_UTC" ]; then
   MOCKOPIN_WINDOW3_START_UTC="${W2_DATE}T11:00:00Z"
 fi
 TMP_SCHEDULE="$(mktemp)"
-python - "$MOCKOPIN_WINDOW1_START_UTC" "$MOCKOPIN_WINDOW2_START_UTC" "$MOCKOPIN_WINDOW3_START_UTC" > "$TMP_SCHEDULE" <<'PY'
+"$PYTHON_BIN" - "$MOCKOPIN_WINDOW1_START_UTC" "$MOCKOPIN_WINDOW2_START_UTC" "$MOCKOPIN_WINDOW3_START_UTC" > "$TMP_SCHEDULE" <<'PY'
 import json, random, sys
 w1, w2, w3 = sys.argv[1:4]
 print(json.dumps({

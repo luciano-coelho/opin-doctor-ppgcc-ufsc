@@ -119,6 +119,48 @@ insuficiente, por construção, para separar um efeito de ordem de um
 efeito real de algoritmo nessa amostra isolada (ver investigação
 local).
 
+## Status: piloto 3 (topologia completa, ensaio geral) -- PAUSADO por Luciano em 2026-10-28, infraestrutura derrubada, ponto de retomada abaixo
+
+**Pausa deliberada, não um bloqueio técnico.** Luciano interrompeu o
+ensaio geral antes da janela de medição e pediu teardown completo com
+ele presente (ver Decision 93, addendum final). Nenhum dado de execução
+foi perdido porque nenhuma execução de medição chegou a começar.
+
+**O que já foi feito e validado, de verdade, nesta rodada:**
+- Apply da topologia completa (65 recursos, 12 instâncias, 7 regiões) e,
+  depois do incidente real registrado na Decision 93, restauração via
+  plano salvo (38 recursos) -- ambos confirmados por leitura direta na
+  AWS, não só pelo estado local do Terraform.
+- Etapa 4 (pré-flight por SSH/alcance): 11/11 hosts alcançáveis a partir
+  do controle; os 3 servidores responderam nos 3 perfis via
+  `switch_crypto_profile.py` reusado remotamente (9/9 trocas, rc=0).
+- Etapa 5 (entrega): `deliver_images.sh` e `deliver_source.sh` completos
+  nos 3 servidores + 8 clientes, 0 erros, conferência de sha256 100% OK
+  (incluindo as partes do tarball dividido).
+- Pré-flight por TCP/443 (sem ICMP, por decisão de Luciano): 8/8
+  clientes, 20/20 amostras cada, 0 falhas -- medianas batendo com o
+  esperado (L0 ~0,14-0,32ms, L325 330,49ms, demais entre 15-220ms).
+
+**O que NÃO foi concluído -- início real da retomada:**
+1. **Handshake TLS do ponto de vista do cliente remoto real, nos 3
+   perfis: NÃO confirmado.** O único teste tentado (perfil hybrid) deu
+   404 em 8/8 clientes -- diagnosticado como limitação do script de
+   teste ad hoc (não define `Host: auth.local` nem apresenta certificado
+   de cliente, ao contrário do `do_call()` real), não um defeito da
+   pilha. Precisa de uma v3 do script de diagnóstico antes de declarar
+   PASS/FAIL neste item.
+2. Portão de validação (24 execuções) -- não iniciado.
+3. Janela de medição 1 -- não iniciada.
+4. Consolidação/critérios de aceitação do piloto 3 -- não aplicável
+   ainda (sem dados).
+
+**Infraestrutura ao final desta rodada:** totalmente derrubada (65
+recursos destruídos, 7 regiões confirmadas limpas via AWS API direta --
+instâncias/EIPs/SGs/key pairs/volumes = 0 em todas). Para retomar, o
+próximo passo real é um novo `terraform plan -out=tfplan` +
+`terraform apply tfplan` (topologia completa), com Luciano presente,
+repetindo o procedimento desta mesma rodada.
+
 ## Passo a passo
 
 Every command below assumes `campaign.vars.local.sh` already exists
@@ -335,6 +377,40 @@ criterion, ending in `OVERALL: PASS` or `OVERALL: FAIL`.
 5. Before `campaign_down.sh` is ever run with `--force` (it refuses by
    default unless `.pull-verified` exists, Decision 49 — `--force`
    bypasses that refusal and is a real, deliberate override).
+6. **Regra permanente (Decision 93, incidente real 2026-10-28):
+   `campaign_up.sh`/`campaign_down.sh` — ou qualquer outro script que
+   chame `terraform apply`/`destroy` — nunca rodam sem Luciano ver
+   antes, nessa mesma sessão, o `terraform plan` real (resumo
+   add/change/destroy) E as variáveis efetivas que o script vai usar
+   (`server_client_instance_type`, `enabled_client_scenarios` —
+   explicitamente se está escopado ou é a topologia completa — nunca a
+   IP do operador nem o conteúdo da chave).** Um `apply` reaproveitando
+   um script que já tem essa lógica embutida (`campaign_up.sh`'s own
+   plan-before-apply gate, adicionado nesse mesmo turno) ainda precisa
+   ser mostrado a Luciano antes de rodar — a salvaguarda automática do
+   script é a RED DE SEGURANÇA, não uma substituição da revisão
+   humana. Motivo: uma variável de escopo de um piloto anterior,
+   esquecida no arquivo de vars local, fez esse exato script destruir
+   38 recursos reais (8 instâncias) sem revisão — ver Decision 93.
+7. **Procedimento padrão de apply, a partir da restauração do piloto 3
+   (Decision 93): sempre com plano salvo em arquivo, nunca recalculado
+   na hora do apply.**
+   ```bash
+   terraform plan -out=tfplan -var=... # (mesmas variáveis de sempre)
+   # revisar o resumo real (add/change/destroy) -- só prosseguir se
+   # bater exatamente com o esperado
+   terraform apply tfplan              # o MESMO plano, sem -auto-approve,
+                                        # sem recalcular -- a aprovação já
+                                        # está no arquivo revisado
+   rm -f tfplan                        # apagar imediatamente após confirmar
+   ```
+   `tfplan` (e `tfplan.*`) está no `.gitignore` (`thesis/results/v8/
+   .gitignore`) — rodar `scan_secrets.sh` depois de apagar o arquivo
+   para confirmar que nunca foi commitado, mesmo que só por um instante.
+   Toda saída de `plan`/`apply` passa por `redact_aws_errors.py` mais um
+   filtro que mascara o IP literal do operador (nunca confiar só no
+   primeiro — `redact_aws_errors.py` não mascara IPs genéricos, só
+   ARN/ID de conta).
 
 ## Critérios de aborto
 

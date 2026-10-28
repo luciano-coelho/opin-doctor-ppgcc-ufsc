@@ -4,6 +4,19 @@
 *.tfstate
 *.tfstate.*
 *.tfplan
+# Decision 93 (real incident, 2026-10-28): `terraform plan -out=tfplan`
+# writes a BARE filename, no extension -- `*.tfplan` above never matched
+# it. Saved-plan files (the new standard apply procedure: plan to a
+# file, review the exact summary, `apply` that same file, delete it
+# right after) are local-only, deleted immediately after use, never
+# meant to be committed.
+tfplan
+tfplan.*
+# Decision 93 addendum (2026-10-28, pause/teardown): `terraform plan
+# -destroy -out=tfdestroy` writes another bare filename the patterns
+# above never matched either -- same gap, different saved-plan name.
+tfdestroy
+tfdestroy.*
 
 # Runtime-only var files (contain the operator's public IP and SSH public
 # key). Generated locally per README.md, never part of version control.

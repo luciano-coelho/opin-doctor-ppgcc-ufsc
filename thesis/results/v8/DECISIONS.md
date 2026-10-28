@@ -2820,6 +2820,31 @@ estimate, checked 2026-10-12, same v7 sources as Decision 47:**
   $35-55** for this specific campaign run. Still an order of magnitude
   under the $200 Free Plan credit.
 
+**Nota de correção (2026-10-27, piloto 3 real):** o "45 resources to
+add" acima estava desatualizado. `terraform plan` real, full topology,
+mostrou **65 to add, 0 to change, 0 to destroy** (confirmado ao vivo,
+piloto 3). A diferença exata (20 recursos) são as regras
+`aws_vpc_security_group_ingress_rule` (uma por cenário/gateway em cada
+servidor + uma de SSH por módulo: 12 SSH + 8 gateway = 20) -- este
+parágrafo, escrito em 2026-10-12, contou "12 security groups" como se
+cada um fosse um recurso atômico com suas regras embutidas; o código
+real desde então (ou já desde então, não verificado) modela cada regra
+de ingress como seu próprio recurso Terraform. Nenhum `replace`/
+`destroy` -- não é drift de configuração, é estimativa de contagem
+nunca recalculada contra o código real. Contagem correta por tipo: 12
+`aws_instance` + 12 `aws_eip` + 12 `aws_security_group` + 20
+`aws_vpc_security_group_ingress_rule` + 8 `aws_key_pair` + 1
+`tls_private_key` = 65. Revisadas as 20 regras uma a uma contra o
+código-fonte (`main.tf`, não só o plano, já que vários valores de CIDR
+aparecem como "known after apply"): nenhuma usa `0.0.0.0/0`/`::/0`;
+`var.operator_ip_cidr` aparece em exatamente um lugar (SSH do módulo
+`control`); todo outro módulo usa exclusivamente o IP público do
+`control` para SSH; cada servidor só abre a porta 443 para os cenários
+daquele próprio servidor, com o L0 colocalizado usando IP privado nos
+3 casos. As 45 instance-hours/custo estimados abaixo continuam válidos
+(a contagem de INSTÂNCIAS, que domina o custo, não mudou -- só a
+contagem de regras de firewall, que não tem custo próprio).
+
 ## 55. Remote mode and delivery: image-ID comparison, real image-size/transfer/cost estimates, disk sizing confirmed, Docker-dependency audit, `REMOTE_GATEWAY_HOST` validation, pilot acceptance criterion, safety-timer margin confirmed
 
 **Image comparison: loaded image ID, not a registry digest** (Decision
@@ -8037,4 +8062,265 @@ arquivo de verdade e confirma que `CODE_HASH` muda. 34 testes
 campanha NÃO estão bloqueados por este atestado. A tensão da seção 7b
 foi resolvida com medição real (terceira rodada, acima) -- v7 e v8 são
 comparáveis quanto ao certificado PQC, sem resíduo sem explicação.
+
+## 92. Plano de análise do piloto 3 -- registrado ANTES de olhar qualquer dado real (pedido explícito, item 8 do prompt do piloto 3)
+
+Escopo do piloto 3 (ensaio geral da campanha completa, topologia cheia,
+tamanho/janelas do piloto): os 3 servidores (`sa-east-1`, `us-east-1`,
+`ap-northeast-1`), os 8 cenários (4+2+2, a lista completa, não a
+sub-lista `L0`/`L325` dos pilotos 1/2), 3 perfis, **10 execuções por
+perfil/cenário, 1 janela** (não 3) -- `CAMPAIGN_WINDOWS_PER_CAMPAIGN=1`,
+sem `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` definido (topologia completa).
+Total: 3 x 8 x 10 = **240 execuções reais**, contra as 60 dos pilotos
+1/2 (`sa-east-1` só) e as 720 da campanha completa (3 janelas x 240).
+45 recursos Terraform (12 instâncias + 12 EIPs + 12 security groups + 7
+key pairs de campanha + 1 key pair de operador + 1 chave SSH gerada --
+mesma contagem já confirmada ao vivo na Decision 54), 12 instâncias
+`m7i-flex.large` (tipo já escolhido e validado nos pilotos 1/2,
+reaproveitado, não re-escolhido sem motivo).
+
+**Plano de análise, decidido agora, sem ver nenhum número do piloto 3**:
+- Estatística central: mediana por célula (perfil x cenário x servidor),
+  a mesma convenção de v1-v7 e dos pilotos 1/2 -- nunca média.
+- Incerteza: IC 95% via bootstrap (mesma `bootstrap_median_ci()` já
+  usada em `consolidate_v8.py`), reportado ao lado de cada mediana, não
+  substituindo-a.
+- Covariável: posição do perfil na janela (`profile_position_in_window`,
+  item 2 da Decision 90) entra na análise de qualquer inversão de
+  latência observada -- junto com decomposição por fase do fluxo
+  (`phase_accounting`, Decision 90), tempos por artefato
+  (`verification_timings`/`signing_timings`), `steal` máximo, perda de
+  pacotes (pcap) e o efeito de instância fria (`run_instance_warmup()`,
+  item 2 da Decision 90). Uma inversão Classic/PQC/Hybrid em latência só
+  é aceita como explicada se pelo menos uma dessas evidências, medida
+  (não hipótese), sustentar a explicação -- "ruído" não é uma categoria
+  válida de explicação neste piloto.
+- Inversões SEM explicação concreta ficam marcadas **ABERTO** no
+  critério de aceite 4 -- não PASSA, não FALHA.
+- Nenhum run é removido da amostra por julgamento. Um run só é
+  descartado com motivo técnico registrado (ex.: retry de PAR TTL já
+  excluído por desenho, falha de verificação de assinatura que abortou
+  o fluxo, divergência de grupo negociado) -- cada descarte é contado e
+  listado, nunca silenciosamente ausente do denominador.
+- Ordem esperada em bytes (OPINsize v8, ±3%): Classic (77.801) < PQC
+  (326.799) < Hybrid (360.857) -- critério de aceite 1/4, não column
+  aberta a interpretação.
+
+Este parágrafo é o compromisso prévio (pre-registration, mesmo
+princípio já usado para o descarte do warmup run nos pilotos
+anteriores) -- a análise real do piloto 3, quando os dados chegarem,
+segue exatamente isto, não um método escolhido depois de ver o
+resultado.
+
+## 93. Incidente real: `campaign_up.sh` destruiu 38 recursos reais (8 instâncias) por uma variável de escopo de piloto antiga esquecida em `campaign.vars.local.sh` -- causa raiz corrigida, duas salvaguardas novas no script, nada perdido além de tempo/dinheiro
+
+**Linha do tempo (UTC, horários dos arquivos de log salvos -- não timestamps
+exatos de evento da AWS/Terraform, que não ficaram registrados
+separadamente; aproximação honesta, não um número preciso):**
+
+- **~2026-10-28T01:01:40Z** -- `terraform plan` (leitura, topologia
+  completa) confirmado: 65 a adicionar, 0 a mudar, 0 a destruir.
+- **2026-10-28T01:08:48Z** -- `terraform apply` **aprovado por
+  Luciano** (presente, confirmado nesta conversa) iniciado, direto,
+  variáveis explícitas, sem `MOCKOPIN_ENABLED_CLIENT_SCENARIOS`.
+- **~2026-10-28T01:09:43Z** -- apply aprovado concluído: **"Apply
+  complete! Resources: 65 added, 0 changed, 0 destroyed."** 12
+  instâncias reais no ar, nas 7 regiões.
+- **(entre ~01:09:43 e ~01:11:28Z)** -- SEGUNDO apply, NÃO revisado
+  antes de rodar: `./campaign_up.sh campaign.vars.local.sh`, reaproveitando
+  o script (em vez do `terraform apply` direto já aprovado) para copiar
+  chave/inventário/cronograma e verificar SSH/relógio. Esse script faz
+  seu PRÓPRIO `terraform apply -auto-approve` internamente -- e
+  `campaign.vars.local.sh` ainda tinha `MOCKOPIN_ENABLED_CLIENT_SCENARIOS=
+  "L0@sa-east-1 L325@sa-east-1"` (resquício dos pilotos 1/2), nunca
+  limpo. O apply rodou com a topologia ESCOPADA, destruindo tudo que
+  não estava nesse subconjunto.
+- **~2026-10-28T01:11:28Z** -- saída do script interrompida (erro
+  `python3` não encontrado no PATH deste shell, dentro do pipe de
+  redação) -- mas o `terraform apply` destrutivo já tinha rodado e
+  concluído antes disso (confirmado abaixo, não assumido).
+
+**O que foi destruído de verdade (confirmado por 2 fontes independentes --
+`terraform state list` local E `aws ec2 describe-instances` real, 7
+regiões, sem ID de conta/ARN em nenhuma chamada) -- 38 recursos, todos
+das instalações `us-east-1`, `ap-northeast-1`, e dos 4 clientes remotos
+que não co-localizam com `sa-east-1`:**
+- 8x `aws_instance`, 8x `aws_eip`, 8x `aws_security_group` (módulos
+  `server_us_east_1`, `server_ap_northeast_1`, `client_l0_us_east_1`,
+  `client_l0_ap_northeast_1`, `client_ca_central_1_a`,
+  `client_ca_central_1_b`, `client_eu_north_1`, `client_ap_northeast_2`).
+- 14x `aws_vpc_security_group_ingress_rule` (as regras SSH desses 8
+  módulos + as regras de gateway `L0`/`L14`/`L30` de
+  `server_us_east_1`/`server_ap_northeast_1` + as regras de gateway
+  `L123`/`L219` de `server_sa_east_1`, que FICOU de pé mas perdeu essas
+  2 regras específicas).
+- Sobrevivente real, confirmado via `aws ec2 describe-instances` (sem
+  conta/ARN): `sa-east-1` (controle + servidor + `L0`) e
+  `ap-southeast-1` (`L325`) -- exatamente a topologia escopada dos
+  pilotos 1/2, igual ao valor esquecido na variável.
+
+**Causa raiz, confirmada por leitura direta (não suposição):**
+`campaign.vars.local.sh` (local, gitignored, nunca commitado) linha 16
+tinha `export MOCKOPIN_ENABLED_CLIENT_SCENARIOS="L0@sa-east-1
+L325@sa-east-1"` -- escrito no turno dos pilotos 1/2, nunca removido
+depois. Chamadas à AWS feitas para confirmar o estado real (todas
+leitura, nenhuma escreveu nada, nenhuma imprimiu ID de conta/ARN):
+`aws sts get-caller-identity` (antes do apply aprovado), `aws ec2
+describe-instances` nas 7 regiões (depois do incidente, para confirmar
+o que sobrou de verdade), `terraform state list`/leitura local do
+`.tfstate` (sem chamada à AWS, só arquivo local).
+
+**Corrigido:**
+1. `campaign.vars.local.sh`: linha removida, substituída por um
+   comentário explicando o incidente -- deixado SEM a variável é o
+   padrão seguro (topologia completa, o default do próprio Terraform).
+2. Procurado e não encontrado nenhum outro valor de piloto antigo: nenhuma
+   outra variável `MOCKOPIN_*` setada no ambiente deste shell, nenhum
+   `*.tfvars` em lugar nenhum do diretório `terraform/`,
+   `campaign.vars.example.sh` só tem a mesma linha como exemplo
+   COMENTADO (nunca executado).
+3. `campaign_up.sh`: duas salvaguardas novas, nenhuma muda o que é
+   medido (puramente infraestrutura/segurança):
+   - Antes de QUALQUER `apply`, roda `terraform plan` primeiro, imprime
+     as variáveis efetivas (sem a IP do operador, sem o conteúdo da
+     chave) e o resumo add/change/destroy, e **ABORTA se houver
+     qualquer destroy** (um replace conta como destroy+add, já cobre
+     os dois) -- a não ser que `--allow-destructive` seja passado
+     explicitamente.
+   - Aborta também se `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` for um
+     subconjunto estrito dos 8 cenários completos, sem a mesma flag --
+     exatamente a condição que causou este incidente.
+   - `python3`/`python` locais trocados por `PYTHON_BIN`, resolvido em
+     tempo de execução checando se o candidato REALMENTE RODA (não só
+     se `command -v` o encontra -- o stub da Microsoft Store do
+     `python` "existe" no PATH deste Windows sem funcionar, foi
+     exatamente isso que mascarou o erro original).
+   - A linha que imprimia o IP do operador em texto puro (regra padrão
+     já violada antes deste incidente, achada ao investigar) também
+     corrigida -- nunca mais impressa.
+4. **Testado em modo plan, de verdade, sem nenhum apply** (duas vezes):
+   (a) config limpa -- mostrou as variáveis corretas (topologia
+   completa), rodou o plan real (38 a adicionar, 0 destruir), seguiu
+   até o prompt de orçamento e abortou lá (entrada não-confirmatória
+   dada de propósito); (b) `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` setada de
+   propósito para o valor escopado, sem a flag -- abortou IMEDIATAMENTE,
+   antes de rodar qualquer `terraform plan`, com a mensagem explicando
+   exatamente por quê.
+
+**Plano de restauração (preparado, NÃO aplicado -- esperando autorização
+explícita de Luciano para o comando exato, conforme pedido):**
+`terraform plan` real, config limpa: **38 a adicionar, 0 a mudar, 0 a
+destruir** -- 8 `aws_instance` + 8 `aws_eip` + 8 `aws_security_group` +
+14 `aws_vpc_security_group_ingress_rule`, distribuídos: `us-east-1` (2
+instâncias) + `ap-northeast-1` (2) + `ca-central-1` (2) + `eu-north-1`
+(1) + `ap-northeast-2` (1) = 8 instâncias novas, mais 2 regras de
+gateway devolvidas a `server_sa_east_1` (que nunca perdeu suas próprias
+instâncias). Estado atual real: 4 instâncias; depois deste plano: 12 --
+bate exato com o que é esperado.
+
+**Relógio e custo:** o custo real já incorrido com o incidente (apply
+aprovado + apply destrutivo + o tempo de investigação) soma ao teto de
+US$8 do piloto 3 -- não é descontado. O relógio de 6h, por outro lado,
+**recomeça do zero no momento do novo apply (quando autorizado)** --
+nenhuma medição chegou a começar; nada do que o relógio de 6h protege
+(uma janela de medição em andamento) foi sequer iniciado.
+
+**Atualizado:** `thesis/results/v8/campaign/scripts/campaign_up.sh`
+(salvaguardas), `campaign.vars.local.sh` (variável removida, não
+commitado -- gitignored), `PILOT_RUNBOOK.md` (regra nova: scripts que
+chamam apply/destroy nunca rodam sem o plano e as variáveis efetivas
+serem vistos primeiro).
+
+**Restauração aplicada (2026-10-28), com plano salvo em arquivo, não
+recalculado -- novo procedimento padrão a partir de agora:**
+`terraform plan -out=tfplan` (variáveis explícitas, config limpa),
+resumo real conferido ANTES de qualquer apply (**38 a adicionar, 0 a
+mudar, 0 a destruir**, IP do operador mascarado na saída -- nenhuma
+ocorrência apareceu neste plano específico, já que o módulo `control`
+não mudava), depois `terraform apply tfplan` (o MESMO plano, sem
+recalcular, sem `-auto-approve` -- a aprovação já está no arquivo
+revisado). Toda saída (plan e apply) passou por `redact_aws_errors.py`
+mais um segundo filtro que mascara o IP literal do operador (capturado
+uma vez em variável de ambiente, nunca impresso). `tfplan` apagado
+imediatamente após o apply confirmado; `scan_secrets.sh` rodado de novo
+e confirmou PASS (nunca foi commitado) -- `.gitignore` também corrigido
+nesse meio tempo: o padrão antigo `*.tfplan` nunca cobria o nome
+literal `tfplan` sem extensão que `-out=tfplan` realmente grava (lacuna
+real, achada ao verificar, não assumida corrigida).
+
+**Resultado: `Apply complete! Resources: 38 added, 0 changed, 0
+destroyed.`** Confirmado por leitura real na AWS (`describe-instances`,
+as 7 regiões, sem conta/ARN): **exatamente 12 instâncias**
+`pending`/`running` -- sa-east-1:3, us-east-1:2, ap-northeast-1:2,
+ca-central-1:2, eu-north-1:1, ap-southeast-1:1, ap-northeast-2:1.
+Topologia completa restaurada.
+
+**Início do novo relógio de 6h**: `tfplan` foi salvo em
+`2026-10-28T01:24:28Z` (horário do arquivo -- a linha de log com o
+horário exato de início do `apply` em si não chegou a ser capturada
+nesta rodada, um detalhe de como a saída em segundo plano foi
+redirecionada, não algo intencional; reportado com essa imprecisão
+honesta em vez de uma hora falsamente precisa). O apply concluiu até
+`2026-10-28T01:26:05Z` (horário do arquivo de saída). **Usando o lado
+mais cedo e mais conservador da janela, `2026-10-28T01:24:28Z` é o
+início oficial do relógio de 6h do piloto 3** -- nenhuma medição tinha
+começado antes disso.
+
+**Procedimento adotado daqui em diante para todo apply de campanha**:
+sempre via plano salvo em arquivo (`terraform plan -out=<arquivo>`,
+resumo revisado por um humano, só então `terraform apply <arquivo>`
+sem recalcular) -- nunca mais `terraform apply` recalculando na hora.
+Registrado também em `PILOT_RUNBOOK.md`.
+
+**Pausa e teardown final (2026-10-28), por decisão de Luciano, com ele
+presente -- mesmo padrão de plano salvo:**
+`terraform plan -destroy -out=tfdestroy` (mesmas variáveis do apply),
+resumo conferido ANTES de aplicar (**0 a adicionar, 0 a mudar, 65 a
+destruir** -- bate exato com a topologia em pé: 8 `aws_instance`, 8
+`aws_eip`, 8 `aws_security_group`, 11 `aws_vpc_security_group_ingress_
+rule` no controle/servidores, 8 `aws_key_pair` incluindo a do operador,
+1 `tls_private_key`), IP do operador/ID de conta/ARN mascarados na saída
+salva. `terraform apply "tfdestroy"` (o mesmo plano, sem recalcular) --
+**"Apply complete! Resources: 0 added, 0 changed, 65 destroyed."**
+(início 2026-10-28T02:44:40Z, fim 2026-10-28T02:45:26Z). `tfdestroy`
+apagado logo depois; lacuna real encontrada no `.gitignore` (mesmo
+padrão do incidente original -- `tfplan`/`tfplan.*` nunca cobriam o
+nome literal `tfdestroy`) corrigida antes do commit, embora o arquivo
+já não tivesse sido staged/commitado em nenhum momento (confirmado por
+`git status`/`git log`). `scan_secrets.sh` rodado de novo: PASS.
+
+Verificação final, região por região, via `aws ec2
+describe-instances`/`describe-addresses`/`describe-security-groups`/
+`describe-key-pairs`/`describe-volumes` (leitura direta, sem ID de
+conta/ARN em nenhuma chamada) -- **as 7 regiões (`sa-east-1`,
+`us-east-1`, `ap-northeast-1`, `ca-central-1`, `eu-north-1`,
+`ap-southeast-1`, `ap-northeast-2`) confirmadas com ZERO instâncias, EIPs,
+security groups, key pairs (incluindo a do operador, nome
+`mockopin-pqc-campaign-operator`, verificada à parte por usar um nome
+diferente das demais) e volumes.** Nenhum dado local nem o repositório
+foram apagados.
+
+**Relógio e custo desta pausa:** o relógio de 6h havia recomeçado no
+apply de restauração (~2026-10-28T01:24-01:26Z, aproximado por
+timestamp de arquivo, mesma ressalva de honestidade já usada acima --
+não um evento separadamente registrado) e foi encerrado pela pausa em
+2026-10-28T02:45:26Z -- **~1h19-21min usados dos 6h permitidos, bem
+abaixo do limite.** Custo real estimado usando a referência do próprio
+Luciano (~US$1,15/h para a topologia completa de 12 instâncias) sobre o
+período em que havia instâncias reais em pé (2026-10-28T01:09:43Z a
+02:44:40Z, ~1h35min, com uma janela intermediária de ~13min em
+capacidade reduzida por causa do incidente) -- **estimativa ~US$1,80,
+bem abaixo do teto de US$8 do piloto 3.** Luciano confirma o valor
+exato no console de Billing.
+
+**Ponto de retomada (registrado também em `PILOT_RUNBOOK.md`):** apply
+e restauração validados, entrega (etapa 5) validada, pré-flight SSH e
+TCP/443 validados (8/8 clientes, 0 falhas). Falta: confirmar o
+handshake TLS do ponto de vista do cliente remoto real nos 3 perfis
+(tentativa única, perfil hybrid, deu 404 -- diagnosticado como
+limitação do script de teste, não da pilha real, mas NÃO corrigido nem
+reconfirmado ainda), o portão de validação (24 execuções) e a janela de
+medição 1. Infraestrutura totalmente derrubada ao final desta rodada;
+retomar exige um novo apply completo (plano salvo), com Luciano
+presente.
 
