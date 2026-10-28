@@ -296,6 +296,53 @@ def find_syn_synack_rtt(pcap_path):
     return None
 
 
+def find_all_syn_synack_rtts(pcap_path):
+    """Same SYN/SYN-ACK matching as `find_syn_synack_rtt()` above, but
+    returns EVERY matched pair's RTT (one per real TCP connection seen in
+    the pcap), not just the first. Added 2026-10-28 (DECISIONS.md,
+    Schardong-coverage check): a single RTT value cannot show jitter
+    (RTT *variation*) -- this project's own real executions open several
+    client-facing TCP connections per run (N_mTLS, currently 6), each
+    with its own real SYN/SYN-ACK pair already present in the SAME pcap
+    already captured for the handshake-bytes/loss terms, so no new
+    collection is needed, only this second pass over it. Matches by
+    4-tuple (same reversed-tuple rule as the single-match function);
+    `pending` only needs one slot per distinct 4-tuple since this
+    project's own connections are opened sequentially, not pipelined."""
+    pending = {}
+    rtts = []
+    for ts, frame in read_pcap_packets(pcap_path):
+        parsed = parse_tcp_packet(frame)
+        if parsed is None:
+            continue
+        src_ip, dst_ip, src_port, dst_port, flags, _payload = parsed
+        if dst_port == 443 and (flags & 0x12) == 0x02:  # SYN, not SYN-ACK
+            pending[(dst_ip, src_ip, dst_port, src_port)] = ts
+        elif (flags & 0x12) == 0x12:  # SYN+ACK
+            key = (src_ip, dst_ip, src_port, dst_port)
+            syn_ts = pending.pop(key, None)
+            if syn_ts is not None:
+                rtts.append(ts - syn_ts)
+    return rtts
+
+
+def rtt_jitter_seconds(pcap_path):
+    """Jitter (RTT variability) WITHIN one run, derived from that run's
+    own several real SYN/SYN-ACK RTT samples (`find_all_syn_synack_rtts()`
+    above) -- not a separate collection, the same client pcap already
+    captured for the handshake-bytes/loss terms. Defined as the mean
+    absolute difference between consecutive RTT samples (packet-delay-
+    variation/IPDV, the same definition RFC 3550 S6.4.1 uses for RTP
+    jitter, adapted here to TCP handshake RTTs since this project
+    captures no RTP traffic). Returns None if fewer than 2 real
+    connections are present (jitter needs at least one difference)."""
+    rtts = find_all_syn_synack_rtts(pcap_path)
+    if len(rtts) < 2:
+        return None
+    diffs = [abs(rtts[i + 1] - rtts[i]) for i in range(len(rtts) - 1)]
+    return sum(diffs) / len(diffs)
+
+
 def parse_tcp_packet_seq_ack(frame):
     """Same Ethernet/IPv4/TCP parse as `parse_tcp_packet_true_len()`, plus
     the TCP header's own sequence and ack numbers -- needed for

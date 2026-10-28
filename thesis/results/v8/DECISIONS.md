@@ -8112,6 +8112,39 @@ anteriores) -- a análise real do piloto 3, quando os dados chegarem,
 segue exatamente isto, não um método escolhido depois de ver o
 resultado.
 
+**Addendum (2026-10-28, checagem de cobertura Schardong -- ver Decision
+94): três acréscimos ao plano de análise, pedidos explicitamente,
+mantendo mediana e bootstrap como estão:**
+- **Resumo da distribuição por combinação** (perfil x cenário x
+  servidor): mínimo, Q1, Q3, p95, máximo e um histograma de 10 bins --
+  `stats_block()` em `consolidate_v8.py` agora inclui isso em TODA
+  métrica que já passa por ele (não só T_fluxo), não um cálculo
+  separado e paralelo.
+- **Shapiro-Wilk**, para registrar a não normalidade (nunca para
+  decidir PASS/FAIL de nada) -- mesma regra da Decision 92 original:
+  só evidência medida e concreta assenta uma inversão, nunca um teste
+  estatístico isolado.
+- **Mann-Whitney (postos) entre perfis**, por célula servidor/cenário,
+  sobre as amostras reais de T_fluxo -- diz apenas se as distribuições
+  são estatisticamente distinguíveis, nunca por si só a causa de uma
+  inversão.
+
+Shapiro-Wilk e Mann-Whitney usam `scipy.stats` -- único lugar deste
+pipeline de análise que depende de algo fora da stdlib (nunca instalado
+em nenhuma instância EC2; `thesis/scripts/requirements.txt`, que É o
+runtime real do campo/cliente, não foi tocado). Decisão registrada
+explicitamente porque este projeto tem um estilo documentado de evitar
+dependência nova para uma necessidade estreita (`pcap_utils.py`, próprio
+docstring) -- reimplementar Shapiro-Wilk à mão (algoritmo Royston 1995,
+AS R94, com coeficientes tabulados) para uma tese é um risco maior do
+que declarar essa dependência: um teste de normalidade silenciosamente
+errado é pior do que uma dependência nova e explícita. Mann-Whitney
+poderia ser escrito à mão com segurança, mas ficou na mesma biblioteca
+para não ter um teste artesanal ao lado de um Shapiro-Wilk de
+biblioteca. Degrada honestamente (`"status": "scipy not installed"`)
+se `scipy` não estiver disponível no ambiente local de análise, nunca
+quebra o `consolidate_v8.py`.
+
 ## 93. Incidente real: `campaign_up.sh` destruiu 38 recursos reais (8 instâncias) por uma variável de escopo de piloto antiga esquecida em `campaign.vars.local.sh` -- causa raiz corrigida, duas salvaguardas novas no script, nada perdido além de tempo/dinheiro
 
 **Linha do tempo (UTC, horários dos arquivos de log salvos -- não timestamps
@@ -8323,4 +8356,97 @@ reconfirmado ainda), o portão de validação (24 execuções) e a janela de
 medição 1. Infraestrutura totalmente derrubada ao final desta rodada;
 retomar exige um novo apply completo (plano salvo), com Luciano
 presente.
+
+## 94. Checagem de cobertura contra o artigo do Schardong (CANS 2022) -- um gap real encontrado e corrigido (fração do handshake sobre T_fluxo), um gap real encontrado e NUNCA antes implementado (jitter), estatística do plano de análise (Decision 92) implementada no `consolidate_v8.py`. Sem AWS, sem alterar código de medição.
+
+**Pedido:** confirmar em `METRICS_COVERAGE.md` que v8 cobre o que
+Schardong et al. mediram -- bytes na rede, T_fluxo em latência baixa e
+alta, e a fração do tempo de handshake TLS sobre o tempo total, por
+perfil e cenário; acrescentar ao plano de análise (Decision 92) resumo
+de distribuição/Shapiro-Wilk/Mann-Whitney; confirmar que jitter e perda
+continuam calculados do pcap.
+
+**Bytes na rede:** já cobertos (OPINsize e os 4 termos, Decision
+77/78/85/88) -- nada a fazer.
+
+**T_fluxo em latência baixa e alta, por perfil/cenário:** já coberto
+estruturalmente -- `consolidate_profile_scenario()` roda por célula
+perfil x servidor x cenário, e cada cenário (`L0`.."L325") É uma RTT
+real diferente, medida (não assumida) em `thesis/results/v8/latency-
+discovery/`. Nenhuma mudança de código necessária, só esta confirmação
+explícita.
+
+**Fração do handshake TLS sobre T_fluxo: NÃO estava calculada --
+corrigida.** `handshakeDurationMs` já era logado pelo gateway (mesma
+linha `"mTLS handshake complete"` de `mtlsHandshakeBytes`,
+`mock_mtls/main.go:675`) e já era puxado (`server/run{NN}_gateway.log`,
+mesmo arquivo de sempre) -- só nunca tinha sido agregado, mesmo padrão
+exato do próprio `term_handshake` (Decision -- corrigido em 2026-10-22).
+`consolidate_v8.py` ganhou `handshake_duration_stats()` (mediana por
+run, pareada 1:1 com o T_fluxo daquele MESMO run) e dois campos novos
+por célula: `mtls_handshake_duration_ms` e
+`mtls_handshake_fraction_of_t_fluxo_pct`. Testado contra fixture real
+(pcap+gateway log casados, `test_handshake_gateway_vs_pcap.py`'s própria
+fixture): mediana real do handshake 19,5/18,0/20,0 ms
+(classic/pqc/hybrid); fração real medida contra dados do piloto 1
+(`L0`, co-localizado): ~0,61% do T_fluxo -- número pequeno esperado
+num cenário de baixa latência onde T_fluxo é dominado por chamadas
+HTTP/assinatura, não pela rede; a fração deve crescer nos cenários de
+alta latência (`L325` etc.), ainda não medido contra dado real de alta
+latência fora do piloto 1/2 (que só têm `L0`/`L325`, mas sem este campo
+no histórico -- será populado a partir do piloto 3 em diante).
+
+**Jitter: NUNCA esteve implementado -- achado real, não assumido
+corrigido.** Busca em `pcap_utils.py`/`consolidate_v8.py` não encontrou
+nenhuma função de jitter em lugar nenhum -- a única ocorrência da
+palavra era um comentário sobre variação RUN-A-RUN, não jitter de rede.
+Implementado agora, do MESMO pcap já capturado para os termos de
+bytes/perda do handshake, sem nova coleta: `find_all_syn_synack_rtts()`
+(generaliza `find_syn_synack_rtt()` para retornar o RTT de TODAS as
+conexões reais do pcap, não só a primeira -- o primeiro elemento
+confirmado idêntico à função original, testado) e
+`rtt_jitter_seconds()` (diferença média absoluta entre RTTs
+consecutivos -- mesma definição que a RFC 3550 S6.4.1 usa para jitter
+de RTP, adaptada a handshakes TCP já que este projeto não captura
+tráfego RTP). Novo campo `rtt_and_loss.rtt_jitter_ms` por célula.
+Testado contra os pcaps reais do piloto 1 (`L0`): 6 conexões reais
+casadas, jitter mediano real ~0,12ms; e contra a fixture `s256`
+casada (14 conexões reais por execução, jitter sub-milissegundo em
+todos os 3 perfis).
+
+**Estatística do plano de análise (Decision 92 addendum, ver acima):**
+`stats_block()` ganhou quartis/p95/histograma/Shapiro-Wilk (toda
+métrica, não só T_fluxo); nova função `add_cross_profile_t_fluxo_
+comparisons()` roda Mann-Whitney par a par entre os perfis presentes em
+cada célula servidor/cenário, usando as amostras reais (`t_fluxo_raw_
+seconds`, campo novo por célula) -- resultado em `consolidated.json`
+no campo de topo `cross_profile_t_fluxo_comparisons`. Único novo campo
+que também precisou mudar o nível de agregação: Mann-Whitney compara
+amostras de perfis DIFERENTES na mesma célula, então não cabia dentro
+de `consolidate_profile_scenario()` (que só vê um perfil por vez) --
+roda uma vez, depois que `build_consolidated()` já montou os 3 perfis.
+
+**Testado, não só revisado:** `handshake_duration_stats()`/jitter
+contra as fixtures reais já existentes (pcap+gateway log casados) e
+contra os pcaps reais do piloto 1; `percentile()`/`histogram_buckets()`/
+`shapiro_wilk()`/`mann_whitney_u()`/`add_cross_profile_t_fluxo_
+comparisons()` com testes unitários novos
+(`tests/test_schardong_coverage.py`, 15 casos, todos passando); suíte
+completa de `thesis/results/v8/campaign/scripts/tests/` re-executada
+(49/49 passando, incluindo os 34 testes pré-existentes, nenhuma
+regressão); `consolidate_v8.py` reexecutado ponta a ponta contra o dado
+real do piloto 1 completo (não um fixture sintético) -- confirma os
+números acima e que nada quebrou no pipeline existente. Um caso real de
+borda encontrado e corrigido durante esse teste: `term_pki` tem
+variância zero entre runs (mesmo nº de bytes sempre) -- `scipy.stats.
+shapiro` degrada para `statistic=1.0`/`p=1.0` com um aviso "range zero"
+nesse caso; `shapiro_wilk()` agora detecta variância zero antes de
+chamar o scipy e reporta `"status": "degenerate (zero variance...)"`
+em vez de um "normal" tecnicamente verdadeiro mas sem sentido.
+
+**Nada do código de medição foi alterado** (`opin_flow.py`,
+`campaign_run.py`'s captura, `mock_mtls/main.go`) -- só
+`consolidate_v8.py`/`pcap_utils.py` (pós-processamento, roda localmente
+sobre dados já coletados) e `METRICS_COVERAGE.md`/`DECISIONS.md`. Sem
+AWS tocado.
 

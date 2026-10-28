@@ -62,14 +62,23 @@ consolidate_v8.py <v8-latency-root> <output-dir>` reads the real
 `consolidated.json` (source) + `CONSOLIDATED_REPORT.md` (derived), with
 the same field structure as v7's own `report_data_v7.json`/
 `Consolidated_Metrics_Report_FINAL.md` wherever v8's data supports it,
-plus the new metrics (RTT, packet-loss upper bound, CPU/steal/memory,
-a bootstrap CI of the median). `thesis/results/v8/METRICS_COVERAGE.md`
+plus the new metrics (RTT, packet-loss upper bound, RTT jitter,
+CPU/steal/memory, a bootstrap CI of the median, a distribution summary
++ Shapiro-Wilk per cell, and Mann-Whitney U between profiles). The last
+two need `scipy` installed locally (`pip install scipy`) -- the one
+external dependency anywhere in this analysis pipeline, never installed
+on any EC2 server/client; without it those two fields report an honest
+`"status": "scipy not installed"` instead of failing the whole run.
+`thesis/results/v8/METRICS_COVERAGE.md`
 is the full map of which v7 metric comes from which v8 file/field, what
 is and isn't covered yet, and why -- read it before trusting any
 specific row of the generated report. `tests/test_consolidate_v8.py`
 runs the generator end to end against real local flow-check data
 (`tests/fixtures/light_flow_check_2026-10-21/`); run it with
 `python3 -m pytest tests/test_consolidate_v8.py` from this directory.
+`tests/test_schardong_coverage.py` covers the mTLS-handshake-fraction/
+jitter/distribution-summary/Mann-Whitney additions (Decision 94) the
+same way, against the same real fixtures.
 
 ## Pcap capture: snaplen 256, handshake measured two ways (Decision 79)
 

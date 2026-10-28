@@ -75,7 +75,29 @@ from campaign_run import (  # reused, not reimplemented -- see module docstring 
     _CLIENT_EXPECTED_CURVE,
     _CORRELATION_WINDOW_SECONDS,
 )
-from pcap_utils import extract_clean_handshake_bytes, detect_loss_signals  # noqa: E402 -- shared, see pcap_utils.py's own docstring
+from pcap_utils import (  # noqa: E402 -- shared, see pcap_utils.py's own docstring
+    extract_clean_handshake_bytes, detect_loss_signals, rtt_jitter_seconds,
+)
+
+# Decision 94 (2026-10-28, Schardong-coverage check): the ONLY external,
+# non-stdlib dependency in this analysis-only module (never installed on
+# any EC2 server/client -- thesis/scripts/requirements.txt is untouched).
+# This project's own standing style (pcap_utils.py's own docstring)
+# avoids new dependencies for narrow needs, but Shapiro-Wilk specifically
+# is not something to hand-roll for a thesis: a correct implementation
+# (Royston 1995, AS R94) needs tabulated coefficients this project has no
+# way to independently verify, and a silently-wrong normality statistic
+# is worse than an honest "scipy not installed" status. Mann-Whitney U
+# is simple enough to hand-roll, but is kept on the same library for one
+# consistent, independently-citable source for both tests rather than a
+# hand-rolled U-test next to a library Shapiro-Wilk. Optional at import
+# time: every caller below degrades to an explicit "scipy not installed"
+# status instead of crashing, consistent with this module's own "missing
+# (reason)" convention for every other not-yet-available field.
+try:
+    from scipy import stats as _scipy_stats
+except ImportError:
+    _scipy_stats = None
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_REPO_ROOT / "thesis" / "scripts"))
@@ -134,9 +156,96 @@ def bootstrap_median_ci(values, n_resamples=2000, ci=0.95, seed=1234):
     return (medians[max(0, lo_idx)], medians[min(n_resamples - 1, hi_idx)])
 
 
+def percentile(values, pct):
+    """Linear-interpolation percentile (numpy's/pandas' default "linear"
+    method), 0 <= pct <= 100. Pure stdlib, no numpy/scipy needed for this
+    one -- only Shapiro-Wilk/Mann-Whitney below need an external library."""
+    if not values:
+        return None
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    k = (len(s) - 1) * (pct / 100)
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    if f == c:
+        return s[f]
+    return s[f] + (s[c] - s[f]) * (k - f)
+
+
+def histogram_buckets(values, n_buckets=10):
+    """Equal-width histogram over `values`, `n_buckets` bins spanning
+    [min, max]. Returns a list of {range_low, range_high, count}, always
+    `n_buckets` long (possibly with zero-count bins) so two cells' own
+    histograms stay directly comparable in shape. A single distinct value
+    (max == min) collapses to one bucket holding everything, not a
+    division by zero."""
+    if not values:
+        return None
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return [{"range_low": lo, "range_high": hi, "count": len(values)}]
+    width = (hi - lo) / n_buckets
+    counts = [0] * n_buckets
+    for v in values:
+        idx = min(int((v - lo) / width), n_buckets - 1)
+        counts[idx] += 1
+    return [
+        {"range_low": lo + i * width, "range_high": lo + (i + 1) * width, "count": counts[i]}
+        for i in range(n_buckets)
+    ]
+
+
+def shapiro_wilk(values):
+    """Decision 92 addendum (2026-10-28): registers non-normality, never
+    gates a PASS/FAIL anywhere -- Decision 92's own rule stays that only
+    measured, concrete evidence (phase accounting/position covariate/
+    steal/loss) settles a latency inversion, not a normality test by
+    itself. scipy.stats.shapiro needs n>=3 and is documented accurate up
+    to n=5000; this project's own per-cell N (10-60 real runs) is always
+    comfortably inside that range."""
+    if _scipy_stats is None:
+        return {"status": "scipy not installed -- normality not tested"}
+    if len(values) < 3:
+        return {"status": f"n={len(values)} too small for Shapiro-Wilk (needs >= 3)"}
+    if min(values) == max(values):
+        # Real case hit against pilot 1's own data (term_pki: identical
+        # byte count on every run, zero variance by construction) --
+        # scipy.stats.shapiro degrades to statistic=1.0/p=1.0 here with a
+        # "range zero" warning rather than a meaningful test; reported
+        # honestly instead of silently keeping that trivially-"normal"
+        # result or letting the warning leak to the console.
+        return {"status": "degenerate (zero variance, all values identical) -- normality undefined"}
+    stat, p = _scipy_stats.shapiro(values)
+    return {"status": "computed", "statistic": float(stat), "p_value": float(p),
+            "normal_at_alpha_0.05": bool(p > 0.05)}
+
+
+def mann_whitney_u(values_a, values_b):
+    """Decision 92 addendum (2026-10-28): two-sided Mann-Whitney U
+    (rank-sum) test between two profiles' own raw samples at the same
+    server/scenario cell -- the nonparametric comparison appropriate once
+    Shapiro-Wilk above registers non-normality (expected for latency
+    distributions). Never gates a PASS/FAIL by itself (Decision 92): it
+    only says whether the two samples are statistically distinguishable
+    at all -- a real, measured cause is still required to explain any
+    Classic/PQC/Hybrid ordering, inverted or not."""
+    if _scipy_stats is None:
+        return {"status": "scipy not installed -- test not run"}
+    if len(values_a) < 1 or len(values_b) < 1:
+        return {"status": "insufficient data"}
+    stat, p = _scipy_stats.mannwhitneyu(values_a, values_b, alternative="two-sided")
+    return {"status": "computed", "statistic": float(stat), "p_value": float(p),
+            "significant_at_alpha_0.05": bool(p < 0.05)}
+
+
 def stats_block(values):
     """Same statistics as v7's own Section 1.5: median, min, max, mean,
-    stdev, spread (max-min)/min. Plus v8's new bootstrap CI."""
+    stdev, spread (max-min)/min. Plus v8's own bootstrap CI, and (Decision
+    92 addendum, 2026-10-28) a distribution summary (quartiles/p95/
+    histogram) and a Shapiro-Wilk normality check -- median and bootstrap
+    stay the reported central statistic/uncertainty, unchanged; these are
+    additions, not replacements."""
     if not values:
         return None
     out = {
@@ -149,6 +258,11 @@ def stats_block(values):
     }
     out["spread_pct"] = ((out["max"] - out["min"]) / out["min"] * 100) if out["min"] else 0.0
     out["bootstrap_median_ci95"] = bootstrap_median_ci(values)
+    out["q1"] = percentile(values, 25)
+    out["q3"] = percentile(values, 75)
+    out["p95"] = percentile(values, 95)
+    out["histogram"] = histogram_buckets(values)
+    out["shapiro_wilk"] = shapiro_wilk(values)
     return out
 
 
@@ -337,6 +451,27 @@ def term_handshake(gateway_log_text, profile):
         return None, None
     median_bytes = statistics.median(sizes)
     return len(sizes), len(sizes) * median_bytes
+
+
+def handshake_duration_stats(gateway_log_text, profile):
+    """Decision 94 (2026-10-28, Schardong-coverage check): the TIME-domain
+    counterpart to `term_handshake()`'s own BYTES term -- same source
+    line ("mTLS handshake complete"), same client-facing-channel filter
+    (`client_facing_handshakes()`), field `handshakeDurationMs` instead
+    of `mtlsHandshakeBytes` (`mock_mtls/main.go:675`, confirmed present
+    on the identical JSON line, already collected and already pulled,
+    only unparsed until now -- same pattern as term_handshake's own
+    2026-10-22 fix). Returns this run's own MEDIAN handshake duration
+    (ms) across its client-facing connections, or None if the log is
+    missing/empty -- mirrors term_handshake()'s median-not-mean, one-
+    value-per-run convention so the two terms pair up run-for-run."""
+    if not gateway_log_text:
+        return None
+    handshakes = client_facing_handshakes(gateway_log_text, profile)
+    durations = [h["handshakeDurationMs"] for h in handshakes if "handshakeDurationMs" in h]
+    if not durations:
+        return None
+    return statistics.median(durations)
 
 
 def term_handshake_pcap(client_pcap_path, gateway_log_text, profile):
@@ -602,12 +737,36 @@ def consolidate_profile_scenario(scenario_path, profile):
     handshake_pcap_results = [term_handshake_pcap(r["client_pcap"], r["gateway_log"], profile) for r in clean_rows]
     handshake_pcap_known = [h for h in handshake_pcap_results if h[1] is not None]
 
+    # Decision 94 (Schardong-coverage check): mTLS handshake DURATION
+    # (ms), per run, paired 1:1 with that SAME run's own t_fluxo_seconds
+    # below -- answers "what fraction of the total flow time is spent in
+    # the TLS handshake", per profile/scenario, which term_handshake's
+    # bytes-only figure cannot.
+    handshake_duration_results = [handshake_duration_stats(r["gateway_log"], profile) for r in clean_rows]
+    handshake_fraction_pct = []
+    for r, dur_ms in zip(clean_rows, handshake_duration_results):
+        tf_this_run = r["result"].get("t_fluxo_seconds")
+        if dur_ms is not None and tf_this_run:
+            handshake_fraction_pct.append(100 * (dur_ms / 1000.0) / tf_this_run)
+    handshake_duration_known = [d for d in handshake_duration_results if d is not None]
+
     opin_processing_results = [opin_processing_stats(r["gateway_log"], profile) for r in clean_rows]
     opin_processing_known = [o for o in opin_processing_results if o and o.get("p50_ms") is not None]
 
     ping_samples = [load_ping(scenario_path / "client" / f"{r['run_stem']}_ping.json") for r in clean_rows]
     ping_samples = [p for p in ping_samples if p]
     pcap_loss = pcap_loss_summary([r["client_pcap"] for r in clean_rows])
+    # Decision 94 (Schardong-coverage check): jitter was never actually
+    # computed anywhere in this pipeline before (a real gap, found while
+    # checking, not previously documented as one) -- added here from the
+    # SAME client pcaps already captured for the handshake-bytes/loss
+    # terms (pcap_utils.rtt_jitter_seconds()), no new collection.
+    jitter_samples_ms = []
+    for r in clean_rows:
+        if r["client_pcap"] and Path(r["client_pcap"]).is_file():
+            j = rtt_jitter_seconds(r["client_pcap"])
+            if j is not None:
+                jitter_samples_ms.append(j * 1000)
     cpu_server = [load_cpu_mem(scenario_path / "server" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_server = [c for c in cpu_server if c]
     cpu_client = [load_cpu_mem(scenario_path / "client" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
@@ -676,6 +835,10 @@ def consolidate_profile_scenario(scenario_path, profile):
         "runs_used": len(clean_rows),
         "runs_retried_excluded": len(retried_rows),
         "t_fluxo_seconds": stats_block(t_fluxo),
+        # Decision 94: raw per-run values, not just the stats_block summary
+        # above -- needed by add_cross_profile_t_fluxo_comparisons() below
+        # (Mann-Whitney needs the actual samples, not a pre-aggregated one).
+        "t_fluxo_raw_seconds": t_fluxo,
         "call_count": sorted(call_counts) if len(call_counts) == 1 else {"not_constant": sorted(call_counts)},
         "term_jwt": stats_block(jwt_sums),
         "n_jwt": sorted(jwt_counts) if len(jwt_counts) == 1 else {"not_constant": sorted(jwt_counts)},
@@ -706,6 +869,21 @@ def consolidate_profile_scenario(scenario_path, profile):
             "stats": stats_block([o["p50_ms"] for o in opin_processing_known]) if opin_processing_known else None,
             "requests_logged_per_run": sorted({o["requests_logged"] for o in opin_processing_known}),
         },
+        # Decision 94 (Schardong-coverage check): mTLS handshake duration
+        # and its fraction of T_fluxo, per profile/scenario -- the third
+        # Schardong et al. (CANS 2022) metric this check found unparsed
+        # (handshakeDurationMs was already logged and pulled, same as
+        # term_handshake's own bytes field, just never aggregated).
+        "mtls_handshake_duration_ms": {
+            "status": "covered, new 2026-10-28" if handshake_duration_known else "missing_gateway_log",
+            "stats": stats_block(handshake_duration_known) if handshake_duration_known else None,
+            "source": "server/run{NN}_gateway.log, same 'mTLS handshake complete' line as term_handshake, "
+                      "field handshakeDurationMs instead of mtlsHandshakeBytes",
+        },
+        "mtls_handshake_fraction_of_t_fluxo_pct": {
+            "status": "covered, new 2026-10-28" if handshake_fraction_pct else "missing (needs both gateway log and t_fluxo_seconds on the same run)",
+            "stats": stats_block(handshake_fraction_pct) if handshake_fraction_pct else None,
+        },
         "opinsize": None,
         "bytes_by_participant": bytes_by_participant([c for calls in agg_calls_per_run for c in calls]) if agg_calls_per_run else None,
         "latency_per_endpoint_ms": latency_per_endpoint([c for calls in agg_calls_per_run for c in calls]) if agg_calls_per_run else None,
@@ -714,7 +892,13 @@ def consolidate_profile_scenario(scenario_path, profile):
             "rtt_avg_ms": stats_block([p["rtt_avg_ms"] for p in ping_samples if "rtt_avg_ms" in p]) if ping_samples else None,
             "loss_pct_upper_bound_max_from_ping": max((p["loss_pct_upper_bound"] for p in ping_samples if "loss_pct_upper_bound" in p), default=None) if ping_samples else None,
             "pcap_loss_signals": pcap_loss,
-        } if (ping_samples or pcap_loss) else None,
+            # Decision 94: new -- jitter (RTT variability) was never
+            # actually computed anywhere in this pipeline before (a real
+            # gap found while checking Schardong coverage, not previously
+            # documented as one). Derived from the SAME client pcaps
+            # already captured for the handshake-bytes/loss terms above.
+            "rtt_jitter_ms": stats_block(jitter_samples_ms) if jitter_samples_ms else None,
+        } if (ping_samples or pcap_loss or jitter_samples_ms) else None,
         "cpu_server": cpu_server or None,
         "cpu_client": cpu_client or None,
         "verification_timings_ms": {
@@ -824,7 +1008,43 @@ def build_consolidated(v8_latency_root):
                 result = consolidate_profile_scenario(exp_dir / server / scenario, profile)
                 if result is not None:
                     out["profiles"][profile][server][scenario] = result
+    out["cross_profile_t_fluxo_comparisons"] = add_cross_profile_t_fluxo_comparisons(out)
     return out
+
+
+def add_cross_profile_t_fluxo_comparisons(data):
+    """Decision 92/94 (2026-10-28): pairwise Mann-Whitney U between
+    profiles' own T_fluxo raw samples, at every (server, scenario) cell
+    present for at least 2 profiles -- the nonparametric comparison
+    Decision 92 calls for when judging whether an observed Classic/PQC/
+    Hybrid latency ordering (inverted or not) is even statistically
+    distinguishable. Never settles an inversion by itself (Decision 92's
+    own rule stands): only measured, concrete evidence -- phase
+    accounting, the position-in-window covariate, steal, pcap loss --
+    explains one; this test only says whether there is a detectable
+    difference worth explaining in the first place."""
+    cells = {}
+    for profile, servers in data["profiles"].items():
+        for server, scenarios in servers.items():
+            for scenario, m in scenarios.items():
+                raw = m.get("t_fluxo_raw_seconds")
+                if raw:
+                    cells.setdefault((server, scenario), {})[profile] = raw
+    comparisons = {}
+    for (server, scenario), by_profile in cells.items():
+        profiles_present = sorted(by_profile)
+        if len(profiles_present) < 2:
+            continue
+        pair_results = {}
+        for i in range(len(profiles_present)):
+            for j in range(i + 1, len(profiles_present)):
+                a, b = profiles_present[i], profiles_present[j]
+                pair_results[f"{a}_vs_{b}"] = mann_whitney_u(by_profile[a], by_profile[b])
+        comparisons.setdefault(server, {})[scenario] = {
+            "profiles_compared": profiles_present,
+            "t_fluxo_mann_whitney": pair_results,
+        }
+    return comparisons
 
 
 def render_report(data):
