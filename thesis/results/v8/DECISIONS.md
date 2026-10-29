@@ -8807,3 +8807,40 @@ nenhuma regressão -- nenhum teste dependia da string exata do comando
 remoto antigo). Entregue a 3 servidores + 8 clientes
 (`deliver_source.sh`, RC=0) antes de qualquer nova execução.
 
+**Addendum (2026-10-29T01:05Z, commit `07ab033`): a primeira correção
+acima estava ela mesma errada -- achado real, não hipotético, no
+primeiro settling run da nova tentativa.** `PQC_SIGNER_SERVICE_URL` era
+uma variável global do MÓDULO Python, setada pelo processo que chama
+`start_pqc_signer_service()` -- mas esse processo (o comando SSH curto
+do orquestrador) e o processo que realmente assina/verifica
+(`campaign_client_runner.py`, outro processo SSH inteiramente separado)
+NUNCA são o mesmo processo no caminho real do `SSHExecutor` -- uma
+variável setada num processo não existe no outro, cada `python3` novo
+reimporta `opin_flow.py` do zero. `LocalExecutor` nunca expôs isso
+porque roda start+execução no MESMO processo. Erro reportado alto e
+claro (`PqcSignerServiceNotStarted` na primeira settling run), exatamente
+como desenhado -- a falha rápida e visível funcionou; a correção em si
+não.
+
+**Redesenhado** para seguir o MESMO padrão que `_USE_TLS_KEM_PROXY` já
+usa (nunca atingido por este problema): `PQC_SIGNER_SERVICE_URL` agora é
+uma CONSTANTE fixa (porta sempre a mesma), sem flag de processo nenhuma
+-- `_run_pqc_signer_service()` checa alcançabilidade a cada chamada,
+tentando a conexão de verdade; um `ConnectionError` real vira
+`PqcSignerServiceNotStarted` (mesmo contrato de erro de antes), uma
+resposta HTTP de erro ou timeout continuam um `RuntimeError` comum.
+`start_pqc_signer_service()`/`stop_pqc_signer_service()` só gerenciam o
+ciclo de vida do container Docker agora.
+
+**Verificado de verdade, localmente, antes de reentregar:**
+`start_pqc_signer_service('pqc')` subiu o container real e confirmou
+saudável; uma chamada real de assinatura+verificação alcançou o serviço
+com sucesso (o erro da verificação em si foi um engano de formato de
+chave no MEU script de teste ad hoc, não um problema de conectividade
+-- o serviço respondeu com um erro real e específico do
+`signer_core.mjs`, provando que o caminho HTTP funciona ponta a ponta);
+chamar `_run_pqc_signer()`/`_run_verifier()` sem serviço nenhum de pé
+continua levantando `PqcSignerServiceNotStarted` corretamente. Suíte
+completa re-executada de novo (50/50). Reentregue a 3 servidores + 8
+clientes antes de qualquer nova execução.
+
