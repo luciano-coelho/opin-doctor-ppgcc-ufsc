@@ -1484,14 +1484,32 @@ class SSHExecutor:
         # container's own, independent of this SSH session, torn down
         # explicitly by stop_block_proxies() below via `docker stop`,
         # not by this process exiting.
+        #
+        # Decision 98 (real incident): this loop used to start ONLY the
+        # TLS KEM proxy -- never opin_flow.start_pqc_signer_service(),
+        # unlike LocalExecutor's own start_block_proxies() (which always
+        # has). Every real AWS execution (all 3 profiles: verify_jwt()/
+        # decrypt_and_verify_jwt() route through the signer dispatcher
+        # for EVERY profile, not just pqc/hybrid) therefore ran with
+        # _PQC_SIGNER_SERVICE_URL=None the whole time, paying a fresh
+        # `docker run --rm -i` per sign/verify call (~450-550ms,
+        # Decision 97) instead of the persistent service's intended sub-
+        # 10ms HTTP round trip. start_pqc_signer_service() now starts
+        # here too, same lifecycle as the proxy, and blocks until
+        # /healthz answers (its own _wait_for_pqc_signer_service_ready())
+        # -- a dead/slow-to-start service now aborts THIS call loudly,
+        # before any flow runs, rather than opin_flow.py silently falling
+        # back later (that silent fallback no longer exists at all,
+        # Decision 98's PqcSignerServiceNotStarted).
         for scenario in scenarios:
             client_ip = self._client_ip(f"{scenario}@{installation}")
             gateway_ip = self._server_gateway_ip(installation, f"{scenario}@{installation}")
-            py_code = "import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True)" % json.dumps(profile)
+            py_code = ("import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True); "
+                       "of.start_pqc_signer_service(%s)") % (json.dumps(profile), json.dumps(profile))
             remote_argv = ["python3", "-c", py_code]
             remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
             self._run_or_print(
-                f"[{installation}/{scenario}/w{window}] start client proxy (detached)",
+                f"[{installation}/{scenario}/w{window}] start client proxy + pqc-signer service (detached)",
                 self._ssh_cmd(client_ip, remote_cmd),
                 timeout_seconds=PROXY_START_TIMEOUT_SECONDS,
             )
@@ -1553,9 +1571,12 @@ class SSHExecutor:
         # re-importing opin_flow just to read one constant.
         for scenario in scenarios:
             client_ip = self._client_ip(f"{scenario}@{installation}")
-            remote_cmd = "docker stop tls_kem_proxy_run 2>/dev/null; docker rm -f tls_kem_proxy_run 2>/dev/null; true"
+            # Decision 98: stops pqc_signer_service_run alongside
+            # tls_kem_proxy_run -- same lifecycle, started together above.
+            remote_cmd = ("docker stop tls_kem_proxy_run pqc_signer_service_run 2>/dev/null; "
+                          "docker rm -f tls_kem_proxy_run pqc_signer_service_run 2>/dev/null; true")
             self._run_or_print(
-                f"[{installation}/{scenario}/w{window}] stop client proxy (docker stop)",
+                f"[{installation}/{scenario}/w{window}] stop client proxy + pqc-signer service (docker stop)",
                 self._ssh_cmd(client_ip, remote_cmd),
             )
 

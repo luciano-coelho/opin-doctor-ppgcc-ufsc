@@ -542,22 +542,39 @@ def load_client_signing_key(crypto_profile: str):
         )
 
 
+class PqcSignerServiceNotStarted(RuntimeError):
+    """Decision 98 (thesis/results/v8/DECISIONS.md, real incident): raised
+    by _run_pqc_signer()/_run_verifier() when start_pqc_signer_service()
+    was never called in this process. Replaces the old SILENT fallback to
+    _run_pqc_signer_oneshot() those two functions used to take -- that
+    fallback is exactly how the real AWS campaign (SSHExecutor's own
+    start_block_proxies(), which never called start_pqc_signer_service())
+    spent ~450-550ms/call on a `docker run --rm -i` per signature/
+    verification, in ALL 3 profiles, for months without anyone noticing:
+    the call always "worked", just ~600-700x slower than the real
+    ML-DSA-65/RSA-4096 operation (native benchmark: 0.713ms/6.624ms). A
+    caller that genuinely wants the one-shot, no-service path (true
+    standalone use, not the campaign) calls _run_pqc_signer_oneshot()/
+    _run_verifier_oneshot() directly -- that path still exists, unchanged,
+    just no longer reachable by accident."""
+
+
 def _run_pqc_signer(payload: str) -> str:
-    """
-    If start_pqc_signer_service() is up for this process, every call goes
-    through the persistent HTTP service instead of spawning a container --
-    see that function's docstring for why (measured ~0.79s/call spawn cost,
-    ~94% of the PQC/Híbrido latency delta over Clássico). Falls
-    back to the original one-shot `docker run --rm -i` path, unchanged,
-    when no service was started in this process (hybrid_verify.py, the
-    artifacts/ capture scripts run standalone, or anyone invoking this
-    module without going through the hot statistical loop) -- same
-    algorithm, same container image, either way; only the invocation
-    mechanism differs.
-    """
-    if _PQC_SIGNER_SERVICE_URL is not None:
-        return _run_pqc_signer_service(payload)
-    return _run_pqc_signer_oneshot(payload)
+    """Dispatches to the persistent HTTP service started by
+    start_pqc_signer_service() -- see that function's docstring for why
+    (measured ~450-790ms/call one-shot-docker spawn cost, the dominant
+    term in every PQC/Hybrid T_fluxo delta measured so far, Decision 97).
+    No more silent fallback (Decision 98): a process that never started
+    the service gets a clear, immediate error instead of a working-but-
+    600x-slower call that looks like a real algorithm cost."""
+    if _PQC_SIGNER_SERVICE_URL is None:
+        raise PqcSignerServiceNotStarted(
+            "_run_pqc_signer() called with no persistent pqc-signer service running in this "
+            "process -- call start_pqc_signer_service(profile) first (the orchestrator must do "
+            "this before any sign/verify call, including warmup/settling), or call "
+            "_run_pqc_signer_oneshot() directly if a one-shot call is genuinely intended."
+        )
+    return _run_pqc_signer_service(payload)
 
 
 def _run_pqc_signer_service(payload: str) -> str:
@@ -619,14 +636,11 @@ class SignatureVerificationError(RuntimeError):
     data (thesis/results/v8/DECISIONS.md, "fluxo completo" turn)."""
 
 
-def _run_verifier(payload: str) -> str:
-    """Same persistent-service-or-one-shot-docker dispatch as
-    _run_pqc_signer() above, reused unchanged for verification requests --
-    one dispatcher, one service, for both directions. See
-    start_pqc_signer_service()'s own docstring for why this is now started
-    for every profile, not just pqc/hybrid."""
-    if _PQC_SIGNER_SERVICE_URL is not None:
-        return _run_pqc_signer_service(payload)
+def _run_verifier_oneshot(payload: str) -> str:
+    """The verification-side equivalent of _run_pqc_signer_oneshot() --
+    spawns a fresh `docker run --rm -i` per call. Kept for genuine
+    standalone use; no longer reachable from _run_verifier() by accident
+    (Decision 98)."""
     result = subprocess.run(
         ["docker", "run", "--rm", "-i", PQC_SIGNER_IMAGE],
         input=payload, capture_output=True, text=True, timeout=30,
@@ -634,6 +648,24 @@ def _run_verifier(payload: str) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"pqc-signer verify call failed: {result.stderr}")
     return result.stdout.strip()
+
+
+def _run_verifier(payload: str) -> str:
+    """Dispatches to the persistent HTTP service for verification requests
+    -- one dispatcher, one service, for both directions (see
+    start_pqc_signer_service()'s own docstring for why this is started
+    for every profile, not just pqc/hybrid). No more silent fallback to a
+    one-shot `docker run` (Decision 98, PqcSignerServiceNotStarted's own
+    docstring) -- a process that never started the service gets a clear,
+    immediate error."""
+    if _PQC_SIGNER_SERVICE_URL is None:
+        raise PqcSignerServiceNotStarted(
+            "_run_verifier() called with no persistent pqc-signer service running in this "
+            "process -- call start_pqc_signer_service(profile) first (the orchestrator must do "
+            "this before any sign/verify call, including warmup/settling), or call "
+            "_run_verifier_oneshot() directly if a one-shot call is genuinely intended."
+        )
+    return _run_pqc_signer_service(payload)
 
 
 #  Per-artifact verification wall-clock time (thesis/results/v8/
@@ -695,7 +727,12 @@ def verify_jwt(token: str, *, classic_jwk: dict | None = None, pqc_jwk: dict | N
     try:
         result = json.loads(_run_verifier(payload))
     finally:
-        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
+        # "dispatch" (Decision 98): always "persistent_service" now that
+        # _run_verifier() no longer falls back silently -- recorded per
+        # call, not assumed, so a future regression is visible in the
+        # data itself, not just in whether the call happened to succeed.
+        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3),
+                                       "dispatch": "persistent_service"})
     if not result.get("valid"):
         raise SignatureVerificationError(result.get("reason", "signature verification failed"))
     return result.get("claims")
@@ -723,7 +760,8 @@ def decrypt_and_verify_jwt(token: str, enc_jwk: dict, *, classic_jwk: dict | Non
     try:
         result = json.loads(_run_verifier(payload))
     finally:
-        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
+        _VERIFICATION_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3),
+                                       "dispatch": "persistent_service"})
     if not result.get("valid"):
         raise SignatureVerificationError(result.get("reason", "id_token verification failed"))
     return result.get("claims")
@@ -1249,6 +1287,12 @@ def sign_jwt(claims: dict, headers: dict, signing_key, alg: str, *, artifact: st
     convention as verify_jwt()'s own `artifact` parameter, never read by
     the signing logic itself."""
     t0 = time.monotonic()
+    # "dispatch" (Decision 98): PS256 never leaves this process (pyjwt,
+    # in-process); ML-DSA-65/hybrid always go through the persistent
+    # service now (no more silent one-shot-docker fallback) -- recorded
+    # per call so the real dispatch path is visible in the data itself.
+    dispatch = {"PS256": "in_process_pyjwt", "ML-DSA-65": "persistent_service",
+                "hybrid": "persistent_service+in_process_pyjwt"}.get(alg, "unknown")
     try:
         if alg == "PS256":
             return pyjwt.encode(claims, signing_key, algorithm="PS256", headers=headers)
@@ -1260,7 +1304,8 @@ def sign_jwt(claims: dict, headers: dict, signing_key, alg: str, *, artifact: st
             return _sign_jwt_hybrid(claims, headers, signing_key)
         raise ValueError(f"unsupported signing alg: {alg}")
     finally:
-        _SIGNING_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3)})
+        _SIGNING_TIMINGS.append({"artifact": artifact, "duration_ms": round((time.monotonic() - t0) * 1000, 3),
+                                  "dispatch": dispatch})
 
 
 def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
