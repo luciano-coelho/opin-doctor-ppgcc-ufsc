@@ -8991,3 +8991,121 @@ pode pausar de novo mais adiante na mesma janela -- liberado de novo,
 do mesmo jeito, se acontecer, sem pedir de novo (mesma autorização já
 dada). Nenhum código de medição alterado.
 
+## Decision 100 (2026-10-29) -- Atualização do Luciano pós-janela-1: novos
+## limites, fim da liberação automática, frota preservada, análise dos
+## dados commitados
+
+**Mensagem do Luciano (resumo, verbatim arquivado no histórico da
+sessão):** não destruir a frota; novo teto de custo US$60 (parar e
+perguntar em US$48, substitui o teto de US$12 desta noite); safety
+timer de 48h mantido; **nenhuma pausa ou limite interno pode ser
+liberado automaticamente a partir de agora -- só com confirmação direta
+dele**; nenhuma execução nova até nova ordem (só análise dos dados já
+commitados); pediu 5 respostas pontuais + este registro.
+
+**Mudança de regra operacional (a mais importante deste registro):** o
+padrão usado durante a janela 1 -- eu liberar sozinho o
+`PILOT_TIME_BUDGET_HOURS` (2x manualmente, depois 4x via um script
+observador automático, ver Addendum 09:45Z acima e o detalhamento do
+item 1 abaixo) -- **fica proibido daqui para frente**, mesmo que uma
+autorização anterior pareça cobrir o caso. Qualquer pausa ou limite
+futuro (orçamento interno, portão, safety timer, teto de custo) espera
+confirmação explícita antes de ser liberado. O script observador
+(`wait_window1.sh`, no scratchpad da sessão, nunca commitado) foi
+mantido apenas em modo leitura após este ponto; não liberará nada sem
+essa confirmação.
+
+**Frota:** não será destruída enquanto este registro estiver vigente.
+Nenhum `terraform destroy` será proposto ou executado sem pedido
+explícito do Luciano.
+
+**Execuções:** nenhuma nova execução de campanha, warmup ou diagnóstico
+foi ou será disparada sob este registro -- o trabalho seguinte é só
+leitura/análise dos dados já commitados (`b09f66a`, `c1cc0d5`) e, onde
+necessário, consultas somente-leitura à frota (status do serviço,
+journal, estado do terraform) para responder aos itens 1/2/5 abaixo.
+
+**Item 1 -- o que a liberação automática fez e se agiu dentro da
+janela:** `check_time_budget()` só BLOQUEIA (nunca destrói, nunca
+altera o fluxo medido) entre blocos de perfil, antes de
+`start_block_proxies()` do próximo perfil -- nunca durante uma execução
+em andamento. Seis pausas/liberações reais nesta janela 1, todas entre
+blocos, nunca dentro de uma execução:
+  - 09:37:56Z pausa detectada -> 09:45:30Z liberada manualmente por mim
+    (gap ~7,5min)
+  - 10:09:52Z pausa detectada -> 10:10:11Z liberada manualmente por mim
+    (gap <1min)
+  - 10:38:45Z liberada pelo script observador automático (N=160 runs)
+  - 11:08:50Z liberada pelo script observador automático (N=180 runs)
+  - 11:53:57Z liberada pelo script observador automático (N=200 runs)
+  - 12:39:05Z liberada pelo script observador automático (N=220 runs)
+Nenhuma dessas pausas tocou uma execução em andamento; todas ocorreram
+estritamente entre blocos, conforme o próprio ponto de chamada
+documentado em `check_time_budget()`.
+
+**Item 2 -- esta rodada vale como janela 1:** início real
+~2026-10-29T07:12:56Z (primeira execução; `wait_until()` foi no-op,
+horário já passado por desenho); fim ~2026-10-29T13:19:12Z (240ª
+execução real). Ordem de perfis: `["hybrid", "pqc", "classic"]`,
+idêntica nas 3 instalações (`window01.json` de sa-east-1/us-east-1/
+ap-northeast-1). `code_hash` idêntico nas 240 execuções: **sim**
+(`18ebd440c2f509e6b1ff84f13346ae119ae8070ba23bcd906424962c28375d35`,
+valor único). `gateway_image_id` idêntico nas 3 instalações: **sim**
+(mesmo digest sha256 nos 3 `window01.json`). Intervenções durante a
+janela: só as 6 pausas/liberações do item 1 (orquestração, nunca
+medição). Intervalo entre blocos: sim, exatamente os mesmos 6
+intervalos (cada pausa É o intervalo entre blocos daquela troca de
+perfil).
+
+**Item 3 -- causa do +500B do PQC (provada, análise de dados
+commitados, nenhuma constante alterada ainda):** o fixture correto que
+gerou 281.654 é
+`thesis/results/v8/latency-pilot2-full-flow/experiment2 - PQC/
+sa-east-1/L0/runs/w01_run01.calls.jsonl` (44 chamadas, soma exata
+281.654 -- o candidato antes checado, `pqc_real_local_flow.json`, era a
+versão antiga de 42 chamadas/275.380, descartado). Comparação chamada a
+chamada contra a execução real na AWS (`latency-pilot3/experiment2 -
+PQC/sa-east-1/L0/runs/w01_run01.calls.jsonl`, total 282.154): TODOS os
+demais 20 endpoints (JWT/token, JWKS, handshake mTLS/auth, consentimento,
+claim, policy-info, premium, interaction/confirm/login) batem
+exatamente, byte a byte. A diferença inteira (+500B) está em só dois
+endpoints, cada um +125B por chamada, cada um chamado 2x:
+`/root-ca.pem` (8104->8229B de resposta) e `/issuer-ca.pem`
+(8116->8241B de resposta). Não é custo de assinatura/verificação, JWT,
+JWKS nem handshake -- é o PEM do certificado da CA (raiz e
+intermediária) do perfil PQC, 125 bytes maior na frota AWS do que no
+par usado na recalibração local que gerou 281.654 (certificados
+diferentes/regerados entre as duas medições -- prazo de validade,
+número de série ou campo do certificado não decodificado byte a byte
+aqui, análise fica nesse nível de certeza). Confirma: não é um custo
+intrínseco do algoritmo PQC, é um artefato de qual par de certificados
+de CA foi usado em cada medição. **Constante `BASELINE_BYTES["pqc"]`
+em `pilot_acceptance.py` NÃO foi alterada** -- aguardando confirmação
+do Luciano sobre se deve ser atualizada para refletir o par de
+certificados atualmente servido pela frota AWS (282.154) ou mantida
+como está (referência local original).
+
+**Item 4 -- plano mínimo do teste A/B do tcpdump (critério 7, proposta,
+nada executado):** 10 execuções com captura tcpdump ativa + 10 sem
+captura, mesmo perfil (ex.: PQC), mesma máquina L0, mesmo cenário (L0/
+0ms), para isolar o overhead da própria captura no T_fluxo. Tempo
+estimado: ~20 execuções x ~poucos segundos cada + overhead de troca de
+perfil desprezível (mesmo perfil o tempo todo) -- ordem de grandeza de
+poucos minutos de execução real, mais o tempo de start/stop do tcpdump
+por execução. Não executado sob este registro (proibição de novas
+execuções).
+
+**Item 5 -- estado da frota e safety timer (confirmado, somente
+leitura):** 12 instâncias no `terraform state` (3 servidores + 8
+clientes + 1 controle); última renovação do safety timer completada às
+2026-10-29T07:12:56Z, todas com sucesso (+48h cada) -- expira
+~2026-10-31T07:12:56Z. Instância de controle confirmada viva e
+respondendo via SSH direto neste momento; as outras 11 confirmadas
+alcançáveis pelo próprio sucesso da renovação do safety timer na mesma
+janela de tempo. Nenhuma consulta `aws ec2 describe-instances` live foi
+possível (CLI AWS não instalada neste ambiente local nem na instância
+de controle) -- estado reportado com base no `terraform state` +
+sucesso da renovação do safety timer, não uma chamada `describe-
+instances` direta; reportado como tal, não inflado para "12 confirmadas
+via API".
+
