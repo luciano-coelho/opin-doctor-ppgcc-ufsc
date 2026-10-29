@@ -8977,3 +8977,17 @@ marcador de aprovação já existente é reconhecido de novo, sem nova
 pausa manual, conforme autorizado). Nenhum código de medição alterado;
 nenhuma janela real chegou a rodar antes desta correção.
 
+**Addendum (2026-10-29T09:45Z) -- orçamento interno do orquestrador
+(`PILOT_TIME_BUDGET_HOURS`, padrão 3h, resquício de piloto anterior,
+nunca setado no `campaign_run.service`) pausou a janela 1 sozinha em
+3,55h reais -- `check_time_budget()`'s próprio design (bloqueia,
+nunca destrói nada, espera um marcador do operador em
+`/home/ec2-user/campaign_time_budget_override`). Liberado por mim,
+dentro da autorização já dada por Luciano nesta mesma sessão (relógio
+de 12h/teto de US$12, "pode deixar terminar" a janela) -- marcador
+criado em 2026-10-29T09:45:30Z. Esse orçamento interno é por BLOCO
+(chamado antes de cada troca de perfil dentro de `run_window()`), então
+pode pausar de novo mais adiante na mesma janela -- liberado de novo,
+do mesmo jeito, se acontecer, sem pedir de novo (mesma autorização já
+dada). Nenhum código de medição alterado.
+
