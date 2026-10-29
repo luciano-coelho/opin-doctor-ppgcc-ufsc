@@ -8844,3 +8844,25 @@ continua levantando `PqcSignerServiceNotStarted` corretamente. Suíte
 completa re-executada de novo (50/50). Reentregue a 3 servidores + 8
 clientes antes de qualquer nova execução.
 
+**Addendum (2026-10-29T02:18:08Z) -- mudança de limites e causa real do
+"reset de SSH" relatado antes.** Luciano autorizou seguir a noite:
+**novo relógio de 12h (parar/perguntar aos 80% = 9h36min, ou seja em
+2026-10-29T11:54:08Z) e novo teto de custo de US$12 (parar/perguntar aos
+80% = US$9,60)**, substituindo o relógio/teto de 6h/US$8 do apply
+original -- frota permanece ligada só enquanto necessário, destroy
+previsto logo após a coleta e o commit da janela.
+
+**Causa real do evento anterior, encontrada em `campaign-status.json`
+no control (não mais "reset de SSH" sem explicação):**
+`BrokenPipeError: [Errno 32] Broken pipe`, dentro do próprio
+`_run_tolerant()`, tentando imprimir um aviso em `stderr` depois que a
+conexão SSH que eu mesmo usei para lançar `campaign_run.py` em primeiro
+plano (sem systemd, sem `nohup`) caiu -- o processo real não travou nem
+o control reiniciou (confirmado: `uptime` contínuo); o pipe que o
+`print()` de aviso tentou escrever é que já não existia mais. **Decisão:
+rodar `campaign_run.py` como o serviço systemd já existente
+(`campaign_run.service`, entregue por `deliver_source.sh`,
+`Restart=on-failure`, independente de qualquer sessão SSH minha) a
+partir de agora** -- resolve a causa raiz (nenhum processo real volta a
+depender de uma sessão SSH meramente usada para acompanhar o progresso).
+
