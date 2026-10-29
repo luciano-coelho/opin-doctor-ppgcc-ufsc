@@ -8958,3 +8958,22 @@ silenciosamente, nos números brutos de Classic/Hybrid da v7 também,
 mas isto é inferência do código, não medição direta; reportado como tal,
 v7 não foi tocada.
 
+**Addendum (2026-10-29T06:05Z) -- correção de agendamento (intervenção,
+não muda o que é medido):** ao criar o marcador do portão de validação
+e liberar a janela, o processo real entrou em `wait_until("2026-10-29T
+19:00:00Z")` -- **13h de espera**, porque `campaign_schedule.json` ainda
+tinha o horário padrão gerado antes desta sessão noturna ter sido
+autorizada (madrugada de 28/10). Achado ao ler `journalctl`/`campaign-
+status.json` diretamente (`"Waiting for window start... 46614s
+remaining"`), não assumido. Corrigido: `campaign_schedule.json`
+reescrito com a janela 1 em `2026-10-29T06:02:34Z` (já passada no
+momento da escrita -- `wait_until()` retorna imediatamente para um
+horário já passado, comportamento pré-existente, não alterado); janelas
+2/3 mantidas nos horários antigos (irrelevantes esta noite -- o portão
+`window1_acceptance`, já existente, bloqueia antes de qualquer
+`wait_until` da janela 2). Serviço reiniciado (novo PID) -- refaz
+ready-check/conectividade/aquecimento/portão de validação do zero (o
+marcador de aprovação já existente é reconhecido de novo, sem nova
+pausa manual, conforme autorizado). Nenhum código de medição alterado;
+nenhuma janela real chegou a rodar antes desta correção.
+
