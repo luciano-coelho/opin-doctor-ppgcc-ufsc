@@ -119,47 +119,47 @@ insuficiente, por construção, para separar um efeito de ordem de um
 efeito real de algoritmo nessa amostra isolada (ver investigação
 local).
 
-## Status: piloto 3 (topologia completa, ensaio geral) -- PAUSADO por Luciano em 2026-10-28, infraestrutura derrubada, ponto de retomada abaixo
+## Status: piloto 3 (topologia completa, ensaio geral) -- PARADO no portão de validação em 2026-10-29, aguardando autorização de Luciano para a janela de medição
 
-**Pausa deliberada, não um bloqueio técnico.** Luciano interrompeu o
-ensaio geral antes da janela de medição e pediu teardown completo com
-ele presente (ver Decision 93, addendum final). Nenhum dado de execução
-foi perdido porque nenhuma execução de medição chegou a começar.
+**Retomado em 2026-10-28 (ver Decision 96) depois da pausa/teardown de
+2026-10-28 (Decision 93, addendum final) -- segundo apply completo desta
+mesma rodada, 65/0/0, com Luciano presente.**
 
 **O que já foi feito e validado, de verdade, nesta rodada:**
-- Apply da topologia completa (65 recursos, 12 instâncias, 7 regiões) e,
-  depois do incidente real registrado na Decision 93, restauração via
-  plano salvo (38 recursos) -- ambos confirmados por leitura direta na
-  AWS, não só pelo estado local do Terraform.
-- Etapa 4 (pré-flight por SSH/alcance): 11/11 hosts alcançáveis a partir
-  do controle; os 3 servidores responderam nos 3 perfis via
-  `switch_crypto_profile.py` reusado remotamente (9/9 trocas, rc=0).
-- Etapa 5 (entrega): `deliver_images.sh` e `deliver_source.sh` completos
-  nos 3 servidores + 8 clientes, 0 erros, conferência de sha256 100% OK
-  (incluindo as partes do tarball dividido).
-- Pré-flight por TCP/443 (sem ICMP, por decisão de Luciano): 8/8
-  clientes, 20/20 amostras cada, 0 falhas -- medianas batendo com o
-  esperado (L0 ~0,14-0,32ms, L325 330,49ms, demais entre 15-220ms).
+- Apply completo (65 recursos, 12 instâncias, 7 regiões) via plano
+  salvo, confirmado por leitura direta na AWS (12/12).
+- Entrega de imagens e código-fonte: 0 erros, sha256 100% conferido.
+- Pré-flight TCP/443: 8/8 clientes, 20/20 amostras, 0 falhas.
+- **Handshake TLS do ponto de vista do cliente remoto real, nos 3
+  perfis: CONFIRMADO.** O 404 anterior era falta do header `Host:
+  auth.local` no script de teste, não falta de certificado (certificado
+  nunca é necessário nessa perna quando se usa o proxy, confirmado
+  lendo `opin_flow.py`) -- corrigido, 24/24 verificações reais (8
+  clientes x 3 perfis) com `status: 200` e corpo JWKS correto por
+  perfil.
+- **Portão de validação (24 execuções): CONCLUÍDO.** 24/24 execuções
+  reais, `call_count=44` em todas, nenhuma com retry, ordem Classic <
+  Hybrid < PQC em T_fluxo confirmada em 8/8 cenários (ver tabela na
+  Decision 96) -- ao contrário da inversão do piloto 2. Dois bugs reais
+  de orquestração encontrados e corrigidos no caminho (cópia de
+  chave/inventário/schedule que `campaign_up.sh` faria e o
+  `terraform apply` direto pulou; `run_validation_stage()` nunca criava
+  as subpastas `runs/`/`server`/`client`, nunca tinha rodado contra AWS
+  real antes) -- ver Decision 96 para os dois, nenhum muda o que é
+  medido.
 
-**O que NÃO foi concluído -- início real da retomada:**
-1. **Handshake TLS do ponto de vista do cliente remoto real, nos 3
-   perfis: NÃO confirmado.** O único teste tentado (perfil hybrid) deu
-   404 em 8/8 clientes -- diagnosticado como limitação do script de
-   teste ad hoc (não define `Host: auth.local` nem apresenta certificado
-   de cliente, ao contrário do `do_call()` real), não um defeito da
-   pilha. Precisa de uma v3 do script de diagnóstico antes de declarar
-   PASS/FAIL neste item.
-2. Portão de validação (24 execuções) -- não iniciado.
-3. Janela de medição 1 -- não iniciada.
-4. Consolidação/critérios de aceitação do piloto 3 -- não aplicável
-   ainda (sem dados).
+**Parado aqui, como instruído -- processo real (`campaign_run.py`)
+sentado em `wait_for_operator_gate("validation_stage")` no control,
+aguardando o marcador do operador. Nenhum marcador foi criado; a janela
+de medição 1 NÃO foi iniciada.**
 
-**Infraestrutura ao final desta rodada:** totalmente derrubada (65
-recursos destruídos, 7 regiões confirmadas limpas via AWS API direta --
-instâncias/EIPs/SGs/key pairs/volumes = 0 em todas). Para retomar, o
-próximo passo real é um novo `terraform plan -out=tfplan` +
-`terraform apply tfplan` (topologia completa), com Luciano presente,
-repetindo o procedimento desta mesma rodada.
+**O que falta:** liberar o portão de validação (quando Luciano
+autorizar), janela de medição 1, consolidação/critérios de aceitação do
+piloto 3.
+
+**Infraestrutura:** de pé (12 instâncias reais, 7 regiões), relógio de
+6h e teto de US$8 do piloto em andamento -- ver Decision 96 para o
+relógio/custo exatos desta retomada.
 
 ## Passo a passo
 

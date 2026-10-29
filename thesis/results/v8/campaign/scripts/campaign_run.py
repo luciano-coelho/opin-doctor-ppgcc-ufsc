@@ -2347,6 +2347,18 @@ def run_validation_stage(executor, installations):
                     out_dir = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
                                / installation / profile / scenario)
                     out_dir.mkdir(parents=True, exist_ok=True)
+                    # Decision 96 (real incident, first actual execution of
+                    # this function): run_one_execution() writes
+                    # {label}.calls.jsonl under out_dir/"runs"/ (same
+                    # convention as run_window(), line ~2468) -- this
+                    # function created only out_dir itself, never its
+                    # "runs"/"server"/"client" subdirectories, so every
+                    # real execution failed with FileNotFoundError on the
+                    # very first write. Mirrors run_window()'s own mkdir
+                    # block exactly, not a new convention.
+                    (out_dir / "runs").mkdir(parents=True, exist_ok=True)
+                    (out_dir / "server").mkdir(parents=True, exist_ok=True)
+                    (out_dir / "client").mkdir(parents=True, exist_ok=True)
                     result = run_one_execution(executor, installation, scenario, profile, 0, 1, out_dir)
                     (out_dir / "run01.json").write_text(json.dumps({
                         "started_at_utc": datetime.now(timezone.utc).isoformat(),

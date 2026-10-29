@@ -8516,3 +8516,100 @@ reprocessa dados já coletados), `METRICS_COVERAGE.md`,
 etapa -- a retomada do piloto 3 (parte 2 do pedido) segue em paradas
 separadas, abaixo.
 
+## 96. Retomada do piloto 3: apply de plano salvo (65/0/0, início 2026-10-28T21:30:57Z), entrega de imagens/código, pré-flight TCP/handshake nos 3 perfis corrigido (achava 404 por falta de Host header, não por certificado), estágio de validação (24/24 execuções reais, ordem Classic<Hybrid<PQC em T_fluxo em todos os 8 cenários) -- dois bugs reais de orquestração encontrados e corrigidos, registrados aqui, não escondidos
+
+**Apply:** `terraform apply tfplan` (plano salvo, sem recalcular) -- **65
+added, 0 changed, 0 destroyed**, início 2026-10-28T21:30:57Z, fim
+21:31:39Z. `tfplan` apagado, scanner confirmou nunca commitado. 12/12
+instâncias confirmadas nas 7 regiões via `aws ec2 describe-instances`
+(minha primeira tentativa usou a tag `Project=mockopin-pqc`, errada --
+a real é `mockopin-pqc-aws` -- corrigida antes de reportar, não depois).
+
+**Bug real #1 (achado, não assumido): `terraform apply` direto pula o
+que `campaign_up.sh` faria depois do seu próprio apply.** `deliver_
+images.sh` falhou na primeira tentativa (`FileNotFoundError:
+/home/ec2-user/inventory.json`) porque a chave de campanha
+(`~/.ssh/campaign_key`) e o `inventory.json` nunca foram copiados para
+o control novo -- `campaign_up.sh` faz essa cópia como parte do seu
+próprio fluxo pós-apply; aplicar o plano salvo diretamente (Decision 93)
+pula essa parte. Corrigido copiando os dois arquivos manualmente
+(`terraform output -raw campaign_private_key` + `terraform output -json
+inventory`, via scp com a chave do operador). `campaign_schedule.json`
+tinha a mesma lacuna (nunca escrito) -- gerado com a mesma convenção
+padrão de `campaign_up.sh` (janela 1 às 19:00 UTC do dia seguinte) e
+copiado também. Nenhum desses arquivos é segredo (chave de campanha
+gerada pelo Terraform, não a do operador) nem afeta o que é medido --
+só infraestrutura de entrega. Reentregue com sucesso depois: imagens
+(RC=0, ~18min, 6/6, IDs idênticos nos 3 servidores) e código-fonte
+(RC=0, cryptography-50.0.2 confirmada em todos os hosts).
+
+**Pré-flight TCP/443 (8 clientes, 20 amostras, 3 perfis):** 0/20 falhas
+na primeira tentativa, EM TODOS os 8 clientes -- achado real: a
+checagem de TCP rodou ANTES de qualquer gateway subir (`deliver_
+images.sh` só carrega as imagens Docker, nunca inicia o
+`docker-compose`; é `switch_crypto_profile.py` que chama
+`_start_if_exited()`). Refeita depois do primeiro switch de perfil
+(gateways já de pé): **20/20 amostras, 0 falhas, nos 8 clientes**,
+medianas batendo com o esperado (L0 0,14-0,18ms; L123 122,9ms; L14
+15,4ms; L219 219,9ms; L30 32,3ms; L325 330,3ms).
+
+**Handshake TLS, corrigido o 404 do piloto anterior:** diagnosticado
+(não suposto) lendo `opin_flow.py`'s `do_call()` -- o 404 anterior era
+por FALTA do header `Host: auth.local` no script de teste ad hoc, NÃO
+por falta de certificado de cliente (confirmado lendo `get_local_leg_
+cert_paths()`'s própria docstring: o proxy local nunca pede certificado
+nessa perna, a identidade mTLS real é toda estabelecida do lado do
+proxy). Corrigido no script de teste (v3): **24/24 verificações reais
+(8 clientes x 3 perfis) -- todas `ok: true, status: 200`**, com corpo
+JWKS real e correto por perfil (RSA/AKP/HYBRID).
+
+**Bug real #2 (achado na primeira execução real de `run_validation_
+stage()`, nunca tinha rodado contra AWS real antes): `FileNotFoundError`
+no primeiro write de `calls.jsonl`.** `run_validation_stage()` criava
+só o diretório pai de cada cenário, nunca as subpastas `runs/`/`server/`/
+`client/` que `run_one_execution()` escreve -- `run_window()` (o
+caminho real da campanha) já faz esse mkdir (linha ~2468); a função de
+validação, escrita e testada só localmente/dry-run antes de hoje, nunca
+tinha essa linha. Corrigido espelhando exatamente o mkdir de
+`run_window()`. Testado: suíte completa (50/50) sem regressão; depois,
+real: 24/24 execuções completas sem erro.
+
+**Estágio de validação, 24/24 execuções reais, call_count=44 em todas,
+nenhuma com retry:**
+
+| Cenário | Classic (s) | Hybrid (s) | PQC (s) | Ordem esperada? |
+|---|---|---|---|---|
+| L0@sa-east-1 | 5,96 | 10,01 | 11,33 | sim |
+| L123@sa-east-1 | 12,51 | 16,08 | 17,12 | sim |
+| L219@sa-east-1 | 18,18 | 22,27 | 23,17 | sim |
+| L325@sa-east-1 | 24,28 | 28,83 | 29,44 | sim |
+| L0@us-east-1 | 6,07 | 9,93 | 10,71 | sim |
+| L14@us-east-1 | 6,66 | 10,09 | 11,59 | sim |
+| L0@ap-northeast-1 | 5,73 | 9,65 | 10,97 | sim |
+| L30@ap-northeast-1 | 7,05 | 11,30 | 12,60 | sim |
+
+**Ordem Classic < Hybrid < PQC confirmada em 8/8 cenários** -- ao
+contrário da inversão Hybrid-mais-rápido-que-PQC observada no piloto 2
+(Decision 89, amostra única também). N=1 por célula aqui (amostra de
+fumaça, não os 10 runs/perfil/cenário reais) -- não conclusivo
+estatisticamente, mas um sinal direto, não interpretado além disso.
+
+**Parado aqui, como instruído: processo real (`campaign_run.py`, PID
+17600 no control) confirmado sentado em `wait_for_operator_gate(
+"validation_stage")`, aguardando o marcador do operador -- 24/24
+`run01.json` reais confirmados em disco, nenhum erro, a janela de
+medição NÃO foi iniciada.** Nenhum marcador foi criado por mim.
+
+**Relógio e custo:** apply em 21:30:57Z; validação completa por volta
+de 2026-10-29T00:1x:xxZ (log parou de crescer logo após o 24º ping,
+processo confirmado ocioso em `ps aux`, não travado) -- aproximadamente
+2h40min dos 6h usados, bem abaixo de 80%. Custo estimado seguindo a
+mesma referência já usada (~US$1,15/h para a topologia de 12
+instâncias): ~US$3,05, dentro do teto de US$8.
+
+**Atualizado:** `campaign_run.py` (dois bugs reais corrigidos, ver
+acima), `thesis/results/v8/campaign/scripts/tests/` sem regressão
+(50/50). Nenhum código de MEDIÇÃO alterado (`opin_flow.py`, `mock_
+mtls/main.go`, `tls_kem_proxy/main.go`) -- só o orquestrador
+(infraestrutura de execução) e o script de diagnóstico local.
+
