@@ -8613,3 +8613,130 @@ acima), `thesis/results/v8/campaign/scripts/tests/` sem regressão
 mtls/main.go`, `tls_kem_proxy/main.go`) -- só o orquestrador
 (infraestrutura de execução) e o script de diagnóstico local.
 
+## 97. Decomposição real de T_fluxo (L0/L325, dado do portão de validação, sem coleta nova) -- verificação custa o MESMO (~490ms) nos 3 perfis, muito acima do benchmark nativo (<1ms): artefato de implementação do despachante de assinatura/verificação, não do algoritmo; a inversão Hybrid<PQC é um resíduo extra específico de PQC, reproduzido em 2/2 cenários
+
+**Dados usados:** os 6 `run01.json` reais do portão de validação
+(classic/pqc/hybrid x L0/L325, sa-east-1) -- `phase_accounting`,
+`verification_timings` (7/execução), `signing_timings` (8/execução), já
+coletados; `server/w00_run01_gateway.log` para bytes/duração de
+handshake (`consolidate_v8.py`'s `term_handshake()`/`handshake_
+duration_sum_ms()`, reusados, não reimplementados). Nenhuma coleta nova,
+nenhum código alterado.
+
+### 1. Decomposição da diferença de T_fluxo
+
+`checksum` = soma dos termos decompostos (handshake+assinatura+
+verificação+setup+rede+resíduo); pequena diferença para `total` é o
+`explicit_wait_seconds` (sempre ~0) e arredondamento.
+
+| L0 | Total | Handshake (bytes) | Handshake (tempo) | Assinatura | Verificação | Setup | Rede (http_calls) | Resíduo |
+|---|---|---|---|---|---|---|---|---|
+| PQC−Classic | +5,369s | +104.568 B | −0,068s | **+3,923s** | −0,032s | −0,515s | −0,000s | **+1,993s** |
+| Hybrid−Classic | +4,054s | +83.028 B | +0,000s | **+3,929s** | +0,035s | −0,012s | +0,080s | +0,022s |
+| Hybrid−PQC | **−1,315s** | −21.540 B | +0,068s | +0,006s | +0,067s | +0,503s | +0,080s | **−1,971s** |
+
+| L325 | Total | Handshake (bytes) | Handshake (tempo) | Assinatura | Verificação | Setup | Rede (http_calls) | Resíduo |
+|---|---|---|---|---|---|---|---|---|
+| PQC−Classic | +5,159s | +104.568 B | −0,079s | **+3,690s** | +0,061s | −0,429s | +0,121s | **+1,716s** |
+| Hybrid−Classic | +4,555s | +83.028 B | −0,011s | **+3,753s** | +0,168s | +0,000s | +0,957s | −0,324s |
+| Hybrid−PQC | **−0,604s** | −21.540 B | +0,068s | +0,063s | +0,106s | +0,429s | +0,836s | **−2,039s** |
+
+**Leitura:** PQC−Classic e Hybrid−Classic são dominados quase
+inteiramente por ASSINATURA (73-97% do delta), não por handshake, rede
+ou verificação (todos ~0 nos dois casos). O handshake em BYTES cresce
+exatamente como esperado (Classic<Hybrid<PQC, igual ao OPINsize), mas o
+handshake em TEMPO não acompanha -- nos dois cenários o tempo de
+handshake é estatisticamente igual entre perfis (diferenças de
+±10-80ms, sem padrão), porque o TEMPO do handshake é dominado pelo RTT
+de rede (6 round-trips fixos por conexão), não pelo tamanho do payload
+dentro do MTU -- a diferença de bytes não se traduz em diferença de
+tempo de handshake nesta escala.
+
+### 2. Como cada verificação é implementada
+
+**TODAS as verificações, nos 3 perfis** (`opin_flow.py`'s `verify_jwt()`/
+`decrypt_and_verify_jwt()`), passam pelo MESMO despachante:
+`_run_verifier()` -> `thesis/scripts/pqc-signer/signer_core.mjs`'s
+`verify_jwt` dispatch, em **JavaScript/Node.js**, via `server.mjs` (um
+serviço HTTP de vida longa, iniciado uma vez por bloco perfil/instalação
+-- `start_pqc_signer_service()`) OU, se esse serviço não estiver de pé,
+um `docker run --rm -i` NOVO por chamada (fallback em `_run_verifier()`,
+linha 630). Isso é deliberado mesmo para Classic (que poderia verificar
+PS256 com `pyjwt` localmente) -- "para que uma diferença de tempo medida
+reflita o algoritmo, não 'Python em processo' vs 'processo separado'"
+(docstring de `start_pqc_signer_service()`).
+
+**Assinatura é diferente por perfil:** Classic assina PS256 via
+`pyjwt.encode()` **em processo, Python puro**, sem tocar o despachante.
+PQC/Hybrid assinam a parte ML-DSA-65 via `_run_pqc_signer()`, o MESMO
+despachante Node.js/HTTP-ou-docker-por-chamada da verificação.
+
+**Medido (média, 7-8 chamadas/execução, L0):**
+
+| Operação | Classic | PQC | Hybrid | Benchmark nativo (Go, assinatura) |
+|---|---|---|---|---|
+| Assinatura (ms/op) | 2,3ms (pyjwt, em processo) | 492,7ms (despachante) | 493,4ms (despachante) | RSA-4096: 6,624ms / ML-DSA-65: 0,713ms |
+| Verificação (ms/op) | 492,5ms (despachante) | 487,9ms (despachante) | 497,4ms (despachante) | (sem benchmark nativo de verificação registrado) |
+
+**A verificação custa o MESMO (~488-497ms) nos 3 perfis, independente
+do algoritmo** -- Classic verifica RSA e paga o mesmo preço que PQC
+verificando ML-DSA-65. Isso por si só já é evidência direta de que o
+custo medido não é da operação criptográfica (que o benchmark nativo
+mostra ser sub-milissegundo para os dois algoritmos): é do MECANISMO de
+despacho. Mesma conclusão para assinatura PQC/Hybrid: ~493ms, ~690x o
+benchmark nativo ML-DSA-65 (0,713ms) -- e ~215x mais lento que a própria
+assinatura Classic em processo (2,3ms), que por sua vez já é compatível
+com a ordem de grandeza do benchmark nativo RSA-4096 (6,624ms,
+PS256/RSA-pyjwt sendo razoavelmente mais rápido, esperado por ser uma
+chave/implementação diferente mas do mesmo algoritmo).
+
+### 3. Conclusão: **(b) artefato de implementação do despachante, não diferença real de algoritmo**
+
+Mesma classe de problema já documentada e corrigida nesta tese para o
+assinador da v7 (um `docker run --rm -i` novo por chamada custando
+~0,79s/spawn, ~94% do delta PQC/Híbrido medido então) -- aqui o custo
+medido (~450-550ms/chamada) está na MESMA ordem de grandeza daquele
+problema antigo, não na ordem de grandeza que o "serviço persistente"
+(`server.mjs`, já implementado para corrigir exatamente isso) deveria
+produzir (uma chamada HTTP local + JSON pequeno + operação
+sub-milissegundo deveria custar poucos ms, não ~500ms). Duas hipóteses
+concretas, não aplicadas, propostas para verificação:
+1. **O serviço persistente pode não estar realmente em uso nestas
+   execuções reais da AWS** (regressão silenciosa para o fallback
+   `docker run --rm -i` por chamada, mesmo padrão do bug antigo) --
+   diagnóstico: logar explicitamente, em `_run_verifier()`/`_run_pqc_
+   signer()`, qual dos dois caminhos foi usado em cada chamada
+   (`_PQC_SIGNER_SERVICE_URL is not None` ou não), sem mudar o
+   comportamento. Custo: ~15min de código + teste local, sem AWS.
+2. **Se o serviço persistente estiver mesmo em uso**, o custo de
+   ~450-550ms está dentro do próprio `server.mjs`/do round-trip HTTP
+   local -- precisa de profiling direto do servidor Node (tempo de
+   parse/dispatch/resposta) para achar o que, dentro dele, custa ~500ms
+   a mais que a operação criptográfica em si. Custo: variável, depende
+   do que o profiling achar; não estimável sem medir.
+Nenhuma das duas foi aplicada -- proposta registrada, aguardando decisão
+de Luciano sobre qual investigar primeiro.
+
+### 4. Por que Hybrid ficou mais rápido que PQC (mesma decomposição)
+
+Assinatura, verificação e handshake são **estatisticamente iguais**
+entre PQC e Hybrid nos dois cenários (deltas de ±0,01-0,10s, ruído, não
+um padrão) -- ou seja, usar ML-DSA-65 dentro do esquema Hybrid custa o
+MESMO que usá-lo sozinho no PQC. **A inversão Hybrid<PQC é inteiramente
+explicada pelo RESÍDUO**: PQC carrega um resíduo extra de +1,99s (L0) e
++1,72s (L325) sobre o Classic que o Hybrid NÃO carrega (resíduo do
+Hybrid fica a ±0,3s do Classic, nos dois cenários) -- reproduzido em
+2/2 cenários reais, não um evento isolado. Esse resíduo não está
+atribuído a nenhuma fase nomeada (`phase_accounting`'s própria definição
+de "resíduo": o que sobra depois de http/assinatura/verificação/setup/
+espera) -- não root-causado ainda a uma linha de código específica;
+hipótese mais provável, dado que Hybrid faz TRABALHO ADICIONAL (duas
+assinaturas: ML-DSA bruta + RSA do JWT externo) e ainda assim NÃO
+carrega esse resíduo, é que a causa é específica de algo no caminho
+PQC-apenas (ex.: conversão/formatação de chave bruta ML-DSA-65 só para
+esse modo), não do algoritmo ML-DSA-65 em si. **N=1 por célula aqui
+(amostra do portão de validação, não os 10 runs/perfil/cenário reais)
+-- o padrão é consistente nos 2 cenários testados, mas não é
+estatisticamente conclusivo; seria resolvido com certeza pela janela de
+medição real (N=10).**
+
