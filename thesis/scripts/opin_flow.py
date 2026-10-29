@@ -508,10 +508,33 @@ def get_setup_timings() -> list[dict]:
     return list(_SETUP_TIMINGS)
 
 
+_SIGNING_KEY_CACHE: dict = {}
+
+
 def load_client_signing_key(crypto_profile: str):
     """
-    Returns (signing_key, kid, alg). classic: signing_key is a pyjwt-usable
-    RSA key object, alg "PS256" -- client_one's original key, unchanged.
+    Decision 99 (real incident, found via the position-vs-profile
+    diagnostic): memoized per crypto_profile in _SIGNING_KEY_CACHE --
+    this function used to reconstruct the RSA-4096 key object from its
+    JWK (pyjwt.algorithms.RSAAlgorithm.from_jwk(), real cost ~252ms)
+    FRESH on every single call, twice per run (once per sub-flow), for
+    classic and hybrid (never for pqc, whose signing_key stays a raw
+    dict) -- the measured cause of ~500ms of classic/hybrid's own
+    T_fluxo that PQC never paid, confirmed call-for-call against the
+    diagnostic's own real setup_timings (median classic/hybrid
+    ~252ms x2, pqc ~0ms x2) and against the real T_fluxo gap it produces
+    (same order of magnitude, same two profiles). Not a cost of the RSA
+    algorithm itself in the PQC-migration sense: the SAME bytes produce
+    the SAME key object every time, so reconstructing it repeatedly is
+    pure, avoidable overhead, not signing/verification work. A cache hit
+    returns before touching the timer below at all -- the real cost (for
+    whichever profile a process ever uses) is paid at most ONCE per
+    process, and latency_automation.run_once_timed() now pre-warms it
+    (see that function) BEFORE T_fluxo's own timer starts, equally for
+    all 3 profiles, so even the first real call never lands inside the
+    measured window. Returns (signing_key, kid, alg). classic:
+    signing_key is a pyjwt-usable RSA key object, alg "PS256" --
+    client_one's original key, unchanged.
     pqc: signing_key is the raw private AKP JWK dict itself (needed as-is
     by sign_jwt()'s docker signer, not something pyjwt can consume), alg
     "ML-DSA-65" -- see thesis/scripts/pqc-signer/ for why client-side
@@ -534,25 +557,30 @@ def load_client_signing_key(crypto_profile: str):
     still being PS256-only) -- closed here once the AS gained its own
     inbound verification (utils/opin/clientHybridAuth.js).
     """
+    if crypto_profile in _SIGNING_KEY_CACHE:
+        return _SIGNING_KEY_CACHE[crypto_profile]
     t0 = time.monotonic()
     try:
         if crypto_profile == "pqc":
             path = CERTS_DIR / "client_one_pqc.jwks"
             jwks = json.loads(path.read_text(encoding="utf-8"))
             jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
-            return jwk, jwk["kid"], "ML-DSA-65"
-        if crypto_profile == "hybrid":
+            result = jwk, jwk["kid"], "ML-DSA-65"
+        elif crypto_profile == "hybrid":
             classic_jwks = json.loads((CERTS_DIR / "client_one.jwks").read_text(encoding="utf-8"))
             classic_jwk = next(k for k in classic_jwks["keys"] if k.get("use") == "sig")
             classic_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(classic_jwk))
             pqc_jwks = json.loads((CERTS_DIR / "client_one_pqc.jwks").read_text(encoding="utf-8"))
             pqc_jwk = next(k for k in pqc_jwks["keys"] if k.get("use") == "sig")
-            return (classic_key, pqc_jwk), classic_jwk["kid"], "hybrid"
-        path = CERTS_DIR / "client_one.jwks"
-        jwks = json.loads(path.read_text(encoding="utf-8"))
-        jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
-        key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
-        return key, jwk["kid"], "PS256"
+            result = (classic_key, pqc_jwk), classic_jwk["kid"], "hybrid"
+        else:
+            path = CERTS_DIR / "client_one.jwks"
+            jwks = json.loads(path.read_text(encoding="utf-8"))
+            jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
+            key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
+            result = key, jwk["kid"], "PS256"
+        _SIGNING_KEY_CACHE[crypto_profile] = result
+        return result
     finally:
         _SETUP_TIMINGS.append(
             {"phase": "load_signing_key", "duration_ms": round((time.monotonic() - t0) * 1000, 3)}

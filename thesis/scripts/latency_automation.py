@@ -126,6 +126,18 @@ def run_once_timed(crypto_profile: str, return_calls: bool = False) -> dict:
     their own overhead -- quantified in thesis/results/v8/DECISIONS.md,
     not reported here since it needs no runtime data, only a count of
     events."""
+    # Decision 99 (real incident): warms opin_flow's signing-key cache
+    # for THIS profile before anything is cleared/timed, equally for all
+    # 3 profiles -- load_client_signing_key()'s own real cost (classic/
+    # hybrid's RSA-4096 key-object construction, ~252ms; pqc's own call
+    # is already cheap) is now paid here, outside T_fluxo, instead of
+    # inside the measured flow's first sub-flow call. clear_setup_
+    # timings() right after this discards this warm-up's own _SETUP_
+    # TIMINGS entry -- the measured window only ever sees cache hits
+    # (near-zero) for this phase now, honestly, not a number hidden
+    # elsewhere.
+    of.load_client_signing_key(crypto_profile)
+
     timing = {"wasted_seconds": 0.0, "retries": []}
     of.clear_verification_timings()
     of.clear_signing_timings()

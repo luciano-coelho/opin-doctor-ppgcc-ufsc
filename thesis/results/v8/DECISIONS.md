@@ -8866,3 +8866,95 @@ rodar `campaign_run.py` como o serviço systemd já existente
 partir de agora** -- resolve a causa raiz (nenhum processo real volta a
 depender de uma sessão SSH meramente usada para acompanhar o progresso).
 
+## 99. Diagnóstico posição-vs-perfil (quadrado 3x3, duas máquinas L0, 5 execuções/bloco): o desvio é do PERFIL, não da posição -- `load_client_signing_key()` reconstruía uma chave RSA-4096 do zero a cada chamada (2x/execução) em Classic/Hybrid, nunca em PQC; corrigido com cache + aquecimento fora da medição de T_fluxo
+
+**Diagnóstico (sa-east-1 e ap-northeast-1, em paralelo, 3 ordens x 3
+posições, 5 execuções/bloco, aquecimento padrão a cada troca):**
+
+| Ordem | Posição 1 | Posição 2 | Posição 3 |
+|---|---|---|---|
+| Classic→PQC→Hybrid | Classic 2,486/2,314 | PQC 1,985/1,920 | Hybrid 2,603/2,498 |
+| PQC→Hybrid→Classic | PQC 2,025/1,852 | Hybrid 2,569/2,449 | Classic 2,448/2,389 |
+| Hybrid→Classic→PQC | Hybrid 2,554/2,453 | Classic 2,463/2,379 | PQC 1,943/1,950 |
+
+(sa-east-1/ap-northeast-1, mediana T_fluxo em segundos, L0.) Por
+PERFIL (média das 3 posições): Classic ≈2,47s/2,36s, PQC ≈1,98s/1,91s,
+Hybrid ≈2,58s/2,47s -- variação interna ao perfil <0,06s/<0,08s,
+variação por posição (mesma posição, perfis diferentes) de até 0,6s.
+**Conclusão: acompanha o perfil, não a posição**, nas duas máquinas,
+nas 3 ordens -- confirmado, não assumido.
+
+**Causa real, encontrada no próprio `setup_timings` (mediana, 15
+execuções/perfil, sa-east-1):** fase `load_signing_key` -- Classic
+251,9ms, PQC 0,11ms, Hybrid 251,6ms, **2 chamadas/execução** (uma por
+sub-fluxo) -- bate quase exato com o desvio real de T_fluxo (Classic-PQC
+≈491ms medido vs ≈504ms previsto; Hybrid-PQC ≈593ms medido vs ≈503ms
+previsto). As outras duas fases de `setup_timings`
+(`generate_callback_cert`, `callback_server_teardown`) NÃO diferem
+entre perfis por mais de 20ms (checado antes de prosseguir, pedido
+explícito) -- nenhum outro artefato encontrado. Pcap (6 conexões,
+handshake 0,18-0,33ms, 0 retransmissões) não explica nada.
+
+**Código, lido antes de corrigir:** `load_client_signing_key()`
+(`thesis/scripts/opin_flow.py`) chama
+`pyjwt.algorithms.RSAAlgorithm.from_jwk()` para reconstruir a chave
+RSA-4096 do cliente (`client_one.jwks`, confirmado 4096 bits) -- para
+Classic (chave própria) e para a metade clássica do Hybrid (sigma1) --
+TODA VEZ que a função é chamada, sem cache, do zero, a partir dos
+mesmos bytes do JWK. PQC nunca entra nesse caminho (sua `signing_key`
+fica como dict bruto, usado pelo despachante Node). **Caminho de
+verificação, confirmado NÃO reconstrói chave nenhuma por chamada** (item
+pedido explicitamente): `verify_jwt()`/`decrypt_and_verify_jwt()`
+encaminham o JWK do servidor como dict bruto, via JSON, para o serviço
+Node -- a única reconstrução de chave RSA em Python no arquivo inteiro
+é `RSAAlgorithm.from_jwk()`, usada SÓ dentro de `load_client_signing_
+key()` (2 ocorrências, confirmado por grep), nunca na verificação.
+
+**Corrigido (commit abaixo), correção de artefato, não do algoritmo
+medido -- mesmas chaves, mesmo formato de wire, só como o cliente invoca
+o próprio código:**
+- `opin_flow.py`: `_SIGNING_KEY_CACHE` (dict módulo) -- `load_client_
+  signing_key()` agora retorna do cache em caso de acerto, SEM tocar o
+  cronômetro nem gravar em `_SETUP_TIMINGS` (só a primeira chamada real,
+  por perfil, por processo, é temporizada).
+- `latency_automation.py`: `run_once_timed()` agora chama `of.load_
+  client_signing_key(crypto_profile)` ANTES de `clear_setup_timings()`/
+  do início do cronômetro de T_fluxo -- o custo real (quando existe) é
+  pago fora da janela medida, igualmente nos 3 perfis; `clear_setup_
+  timings()` descarta a própria entrada desse aquecimento.
+
+**Evidência antes/depois, medida localmente (não AWS, não aplicada
+ainda na campanha real no momento deste teste):**
+
+| Perfil | 1ª chamada (custo real) | 2ª chamada (cache) | Entradas em `setup_timings` |
+|---|---|---|---|
+| classic | 338,04ms | 0,003ms | 1 (só a 1ª) |
+| pqc | 8,18ms | 0,384ms | 1 (só a 1ª) |
+| hybrid | 330,64ms | 0,002ms | 1 (só a 1ª) |
+
+**Hora UTC:** achado e corrigido entre 2026-10-29T04:39Z e 05:19:51Z
+(este registro). **Commit:** ver próximo commit git após este registro
+(`opin_flow.py`/`latency_automation.py`). **Motivo:** achado real via o
+diagnóstico posição-vs-perfil acima, confirmado código+dado, não
+hipótese. **Execuções afetadas:** as 24 execuções do portão de
+validação (já reportadas, nenhuma invalidada por ESTA correção
+especificamente -- eram reais, só não tinham a causa do desvio
+identificada ainda) e o diagnóstico posição-vs-perfil acima (dados
+preservados como evidência do achado, não descartados). Nenhuma janela
+de medição real foi afetada (nenhuma rodou ainda). Testado: suíte
+completa de `thesis/results/v8/campaign/scripts/tests/` (50/50, sem
+regressão); entregue a 3 servidores + 8 clientes antes de qualquer nova
+execução.
+
+**v7 (pedido explícito, só verificação, nada alterado):** `thesis/
+results/v7/latency/.../runs/run00_warmup.json` não tem nenhum campo
+`setup_timings`/`phase_accounting` -- essa instrumentação só existe
+desde a v8 (Decision 90). **Não é possível medir diretamente, no dado
+da v7, se o mesmo custo existia em Classic/Hybrid.** Pelo próprio código
+(`load_client_signing_key()`'s docstring cita a Decision 9 da v4 para o
+ramo hybrid), a reconstrução RSA-do-JWK sem cache é estrutural desde
+pelo menos a v4 -- plausível que o mesmo custo estivesse presente,
+silenciosamente, nos números brutos de Classic/Hybrid da v7 também,
+mas isto é inferência do código, não medição direta; reportado como tal,
+v7 não foi tocada.
+
