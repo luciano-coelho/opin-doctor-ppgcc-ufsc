@@ -8740,3 +8740,70 @@ esse modo), não do algoritmo ML-DSA-65 em si. **N=1 por célula aqui
 estatisticamente conclusivo; seria resolvido com certeza pela janela de
 medição real (N=10).**
 
+## 98. Intervenção (correção de artefato de implementação, não do algoritmo medido) -- serviço persistente de assinatura/verificação nunca era iniciado no caminho real da campanha (SSHExecutor); corrigido, código entregue, as 24 execuções do portão de validação invalidadas e serão refeitas
+
+**Confirmação em 15 minutos, por código E por evidência ao vivo (pedido
+explícito, item 1):** `SSHExecutor.start_block_proxies()` só chamava
+`opin_flow.start_tls_kem_proxy()`, NUNCA `opin_flow.start_pqc_signer_
+service()` -- confirmado lendo o código (`campaign_run.py`, a versão de
+`start_block_proxies()` da classe `LocalExecutor` chama os dois; a
+versão da `SSHExecutor`, usada de verdade na campanha real, só chamava
+um). Confirmado também ao vivo: `docker ps -a --filter
+name=pqc_signer_service_run` num cliente real (L0@sa-east-1, usado nos
+3 perfis durante as 24 execuções) não mostrou NENHUM container com esse
+nome, vivo ou morto -- o serviço persistente nunca existiu em nenhuma
+das 24 execuções do portão de validação, em nenhum perfil.
+
+**Hora UTC:** confirmação e correção entre 2026-10-29T00:3xZ e
+2026-10-29T00:53:31Z (este registro). **Commit:** `2cf7374` (código:
+`thesis/scripts/opin_flow.py`, `thesis/results/v8/campaign/scripts/
+campaign_run.py`). **Motivo:** achado real durante a análise de
+decomposição (Decision 97) -- verificação custando o mesmo (~490ms) nos
+3 perfis, muito acima do benchmark nativo, apontou para um artefato do
+despachante, não do algoritmo; confirmado como descrito acima.
+**Execuções afetadas:** as 24 execuções do portão de validação
+(sa-east-1/us-east-1/ap-northeast-1, 3 perfis, N=1/célula) -- **todas
+invalidadas** (mediram o custo do `docker run` por chamada, não o
+algoritmo) e serão refeitas com o código corrigido antes de qualquer
+liberação do portão. Nenhuma janela de medição real (N=10) chegou a
+rodar -- nada além da amostra de validação é afetado.
+
+**Correção aplicada (item 2):**
+- `opin_flow.py`: `_run_pqc_signer()`/`_run_verifier()` não têm mais
+  recuo silencioso para `docker run --rm -i` por chamada -- se
+  `start_pqc_signer_service()` não foi chamado no processo, a chamada
+  levanta `PqcSignerServiceNotStarted` imediatamente, com mensagem clara.
+  As funções one-shot (`_run_pqc_signer_oneshot()`/`_run_verifier_
+  oneshot()`) continuam existindo, só não são mais alcançadas por
+  acidente. Cada entrada de `signing_timings`/`verification_timings`
+  passa a gravar `dispatch` ("in_process_pyjwt" para PS256,
+  "persistent_service" para ML-DSA-65 puro, "persistent_service+in_
+  process_pyjwt" para hybrid).
+- `campaign_run.py`: `SSHExecutor.start_block_proxies()` agora também
+  inicia `start_pqc_signer_service()` em cada cliente, no MESMO comando
+  remoto que já inicia o proxy TLS, ANTES de qualquer execução (inclusive
+  o aquecimento, que já reusa `start_block_proxies()`/`stop_block_
+  proxies()` -- um único ponto de correção cobre aquecimento, portão de
+  validação e janelas reais). `start_pqc_signer_service()` já bloqueia
+  até `/healthz` responder (`_wait_for_pqc_signer_service_ready()`,
+  código pré-existente, não alterado) -- isso É a validação pedida no
+  item 2 ("o aquecimento valida isso"): um serviço que não sobe a tempo
+  aborta o bloco na hora, antes de qualquer fluxo real rodar.
+  `stop_block_proxies()` derruba o serviço junto com o proxy.
+
+**Isto é correção de artefato de implementação, não mudança do
+algoritmo medido:** mesmas chaves, mesmos algoritmos (PS256/ML-DSA-65),
+mesmo formato de wire, mesma lógica de verificação dentro de
+`signer_core.mjs`. Muda só COMO o cliente invoca esse código (processo
+persistente de verdade, em vez de um novo container por chamada) --
+exatamente a mesma classe de correção já registrada para o assinador da
+v7.
+
+**Testado antes de entregar:** `PqcSignerServiceNotStarted` confirmada
+sendo levantada localmente (`_run_pqc_signer('{}')`/`_run_verifier('{}')`
+sem serviço ativo); suíte completa de
+`thesis/results/v8/campaign/scripts/tests/` re-executada (50/50,
+nenhuma regressão -- nenhum teste dependia da string exata do comando
+remoto antigo). Entregue a 3 servidores + 8 clientes
+(`deliver_source.sh`, RC=0) antes de qualquer nova execução.
+
