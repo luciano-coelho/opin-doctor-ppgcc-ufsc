@@ -449,15 +449,32 @@ PQC_SIGNER_IMAGE = "mockopin-pqc-signer"
 PQC_SIGNER_SERVICE_CONTAINER_NAME = "pqc_signer_service_run"
 PQC_SIGNER_SERVICE_PORT = 8901
 
-# Set by start_pqc_signer_service(), cleared by stop_pqc_signer_service();
-# None means "no persistent service in this process" -- _run_pqc_signer()
-# falls back to the one-shot docker-run-per-call path in that case. Module
-# global, not a return value threaded through every caller, because
-# sign_jwt()/_run_pqc_signer() are called many frames deep inside
-# run_insurance_flow()/run_person_flow() with no natural place to pass a
-# service handle through -- same shape as _wait_for_tls_kem_proxy_ready()
-# reading module state rather than everything being parameterized.
-_PQC_SIGNER_SERVICE_URL: str | None = None
+# Decision 98 (real incident, corrected a first attempt at this same fix
+# that was itself still wrong): this used to be a module global, None
+# until start_pqc_signer_service() set it, the same PROCESS that called
+# start_pqc_signer_service() -- which is never the process that actually
+# signs/verifies on the real SSHExecutor-driven campaign. The orchestrator
+# starts the service via one `ssh ... python3 -c "...start_pqc_signer_
+# service(...)"` invocation (its own, short-lived Python process); every
+# real execution/settling/warmup run is a SEPARATE `ssh ... python3
+# campaign_client_runner.py` invocation (its own, FRESH Python process,
+# module state reset to its own file-level defaults) -- a module global
+# set in one process's memory cannot be read by another. The first fix
+# attempt (checking this global before dispatching) therefore failed
+# loudly on the very first real settling run, the SAME real incident
+# class as the original bug, just moved one level ---- correctly fast
+# because it's loud, not because it's harmless.
+#
+# Fixed the same way _USE_TLS_KEM_PROXY/TLS_KEM_PROXY_PORT already work
+# (opin_flow.py's own pre-existing pattern, never broken by this exact
+# problem): a FIXED, always-assumed-reachable URL, no in-process "did
+# someone call start() here" flag at all. The service is reached by its
+# OWN localhost port, which is real, OS-level, cross-process truth --
+# the same reason the TLS KEM proxy never needed a Python-level flag
+# either. _run_pqc_signer_service() below is what actually proves
+# reachability, per call, by trying the real HTTP POST and converting a
+# real connection failure into PqcSignerServiceNotStarted.
+PQC_SIGNER_SERVICE_URL = f"http://127.0.0.1:{PQC_SIGNER_SERVICE_PORT}/"
 
 
 #  Client-side setup/teardown wall-clock time (item 1 of the T_fluxo
@@ -543,51 +560,68 @@ def load_client_signing_key(crypto_profile: str):
 
 
 class PqcSignerServiceNotStarted(RuntimeError):
-    """Decision 98 (thesis/results/v8/DECISIONS.md, real incident): raised
-    by _run_pqc_signer()/_run_verifier() when start_pqc_signer_service()
-    was never called in this process. Replaces the old SILENT fallback to
-    _run_pqc_signer_oneshot() those two functions used to take -- that
-    fallback is exactly how the real AWS campaign (SSHExecutor's own
-    start_block_proxies(), which never called start_pqc_signer_service())
-    spent ~450-550ms/call on a `docker run --rm -i` per signature/
-    verification, in ALL 3 profiles, for months without anyone noticing:
+    """Decision 98 (thesis/results/v8/DECISIONS.md, real incident -- fixed
+    twice, the first attempt still wrong): raised by _run_pqc_signer_
+    service() when the persistent service's own localhost port refuses
+    the connection. Replaces the old SILENT fallback to
+    _run_pqc_signer_oneshot() -- that fallback is exactly how the real
+    AWS campaign (SSHExecutor's own start_block_proxies(), which never
+    called start_pqc_signer_service() at all) spent ~450-550ms/call on a
+    `docker run --rm -i` per signature/verification, in ALL 3 profiles:
     the call always "worked", just ~600-700x slower than the real
-    ML-DSA-65/RSA-4096 operation (native benchmark: 0.713ms/6.624ms). A
-    caller that genuinely wants the one-shot, no-service path (true
+    ML-DSA-65/RSA-4096 operation (native benchmark: 0.713ms/6.624ms).
+
+    A caller that genuinely wants the one-shot, no-service path (true
     standalone use, not the campaign) calls _run_pqc_signer_oneshot()/
     _run_verifier_oneshot() directly -- that path still exists, unchanged,
     just no longer reachable by accident."""
 
 
 def _run_pqc_signer(payload: str) -> str:
-    """Dispatches to the persistent HTTP service started by
-    start_pqc_signer_service() -- see that function's docstring for why
-    (measured ~450-790ms/call one-shot-docker spawn cost, the dominant
-    term in every PQC/Hybrid T_fluxo delta measured so far, Decision 97).
-    No more silent fallback (Decision 98): a process that never started
-    the service gets a clear, immediate error instead of a working-but-
+    """Dispatches to the persistent HTTP service (PQC_SIGNER_SERVICE_URL,
+    always assumed reachable -- see that constant's own docstring for why
+    this is NOT a "was start() called in this process" check, same
+    reasoning as _USE_TLS_KEM_PROXY). Measured ~450-790ms/call one-shot-
+    docker spawn cost is the dominant term in every PQC/Hybrid T_fluxo
+    delta measured so far (Decision 97); the persistent service is meant
+    to replace that with a single-digit-ms HTTP round trip. No more
+    silent fallback (Decision 98): an unreachable service raises
+    PqcSignerServiceNotStarted immediately instead of a working-but-
     600x-slower call that looks like a real algorithm cost."""
-    if _PQC_SIGNER_SERVICE_URL is None:
-        raise PqcSignerServiceNotStarted(
-            "_run_pqc_signer() called with no persistent pqc-signer service running in this "
-            "process -- call start_pqc_signer_service(profile) first (the orchestrator must do "
-            "this before any sign/verify call, including warmup/settling), or call "
-            "_run_pqc_signer_oneshot() directly if a one-shot call is genuinely intended."
-        )
     return _run_pqc_signer_service(payload)
 
 
 def _run_pqc_signer_service(payload: str) -> str:
     """
-    POSTs to the persistent server (server.mjs) started by
-    start_pqc_signer_service(). No retry: a healthy, already-proven-up
-    Node process answering a plain HTTP POST is not expected to time out
-    the way a fresh `docker run` competing for scheduling under sustained
-    ephemeral-container load was (see _run_pqc_signer_oneshot's docstring)
-    -- a failure here is treated as a real one, surfaced immediately
-    rather than silently retried.
+    POSTs to the persistent server (server.mjs), started by
+    start_pqc_signer_service() in SOME process -- not necessarily this
+    one (Decision 98: the orchestrator starts it once per block, from its
+    own short-lived SSH command; every real execution is a separate
+    `campaign_client_runner.py` process that never calls start() itself,
+    by design -- same relationship _USE_TLS_KEM_PROXY already has with
+    start_tls_kem_proxy()). Reachability is therefore checked HERE, by
+    actually trying the connection, not by any in-process flag: a real
+    `requests.exceptions.ConnectionError` (refused/no route -- the
+    service was never started, or already stopped) becomes
+    PqcSignerServiceNotStarted, a clear and immediate signal, distinct
+    from a real HTTP error response (still a plain RuntimeError, the
+    service IS up but the call itself failed) or a timeout (also a plain
+    RuntimeError -- a healthy, already-proven-up Node process answering a
+    plain HTTP POST is not expected to time out the way a fresh
+    `docker run` competing for scheduling under sustained ephemeral-
+    container load was, see _run_pqc_signer_oneshot()'s own docstring --
+    no retry here, a failure is a real one).
     """
-    resp = requests.post(_PQC_SIGNER_SERVICE_URL, data=payload, timeout=30)
+    try:
+        resp = requests.post(PQC_SIGNER_SERVICE_URL, data=payload, timeout=30)
+    except requests.exceptions.ConnectionError as e:
+        raise PqcSignerServiceNotStarted(
+            f"pqc-signer persistent service not reachable at {PQC_SIGNER_SERVICE_URL} ({e}) -- "
+            "the orchestrator must call start_pqc_signer_service(profile) on this same machine "
+            "before any sign/verify call, including warmup/settling. Call "
+            "_run_pqc_signer_oneshot()/_run_verifier_oneshot() directly if a one-shot, no-service "
+            "call is genuinely intended."
+        ) from e
     if resp.status_code != 200:
         raise RuntimeError(f"pqc-signer service returned {resp.status_code}: {resp.text}")
     return resp.text.strip()
@@ -654,17 +688,9 @@ def _run_verifier(payload: str) -> str:
     """Dispatches to the persistent HTTP service for verification requests
     -- one dispatcher, one service, for both directions (see
     start_pqc_signer_service()'s own docstring for why this is started
-    for every profile, not just pqc/hybrid). No more silent fallback to a
-    one-shot `docker run` (Decision 98, PqcSignerServiceNotStarted's own
-    docstring) -- a process that never started the service gets a clear,
-    immediate error."""
-    if _PQC_SIGNER_SERVICE_URL is None:
-        raise PqcSignerServiceNotStarted(
-            "_run_verifier() called with no persistent pqc-signer service running in this "
-            "process -- call start_pqc_signer_service(profile) first (the orchestrator must do "
-            "this before any sign/verify call, including warmup/settling), or call "
-            "_run_verifier_oneshot() directly if a one-shot call is genuinely intended."
-        )
+    for every profile, not just pqc/hybrid). Reachability is checked by
+    _run_pqc_signer_service() itself (Decision 98) -- see that function's
+    own docstring for why this is NOT an in-process flag check."""
     return _run_pqc_signer_service(payload)
 
 
@@ -1199,7 +1225,6 @@ def start_pqc_signer_service(crypto_profile: str) -> bool:
     as TLS_KEM_PROXY_CONTAINER_NAME: stop_pqc_signer_service() can
     `docker stop` it reliably even if this return value were ever lost.
     """
-    global _PQC_SIGNER_SERVICE_URL
     subprocess.run(
         ["docker", "rm", "-f", PQC_SIGNER_SERVICE_CONTAINER_NAME],
         capture_output=True, text=True,
@@ -1214,7 +1239,12 @@ def start_pqc_signer_service(crypto_profile: str) -> bool:
         ],
         capture_output=True, text=True, check=True,
     )
-    _PQC_SIGNER_SERVICE_URL = f"http://127.0.0.1:{PQC_SIGNER_SERVICE_PORT}/"
+    # Decision 98: no module-global URL to set anymore -- PQC_SIGNER_
+    # SERVICE_URL is a fixed constant (same port always), reachability is
+    # checked per call by _run_pqc_signer_service() itself, which is what
+    # lets a LATER, separate process (the real execution, not this
+    # start-call's own short-lived one) use the service this call just
+    # started.
     _wait_for_pqc_signer_service_ready()
     return True
 
@@ -1249,14 +1279,12 @@ def _wait_for_pqc_signer_service_ready(timeout_seconds: int = 30) -> None:
 
 def stop_pqc_signer_service(started: bool) -> None:
     """Mirrors stop_tls_kem_proxy(): `docker stop` is what actually matters."""
-    global _PQC_SIGNER_SERVICE_URL
     if not started:
         return
     subprocess.run(
         ["docker", "stop", PQC_SIGNER_SERVICE_CONTAINER_NAME],
         capture_output=True, text=True, timeout=30,
     )
-    _PQC_SIGNER_SERVICE_URL = None
 
 
 # Per-artifact client-side signing wall-clock time (item 1 of the
