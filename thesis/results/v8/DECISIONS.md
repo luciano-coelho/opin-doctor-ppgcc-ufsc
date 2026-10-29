@@ -8932,9 +8932,9 @@ ainda na campanha real no momento deste teste):**
 | pqc | 8,18ms | 0,384ms | 1 (só a 1ª) |
 | hybrid | 330,64ms | 0,002ms | 1 (só a 1ª) |
 
-**Hora UTC:** achado e corrigido entre 2026-10-29T04:39Z e 05:19:51Z
-(este registro). **Commit:** ver próximo commit git após este registro
-(`opin_flow.py`/`latency_automation.py`). **Motivo:** achado real via o
+**Hora UTC:** achado e corrigido entre 2026-10-29T04:39Z e 05:19:51Z.
+**Commit:** `b43da1f` (`opin_flow.py`/`latency_automation.py`).
+**Motivo:** achado real via o
 diagnóstico posição-vs-perfil acima, confirmado código+dado, não
 hipótese. **Execuções afetadas:** as 24 execuções do portão de
 validação (já reportadas, nenhuma invalidada por ESTA correção
