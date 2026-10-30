@@ -1780,6 +1780,23 @@ class SSHExecutor:
                 print(f"  [{installation}/{scenario}] run {label}: tcpdump DELIBERATELY SKIPPED "
                       f"(CAMPAIGN_TCPDUMP_AB_TEST alternation, pilot acceptance criterion 7)")
                 server_pid = client_pid = server_pcap = client_pcap = None
+                # Real bug found live (this analysis, CAMPAIGN_TCPDUMP_AB_TEST
+                # exercised end to end for the first time): the `.iface` file
+                # read unconditionally below (network_interface metadata) is
+                # only ever WRITTEN as a side effect of _tcpdump_start_cmd's
+                # own remote command -- skipping tcpdump skipped that write
+                # too, so the later unconditional `cat` crashed the whole
+                # execution with "No such file or directory" on every
+                # no-capture run. Fixed by running the SAME interface-
+                # detection snippet standalone (no tcpdump involved) so the
+                # file exists either way and network_interface stays populated
+                # for every run, captured or not.
+                iface_only_cmd = f'{self._iface_detect_sh()}; echo $IFACE > $HOME/{label}.server.iface'
+                self._run_or_print(f"[{installation}/{scenario}] detect interface only (server, no capture)",
+                                    self._ssh_cmd(server_ip, iface_only_cmd))
+                iface_only_cmd = f'{self._iface_detect_sh()}; echo $IFACE > $HOME/{label}.client.iface'
+                self._run_or_print(f"[{installation}/{scenario}] detect interface only (client, no capture)",
+                                    self._ssh_cmd(client_ip, iface_only_cmd))
 
             # Pilot acceptance criterion 4: periodic CPU/steal/mem
             # sampling, independent of whether tcpdump itself is

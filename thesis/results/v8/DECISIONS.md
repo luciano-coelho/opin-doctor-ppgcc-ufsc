@@ -9185,3 +9185,123 @@ Cada posição (1a, 2a, 3a) recebe cada perfil exatamente uma vez ao
 longo das 3 janelas (rotação cíclica simples) -- confirmado
 mecanicamente no teste seco acima, item (5).
 
+**Item 1 -- continuação (CA do PQC byte a byte): localização confirmada,
+decodificação live bloqueada, recomendação sem aplicar ainda.** Troquei
+o servidor sa-east-1 para o perfil PQC de verdade
+(`CRYPTO_PROFILE=pqc TLS_KEM_PROXY_USE_PRECOMPILED=1 python3 switch_
+crypto_profile.py pqc`, 5 execuções de settling, confirmado "=== CRYPTO_
+PROFILE=pqc ready ===") para tentar buscar o PEM real servido agora e
+decodificar com `openssl x509 -text` lado a lado, como pedido. A busca
+direta (`curl -k -H "Host: directory" https://127.0.0.1:443/root-ca.pem`
+no próprio servidor) falhou com alerta TLS ("handshake failure") -- o
+perfil PQC exige o proxy TLS-KEM do próprio projeto (`tls_kem_proxy`,
+que fala o grupo KEM pós-quântico), que o `curl`/`openssl` puro deste
+ambiente não fala. Não montei esse proxy só para este diagnóstico
+(custo de engenharia adicional, fora do pedido original de "proponha,
+não execute" dos outros itens).
+
+Na ausência da decodificação live, fiz a aritmética com os números já
+reais e commitados:
+- Arquivo commitado hoje `root_ca_pqc.crt` = 8126 bytes (texto PEM,
+  confirmado `wc -c` + `git rev-parse HEAD:...`, sem mudança desde antes
+  de qualquer uma das duas medições -- git log confirma).
+- AWS medido (pilot3, real) para `/root-ca.pem` = 8229 bytes totais
+  (request+response). 8229 - 8126 = 103 bytes -- bate quase exatamente
+  com os 3 cabeçalhos HTTP reais que capturei direto do gateway (perfil
+  classic, mesma rota, mesmo servidor, só para confirmar o conjunto de
+  cabeçalhos): `Content-Type: application/x-pem-file` + `Date: ...` +
+  `Transfer-Encoding: chunked` = ~104 bytes pela fórmula de
+  `header_bytes()` do próprio projeto. **AWS é consistente com servir
+  exatamente o arquivo commitado atual + cabeçalhos HTTP comuns.**
+- Local medido (fixture pilot2-full-flow, Oct/26) para `/root-ca.pem` =
+  8104 bytes totais. Com os mesmos ~104 bytes de cabeçalho, o corpo
+  local seria ~8000 bytes -- **126 bytes MENOR** que o arquivo commitado
+  hoje. Como o git log confirma que o arquivo não mudou desde antes de
+  26/10, isso não pode ser um commit posterior -- a explicação mais
+  plausível é que a imagem Docker local usada naquela medição de 26/10
+  era um snapshot mais antigo (pré-rebuild), não reproduzível agora para
+  confirmação direta (aquele ambiente local efêmero não existe mais).
+
+**Conclusão:** o +500B não é custo de assinatura/verificação, JWT, JWKS
+nem handshake (todas as outras 42 chamadas bateram exato) -- é
+especificamente o PEM da CA do PQC, e a medição da AWS é consistente com
+o artefato CORRETO e atualmente commitado; a medição local antiga é que
+parece refletir um estado desatualizado. **Recomendação (não aplicada):
+atualizar `BASELINE_BYTES["pqc"]` para 282.154, tratando a medição AWS
+como a referência correta** -- mas isto não é a prova decodificada
+campo a campo que foi pedida (bloqueada pela incompatibilidade TLS/PQC
+do curl), então a constante continua INTOCADA até confirmação direta do
+Luciano.
+
+**Item 2 -- teste de deriva da janela de 6h (offline, dados já
+commitados, nenhuma execução nova):**
+- **Inclinação do T_fluxo dentro de cada bloco:** TODOS os 9 blocos
+  (3 instalações x 3 perfis) têm inclinação NEGATIVA (T_fluxo cai ao
+  longo das 10 execuções do bloco) -- um padrão consistente, não ruído
+  aleatório. 3 blocos têm correlação de Spearman forte (|rho|>=0.7,
+  limiar declarado): sa-east-1/classic (rho=-0.806), sa-east-1/hybrid
+  (rho=-0.903), us-east-1/hybrid (rho=-0.842). Possível resíduo de
+  settling mesmo depois dos 5 execuções de aquecimento por bloco.
+- **Primeira execução pós-pausa vs. resto do bloco:** 4 blocos foram
+  precedidos por uma das 6 pausas/liberações (us-east-1/pqc,
+  us-east-1/classic, ap-northeast-1/pqc, ap-northeast-1/classic) --
+  todos com diferença POSITIVA pequena (+3,1% a +5,2%), nenhum passou do
+  limiar declarado de 20%. Sem outlier por este critério.
+- **RTT (jitter)/perda/steal por bloco:** jitter mediano 0,09-0,15ms em
+  todos os 9 blocos (mesma ordem de grandeza); perda por sinais de pcap
+  0,05%-0,39%; steal% (recalculado aqui a partir do delta bruto de
+  `/proc/stat` entre a primeira e a última amostra de cada execução --
+  achado: `load_cpu_mem()` do `consolidate_v8.py` espera um campo "cpu"
+  pré-processado que o sampler real nunca escreveu, então
+  `cpu_steal_pct_mean` nunca foi populado em `consolidated.json` para
+  nenhum bloco -- reportado aqui, não corrigido no pipeline, por ser só
+  análise offline) muito baixo em geral (<0,03%), sem padrão temporal
+  claro.
+- **Rede do início vs. fim (por instalação, primeiro bloco cronológico
+  vs. último):** jitter e perda do primeiro e do último bloco de cada
+  instalação ficam na mesma ordem de grandeza (ex. sa-east-1: jitter
+  0,111ms->0,100ms; us-east-1: 0,102ms->0,111ms; ap-northeast-1:
+  0,149ms->0,153ms) -- **sim, é a mesma rede**, sem deriva evidente
+  entre início e fim da janela de 6h.
+- **VEREDITO: FALHA** -- critério declarado (nenhum bloco com
+  |rho|>=0,7 E nenhuma primeira-execução-pós-pausa com diferença >20%)
+  não passa, por causa da inclinação consistente dentro dos blocos (3
+  de 9 excedem o limiar). A causa mais provável é o próprio padrão de
+  settling, não a rede nem as pausas -- nenhuma conclusão sobre perfis
+  tirada daqui, como pedido.
+
+**Item 4 -- teste A/B do tcpdump, executado de verdade (critério 7),
+L0@sa-east-1, 3 perfis, 10+10 execuções alternadas (ABAB):** reusei o
+mecanismo já existente no próprio orquestrador (`CAMPAIGN_TCPDUMP_AB_
+TEST`/`_tcpdump_enabled_for_run()`, criado para este critério mas nunca
+exercitado de ponta a ponta até agora) em vez de reimplementar.
+
+**Bug real encontrado e corrigido antes de rodar de verdade:**
+`run_one_execution()`'s própria leitura do arquivo `.iface` (metadado
+de interface de rede) era incondicional, mas esse arquivo só é
+ESCRITO como efeito colateral do comando de start do tcpdump -- toda
+execução SEM captura (a metade "B" do teste) tentava ler um arquivo
+que nunca existiu e crashava com "No such file or directory". Primeira
+tentativa real crashou na 2a execução (classic, run 2). Corrigido
+rodando o mesmo trecho de detecção de interface, sozinho, mesmo quando
+a captura é pulada -- `campaign_run.py` corrigido e commitado junto com
+este registro. Segunda tentativa: 60/60 execuções completas, sem
+crash.
+
+**Resultado (mediana com margem de erro, bootstrap 95% CI, 10000
+reamostragens, n=10 por braço):**
+| perfil  | mediana COM captura | mediana SEM captura | diferença | IC 95% |
+|---------|---------------------|----------------------|-----------|--------|
+| classic | 1,8923s | 1,8969s | -4,6ms | [-68,3; +95,0]ms |
+| pqc     | 1,9105s | 1,8936s | +16,9ms | [-58,1; +119,8]ms |
+| hybrid  | 1,9630s | 2,0097s | -46,7ms | [-98,5; +44,4]ms |
+
+Os 3 intervalos de confiança incluem zero -- **nenhuma diferença
+estatisticamente detectável** entre rodar com ou sem captura tcpdump
+simultânea, em nenhum dos 3 perfis, com este tamanho de amostra
+(n=10/braço). Dados brutos (pcaps, cpu_mem, run*.json, summary.json)
+commitados em `thesis/results/v8/latency-pilot3/tcpdump-ab-test/`,
+escaneados (scan de texto padrão + descompactação manual dos 60 pcaps
+contra o IP real do autor e o ID da conta AWS, 0 hits) antes do commit.
+
+
