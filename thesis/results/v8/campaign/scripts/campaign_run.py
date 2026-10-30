@@ -2797,19 +2797,26 @@ def run_validation_stage(executor, installations, parallel=False):
 
 
 def validation_stage_health():
-    """Decision 105, item 2: acceptance check for the PARALLEL-mode
+    """Decision 105/106: acceptance check for the PARALLEL-mode
     validation stage -- every one of the 24 cells' single sample must
     fall inside pilot 3's own real PILOT3_T_FLUXO_CI95 for that exact
-    (profile, installation, scenario), AND there must be zero missing/
-    failed cells. A deliberately strict, single-sample-vs-median-CI
-    comparison (see PILOT3_T_FLUXO_CI95's own docstring) -- a smoke
-    test for parallelism-introduced skew (e.g. control itself, a tiny
+    (profile, installation, scenario), zero missing/failed cells, AND
+    mean steal% (server+client, same delta-based /proc/stat method as
+    compute_window_health()) below WINDOW_STEAL_THRESHOLD_PCT (5%,
+    added explicitly by the operator in Decision 106 -- the same
+    threshold already used for the real windows' own auto-advance
+    check, reused here rather than inventing a second number). A
+    deliberately strict, single-sample-vs-median-CI comparison (see
+    PILOT3_T_FLUXO_CI95's own docstring) -- a smoke test for
+    parallelism-introduced skew (e.g. control itself, a tiny
     t4g.micro, becoming a bottleneck running 3 installations' SSH at
     once), not a formal hypothesis test."""
     n_checked, n_outside, n_missing = 0, 0, 0
+    steal_samples = []
     for (profile, installation, scenario), (lo, hi) in PILOT3_T_FLUXO_CI95.items():
-        run_file = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
-                    / installation / profile / scenario / "run01.json")
+        cell_dir = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
+                    / installation / profile / scenario)
+        run_file = cell_dir / "run01.json"
         if not run_file.exists():
             n_missing += 1
             print(f"    [{installation}/{profile}/{scenario}] MISSING (no run01.json)")
@@ -2825,8 +2832,15 @@ def validation_stage_health():
             n_outside += 1
             print(f"    [{installation}/{profile}/{scenario}] t_fluxo={t_fluxo:.4f}s OUTSIDE pilot-3 CI "
                   f"[{lo:.4f}, {hi:.4f}]")
-    print(f"    validation_stage_health: {n_checked} checked, {n_outside} outside CI, {n_missing} missing/errors")
-    return n_outside == 0 and n_missing == 0
+        for side in ("server", "client"):
+            s = _steal_pct_from_cpu_jsonl(cell_dir / side / "w00_run01_cpu.jsonl")
+            if s is not None:
+                steal_samples.append(s)
+    mean_steal = statistics.mean(steal_samples) if steal_samples else 0.0
+    steal_ok = mean_steal < WINDOW_STEAL_THRESHOLD_PCT
+    print(f"    validation_stage_health: {n_checked} checked, {n_outside} outside CI, {n_missing} missing/errors, "
+          f"mean_steal={mean_steal:.2f}% ({'OK' if steal_ok else 'TOO HIGH'})")
+    return n_outside == 0 and n_missing == 0 and steal_ok
 
 
 def run_window(executor, installation, window, seed, profile_order):
