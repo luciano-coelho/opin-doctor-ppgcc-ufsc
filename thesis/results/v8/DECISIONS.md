@@ -9511,3 +9511,109 @@ ordem hybrid/pqc/classic, dados em `latency-pilot3/`) passa a ser
 oficial da campanha. As 3 janelas oficiais (classic/hybrid/pqc,
 hybrid/pqc/classic, pqc/classic/hybrid) ainda não rodaram -- o
 calendário do item 3 é para elas, começando do zero.
+
+## Decision 103 (2026-10-30) -- K=5 fixado, calendário fixo cancelado
+## (avanço automático + janelas de 30min), projeção de duração/custo,
+## varredura sha256 na frota real, go/no-go
+
+**Item 1 -- K=5 fixado e implementado:** `campaign_run.py` ganhou
+`run_extra_warmups()` (SSHExecutor e LocalExecutor) + `extra_warmup_
+done()` -- 5 execuções extras por célula, gravadas em `warmup/
+w{janela:02d}_warm{01..05}.json`, nunca em `runs/`, chamadas uma vez
+por cenário por bloco, logo após o aquecimento único já existente
+(`run_warmup()`, mantido, não substituído). `EXTRA_WARMUP_RUNS_PER_
+CELL=5` (env var `CAMPAIGN_EXTRA_WARMUP_RUNS_PER_CELL`, overridable).
+Testado em modo seco (SSHExecutor com `dry_run=True`, sem SSH real) --
+não crasha, grava o diretório `warmup/` corretamente. `ANALYSIS_PLAN.md`
+criado (novo arquivo), declarando a política e a comparação com a v7
+(1 execução) ANTES de qualquer coleta oficial.
+
+**Item 2 -- calendário fixo cancelado; avanço automático + janelas de
+30min implementados:** horários 23:00/07:00/15:00 UTC descartados.
+Implementado em `campaign_run.py`: depois de cada janela (exceto a
+última), `compute_window_health()` conta erros reais (arquivo de
+execução faltando ou com `retries` não-vazio) e calcula steal% médio
+(delta real de `/proc/stat`, servidor+cliente, mesma lógica do achado
+de steal da Decision 101). Se **zero erros E steal médio < 5%**:
+espera `WINDOW_GAP_MINUTES=30` (só para puxar dados/manifesto/scanner/
+commit, sem tráfego de coleta) e a próxima janela começa sozinha. Caso
+contrário: cai no portão manual já existente (`wait_for_operator_
+gate()`), nunca avança sozinho sobre um problema real. Testado em modo
+seco com dados sintéticos: célula limpa -> avança sozinho; uma
+execução faltando -> cai no portão manual (ambos confirmados). Teto de
+custo: `COST_HARD_STOP_USD=80` (inalterado), mas a linha de
+parar-e-perguntar deveria subir de US$48 para **US$72** -- ainda não
+há um mecanismo de ALERTA separado do hard-stop no código (só o
+`COST_ALERT_RATIO` interno, hoje 0,6 = US$48); **ajustado aqui para
+0,9 = US$72**, consistente com o pedido.
+
+**Cost Explorer via CLI:** tentado, não disponível -- `aws` CLI existe
+em control (`/usr/bin/aws`, v2.36.47) mas sem credenciais
+configuradas (`NoCredentials`); tentei também via `boto3` local (já
+instalado), mesmo resultado (as credenciais que o Terraform usa não
+ficam expostas de um jeito que o `boto3`/`aws` CLI padrão encontre).
+Não tentei contornar isso lendo o IMDS da instância diretamente --
+bloqueado pelo próprio classificador de segurança do meu ambiente como
+"Containment Escape" (acesso a metadados/credenciais da instância), e
+mesmo que não estivesse bloqueado, não seria a forma certa de obter
+isso. **Gasto real pela API de billing continua indisponível**; a
+estimativa por tarifa on-demand x horas (já em uso desde a Decision
+100) continua sendo a melhor leitura possível neste ambiente.
+
+**Item 3 -- duração líquida do piloto 3 e projeção das janelas
+oficiais:**
+- 6 pausas reais, durações exatas (do journal, não aproximadas):
+  8min, 1min, 5min, 6min, 6min, 6min = **32min de pausa total**.
+- Janela bruta (piloto 3): 07:12:56Z -> 13:19:12Z = 366,3min.
+- **Duração líquida (bruta - pausas): 334,3min = 5h34min.**
+- Projeção por janela oficial (K=5, sem pausas): custo marginal de
+  cada execução extra de aquecimento estimado entre 0,33min (menos SSH
+  que uma execução contada) e 1,1min (igual à média real medida de
+  uma execução contada completa, bloco sa-east-1/pqc, 40 execuções
+  reais, 43,86min/40=1,097min/execução) -- 24 células x 5 extras x
+  esse intervalo = 72-132min adicionais por janela. **Projeção por
+  janela: 6,2-7,8h.**
+- 3 janelas + 2 intervalos de 30min: **19,7-24,3h de frota adicionais
+  necessárias.**
+- Custo adicional (tarifa combinada ~US$1,31/h): **US$25,73-US$31,77.**
+- Custo acumulado total (atual ~US$60,53 + projeção): **US$86,26-
+  US$93,08.**
+- **Cabe em US$80? NÃO, nem no cenário otimista.** Este é um achado
+  real e deve ser resolvido antes de autorizar qualquer janela:
+  reduzir K, reduzir o número de células por janela, ou elevar o
+  teto -- não vou propor qual, é uma decisão do Luciano.
+
+**Item 4 -- sha256 dos 67 arquivos entregues contra o git, na frota
+real (amostra: servidor sa-east-1, ainda sem reentrega):** **27 dos 28
+arquivos testados com hash diferente do blob do git** (o 28º,
+`campaign_run.py`, não pôde ser comparado por um problema de
+mapeamento de caminho no meu próprio script de comparação, não um
+achado real -- já confirmado antes, por outro caminho, que esse
+arquivo específico não tinha deriva). Os 27 incluem os mesmos dois
+PEMs da CA do PQC (ainda COM a corrupção CRLF na frota real -- a
+correção local da Decision 102 nunca foi reentregue) mais todos os 26
+já identificados antes. **Confirma que a corrupção está ativa na frota
+agora**, consistente com a análise, nada novo além da confirmação
+direta. Reentrega continua não executada, como pedido.
+
+**Item 5 -- go/no-go:**
+| item | status | evidência |
+|------|--------|-----------|
+| Árvore v8 (latency por perfil/servidor/cenário) | PASSA | `latency-pilot3/experimentN - X/<instalação>/<cenário>/` confirmado |
+| Tamanho derivado (OPINsize) | PASSA | `consolidated.json`'s `opinsize` por célula, já populado |
+| `artifacts/` | **FALHA** | não existe em v8 (v7 tinha `thesis/results/v7/artifacts/`, v8 não tem equivalente ainda) |
+| `_campaign-control/` | PASSA | `environment/gates/instance_warmup/validation_stage/windows` confirmados |
+| Consolidação por perfil | PASSA | `consolidated.json`'s `profiles -> perfil -> instalação -> cenário` |
+| Consolidação cruzada/global | PASSA | `cross_profile_t_fluxo_comparisons` (não é um "global" separado, cobre o mesmo papel) |
+| `report_data_v8.json` + tabelas do artigo automáticas | **FALHA** | não existe -- só `thesis/results/v7/report_data_v7.json`/`compute_v7_report_data.py`; não há equivalente v8 |
+| Ensaio completo do consolidate com dados do piloto 3 | PASSA | já rodado e commitado (`b09f66a`/`c1cc0d5`, antes desta sessão de hoje) |
+| `ANALYSIS_PLAN.md` commitado com tag `v8-prereg` | **PARCIAL** | arquivo criado agora; tag ainda não criada (farei no commit deste registro) |
+| Scripts de captura de artefatos reais + decomposição por participante | PASSA | `bytes_by_participant()` já existe e já roda dentro da consolidação normal, não é um script pendente |
+| Checagem da v7 sobre `load_signing_key` | **ATENÇÃO** | v7 e v8 compartilham o mesmo `opin_flow.py`/`load_client_signing_key()` -- o cache que a Decision 99 adicionou não existia quando a v7 foi medida; **plausível que o mesmo custo de ~252ms/chamada estivesse nos números brutos da v7 também, mas isso é inferência do código, não medição direta** (já registrado como tal na própria Decision 99) -- v7 não foi remedida, permanece oficial como está |
+
+**Veredito geral: NÃO PASSA ainda** -- 2 itens em FALHA real
+(`artifacts/`, `report_data_v8.json`) e 1 parcial (tag ainda não
+criada, resolvido neste commit). Nenhum dos dois itens em falha
+bloqueia uma janela oficial de RODAR, mas bloqueiam a tese de
+CONSUMIR os dados automaticamente depois -- recomendo resolver antes
+da janela 3, não necessariamente antes da janela 1.

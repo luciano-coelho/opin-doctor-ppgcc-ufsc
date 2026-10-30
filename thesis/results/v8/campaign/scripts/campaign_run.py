@@ -88,6 +88,7 @@ import os
 import random
 import re
 import shlex
+import statistics
 import subprocess
 import sys
 import threading
@@ -171,7 +172,7 @@ _INSTANCE_HOURLY_USD_BY_REGION = {
 }
 _CONTROL_HOURLY_USD = 0.0084  # t4g.micro, approx, negligible either way
 COST_HARD_STOP_USD = float(os.environ.get("CAMPAIGN_COST_HARD_STOP_USD", "80"))
-COST_ALERT_RATIO = 0.6  # warn once estimated cost crosses 60% of the hard stop
+COST_ALERT_RATIO = 0.9  # Decision 103: $72/$80 = 0.9 -- warn once estimated cost crosses the stop-and-ask line
 COST_BUDGET_OVERRIDE_MARKER = Path("/home/ec2-user/campaign_cost_hard_stop_override")
 COST_BUDGET_POLL_SECONDS = 60
 _cost_alert_logged = False  # module-level, so the 60%-crossing warning only prints once
@@ -1055,6 +1056,14 @@ def warmup_done(scenario_path, window):
     return (scenario_path / f"run00_warmup_window{window:02d}.json").exists()
 
 
+def extra_warmup_done(scenario_path, window, count):
+    # Decision 102, item 1: resumability for the K extra warmups --
+    # checks only the LAST expected file (w{window}_warm{count}.json),
+    # same "done means the final one exists" convention as
+    # already_done()/warmup_done() above.
+    return (scenario_path / "warmup" / f"w{window:02d}_warm{count:02d}.json").exists()
+
+
 # Item 1 (this turn): the gateway image -- the one whose ID actually
 # matters for the campaign's crypto correctness (auth/mockapi/
 # mongo_seed's own IDs aren't gated here; deliver_images.sh delivers
@@ -1747,6 +1756,56 @@ class SSHExecutor:
         result["negotiated_group_verification"] = verification
         (scenario_path / f"run00_warmup_window{window:02d}.json").write_text(json.dumps(result, indent=2))
 
+    def run_extra_warmups(self, installation, scenario, profile, window, scenario_path, count):
+        """Decision 102, item 1: K extra warmup executions per cell,
+        declared BEFORE collection (not tuned after looking at results),
+        discarded from every statistic -- the per-cell counterpart to
+        run_warmup()'s own single pre-existing warmup (kept unchanged;
+        this is additional, not a replacement). Written under
+        scenario_path/warmup/, never scenario_path/runs/, so nothing
+        downstream (already_done(), consolidate_v8.py's own run*.json
+        glob) can ever mistake one for a counted execution. Same
+        correctness checks as run_warmup() (call_count>0, negotiated
+        group) on every one of the K runs -- a cold-start failure
+        should abort here, not silently show up as noise in the first
+        counted run."""
+        warmup_dir = scenario_path / "warmup"
+        warmup_dir.mkdir(parents=True, exist_ok=True)
+        client_ip = self._client_ip(f"{scenario}@{installation}")
+        server_ip = self._server_ip(installation)
+        gateway_ip = self._server_gateway_ip(installation, f"{scenario}@{installation}")
+        for i in range(1, count + 1):
+            label = f"w{window:02d}_warm{i:02d}"
+            since_dt = datetime.now(timezone.utc)
+            remote_argv = ["python3", "campaign_client_runner.py", "--label", label]
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(_REMOTE_CLIENT_ENV(profile, gateway_ip))} {shlex.join(remote_argv)}"
+            stdout = self._run_or_print(
+                f"[{installation}/{scenario}/w{window}] extra warmup {i}/{count}",
+                self._ssh_cmd(client_ip, remote_cmd),
+                timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
+            )
+            until_dt = datetime.now(timezone.utc)
+            if stdout is None:
+                continue  # dry-run
+            result = json.loads(stdout)
+            if result.get("call_count", 0) <= 0:
+                raise RuntimeError(f"[{installation}/{scenario}/{profile}/w{window}] extra warmup {i}/{count} "
+                                    f"completed but call_count={result.get('call_count')} -- not verified")
+            gateway_log = self._run_or_print(
+                f"[{installation}/{scenario}/w{window}] fetch extra warmup {i} gateway log",
+                self._ssh_cmd(server_ip, f"docker logs -t --since {since_dt.isoformat()} "
+                                          f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
+            )
+            verification = verify_negotiated_groups(gateway_log, _CLIENT_EXPECTED_CURVE[profile])
+            if not verification["ok"]:
+                raise RuntimeError(
+                    f"[{installation}/{scenario}/{profile}/w{window}] extra warmup {i}/{count}: negotiated-group "
+                    f"verification FAILED (A.2/B.12):\n  " + "\n  ".join(verification["problems"])
+                )
+            result.pop("calls", None)
+            result["negotiated_group_verification"] = verification
+            (warmup_dir / f"{label}.json").write_text(json.dumps(result, indent=2))
+
     def run_one_execution(self, installation, scenario, profile, window, run_index, scenario_path):
         lock = _SERVER_LOCKS[installation]
         if not lock.acquire(blocking=False):
@@ -2154,6 +2213,33 @@ class LocalExecutor:
             json.dumps(result, indent=2)
         )
 
+    def run_extra_warmups(self, installation, scenario, profile, window, scenario_path, count):
+        """LocalExecutor counterpart of SSHExecutor's own method (same
+        docstring) -- local rehearsal/dry-run only, no tcpdump/cpu
+        sampling (matches run_warmup()'s own lighter-weight local
+        shape, same self.la.run_once_timed_with_retry() call)."""
+        warmup_dir = scenario_path / "warmup"
+        warmup_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, count + 1):
+            label = f"w{window:02d}_warm{i:02d}"
+            whole_run_retries = []
+            since_dt = datetime.now(timezone.utc)
+            result = self.la.run_once_timed_with_retry(profile, label, whole_run_retries, return_calls=False)
+            until_dt = datetime.now(timezone.utc)
+            result["whole_run_retries"] = whole_run_retries
+            if result.get("call_count", 0) <= 0:
+                raise RuntimeError(f"[{installation}/{scenario}/{profile}/w{window}] extra warmup {i}/{count} "
+                                    f"completed but call_count={result.get('call_count')} -- not verified")
+            gateway_log = self._slice_gateway_log_live(since_dt, until_dt)
+            verification = verify_negotiated_groups(gateway_log, _CLIENT_EXPECTED_CURVE[profile])
+            result["negotiated_group_verification"] = verification
+            if not verification["ok"]:
+                raise RuntimeError(
+                    f"[{installation}/{scenario}/{profile}/w{window}] extra warmup {i}/{count}: negotiated-group "
+                    f"verification FAILED (A.2/B.12):\n  " + "\n  ".join(verification["problems"])
+                )
+            (warmup_dir / f"{label}.json").write_text(json.dumps(result, indent=2))
+
     def _slice_gateway_log_live(self, since_dt, until_dt, margin_seconds=2):
         """Decision 62: derives a per-run slice from a FRESH `docker
         logs --since/--until` call widened by a margin -- used here
@@ -2345,6 +2431,19 @@ def run_warmup(executor, installation, scenario, profile, window, scenario_path)
     executor.run_warmup(installation, scenario, profile, window, scenario_path)
 
 
+EXTRA_WARMUP_RUNS_PER_CELL = int(os.environ.get("CAMPAIGN_EXTRA_WARMUP_RUNS_PER_CELL", "5"))
+
+
+def run_extra_warmups(executor, installation, scenario, profile, window, scenario_path):
+    """Decision 102, item 1: K=EXTRA_WARMUP_RUNS_PER_CELL extra warmup
+    executions per cell, declared BEFORE collection, discarded from
+    every statistic -- additional to (never replacing) run_warmup()'s
+    own pre-existing single warmup above. See Decision 102/ANALYSIS_
+    PLAN.md for why K=5 (stabilizes all 24 of pilot 3's real cells,
+    Mann-Kendall) and v7's own K=1 for comparison."""
+    executor.run_extra_warmups(installation, scenario, profile, window, scenario_path, EXTRA_WARMUP_RUNS_PER_CELL)
+
+
 def start_block_proxies(executor, installation, profile, scenarios, window):
     executor.start_block_proxies(installation, profile, scenarios, window)
 
@@ -2454,6 +2553,70 @@ def run_instance_warmup(executor, installation, duration_seconds=INSTANCE_WARMUP
     finally:
         stop_block_proxies(executor, installation, INSTANCE_WARMUP_PROFILE, [scenario], window=0)
     print(f"[{installation}] instance warmup: {i} disposable flow(s) run in {duration_seconds}s")
+
+
+WINDOW_GAP_MINUTES = int(os.environ.get("CAMPAIGN_WINDOW_GAP_MINUTES", "30"))
+WINDOW_STEAL_THRESHOLD_PCT = float(os.environ.get("CAMPAIGN_WINDOW_STEAL_THRESHOLD_PCT", "5.0"))
+
+
+def _steal_pct_from_cpu_jsonl(path):
+    """Same delta-based steal% as the offline drift analysis (Decision
+    101/102): cumulative /proc/stat jiffies, first vs last sample in
+    this one file -- NOT a lifetime-since-boot ratio."""
+    if not path.is_file():
+        return None
+    lines = [l for l in path.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+    if len(lines) < 2:
+        return None
+    try:
+        first, last = json.loads(lines[0]), json.loads(lines[-1])
+        f0 = [int(x) for x in first["proc_stat_line"].split()[1:11]]
+        f1 = [int(x) for x in last["proc_stat_line"].split()[1:11]]
+    except (json.JSONDecodeError, KeyError, ValueError, IndexError):
+        return None
+    dtotal, dsteal = sum(f1) - sum(f0), f1[7] - f0[7]
+    return 100 * dsteal / dtotal if dtotal > 0 else None
+
+
+def compute_window_health(installations, window):
+    """Decision 102's automatic-advance policy: scans THIS window's own
+    just-written run*.json (errors: a missing file for an expected
+    global_run_index, or a nonempty "retries" list) and *_cpu.jsonl
+    (mean steal%, server+client, delta-based) across every installation/
+    profile/scenario this window actually touched. Runs entirely on
+    control's own already-local data (SSHExecutor writes results here
+    as it goes) -- no off-instance pull needed for this automated
+    check, unlike wait_for_operator_gate()'s own full acceptance
+    review."""
+    n_errors = 0
+    n_runs_expected = 0
+    steal_samples = []
+    for installation in installations:
+        scenarios = SCENARIO_ROTATION[installation][window]
+        for profile in PROFILES:
+            for scenario in scenarios:
+                scenario_path = scenario_dir(installation, scenario, profile)
+                for i in range(1, RUNS_PER_WINDOW + 1):
+                    global_run_index = (window - 1) * RUNS_PER_WINDOW + i
+                    n_runs_expected += 1
+                    run_file = scenario_path / "runs" / f"run{global_run_index:02d}.json"
+                    if not run_file.exists():
+                        n_errors += 1
+                        continue
+                    try:
+                        d = json.loads(run_file.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError:
+                        n_errors += 1
+                        continue
+                    if d.get("result", {}).get("retries"):
+                        n_errors += 1
+                    label = f"w{window:02d}_run{global_run_index:02d}"
+                    for side in ("server", "client"):
+                        s = _steal_pct_from_cpu_jsonl(scenario_path / side / f"{label}_cpu.jsonl")
+                        if s is not None:
+                            steal_samples.append(s)
+    mean_steal = statistics.mean(steal_samples) if steal_samples else 0.0
+    return n_errors, n_runs_expected, mean_steal
 
 
 def wait_for_operator_gate(gate_name: str, poll_seconds: int = 60) -> None:
@@ -2672,6 +2835,8 @@ def run_window(executor, installation, window, seed, profile_order):
                 scenario_path = scenario_paths[scenario]
                 if not warmup_done(scenario_path, window):
                     run_warmup(executor, installation, scenario, profile, window, scenario_path)
+                if not extra_warmup_done(scenario_path, window, EXTRA_WARMUP_RUNS_PER_CELL):
+                    run_extra_warmups(executor, installation, scenario, profile, window, scenario_path)
 
             # Step 3: round-robin -- run index is the OUTER loop,
             # scenario the inner one -- run 1 of every scenario, then
@@ -2842,14 +3007,29 @@ def main():
         for installation in installations:
             write_status("running", f"window={window} installation={installation}")
             run_window(executor, installation, window, latin_square_seed, profile_orders_by_window[window])
-        if window == 1:
-            # Validation-gate turn (item 3): same stop as the pre-window-1
-            # gate above, this time over window 1's own full, real
-            # dataset (every installation's own 10 runs/profile/scenario)
-            # instead of the 24-execution smoke sample -- full acceptance
-            # before spending window 2/3's own time/money.
-            print("=== window 1 complete for every installation -- full acceptance gate before window 2 ===")
-            wait_for_operator_gate("window1_acceptance")
+        if window < WINDOWS_PER_CAMPAIGN:
+            # Decision 102's automatic-advance policy (campaign mode):
+            # replaces the pilot's own unconditional manual gate
+            # (previously only after window 1) -- window N+1 starts on
+            # its own, after a fixed WINDOW_GAP_MINUTES pull/manifest/
+            # scan/commit window with NO collection traffic, only if
+            # window N finished with zero errors and mean steal% below
+            # WINDOW_STEAL_THRESHOLD_PCT. Any other outcome falls back
+            # to the same manual wait_for_operator_gate() the pilot
+            # already used -- never auto-advances past a real problem.
+            n_errors, n_expected, mean_steal = compute_window_health(installations, window)
+            healthy = (n_errors == 0 and mean_steal < WINDOW_STEAL_THRESHOLD_PCT)
+            write_status("window_gap", f"window={window} errors={n_errors}/{n_expected} "
+                                        f"steal_pct={mean_steal:.2f} healthy={healthy}")
+            print(f"=== window {window} complete: errors={n_errors}/{n_expected} runs, "
+                  f"mean_steal={mean_steal:.2f}% -- "
+                  f"{'AUTO-ADVANCE' if healthy else 'GATE (operator required)'} ===")
+            if healthy:
+                print(f"    Waiting {WINDOW_GAP_MINUTES} min (pull/manifest/scan/commit window, "
+                      f"no collection traffic) before window {window + 1}...")
+                time.sleep(WINDOW_GAP_MINUTES * 60)
+            else:
+                wait_for_operator_gate(f"window{window}_acceptance")
     write_status("completed", f"windows={WINDOWS_PER_CAMPAIGN}")
 
 
