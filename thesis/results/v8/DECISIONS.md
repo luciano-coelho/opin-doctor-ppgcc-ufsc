@@ -9617,3 +9617,119 @@ criada, resolvido neste commit). Nenhum dos dois itens em falha
 bloqueia uma janela oficial de RODAR, mas bloqueiam a tese de
 CONSUMIR os dados automaticamente depois -- recomendo resolver antes
 da janela 3, não necessariamente antes da janela 1.
+
+## Decision 104 (2026-10-30) -- destroy confirmado e verificado, decomposição
+## do overhead por execução, os 2 FALHAs do go/no-go fechados offline,
+## roteiro de resubida
+
+**Item 1 -- destroy executado e verificado, com o Luciano presente:**
+Pré-condição confirmada antes de qualquer destroy: `git status`
+limpo, `git push origin main` (6 commits, incluindo as Decisions
+100-103 e todos os dados do piloto 3) -- `main...origin/main` sem
+divergência depois do push. `terraform plan -destroy -out=tfdestroy`:
+**`Plan: 0 to add, 0 to change, 65 to destroy`** -- exatamente os 65
+esperados. `terraform apply "tfdestroy"` (só o plano salvo, sem
+recalcular): **`Apply complete! Resources: 0 added, 0 changed, 65
+destroyed`**. Plano apagado (`rm tfdestroy`) depois. Confirmação
+região a região (chamada real à API da AWS, não só `terraform
+state`, usando o profile `MOCKOPIN_AWS_PROFILE` que o próprio
+Terraform já usava -- descoberto nesta investigação que `aws`
+CLI/`boto3` sem esse profile explícito não acham credencial nenhuma):
+**sa-east-1, us-east-1, ap-northeast-1, ca-central-1, eu-north-1,
+ap-northeast-2, ap-southeast-1 -- as 7, 0 instâncias cada uma.**
+`terraform state list` também confirma 0 recursos. Frota destruída e
+verificada em dois níveis independentes.
+
+**Item 2 -- decomposição do overhead por execução (offline, dados do
+piloto 3):**
+- Overhead real medido (gap entre o fim de uma execução e o início da
+  próxima, excluindo o próprio T_fluxo do fluxo): média 53,7s,
+  mediana 49,4s, **p90 = 80,0s** -- bate com a estimativa de "~76s"
+  do Luciano (ele está olhando a cauda superior, não a média).
+- **Achado real, concreto**: o `ping -c 10` de referência (cliente ->
+  servidor) dentro de cada execução **está sempre bloqueado (ICMP
+  bloqueado pelo security group, confirmado nesta mesma sessão) e
+  sempre espera os ~9,3s completos sem nunca ter sucesso** --
+  `rtt_avg_ms` já vem `null` em todo lugar por causa disso (acha
+  do na Decision 101). Remover ou encurtar este ping não perde
+  NENHUMA informação (já não tinha nenhuma) e não toca no que é
+  medido.
+- Enumerados os ~19 SSH + 2 SCP por execução (tcpdump start/stop x2
+  lados, verify, sampler de CPU start/stop/fetch x2, chrony x2, iface
+  fetch x2, log do gateway, scp do pcap x2, mais o próprio ping) --
+  cada round-trip SSH/SCP real custa em média ~2-3,5s; o resto do
+  overhead (fora o ping) vem daí, não de um único vilão.
+- **(a) Execuções extras de aquecimento sem pcap/coletores** (só o
+  JSON do fluxo): é exatamente o que `run_extra_warmups()` já faz
+  (Decision 103) -- não toca no que é medido, porque aquecimento
+  nunca entrou na estatística.
+- **(b) Esperas fixas só de orquestração**: o `ping -c 10` bloqueado é
+  o caso claro -- não toca no que é medido (a métrica que ele
+  alimentaria já vinha nula). Os polls de 60s de orçamento (Decision
+  100/103) já saem do caminho em modo campanha, não somam aqui.
+- **(c) Rodar as 3 instalações em paralelo** (servidores e clientes
+  independentes, nunca dois clientes diferentes contra o mesmo
+  servidor ao mesmo tempo): **seguro e não toca no que é medido** --
+  cada instalação já tem seu próprio servidor dedicado (confirmado no
+  inventário), e o lock `_SERVER_LOCKS[installation]` já impede duas
+  execuções simultâneas NO MESMO servidor; paralelismo por instalação
+  nunca viola essa regra, porque cada instalação é um servidor
+  diferente.
+- **Projeções (janela única, K=5, sem pausas, meta <=10h de frota)**:
+
+| combinação | duração/janela | frota total (3 janelas+2 gaps) | custo adicional | acumulado | cabe em 10h? |
+|---|---|---|---|---|---|
+| K=5 sequencial, sem outras mudanças | 7,00h | 22,01h | +US$28,75 | US$89,28 | NÃO |
+| + remover o ping bloqueado | 6,38h | 20,14h | +US$26,32 | US$86,85 | NÃO |
+| + paralelizar as 3 instalações | 3,19h | 10,57h | +US$13,81 | US$74,34 | quase (10,57h) |
+
+  Combinando as 3 reduções chega muito perto da meta de 10h (10,57h) --
+  um corte adicional pequeno (ex. unificar chrony+iface num único SSH,
+  ou aceitar K=4 em vez de K=5, que já cobre 95,8% das células) fecharia
+  a diferença. **Nada disto foi implementado** -- só a análise, como
+  pedido.
+
+**Item 3 -- os 2 FALHAs do go/no-go, fechados offline com dados do
+piloto 3:**
+- `report_data_v8.json` + tabelas automáticas: novo
+  `generate_report_data.py`, chamado automaticamente de dentro do
+  próprio `consolidate_v8.py` (não é mais um passo manual separado) --
+  ensaiado do zero contra os dados reais do piloto 3: `consolidate_v8.py`
+  rodou e produziu os 4 arquivos (`consolidated.json`,
+  `CONSOLIDATED_REPORT.md`, `report_data_v8.json` com 24 linhas,
+  `REPORT_TABLES.md`) numa única chamada. **FALHA fechada, evidência:
+  ensaio completo rodou sem erro.**
+- Scripts de captura de artefatos reais: novo
+  `capture_real_artifacts.sh`, por perfil (certificado do cliente, log
+  de handshake do gateway) -- mesmo papel de `thesis/results/v7/
+  artifacts/`. **Preparado, NÃO executado** (frota já destruída pelo
+  item 1 desta mesma decisão -- não existe onde rodar agora; pronto
+  para a próxima campanha, depois das janelas oficiais e antes do
+  destroy final, como pedido). Decomposição por participante: já
+  fechada antes (`bytes_by_participant()` já roda dentro da
+  consolidação normal).
+
+**Item 4 -- roteiro de resubida, preparado:**
+1. `terraform apply` de plano salvo (`terraform plan -out=tfup` +
+   revisão + `terraform apply tfup`) -- ~10-15min para os 65 recursos
+   em 7 regiões (mesma ordem de grandeza do apply original).
+2. `deliver_images.sh` + `deliver_source.sh` -- agora a partir da
+   árvore corrigida em LF (Decision 102); **conferência de sha256 dos
+   67 arquivos entregues contra `git show HEAD:<arquivo>`** em pelo
+   menos uma instalação (mesmo método do item 4 da Decision 103,
+   repetido depois da entrega para confirmar 0 divergências, não só
+   antes) -- ~15-20min (inclui a cópia dos tarballs de imagem Docker,
+   que são os maiores arquivos).
+3. Pré-flight TCP (conectividade cliente->gateway na porta 443, por
+   instalação) -- ~5min; não existe como script dedicado ainda
+   (foi feito manualmente na sessão original, não salvo) -- a
+   verificação em si é simples (uma tentativa de conexão TCP por
+   cliente), proponho escrevê-la como script antes da próxima
+   resubida, não durante.
+4. Validação curta de 24 execuções (`run_validation_stage()`, já
+   existente, 1 execução/perfil x 8 cenários) -- ~10-15min, inclui as
+   trocas de perfil.
+- **Duração estimada total: ~40-55min (~1h).**
+- **Custo estimado: ~US$1,31** (1h x tarifa combinada de frota já
+  usada, ~US$1,31/h) -- desprezível frente ao teto de US$80.
+

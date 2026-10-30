@@ -1176,6 +1176,15 @@ def main():
     (out_dir / "CONSOLIDATED_REPORT.md").write_text(render_report(data), encoding="utf-8")
     print(f"Wrote {out_dir / 'consolidated.json'} and {out_dir / 'CONSOLIDATED_REPORT.md'}")
 
+    # Decision 103, go/no-go item: report_data_v8.json + the paper's own
+    # tables are generated HERE, automatically, every time consolidate_v8.py
+    # runs -- not a separate manual step someone has to remember.
+    from generate_report_data import derive_report_data, render_markdown_table
+    report_data = derive_report_data(data)
+    (out_dir / "report_data_v8.json").write_text(json.dumps(report_data, indent=2), encoding="utf-8")
+    (out_dir / "REPORT_TABLES.md").write_text(render_markdown_table(report_data), encoding="utf-8")
+    print(f"Wrote {out_dir / 'report_data_v8.json'} ({len(report_data['rows'])} rows) and {out_dir / 'REPORT_TABLES.md'}")
+
 
 if __name__ == "__main__":
     main()
