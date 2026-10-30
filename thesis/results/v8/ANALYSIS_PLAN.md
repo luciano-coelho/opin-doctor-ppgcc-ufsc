@@ -59,6 +59,42 @@ lista completa dos 11 critérios)
   perfis (`cross_profile_t_fluxo_comparisons`) -- não um "global" único
   separado, a visão cruzada já cobre esse papel.
 
+## Reduções de overhead aprovadas (Decision 105, 2026-10-30)
+
+Aprovadas pelo Luciano, com ele presente, antes de qualquer coleta
+oficial -- cada uma com o dado real que a justifica:
+
+- **(a) Aquecimentos extras sem pcap nem coletores**: já implementado
+  (Decision 103, `run_extra_warmups()`) -- grava só o JSON do fluxo,
+  nunca inicia tcpdump/sampler de CPU. Não toca no que é medido porque
+  aquecimento nunca entrou na estatística.
+- **(b) Remoção do ping de referência** (`ping -c 10`, cliente ->
+  servidor, dentro de cada execução): achado real (Decision 104) --
+  ICMP está sempre bloqueado pelo security group, o ping sempre espera
+  os ~9,3s completos sem nunca retornar um RTT real (`rtt_avg_ms` já
+  vinha `null` por causa disso). RTT/jitter continuam vindo do próprio
+  pcap (`rtt_jitter_ms`, Decision 94) e do novo pré-flight TCP (porta
+  443, uma vez por cliente, antes de qualquer janela --
+  `preflight_tcp.py`, roda a partir do PRÓPRIO cliente via SSH, não de
+  control, porque o caminho de rede é diferente). Implementado:
+  `run_one_execution()` não chama mais `ping`, não grava mais
+  `{label}_ping.json`.
+- **(c) As 3 instalações em paralelo**: seguro porque cada instalação
+  tem seu próprio servidor dedicado (nenhum cliente de uma fala com o
+  servidor de outra, confirmado no `inventory.json`), e
+  `_SERVER_LOCKS[installation]` (já existia, `threading.Lock` real) já
+  impede duas execuções simultâneas NO MESMO servidor -- paralelizar
+  por instalação nunca pode violar essa regra. `CAMPAIGN_PARALLEL_
+  INSTALLATIONS=1` (padrão desligado) ativa isso tanto na validação de
+  24 execuções quanto nas janelas reais.
+
+**Critério de aceite da validação em paralelo**: as 24 células (1
+execução cada) devem cair dentro do IC95% real do piloto 3 para
+aquela mesma célula (`PILOT3_T_FLUXO_CI95`, hardcoded a partir de
+`consolidated.json`) E zero erros. Se falhar, o próprio código desarma
+`CAMPAIGN_PARALLEL_INSTALLATIONS` e as janelas reais rodam
+sequenciais -- sem intervenção manual.
+
 ## Decomposição por participante
 
 `bytes_by_participant()` (`consolidate_v8.py`) já existe e já roda

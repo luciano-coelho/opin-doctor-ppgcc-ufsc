@@ -9733,3 +9733,101 @@ piloto 3:**
 - **Custo estimado: ~US$1,31** (1h x tarifa combinada de frota já
   usada, ~US$1,31/h) -- desprezível frente ao teto de US$80.
 
+## Decision 105 (2026-10-30) -- as 3 reduções aprovadas, implementadas em
+## modo campanha (nada subido ainda); validação paralela com critério de
+## aceite e fallback automático; custo incremental separado do
+## acumulado; checagem da v7 sobre load_signing_key
+
+**Aprovação do Luciano, com ele presente**: (a) aquecimentos extras
+sem pcap/coletores, (b) remoção do ping de referência, (c) as 3
+instalações em paralelo. Implementadas em `campaign_run.py`, **nada
+executado** (frota ainda destruída, "não suba sem meu comando").
+
+**Item 1 -- as 3 implementadas, com o dado que justifica cada uma:**
+- (a) já existia desde a Decision 103 (`run_extra_warmups()`) -- só
+  confirmado aqui que já satisfaz a aprovação, nenhum código novo.
+- (b) `run_one_execution()` não chama mais `ping -c 10` nem grava
+  `{label}_ping.json` (SSHExecutor e LocalExecutor). Dado que
+  justifica: achado da Decision 104, ICMP sempre bloqueado, `ping -c
+  10` sempre esperava os ~9,3s completos sem nunca retornar RTT real
+  (`rtt_avg_ms` já vinha `null` por isso em 100% das execuções reais).
+  Novo `preflight_tcp.py` (porta 443, uma vez por cliente, a partir do
+  PRÓPRIO cliente via SSH -- não de control, que não tem o mesmo
+  caminho de rede) substitui a função de "confirmar conectividade" que
+  o ping também cumpria, sem o custo por execução.
+- (c) nova flag `CAMPAIGN_PARALLEL_INSTALLATIONS` (padrão desligado) --
+  `threading.Thread` por instalação, tanto no laço de janelas do
+  `main()` quanto em `run_validation_stage()`. Dado que justifica:
+  cada instalação tem servidor próprio e dedicado (confirmado no
+  `inventory.json` real), e `_SERVER_LOCKS[installation]` (já existia,
+  `threading.Lock` real) já impede duas execuções simultâneas no MESMO
+  servidor -- paralelizar por instalação não pode violar essa regra
+  por construção.
+- `ANALYSIS_PLAN.md` atualizado com as 3, antes de qualquer coleta
+  oficial (seção "Reduções de overhead aprovadas"). Testado a seco:
+  (1) nenhuma referência residual a `ping_output`/escrita de
+  `_ping.json`; (2) 3 threads de 0,3s cada rodaram em 0,30s total, não
+  0,9s -- paralelismo confirmado funcionando; (3)/(4)
+  `validation_stage_health()` aceita quando as 24 células sintéticas
+  caem dentro do IC95% e rejeita quando uma cai fora -- os 2 casos
+  testados.
+- Tag `v8-prereg-2` criada (mantendo `v8-prereg`), apontando para este
+  commit.
+
+**Item 2 -- validação paralela com critério de aceite e fallback
+automático:** `run_validation_stage(..., parallel=True)` roda as 3
+instalações em threads; ao final, `validation_stage_health()` compara
+a amostra única de cada uma das 24 células contra
+`PILOT3_T_FLUXO_CI95` (hardcoded a partir do `consolidated.json` real
+do piloto 3 -- comparação deliberadamente estrita, um IC de mediana de
+10 amostras é mais estreito que o espalhamento natural de uma única
+amostra nova, escolha explícita do Luciano como teste de fumaça para
+viés introduzido pelo paralelismo, não um teste de hipótese formal).
+Zero erros E todas as 24 dentro do IC -> `main()` mantém
+`CAMPAIGN_PARALLEL_INSTALLATIONS=True` para as janelas reais. Qualquer
+outro resultado -> `main()` desarma a flag automaticamente (sem
+intervenção manual) e imprime a projeção recalculada para modo
+sequencial (os números da própria Decision 104: ~6,38h/janela,
+~20,14h de frota, +US$26,32, em vez de ~3,19h/janela, ~10,57h,
++US$13,81 do modo paralelo).
+
+**Item 3 -- custo incremental, separado do acumulado, com a base
+explicitada:**
+- **Base dos US$86-93 anteriores (Decision 104)**: projeção
+  SEQUENCIAL (sem paralelismo, sem remover o ping) -- duração líquida
+  do piloto 3 (334,3min, K=1 já incluso) + overhead do K=5 extra
+  (72-144min) x 3 janelas + 2 intervalos de 30min, à tarifa combinada
+  de frota ~US$1,31/h, somado ao custo já acumulado (~US$60,53,
+  46,33h desde o apply original).
+- **Custo incremental agora (depois das 3 reduções aprovadas)**:
+  resubida (~1h) + validação paralela (~10min, mais rápida que antes
+  por não ter mais o ping nem rodar sequencial) + 3 janelas oficiais
+  com K=5/sem ping/paralelas (~10,57h, projeção da Decision 104) +
+  captura de artefatos (~15min) = **~11,99h de frota**.
+  **Custo incremental: ~US$15,66 (sem margem) / ~US$17,23 (+10%).**
+- **Acumulado total**: US$60,53 + incremental = **~US$76,19 (sem
+  margem) / ~US$77,76 (+10%)** -- **cruza a linha de parar-e-perguntar
+  de US$72** (ambos os cenários), mas fica dentro do teto de US$80.
+  Reportado explicitamente, como a regra pede, mesmo sem pausa
+  automática.
+
+**Item 4 -- checagem da v7 sobre `load_signing_key` em Classic e
+Hybrid (só relatório, nenhuma remedição):** a própria docstring da
+Decision 99 (`opin_flow.py`, `load_client_signing_key()`) já responde
+isso diretamente, não é mais inferência: "for classic and hybrid
+(never for pqc, whose signing_key stays a raw dict) -- the measured
+cause of ~500ms of classic/hybrid's own T_fluxo that PQC never paid,
+confirmed call-for-call against the diagnostic's own real
+setup_timings (median classic/hybrid ~252ms x2, pqc ~0ms x2)". Como a
+v7 usa o MESMO `opin_flow.py`/`load_client_signing_key()` (código
+compartilhado entre versões, não uma cópia por versão -- confirmado
+antes) e o cache da Decision 99 só existe desde esta sessão (muito
+depois da v7 ter sido medida), **é de alta confiança que a v7 pagou
+esse mesmo custo (~252ms x2 = ~500ms) em Classic e Hybrid, e não em
+PQC** -- mesmo mecanismo, mesmo código, sem variação de dados entre
+versões que explicasse diferença. Isto NÃO é uma remedição direta da
+v7 (nenhum teste A/B cache-vs-sem-cache foi rodado contra a
+infraestrutura real da v7 na época) -- é confiança alta por mecanismo
+confirmado, não medição direta repetida. v7 permanece oficial, como
+está, sem mudança.
+

@@ -157,6 +157,51 @@ _CAMPAIGN_START_UTC = None  # set once, at the top of main()
 # future window explicitly opts in.
 CAMPAIGN_ALERT_ONLY_BUDGET = os.environ.get("CAMPAIGN_ALERT_ONLY_BUDGET", "0") == "1"
 
+# Decision 105 (2026-10-30): run the 3 installations' own windows
+# concurrently instead of one after another -- each installation has
+# its own dedicated server (never shared, confirmed in inventory.json),
+# so this can never make two different clients talk to the same server
+# at once; _SERVER_LOCKS below already enforces "one execution per
+# server at a time" independently of this flag. Defaults off so the
+# pilot's own already-exercised sequential behavior is untouched unless
+# a future window explicitly opts in.
+CAMPAIGN_PARALLEL_INSTALLATIONS = os.environ.get("CAMPAIGN_PARALLEL_INSTALLATIONS", "0") == "1"
+
+# Decision 105, item 2: pilot 3's own real per-cell T_fluxo 95% bootstrap
+# CI (thesis/results/v8/latency-pilot3/consolidated.json's own
+# t_fluxo_seconds.bootstrap_median_ci95, all 24 cells) -- the acceptance
+# band the parallel-mode validation stage's single-execution-per-cell
+# sample is checked against. A deliberately strict comparison (a CI of
+# a 10-sample median is narrower than any one new draw's own natural
+# spread) -- the operator's own explicit choice (Decision 105), a smoke
+# test for parallelism-introduced skew, not a formal hypothesis test.
+PILOT3_T_FLUXO_CI95 = {
+    ("classic", "ap-northeast-1", "L0"): (1.7364985, 1.837745),
+    ("classic", "ap-northeast-1", "L30"): (3.5481, 3.640565),
+    ("classic", "sa-east-1", "L0"): (1.7787215, 1.905561),
+    ("classic", "sa-east-1", "L123"): (8.6625215, 8.7155),
+    ("classic", "sa-east-1", "L219"): (14.1141935, 14.198763),
+    ("classic", "sa-east-1", "L325"): (20.193783, 20.502445),
+    ("classic", "us-east-1", "L0"): (1.842051, 1.933918),
+    ("classic", "us-east-1", "L14"): (2.7150555, 2.7793495),
+    ("hybrid", "ap-northeast-1", "L0"): (1.860211, 1.938293),
+    ("hybrid", "ap-northeast-1", "L30"): (3.662047, 3.687051),
+    ("hybrid", "sa-east-1", "L0"): (1.8863249999999998, 2.024397),
+    ("hybrid", "sa-east-1", "L123"): (8.76532, 8.828886),
+    ("hybrid", "sa-east-1", "L219"): (14.180939, 14.273812),
+    ("hybrid", "sa-east-1", "L325"): (20.1626115, 20.4079455),
+    ("hybrid", "us-east-1", "L0"): (1.9366785, 2.014734),
+    ("hybrid", "us-east-1", "L14"): (2.823626, 2.907787),
+    ("pqc", "ap-northeast-1", "L0"): (1.756443, 1.8342315),
+    ("pqc", "ap-northeast-1", "L30"): (3.564727, 3.639811),
+    ("pqc", "sa-east-1", "L0"): (1.890564, 1.978156),
+    ("pqc", "sa-east-1", "L123"): (8.6644625, 8.7649255),
+    ("pqc", "sa-east-1", "L219"): (14.168015, 14.2408765),
+    ("pqc", "sa-east-1", "L325"): (20.215258, 20.3843255),
+    ("pqc", "us-east-1", "L0"): (1.899827, 1.973918),
+    ("pqc", "us-east-1", "L14"): (2.754624, 2.844896),
+}
+
 # Estimated on-demand hourly rate for this fleet's real instance mix (11x
 # m7i-flex.large across 7 regions + 1x control t4g.micro), by region --
 # NOT the AWS Price List API (unavailable in this environment: no AWS
@@ -1931,16 +1976,20 @@ class SSHExecutor:
                                           f"--until {until_dt.isoformat()} insurance-server-lambdas-mtls-1"),
             )
             # Software-inventory audit (this turn): absolute paths
-            # (/usr/sbin/ping, /usr/bin/chronyc) -- see server_flock_wrap()'s
-            # own comment for why a bare command name isn't trusted here.
-            # Pilot item 2 (this turn): pings the same IP the client's own
-            # REMOTE_GATEWAY_HOST actually dials (gateway_ip, colocated-
-            # aware) -- pinging server_ip (always public) would silently
-            # measure a DIFFERENT path than the one the real execution
-            # just used for a co-located client, corrupting the reference
-            # RTT's own meaning.
-            ping_output = self._run_tolerant(f"[{installation}/{scenario}] reference ping (client -> server)",
-                                              self._ssh_cmd(client_ip, f"/usr/sbin/ping -c 10 -q {shlex.quote(gateway_ip)}"))
+            # (/usr/bin/chronyc) -- see server_flock_wrap()'s own comment
+            # for why a bare command name isn't trusted here.
+            # Decision 105 (2026-10-30): the per-execution reference ping
+            # (the same kind of call, client -> gateway_ip) removed -- found live
+            # (Decision 104) that ICMP is always blocked by the security
+            # group, so this call ALWAYS waited its full ~9.3s and NEVER
+            # once returned a real RTT (rtt_avg_ms was already null in
+            # every real execution because of this). RTT/jitter continue
+            # to come from the pcap itself (rtt_jitter_ms, Decision 94) and
+            # from the campaign's own one-time TCP pre-flight (port 443,
+            # per installation, before any window starts) -- neither of
+            # those needs this per-execution call. Approved explicitly by
+            # the operator (Decision 105) after confirming nothing measured
+            # depends on it.
             server_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (server)",
                                                 self._ssh_cmd(server_ip, "/usr/bin/chronyc tracking"))
             client_chrony = self._run_tolerant(f"[{installation}/{scenario}] clock: chronyc tracking (client)",
@@ -1973,7 +2022,10 @@ class SSHExecutor:
             # jsonl convention LocalExecutor's own A.9 sampler uses.
             (server_dir / f"{label}_cpu.jsonl").write_text(server_cpu_mem_samples or "")
             (client_dir / f"{label}_cpu.jsonl").write_text(client_cpu_mem_samples or "")
-            (client_dir / f"{label}_ping.json").write_text(json.dumps({"raw_ping_output": ping_output}) + "\n")
+            # Decision 105: no more {label}_ping.json -- see the removal
+            # note above. consolidate_v8.py's own ping_samples handling
+            # already tolerates zero samples (rtt_avg_ms -> None), no
+            # change needed there.
 
             # A.8: client-vs-server drift from each side's own chronyc
             # tracking offset -- not a container-vs-host reading.
@@ -2396,9 +2448,9 @@ class LocalExecutor:
                 cpu_jsonl_text  # same machine as server in the local test; a real remote
                                  # client samples its own /proc/stat+/proc/meminfo independently
             )
-            (client_dir / f"{label}_ping.json").write_text(
-                json.dumps({"note": "reference ping: not applicable in the local test (no real network hop)"}) + "\n"
-            )
+            # Decision 105: SSHExecutor no longer writes {label}_ping.json
+            # either (the per-execution reference ping was removed there) --
+            # this local-test placeholder follows suit, nothing to write.
             # Same field name as SSHExecutor's own result["tcpdump_enabled"]
             # (every execution JSON registers it) -- here it means "both
             # sides actually captured", distinct from the pilot's own
@@ -2639,7 +2691,7 @@ def wait_for_operator_gate(gate_name: str, poll_seconds: int = 60) -> None:
     print(f"=== GATE: {gate_name} -- approved (marker found), continuing ===")
 
 
-def run_validation_stage(executor, installations):
+def run_validation_stage(executor, installations, parallel=False):
     """Item 3 (validation-gate turn, thesis/results/v8/DECISIONS.md): ONE
     execution per profile, in every one of the campaign's 8 scenarios
     (SCENARIO_ROTATION[installation][1] is already each installation's
@@ -2657,50 +2709,124 @@ def run_validation_stage(executor, installations):
     inventory-scoping rule as run_window() (SSHExecutor only), same
     "skip an installation with nothing available in this run's own
     inventory, don't abort the whole campaign" philosophy as the earlier
-    installation-skip orchestrator fix."""
-    for installation in installations:
-        scenarios = SCENARIO_ROTATION[installation][1]
-        if isinstance(executor, SSHExecutor):
-            available_clients = executor.inventory.get("clients", {})
-            scenarios = [s for s in scenarios if f"{s}@{installation}" in available_clients]
-        if not scenarios:
-            print(f"[{installation}] validation stage: no scenario in this run's own inventory -- skipping "
-                  f"(not aborting the campaign).")
-            continue
-        for profile in PROFILES:
-            check_time_budget()
-            if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
-                check_cost_budget(executor.inventory)
-            pre_block_checks(executor, installation, profile)
-            start_block_proxies(executor, installation, profile, scenarios, window=0)
-            try:
-                for scenario in scenarios:
-                    out_dir = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
-                               / installation / profile / scenario)
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    # Decision 96 (real incident, first actual execution of
-                    # this function): run_one_execution() writes
-                    # {label}.calls.jsonl under out_dir/"runs"/ (same
-                    # convention as run_window(), line ~2468) -- this
-                    # function created only out_dir itself, never its
-                    # "runs"/"server"/"client" subdirectories, so every
-                    # real execution failed with FileNotFoundError on the
-                    # very first write. Mirrors run_window()'s own mkdir
-                    # block exactly, not a new convention.
-                    (out_dir / "runs").mkdir(parents=True, exist_ok=True)
-                    (out_dir / "server").mkdir(parents=True, exist_ok=True)
-                    (out_dir / "client").mkdir(parents=True, exist_ok=True)
-                    result = run_one_execution(executor, installation, scenario, profile, 0, 1, out_dir)
-                    (out_dir / "run01.json").write_text(json.dumps({
-                        "started_at_utc": datetime.now(timezone.utc).isoformat(),
-                        "server": installation, "client": scenario, "profile": profile,
-                        "code_hash": CODE_HASH,  # item 4, Decision 91 -- same convention as run_window()'s own runs
-                        "result": result,
-                    }, indent=2))
-            finally:
-                stop_block_proxies(executor, installation, profile, scenarios, window=0)
-    print("=== validation stage: 24 executions complete (see _campaign-control/validation_stage/) ===")
+    installation-skip orchestrator fix.
+
+    Decision 105, item 2: `parallel=True` runs each installation's own
+    body in its own thread (same safety argument as the window loop's
+    own CAMPAIGN_PARALLEL_INSTALLATIONS -- independent dedicated
+    servers, _SERVER_LOCKS already per-installation). Returns True if
+    parallel mode's own acceptance check passed (every cell's single
+    sample inside PILOT3_T_FLUXO_CI95 AND zero errors), False if it
+    failed (caller should fall back to sequential for the real
+    windows), None if parallel=False (not applicable)."""
+    errors = []
+
+    def _run_one_installation(installation):
+        try:
+            scenarios = SCENARIO_ROTATION[installation][1]
+            if isinstance(executor, SSHExecutor):
+                available_clients = executor.inventory.get("clients", {})
+                scenarios = [s for s in scenarios if f"{s}@{installation}" in available_clients]
+            if not scenarios:
+                print(f"[{installation}] validation stage: no scenario in this run's own inventory -- skipping "
+                      f"(not aborting the campaign).")
+                return
+            for profile in PROFILES:
+                check_time_budget()
+                if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
+                    check_cost_budget(executor.inventory)
+                pre_block_checks(executor, installation, profile)
+                start_block_proxies(executor, installation, profile, scenarios, window=0)
+                try:
+                    for scenario in scenarios:
+                        out_dir = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
+                                   / installation / profile / scenario)
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        # Decision 96 (real incident, first actual execution of
+                        # this function): run_one_execution() writes
+                        # {label}.calls.jsonl under out_dir/"runs"/ (same
+                        # convention as run_window(), line ~2468) -- this
+                        # function created only out_dir itself, never its
+                        # "runs"/"server"/"client" subdirectories, so every
+                        # real execution failed with FileNotFoundError on the
+                        # very first write. Mirrors run_window()'s own mkdir
+                        # block exactly, not a new convention.
+                        (out_dir / "runs").mkdir(parents=True, exist_ok=True)
+                        (out_dir / "server").mkdir(parents=True, exist_ok=True)
+                        (out_dir / "client").mkdir(parents=True, exist_ok=True)
+                        result = run_one_execution(executor, installation, scenario, profile, 0, 1, out_dir)
+                        (out_dir / "run01.json").write_text(json.dumps({
+                            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                            "server": installation, "client": scenario, "profile": profile,
+                            "code_hash": CODE_HASH,  # item 4, Decision 91 -- same convention as run_window()'s own runs
+                            "result": result,
+                        }, indent=2))
+                finally:
+                    stop_block_proxies(executor, installation, profile, scenarios, window=0)
+        except BaseException as e:
+            errors.append((installation, e))
+
+    if parallel:
+        threads = [threading.Thread(target=_run_one_installation, args=(inst,), name=f"validation-{inst}")
+                   for inst in installations]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    else:
+        for installation in installations:
+            _run_one_installation(installation)
+
+    if errors:
+        failed_inst, exc = errors[0]
+        raise RuntimeError(
+            f"validation stage: installation {failed_inst} failed ({len(errors)} installation(s) failed total)"
+        ) from exc
+
+    print(f"=== validation stage: 24 executions complete (parallel={parallel}), "
+          f"see _campaign-control/validation_stage/ ===")
+
+    parallel_accepted = None
+    if parallel:
+        parallel_accepted = validation_stage_health()
+        print(f"=== validation stage (parallel mode) acceptance: "
+              f"{'PASSOU' if parallel_accepted else 'FALHOU'} ===")
+
     wait_for_operator_gate("validation_stage")
+    return parallel_accepted
+
+
+def validation_stage_health():
+    """Decision 105, item 2: acceptance check for the PARALLEL-mode
+    validation stage -- every one of the 24 cells' single sample must
+    fall inside pilot 3's own real PILOT3_T_FLUXO_CI95 for that exact
+    (profile, installation, scenario), AND there must be zero missing/
+    failed cells. A deliberately strict, single-sample-vs-median-CI
+    comparison (see PILOT3_T_FLUXO_CI95's own docstring) -- a smoke
+    test for parallelism-introduced skew (e.g. control itself, a tiny
+    t4g.micro, becoming a bottleneck running 3 installations' SSH at
+    once), not a formal hypothesis test."""
+    n_checked, n_outside, n_missing = 0, 0, 0
+    for (profile, installation, scenario), (lo, hi) in PILOT3_T_FLUXO_CI95.items():
+        run_file = (DATA_ROOT / "v8" / "latency" / "_campaign-control" / "validation_stage"
+                    / installation / profile / scenario / "run01.json")
+        if not run_file.exists():
+            n_missing += 1
+            print(f"    [{installation}/{profile}/{scenario}] MISSING (no run01.json)")
+            continue
+        try:
+            t_fluxo = json.loads(run_file.read_text(encoding="utf-8"))["result"]["t_fluxo_seconds"]
+        except (json.JSONDecodeError, KeyError):
+            n_missing += 1
+            print(f"    [{installation}/{profile}/{scenario}] UNREADABLE")
+            continue
+        n_checked += 1
+        if not (lo <= t_fluxo <= hi):
+            n_outside += 1
+            print(f"    [{installation}/{profile}/{scenario}] t_fluxo={t_fluxo:.4f}s OUTSIDE pilot-3 CI "
+                  f"[{lo:.4f}, {hi:.4f}]")
+    print(f"    validation_stage_health: {n_checked} checked, {n_outside} outside CI, {n_missing} missing/errors")
+    return n_outside == 0 and n_missing == 0
 
 
 def run_window(executor, installation, window, seed, profile_order):
@@ -2897,7 +3023,7 @@ def run_window(executor, installation, window, seed, profile_order):
 
 
 def main():
-    global _CAMPAIGN_START_UTC, FLEET_BOOT_UTC
+    global _CAMPAIGN_START_UTC, FLEET_BOOT_UTC, CAMPAIGN_PARALLEL_INSTALLATIONS
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true",
@@ -2989,7 +3115,21 @@ def main():
     # own wait_until(), so the gate's wait time doesn't eat into window
     # 1's scheduled start.
     write_status("running", "validation_stage")
-    run_validation_stage(executor, installations)
+    parallel_accepted = run_validation_stage(executor, installations, parallel=CAMPAIGN_PARALLEL_INSTALLATIONS)
+    if CAMPAIGN_PARALLEL_INSTALLATIONS and parallel_accepted is False:
+        # Decision 105, item 2: automatic fallback -- the parallel-mode
+        # validation sample didn't hold up (some cell outside pilot 3's
+        # own CI, or an error), so the real windows run sequentially
+        # instead, never silently keeping a mode its own smoke test
+        # just failed. Duration/cost for the rest of the campaign
+        # reverts to the sequential projection (Decision 104's own
+        # numbers), not the parallel one.
+        CAMPAIGN_PARALLEL_INSTALLATIONS = False
+        write_status("running", "validation_stage_parallel_rejected -- falling back to sequential windows")
+        print("=== Parallel-mode validation REJECTED -- falling back to SEQUENTIAL for all real windows. ===")
+        print("    Recalculated projection (sequential, K=5, no pauses, Decision 104's own numbers): "
+              "~6.38h/window, ~20.14h fleet total for 3 windows + 2 gaps, ~$26.32 additional cost "
+              "(vs. the rejected parallel projection of ~3.19h/window, ~10.57h total, ~$13.81).")
 
     # ONE seed for the whole campaign (not one per window, see
     # build_latin_square_profile_orders()'s own docstring) -- read once,
@@ -3004,9 +3144,44 @@ def main():
             sys.exit(f"campaign_schedule.json is missing window_start_times_utc['{window}'].")
         wait_until(start_time)
         renew_safety_timers(inventory, ssh_port=ssh_port, ssh_key_path=ssh_key_path)  # again right before each window
-        for installation in installations:
-            write_status("running", f"window={window} installation={installation}")
-            run_window(executor, installation, window, latin_square_seed, profile_orders_by_window[window])
+        if CAMPAIGN_PARALLEL_INSTALLATIONS:
+            # Decision 105: safe because each installation has its own
+            # dedicated server (confirmed in inventory.json -- never
+            # shared), and _SERVER_LOCKS[installation] (already a real
+            # threading.Lock, pre-existing) already forbids two
+            # concurrent executions on the SAME server -- parallelizing
+            # across installations can never violate that, because each
+            # thread only ever touches its own installation's lock.
+            # write_status() races harmlessly (last-write-wins on a
+            # single whole-file json.dumps -- never corrupts, just a
+            # status display, not correctness-critical). Any real
+            # failure in one installation's thread is collected and
+            # re-raised after every thread finishes, never swallowed.
+            parallel_errors = []
+
+            def _run_window_thread(inst):
+                try:
+                    write_status("running", f"window={window} installation={inst} (parallel)")
+                    run_window(executor, inst, window, latin_square_seed, profile_orders_by_window[window])
+                except BaseException as e:
+                    parallel_errors.append((inst, e))
+
+            threads = [threading.Thread(target=_run_window_thread, args=(inst,), name=f"w{window}-{inst}")
+                       for inst in installations]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if parallel_errors:
+                failed_inst, exc = parallel_errors[0]
+                raise RuntimeError(
+                    f"window {window}: installation {failed_inst} failed in parallel mode "
+                    f"({len(parallel_errors)} installation(s) failed total)"
+                ) from exc
+        else:
+            for installation in installations:
+                write_status("running", f"window={window} installation={installation}")
+                run_window(executor, installation, window, latin_square_seed, profile_orders_by_window[window])
         if window < WINDOWS_PER_CAMPAIGN:
             # Decision 102's automatic-advance policy (campaign mode):
             # replaces the pilot's own unconditional manual gate
