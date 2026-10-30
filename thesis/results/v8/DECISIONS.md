@@ -9831,3 +9831,73 @@ infraestrutura real da v7 na época) -- é confiança alta por mecanismo
 confirmado, não medição direta repetida. v7 permanece oficial, como
 está, sem mudança.
 
+## Decision 107 (2026-10-30) -- análise offline dos 16 desvios da validação
+## paralela; critério de autodecisão aplicado: NÃO disparar a janela 1
+
+**Item 1a -- N por célula e crítica do critério:** piloto 3 tem N=10
+por célula (não 30 -- 30 seria o total ao fim de 3 janelas, 10/janela;
+piloto 3 é só uma janela). Comparar 1 execução nova contra o IC95% da
+MEDIANA de 10 é rigoroso demais, como já documentado no próprio
+código (`PILOT3_T_FLUXO_CI95`'s docstring). Reavaliado com o
+percentil 5-95 das 10 amostras BRUTAS do piloto 3 (banda real de
+dispersão, não IC da mediana): **8/24 (33%) ficam fora, não 16/24
+(67%)** -- menos da metade do que o critério estrito indicava, mas
+ainda uma fração real, não desprezível.
+
+**Item 1b -- magnitude/sinal e razões entre perfis:** desvio
+mediano +0,66%, médio +0,67% -- pequeno, consistente com uma
+diferença real (mas pequena) de rede entre esta subida e a do piloto
+3 (instâncias/IPs novos). 16/24 células mais lentas, 8/24 mais
+rápidas -- sem sinal uniforme forte, mas levemente concentrado em
+"mais lento". **Razão Hybrid/Classic e PQC/Classic, válido x
+piloto 3, por instalação/cenário**: PQC/Classic sempre dentro de
+±2,7% -- ok. **Hybrid/Classic excede 5% em 2 de 8 combinações**:
+us-east-1/L14 (+5,95%) e sa-east-1/L0 (+5,01%, na borda) -- Hybrid
+especificamente rodou um pouco mais lento, relativo a Classic, do que
+no piloto 3, nessas 2 rotas.
+
+**Item 1c -- checagens de artefato (todas rodadas de verdade, nenhuma
+assumida):**
+- Signer persistente, sem fallback: **PASSA** -- os únicos valores de
+  `dispatch` vistos nas 24 execuções são `persistent_service`,
+  `in_process_pyjwt` e a combinação dos dois; nenhum indício de
+  fallback para `docker run` por chamada.
+- Cache da chave RSA ativo: **PASSA** -- `load_signing_key` não
+  aparece em nenhum `setup_timings` das 24 execuções (o pré-warm da
+  Decision 99 roda ANTES do timer, por desenho -- ausência aqui é o
+  resultado esperado quando o cache funciona, não evidência de
+  problema).
+- `code_hash`: difere do piloto 3 (esperado -- código genuinamente
+  mudou, Decisions 100-106), mas **consistente internamente** (um só
+  valor nas 24 execuções, confirmando entrega sem mistura de
+  versões).
+- Digest da imagem do gateway: **igual ao piloto 3**
+  (`sha256:0839...341901`), confirmado nos 3 servidores reais via
+  `docker inspect`.
+- Ordem dos perfis / quadrado latino: `build_latin_square_profile_
+  orders(seed=0)` produz exatamente as 3 linhas que o Luciano
+  especificou (janela 1 = classic/hybrid/pqc, janela 2 = hybrid/pqc/
+  classic, janela 3 = pqc/classic/hybrid) -- confirmado rodando a
+  função de verdade. `seed=0` será usado se a janela 1 rodar.
+
+**Item 2 -- critério de autodecisão, aplicado:** dos 4 critérios
+exigidos (sem sinal de artefato; desvio/razões dentro de 5%; 0 erros;
+steal <5%), **3 passam e 1 falha**: a razão Hybrid/Classic excede 5%
+em 2 das 8 rotas (us-east-1/L14 +5,95%, claramente acima; sa-east-1/
+L0 +5,01%, na borda). Como o próprio critério exige que TODOS passem,
+e um deles não passa, **a decisão correta é parar, não disparar**,
+exatamente como instruído ("se algum falhar, PARE e relate sem
+disparar").
+
+**VEREDITO: NÃO disparada a janela 1.** Nenhum sinal de artefato real
+encontrado (todas as checagens de (c) limpas ou explicadas) -- a
+causa mais provável do desvio é variação real, pequena, de rede entre
+esta subida da frota e a do piloto 3, concentrada na razão Hybrid/
+Classic especificamente, não um problema de medição. Reportado como
+achado, sem decidir sozinho além do que o critério permite.
+
+**Itens 3 e 4**: as 24 execuções já estão em `_campaign-control/
+validation_stage/` (nunca em `runs/` real) -- já satisfaz o pedido,
+nenhuma ação adicional. Item 4 (fim da janela 1: pull/commit/scan/
+consolidate+drift) não se aplica -- nenhuma janela rodou.
+
