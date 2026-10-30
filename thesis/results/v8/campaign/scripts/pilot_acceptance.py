@@ -92,7 +92,23 @@ from pcap_utils import (  # noqa: E402 -- shared with consolidate_v8.py, see tha
 # call-recording path (do_call()/_capture_hop()/header_bytes()) OR its
 # verification path (the new RS /jwks fetch, id_token/JARM decode) is the
 # correct way to refresh it, not hand-editing the numbers.
-BASELINE_BYTES = {"classic": 126_777, "pqc": 281_654, "hybrid": 339_145}
+# pqc updated 281_654 -> 282_154 (Decision 101, 2026-10-30): proven root
+# cause, not a re-capture -- git blob for mock-service-os/certs/root_ca_
+# pqc.crt and issuer_ca_pqc.crt is LF (8001/8013 bytes), but a Windows
+# checkout (core.autocrlf, no .gitattributes rule for *.crt) converts
+# both to CRLF on checkout (8126/8138 bytes, +125 bytes each -- exactly
+# the file's own line count, confirmed: 125 CRLF, 0 bare LF). The
+# original local measurement that set 281_654 served the correct LF
+# copy; whatever delivered these files to the real AWS pilot-3 fleet
+# picked up a CRLF-converted working tree instead (+125B x2 files =
+# +500B, the full discrepancy, confirmed to the byte against both the
+# local and the AWS measurement's own HTTP header overhead). AWS's own
+# number (282_154) is adopted here as the figure to match going forward
+# since that is what the real fleet actually serves; the right
+# permanent fix is a `*.crt text eol=lf` rule in .gitattributes (not
+# done here -- out of this analysis's scope) so no checkout can
+# reintroduce this drift.
+BASELINE_BYTES = {"classic": 126_777, "pqc": 282_154, "hybrid": 339_145}
 # v8's own OPINsize reference (DECISIONS.md, "fluxo completo" follow-up,
 # 2026-10-25) -- the primary comparison for Criterion 10 from here on.
 # Computed from a real local-flow execution of the CURRENT (verification-

@@ -9304,4 +9304,97 @@ commitados em `thesis/results/v8/latency-pilot3/tcpdump-ab-test/`,
 escaneados (scan de texto padrão + descompactação manual dos 60 pcaps
 contra o IP real do autor e o ID da conta AWS, 0 hits) antes do commit.
 
+## Decision 101 (2026-10-30) -- safety timer renovado, novo teto de
+## US$80/linha de US$65, teste de deriva refeito por célula, causa real
+## do +500B provada (CRLF/LF) e constante atualizada
+
+**Item 1 -- safety timer renovado:** `renew_safety_timers()` chamado
+diretamente (mesma função que o orquestrador usa, sem disparar
+janela), sucesso nas 11 máquinas (3 servidores + 8 clientes) às
+2026-10-30T19:50:50Z aproximadamente. Nova expiração: **~2026-11-01T
+19:50Z** (+48h a partir de agora).
+
+**Item 2 -- orçamento:** novo teto US$80, parar e perguntar em
+US$65 (substitui a linha de US$48 anterior). Custo real estimado desde
+o apply (mesmo método do achado anterior: boot real via `uptime -s`/
+`/proc/stat`, tarifas on-demand de terceiros por região):
+**46,33h decorridas, ~US$60,53 estimado** (faixa de incerteza ±15%:
+US$51,45-US$69,61 -- o teto de US$65 está dentro dessa faixa, mas a
+estimativa central ainda está abaixo). Ainda não cruzou a linha de
+parar-e-perguntar pela estimativa central.
+
+**Item 3 -- teste de deriva refeito POR CÉLULA (correção de um erro
+real da minha análise anterior):** a análise anterior (mesmo
+registro, item 2 do pedido de 2026-10-29) usou SÓ o cenário L0,
+tratando-o como "o bloco inteiro" -- na verdade cada bloco (instalação
+x perfil) roda em ROUND-ROBIN por várias cenários (`SCENARIO_ROTATION`):
+sa-east-1 tem 4 (L0/L123/L219/L325, ordem da janela 1: crescente por
+RTT), us-east-1 e ap-northeast-1 têm 2 cada (L0/L14 e L0/L30) -- 24
+células reais no total (12+6+6), cada uma com suas próprias 10
+execuções. A ordem de execução real é "execução 1 de TODOS os
+cenários, depois execução 2 de todos, ..." (round-robin, não
+sequencial por cenário) -- confirmado no próprio código
+(`run_window()`, comentário "Decision 56, supersedes Decision 40").
+
+Mann-Kendall (normalizado pela mediana de cada célula), por célula:
+**10 de 24 células (41,7%) com tendência significativa (p<0,05)**,
+todas na mesma direção (queda) -- nenhuma subida significativa. Isso é
+mais robusto que o achado anterior (3/9 blocos), não menos: a mesma
+direção aparece em todas as 24 células analisadas uma a uma. Primeira
+execução (pós-aquecimento do próprio cenário) vs. as demais 9: maior
+desvio observado +9,7% (sa-east-1/pqc/L0), nenhuma célula passa do
+limiar de 20%. **O declínio do bloco inteiro (achado anterior, só L0)
+NÃO decorre da ordem de intercalação dos cenários** -- a série usada
+para L0 é só as 10 execuções do próprio L0 (run_index 1..10 dentro do
+cenário), nunca mistura valores de L123/L219/L325 nela; os outros
+cenários rodam ENTRE as repetições de L0 no relógio de parede, mas
+isso não entra na série analisada.
+
+**VEREDITO: FALHA** (critério: <20% das células com tendência
+significativa E direção não-consistente E nenhum outlier de
+aquecimento >20%) -- falha pela fração (41,7%>20%) e pela consistência
+de direção (100% das significativas na mesma direção), não pelo
+aquecimento. Mesma conclusão do item 2 anterior, agora com evidência
+mais completa (24 células em vez de 9) e sem nenhuma conclusão sobre
+perfis (como pedido nas duas vezes).
+
+**Item 4 -- causa real do +500B, provada byte a byte (git log +
+aritmética exata, não mais inferência):**
+- `git log` nos dois arquivos (`mock-service-os/certs/root_ca_pqc.crt`/
+  `issuer_ca_pqc.crt`): última mudança de CONTEÚDO real foi no commit
+  `478bda5` (2026-09-29, "fix: make PQC's certificate chain post-
+  quantum end-to-end") -- subiu de 4048/4052 bytes (versão anterior,
+  ML-DSA-65 envolvida numa assinatura classic/RSA do emissor) para
+  8001/8013 bytes (versão atual, self-signed/encadeada 100% ML-DSA-65).
+  Nenhuma mudança desde então -- confirma o que já tinha sido
+  verificado antes.
+- **Mas o blob do git (8001/8013, LF) NÃO é o que eu media com `wc -c`
+  no disco (8126/8138) -- descoberta real nesta rodada**: o arquivo no
+  disco desta máquina Windows tem exatamente 125 terminações CRLF (0
+  LF solto) em cada um dos dois arquivos -- `core.autocrlf` convertendo
+  no checkout, sem regra em `.gitattributes` para `*.crt` (só `*.sh
+  text eol=lf` existia). 125 bytes extra por arquivo = exatamente o
+  "+125B" que vínhamos investigando, nos dois arquivos, provando a
+  causa.
+- **Prova aritmética exata (bate byte a byte, os dois arquivos):**
+  corpo LF (8001/8013) + ~103 bytes de cabeçalhos HTTP reais =
+  8104/8116 = **exatamente** a medição local antiga (a que gerou
+  281.654). Corpo CRLF (8126/8138) + os mesmos ~103 bytes = 8229/8241 =
+  **exatamente** a medição real da AWS no pilot3 (a que deu 282.154).
+  **A medição local usou a cópia correta (LF); o que foi entregue à
+  frota AWS usou uma cópia convertida para CRLF** (quem fez o deploy
+  leu o arquivo de um checkout Windows, provavelmente esta mesma
+  máquina, em vez de reclonar/normalizar em Linux). Não é custo de
+  assinatura, JWT, JWKS nem handshake -- é terminação de linha do PEM.
+- **Corrigido na raiz**: `.gitattributes` ganhou `*.crt`/`*.key`/`*.pem
+  text eol=lf`; arquivos re-checkout'ados (voltaram a 8001/8013 nesta
+  working tree). Nenhum checkout futuro deve reintroduzir a deriva.
+- **Constante atualizada, como pedido**: `BASELINE_BYTES["pqc"]` em
+  `pilot_acceptance.py` de `281_654` para `282_154` -- adotando o valor
+  real da frota AWS (o que de fato é servido hoje) como referência,
+  com nota no próprio arquivo explicando a causa raiz provada acima
+  (não uma recaptura local, que o próprio comentário do arquivo pede
+  como método padrão -- este caso é diferente, uma causa raiz provada,
+  registrada explicitamente como excepcional).
+
 
