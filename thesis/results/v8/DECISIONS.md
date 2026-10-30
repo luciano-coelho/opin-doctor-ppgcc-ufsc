@@ -9901,3 +9901,37 @@ validation_stage/` (nunca em `runs/` real) -- já satisfaz o pedido,
 nenhuma ação adicional. Item 4 (fim da janela 1: pull/commit/scan/
 consolidate+drift) não se aplica -- nenhuma janela rodou.
 
+## Decision 108 (2026-10-30) -- correção do critério de 5%: rígido
+## demais para N=1 contra piloto de N=10; autorizada a campanha das 3
+## janelas oficiais, com travas automáticas novas
+
+**Correção do critério (pedido explícito do Luciano, com ele
+presente):** o limiar de 5% na razão Hybrid/Classic (Decision 107)
+era rígido demais para comparar UMA execução nova contra a razão de
+medianas de N=10 do piloto 3 -- o mesmo problema estrutural já
+documentado para o IC95% da mediana (uma amostra única tem dispersão
+natural maior que qualquer estatística agregada de 10). As outras 3
+de 4 verificações (sem sinal de artefato, 0 erros, steal<5%) já
+tinham passado; com a correção do 4º critério, as checagens no
+conjunto são aceitas. **Autorizadas as 3 janelas oficiais.**
+
+Travas automáticas NOVAS, implementadas antes de disparar (não
+existiam no código até este registro): `check_artifact_health()` --
+checa, a cada bloco (mesmo ponto de `check_time_budget()`/`check_cost_
+budget()`, não só entre janelas): (1) `CODE_HASH` do processo contra
+`REGISTERED_CODE_HASH` (travado no valor confirmado pela validação
+desta mesma subida, Decision 107 -- consistência DENTRO desta
+campanha, não contra o piloto 3, que teve código diferente por
+desenho); (2) digest da imagem do gateway nos 3 servidores, via SSH,
+contra `REGISTERED_IMAGE_DIGEST` (o mesmo confirmado na Decision 107);
+(3) sinal de fallback do signer persistente (dispatch != persistent_
+service/in_process_pyjwt) na última execução real escrita; (4) sinal
+de cache RSA inativo (`load_signing_key` aparecendo dentro de
+`setup_timings` de uma execução real, o que só acontece se o pré-warm
+falhar). Qualquer uma falhando -> `RuntimeError`, mesmo tratamento de
+"saída não-zero, sem destruir nada" que o resto do orquestrador já
+usa (A.4) -- nunca uma pausa esperando liberação, como pedido.
+`COST_HARD_STOP_USD=40` para esta subida especificamente (substitui o
+teto de US$80 só para esta campanha -- "US$40 acumulados desde esta
+subida", um número menor e mais apertado que o teto geral).
+

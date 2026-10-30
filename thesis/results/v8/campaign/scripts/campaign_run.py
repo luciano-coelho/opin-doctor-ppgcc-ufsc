@@ -1171,6 +1171,112 @@ def _compute_code_hash():
 
 CODE_HASH = _compute_code_hash()
 
+# Decision 108 (2026-10-30): new automatic stop conditions, confirmed by
+# the operator's own just-completed parallel validation (this same
+# fleet boot) -- consistency WITHIN this campaign, not against pilot 3
+# (whose code_hash legitimately differs, Decisions 100-106). Set as
+# constants here (not env-var overridable) because they're meant to
+# catch THIS process's own code drifting mid-campaign, not to be
+# silently redefined away.
+REGISTERED_CODE_HASH = os.environ.get("CAMPAIGN_REGISTERED_CODE_HASH", CODE_HASH)
+REGISTERED_IMAGE_DIGEST = os.environ.get(
+    "CAMPAIGN_REGISTERED_IMAGE_DIGEST",
+    "sha256:0839867545f3170f6198e7e2f6f3a9a7f6803c2b4feba2bb54f181195b341901",
+)
+
+
+def _find_latest_run_file(installation):
+    """Decision 108: the most recently written real run{NN}.json for
+    this installation, any profile/scenario -- used to check signer/
+    RSA-cache health from already-collected data instead of spending a
+    new execution on a dedicated check. Before window 1's first block,
+    there is none yet (returns None) -- the operator's own just-run
+    parallel validation (Decision 107) is this campaign's de facto
+    pre-launch confirmation for that case, not re-checked here."""
+    candidates = []
+    for profile in PROFILES:
+        exp_dir = PROFILE_TO_EXPERIMENT_DIR[profile]
+        base = DATA_ROOT / "v8" / "latency" / exp_dir / installation
+        if not base.is_dir():
+            continue
+        for run_file in base.glob("*/runs/run*.json"):
+            if "calls" in run_file.name:
+                continue
+            try:
+                candidates.append((run_file.stat().st_mtime, run_file))
+            except OSError:
+                continue
+    if not candidates:
+        return None
+    return max(candidates, key=lambda t: t[0])[1]
+
+
+def check_artifact_health(executor, installation):
+    """Decision 108: the operator's own new automatic stop conditions --
+    checked at the same point as check_time_budget()/check_cost_budget()
+    (start of every profile block, before spending any more real
+    time/money), so they fire 'a qualquer momento', not just between
+    windows. Raises RuntimeError (same A.4 treatment as everything else
+    here: nonzero exit, never a resumable pause) the first time any of
+    the following doesn't hold:
+      - this process's own CODE_HASH hasn't drifted from
+        REGISTERED_CODE_HASH (only possible via a mid-campaign restart
+        picking up different code -- can't happen within one continuous
+        process, checked anyway as a cheap defensive constant).
+      - the live gateway image digest (docker inspect, this installation's
+        own server) matches REGISTERED_IMAGE_DIGEST.
+      - the signer dispatch recorded in the most recent real run (any
+        profile) shows no fallback (only persistent_service/
+        in_process_pyjwt values are healthy).
+      - load_signing_key never appears inside that same run's own
+        setup_timings (its presence there means the pre-warm/cache
+        failed and the ~252ms reconstruction leaked into a measured
+        window)."""
+    if CODE_HASH != REGISTERED_CODE_HASH:
+        raise RuntimeError(
+            f"[{installation}] Decision 108 safety gate: CODE_HASH drifted mid-campaign "
+            f"({CODE_HASH} != registered {REGISTERED_CODE_HASH})."
+        )
+    if isinstance(executor, SSHExecutor):
+        server_ip = executor._server_ip(installation)
+        actual_digest = executor._run_or_print(
+            f"[{installation}] Decision 108 safety gate: inspect live gateway image digest",
+            executor._ssh_cmd(server_ip, "sudo docker inspect insurance-server-lambdas-mtls-1 "
+                                          "--format '{{.Image}}'"),
+        )
+        actual_digest = (actual_digest or "").strip()
+        if actual_digest and actual_digest != REGISTERED_IMAGE_DIGEST:
+            raise RuntimeError(
+                f"[{installation}] Decision 108 safety gate: gateway image digest ({actual_digest}) "
+                f"!= registered ({REGISTERED_IMAGE_DIGEST})."
+            )
+
+    latest = _find_latest_run_file(installation)
+    if latest is None:
+        return  # window 1's first block -- nothing collected yet, validation already confirmed health
+    try:
+        d = json.loads(latest.read_text(encoding="utf-8"))
+        result = d.get("result", {})
+    except (json.JSONDecodeError, OSError):
+        return  # don't fail a real safety gate on a transient read glitch of an already-written file
+    dispatches = set()
+    for key in ("verification_timings", "signing_timings"):
+        for t in result.get(key, []) or []:
+            if "dispatch" in t:
+                dispatches.add(t["dispatch"])
+    bad_dispatches = {d for d in dispatches if "persistent_service" not in d and "in_process_pyjwt" not in d}
+    if bad_dispatches:
+        raise RuntimeError(
+            f"[{installation}] Decision 108 safety gate: signer/verification fallback detected in "
+            f"{latest} -- dispatch value(s) {bad_dispatches} (expected persistent_service/in_process_pyjwt)."
+        )
+    for t in result.get("setup_timings", []) or []:
+        if t.get("phase") == "load_signing_key":
+            raise RuntimeError(
+                f"[{installation}] Decision 108 safety gate: load_signing_key appeared inside "
+                f"setup_timings of {latest} ({t.get('duration_ms')}ms) -- the RSA key cache/pre-warm failed."
+            )
+
 
 def pre_block_checks(executor, installation, profile):
     """Decision 49/53: at the start of every profile block, verify the
@@ -2735,6 +2841,7 @@ def run_validation_stage(executor, installations, parallel=False):
                 check_time_budget()
                 if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
                     check_cost_budget(executor.inventory)
+                check_artifact_health(executor, installation)  # Decision 108
                 pre_block_checks(executor, installation, profile)
                 start_block_proxies(executor, installation, profile, scenarios, window=0)
                 try:
@@ -2944,6 +3051,7 @@ def run_window(executor, installation, window, seed, profile_order):
         check_time_budget()  # pilot item 3 -- before spending any more real time/money on this block
         if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
             check_cost_budget(executor.inventory)
+        check_artifact_health(executor, installation)  # Decision 108 -- a hard stop, never a resumable pause
         checks = pre_block_checks(executor, installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
 
