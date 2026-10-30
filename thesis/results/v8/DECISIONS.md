@@ -9397,4 +9397,117 @@ aritmética exata, não mais inferência):**
   como método padrão -- este caso é diferente, uma causa raiz provada,
   registrada explicitamente como excepcional).
 
+## Decision 102 (2026-10-30) -- correção da Decision 101: 282.154 era o
+## artefato CRLF, não a verdade; varredura completa da árvore entregue;
+## tamanho do efeito e política de aquecimento; calendário das 3
+## janelas; preparação (sem executar) da reentrega; piloto 3 ≠ janela
+## oficial
 
+**Item 1 -- BASELINE_BYTES revertido, causa confirmada, árvore inteira
+varrida:** `BASELINE_BYTES["pqc"]` voltou de `282_154` para
+`281_654` -- a Decision 101 tinha adotado o número da AWS como "a
+verdade atual", mas isso estava invertido: 281.654 é o valor CORRETO
+(a cópia LF, que é o que o blob do git de fato contém); 282.154 era o
+artefato do checkout Windows com CRLF entregue à frota. O lado que
+precisa de correção é a ENTREGA à AWS, não a constante de referência.
+
+`.gitattributes` ampliado para `*.pem`/`*.crt`/`*.key`/`*.json`/
+`*.jwks`/`*.py`/`*.yml`/`*.yaml`/`*.conf`/`*.service`/`Dockerfile`/
+`go.mod`/`go.sum`/`*.go`, todos `eol=lf` (mais `*.p12`/`*.pfx` como
+`binary`, por precaução, já que estão na mesma árvore). `git add
+--renormalize .` só pegou 2 arquivos fora do escopo deste pedido
+(`insurance-server-lambdas/gradlew.bat`, um artefato de resultados da
+v7) -- revertidos, fora do escopo ("árvore entregue às máquinas").
+
+Varredura completa da árvore que `deliver_source.sh` de fato
+empacota (mesmo tarball para os 3 perfis -- `mock-service-os/certs/`
+contém os certificados dos 3 perfis juntos) contra o blob do HEAD:
+**67 arquivos entregues, 26 com deriva de CRLF antes da correção
+(conteúdo idêntico ao blob, só terminação de linha), 0 depois.**
+Lista completa dos 26 (todos corrigidos, re-checkout forçado):
+`docker-compose.yml`, `participants.json`, `software_statement.json`,
+`certs/Dockerfile`, `certs/client_one.key`, `certs/client_one_pqc.crt`,
+`certs/client_one_pqc.jwks`, `certs/client_one_pqc_pub.jwks`,
+`certs/client_two.key`, `certs/go.mod`, `certs/go.sum`,
+`certs/issuer_ca.key`, `certs/mongo.crt`, `certs/mongo.key`,
+`certs/mongo.pem`, `certs/mtls.key`, **`certs/mtls_pqc.crt`** (certificado
+que participa de handshake mTLS real, não só o PEM de simulação de
+CA-download), `certs/op.key`, `certs/postgres.crt`,
+`certs/postgres.key`, `certs/root_ca.key`, `ssa/jwks.json`,
+`ssa/private_jwk.json`, `thesis/scripts/campaign_client_runner.py`,
+`thesis/scripts/latency_automation.py`, **`thesis/scripts/opin_flow.py`**
+(+2475 bytes de deriva -- o maior de todos). Scripts Python com CRLF
+ainda executam (Python aceita ambos), mas isso não é limpo nem
+reprodutível -- corrigido na raiz.
+
+**Item 2 -- tamanho do efeito (1o terço vs. último terço, 24 células) e
+política de aquecimento:**
+- Mediana da variação entre as 24 células: **-1,3%**; média: **-2,3%**.
+  Maiores quedas: sa-east-1/hybrid/L0 -8,5% (IC95% [-9,9%,-1,9%]),
+  sa-east-1/classic/L0 -7,1% (IC95% [-10,3%,-1,4%]) -- ambas com IC
+  que não cruza zero. Várias células (ex. L123/L219/L325 em
+  sa-east-1) têm variação pequena e não significativa (<1,2%, IC
+  cruzando zero) -- o efeito é mais forte nas células de latência
+  menor/mais próxima (L0), não uniforme.
+- **Onde estabiliza:** menor K (execuções extras descartadas, a partir
+  do início da célula) tal que Mann-Kendall nas execuções restantes
+  deixe de ser significativo -- mediana K=0, máximo K=5 (sa-east-1/
+  pqc/L123). Distribuição: K=0 em 14/24 células (58%), K<=2 em 20/24
+  (83%), K<=3 em 21/24 (87,5%), K<=4 em 23/24 (95,8%), K<=5 em 24/24
+  (100%).
+- **Comparação com a v7:** a v7 usou exatamente 1 execução de
+  aquecimento por célula (`run00_warmup.json`), igual ao padrão atual
+  da v8 (`run_warmup()`, uma vez por cenário por bloco) -- confirmado
+  em `thesis/results/v7/DECISIONS.md`. O achado aqui é que **1 execução
+  não é suficiente** para eliminar a tendência numa fração relevante
+  de células.
+- **Proposta de política (declarada antes da coleta, como pedido): K=3
+  execuções extras descartadas por célula**, além da já existente -- 
+  cobre 87,5% das células sem resíduo de tendência. Para quem quiser
+  garantia total (0% de resíduo), **K=5**. Não aplicado ainda --
+  proposta para a próxima janela oficial.
+
+**Item 3 -- calendário das 3 janelas compactas, sem pausas:**
+`campaign_run.service` roda com `CAMPAIGN_ALERT_ONLY_BUDGET=1`
+(Decision 100) -- sem pausas internas de orçamento/tempo, só o teto de
+custo de verdade.
+| janela | horário UTC | ordem de perfis |
+|--------|-------------|------------------|
+| 1 | 23:00 | classic, hybrid, pqc |
+| 2 | 07:00 (dia seguinte) | hybrid, pqc, classic |
+| 3 | 15:00 (mesmo dia) | pqc, classic, hybrid |
+
+Quadrado latino válido (cada perfil em cada posição exatamente uma
+vez). **Duração esperada**: soma pura de T_fluxo das 240 execuções do
+piloto 3 foi só 27,7min -- o resto das 6h06m reais foi overhead (SSH
+por execução, settling, aquecimento, e as 6 pausas agora eliminadas em
+modo campanha). Sem pausas, uma estimativa honesta fica entre ~1,5h
+(otimista) e as 6h06m do piloto (pessimista, caso o overhead de SSH se
+repita igual) -- **não tenho uma medição direta de uma janela sem
+pausas ainda**, então não finjo uma precisão que não tenho; recomendo
+tratar a primeira das 3 janelas como a medição real desse tempo.
+**Custo estimado**: 3 janelas x ~3h (ponto médio da faixa) = 9h de
+frota adicionais x ~US$1,31/h (mesma tarifa já usada) ≈ **+US$11,76**,
+total acumulado ≈ **US$72,3** -- dentro do teto de US$80, mas
+**cruzando a linha de parar-e-perguntar de US$65 durante a janela 2 ou
+3**. Isso deve ser reportado quando acontecer, mesmo sem pausa
+automática.
+
+**Item 4 -- reentrega preparada, NÃO executada:** comando pronto --
+`bash thesis/results/v8/campaign/scripts/deliver_source.sh
+thesis/results/v8/campaign/campaign.vars.local.sh` (reempacota com os
+arquivos já corrigidos em LF, já que o `.gitattributes` agora garante
+isso em qualquer checkout novo). Validação curta proposta (sem
+executar): para cada um dos 2 PEMs da CA do PQC, em cada uma das 3
+instalações, `sha256sum` do arquivo entregue remotamente comparado
+contra `git show HEAD:mock-service-os/certs/root_ca_pqc.crt | sha256sum`
+(e o mesmo para `issuer_ca_pqc.crt`) -- script de ~10 linhas, pronto
+para rodar quando autorizado, não disparado agora.
+
+**Item 5 -- piloto 3 não é janela oficial:** registrado -- o que até
+aqui foi chamado de "janela 1" (240 execuções reais, 2026-10-29,
+ordem hybrid/pqc/classic, dados em `latency-pilot3/`) passa a ser
+**Piloto 3**, uma repetição de validação, não a primeira janela
+oficial da campanha. As 3 janelas oficiais (classic/hybrid/pqc,
+hybrid/pqc/classic, pqc/classic/hybrid) ainda não rodaram -- o
+calendário do item 3 é para elas, começando do zero.
