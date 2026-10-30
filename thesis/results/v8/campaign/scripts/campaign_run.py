@@ -141,6 +141,123 @@ TIME_BUDGET_OVERRIDE_MARKER = Path("/home/ec2-user/campaign_time_budget_override
 TIME_BUDGET_POLL_SECONDS = 60
 _CAMPAIGN_START_UTC = None  # set once, at the top of main()
 
+# Decision 100 addendum (2026-10-30), "modo campanha": the pilot's own
+# per-block BLOCKING pauses (time budget, and now cost) were explicitly
+# authorized for a single supervised pilot night, never for the real
+# multi-window campaign (windows 2/3) running unattended for longer
+# stretches -- and the operator explicitly banned any further
+# auto-release of a pause without his direct confirmation (Decision 100).
+# CAMPAIGN_ALERT_ONLY_BUDGET=1 turns every budget check below into a
+# logged WARNING (write_status + journal line), never a blocking wait --
+# except the cost hard stop just below, which stays a genuine block even
+# in this mode (the operator's own instruction: "parada de segurança
+# apenas no teto de custo, e só liberada por mim"). Defaults to "0" so
+# the pilot's already-exercised blocking behavior is untouched unless a
+# future window explicitly opts in.
+CAMPAIGN_ALERT_ONLY_BUDGET = os.environ.get("CAMPAIGN_ALERT_ONLY_BUDGET", "0") == "1"
+
+# Estimated on-demand hourly rate for this fleet's real instance mix (11x
+# m7i-flex.large across 7 regions + 1x control t4g.micro), by region --
+# NOT the AWS Price List API (unavailable in this environment: no AWS
+# CLI on control or on the operator's machine), third-party aggregator
+# figures (devzero.io/aws-pricing.com, checked 2026-10-30) -- an
+# ESTIMATE for this alert/stop mechanism, not a billing reconciliation.
+# See Decision 100's 2026-10-30 addendum for the live cross-check against
+# real instance boot time (uptime -s) that motivated this.
+_INSTANCE_HOURLY_USD_BY_REGION = {
+    "sa-east-1": 0.1526, "us-east-1": 0.0958, "ap-northeast-1": 0.1237,
+    "ca-central-1": 0.107, "eu-north-1": 0.102, "ap-northeast-2": 0.118,
+    "ap-southeast-1": 0.120,
+}
+_CONTROL_HOURLY_USD = 0.0084  # t4g.micro, approx, negligible either way
+COST_HARD_STOP_USD = float(os.environ.get("CAMPAIGN_COST_HARD_STOP_USD", "80"))
+COST_ALERT_RATIO = 0.6  # warn once estimated cost crosses 60% of the hard stop
+COST_BUDGET_OVERRIDE_MARKER = Path("/home/ec2-user/campaign_cost_hard_stop_override")
+COST_BUDGET_POLL_SECONDS = 60
+_cost_alert_logged = False  # module-level, so the 60%-crossing warning only prints once
+
+
+def estimate_fleet_cost_usd(inventory):
+    """Rough, honestly-labeled ESTIMATE of real spend so far: blended
+    hourly rate (see _INSTANCE_HOURLY_USD_BY_REGION above) times hours
+    elapsed since the fleet's own boot time. Takes `inventory` instead of
+    re-deriving region counts from scratch, so a future fleet shape
+    (different region mix) is picked up automatically rather than
+    silently stale. FLEET_BOOT_UTC must be set (main()) before this is
+    ever called -- fails loudly rather than guessing a start time."""
+    if FLEET_BOOT_UTC is None:
+        raise RuntimeError("estimate_fleet_cost_usd: FLEET_BOOT_UTC not set -- main() must set it first")
+    hourly = _CONTROL_HOURLY_USD
+    # Servers (confirmed live against the real inventory.json, Decision
+    # 100's 2026-10-30 addendum): keyed BY region name, no separate
+    # "region" field -- unlike clients, which DO carry an explicit
+    # "region" field (needed there since a client's own dict key is its
+    # scenario label, e.g. "L123@sa-east-1", not its real region).
+    for region in inventory.get("servers", {}):
+        hourly += _INSTANCE_HOURLY_USD_BY_REGION[region]
+    for client in inventory.get("clients", {}).values():
+        hourly += _INSTANCE_HOURLY_USD_BY_REGION[client["region"]]
+    elapsed_hours = (datetime.now(timezone.utc) - FLEET_BOOT_UTC).total_seconds() / 3600
+    return hourly * elapsed_hours, elapsed_hours
+
+
+FLEET_BOOT_UTC = None  # set once, at the top of main(), from the control instance's own real boot time
+
+
+def _read_control_boot_utc():
+    """Control's own real boot time (Linux `/proc/stat`'s `btime`,
+    seconds since epoch) -- a stand-in for "fleet boot time" since every
+    instance in this fleet is launched together by the same `terraform
+    apply` (confirmed live, Decision 100's 2026-10-30 addendum: control
+    and the sa-east-1 server's own `uptime -s` matched exactly). Falls
+    back to _CAMPAIGN_START_UTC (never raises) so item-4's local,
+    non-Linux dry-run rehearsal doesn't need a real `/proc/stat` to
+    exercise this code path."""
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return datetime.fromtimestamp(int(line.split()[1]), tz=timezone.utc)
+    except OSError:
+        pass
+    return _CAMPAIGN_START_UTC
+
+
+def check_cost_budget(inventory):
+    """Decision 100 addendum (2026-10-30), item 3: the ONE hard stop that
+    survives in campaign mode. Estimated cost (see estimate_fleet_cost_usd)
+    past COST_HARD_STOP_USD BLOCKS -- same never-exits, never-destroys,
+    operator-marker-file pattern as check_time_budget() -- regardless of
+    CAMPAIGN_ALERT_ONLY_BUDGET. Below the hard stop but past
+    COST_ALERT_RATIO of it, logs a one-time warning and continues."""
+    global _cost_alert_logged
+    cost_usd, elapsed_hours = estimate_fleet_cost_usd(inventory)
+    if cost_usd < COST_HARD_STOP_USD * COST_ALERT_RATIO:
+        return
+    if cost_usd < COST_HARD_STOP_USD:
+        if not _cost_alert_logged:
+            print(f"=== ALERT: estimated fleet cost ~${cost_usd:.2f} (elapsed {elapsed_hours:.2f}h) has crossed "
+                  f"{COST_ALERT_RATIO*100:.0f}% of the ${COST_HARD_STOP_USD:.2f} hard stop -- continuing, "
+                  f"not blocking (this is an alert, not the hard stop). ===")
+            write_status("cost_alert", f"estimated_usd={cost_usd:.2f} elapsed_hours={elapsed_hours:.2f}")
+            _cost_alert_logged = True
+        return
+    write_status("paused_cost_hard_stop", f"estimated_usd={cost_usd:.2f} elapsed_hours={elapsed_hours:.2f}")
+    print(f"=== COST HARD STOP: estimated fleet cost ~${cost_usd:.2f} >= ${COST_HARD_STOP_USD:.2f} after "
+          f"{elapsed_hours:.2f}h ===")
+    print(f"    This orchestrator will NOT continue on its own and will NOT destroy anything itself.")
+    print(f"    This is the ONE hard stop left in campaign mode -- it is released ONLY by the operator's "
+          f"explicit confirmation (Decision 100), never automatically.")
+    print(f"    To KEEP GOING, create {COST_BUDGET_OVERRIDE_MARKER} on this control instance "
+          f"(e.g. 'touch {COST_BUDGET_OVERRIDE_MARKER}') only after the operator has confirmed it directly.")
+    while not COST_BUDGET_OVERRIDE_MARKER.exists():
+        time.sleep(COST_BUDGET_POLL_SECONDS)
+        cost_usd, elapsed_hours = estimate_fleet_cost_usd(inventory)
+        print(f"    ... still waiting for {COST_BUDGET_OVERRIDE_MARKER} (estimated ${cost_usd:.2f}, "
+              f"elapsed {elapsed_hours:.2f}h)")
+    print(f"    {COST_BUDGET_OVERRIDE_MARKER} found -- continuing.")
+    COST_BUDGET_OVERRIDE_MARKER.unlink()
+
 
 def check_time_budget():
     """Pilot item 3 (this turn): called once per profile block (the
@@ -153,11 +270,22 @@ def check_time_budget():
     destroys anything itself and never silently keeps spending past
     the budget unattended. Logs a reminder every
     TIME_BUDGET_POLL_SECONDS so this is visible in journalctl, not a
-    silent hang indistinguishable from one."""
+    silent hang indistinguishable from one.
+
+    Decision 100 addendum (2026-10-30), "modo campanha": under
+    CAMPAIGN_ALERT_ONLY_BUDGET, past-budget only logs a warning (once
+    per call, every time this function runs past budget -- cheap and
+    visible in journalctl) and returns immediately. Never blocks in this
+    mode -- the only hard stop left is check_cost_budget()'s."""
     if _CAMPAIGN_START_UTC is None:
         return  # defensive -- main() always sets this before run_window() is ever called
     elapsed_hours = (datetime.now(timezone.utc) - _CAMPAIGN_START_UTC).total_seconds() / 3600
     if elapsed_hours < PILOT_TIME_BUDGET_HOURS:
+        return
+    if CAMPAIGN_ALERT_ONLY_BUDGET:
+        print(f"=== ALERT (not blocking, campaign mode): PILOT_TIME_BUDGET_HOURS "
+              f"({PILOT_TIME_BUDGET_HOURS}h) exceeded after {elapsed_hours:.2f}h -- continuing. ===")
+        write_status("time_budget_alert", f"elapsed_hours={elapsed_hours:.2f} budget_hours={PILOT_TIME_BUDGET_HOURS}")
         return
     write_status("paused_time_budget", f"elapsed_hours={elapsed_hours:.2f} budget_hours={PILOT_TIME_BUDGET_HOURS}")
     print(f"=== PILOT_TIME_BUDGET_HOURS ({PILOT_TIME_BUDGET_HOURS}h) EXCEEDED after {elapsed_hours:.2f}h ===")
@@ -2361,6 +2489,8 @@ def run_validation_stage(executor, installations):
             continue
         for profile in PROFILES:
             check_time_budget()
+            if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
+                check_cost_budget(executor.inventory)
             pre_block_checks(executor, installation, profile)
             start_block_proxies(executor, installation, profile, scenarios, window=0)
             try:
@@ -2492,6 +2622,8 @@ def run_window(executor, installation, window, seed, profile_order):
     # only raises when dry_run=False), so dry-run runs are unaffected.
     for block_position, profile in enumerate(profile_order):
         check_time_budget()  # pilot item 3 -- before spending any more real time/money on this block
+        if isinstance(executor, SSHExecutor):  # cost is a real-AWS concept only -- LocalExecutor has no inventory/cost
+            check_cost_budget(executor.inventory)
         checks = pre_block_checks(executor, installation, profile)
         print(f"  [{installation}/{profile}] pre-block checks: {checks}")
 
@@ -2583,7 +2715,7 @@ def run_window(executor, installation, window, seed, profile_order):
 
 
 def main():
-    global _CAMPAIGN_START_UTC
+    global _CAMPAIGN_START_UTC, FLEET_BOOT_UTC
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true",
@@ -2595,6 +2727,12 @@ def main():
     # correctly resets the budget's own clock too, since a restarted
     # run has its own fresh real-time cost from this point forward.
     _CAMPAIGN_START_UTC = datetime.now(timezone.utc)
+    # Decision 100 addendum (2026-10-30): unlike _CAMPAIGN_START_UTC,
+    # this does NOT reset on an orchestrator restart -- real spend keeps
+    # accruing on the fleet regardless of how many times this process
+    # has restarted, so check_cost_budget() must measure from the
+    # instances' own actual boot time, not from this process's.
+    FLEET_BOOT_UTC = _read_control_boot_utc()
     write_status("starting", f"dry_run={args.dry_run}")
     config = load_config()
     inventory = load_inventory()

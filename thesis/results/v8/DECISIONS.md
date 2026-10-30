@@ -9109,3 +9109,79 @@ sucesso da renovação do safety timer, não uma chamada `describe-
 instances` direta; reportado como tal, não inflado para "12 confirmadas
 via API".
 
+**Addendum (2026-10-30T17:3xZ) -- novo pedido do Luciano, mesmo dia,
+5 itens adicionais (CA do PQC byte a byte, teste de deriva offline da
+janela de 6h, modo campanha sem pausas + quadrado latino p/ janelas
+2/3, teste A/B do tcpdump real, status da frota) -- interrompido no
+meio por um achado de orçamento: boot real das 12 instâncias (`uptime
+-s`) = 2026-10-28T21:31:19Z; ~43,98h decorridas até 2026-10-30T17:30Z;
+estimativa de custo (tarifas on-demand de terceiros por região, SEM
+API de billing -- AWS CLI não disponível neste ambiente) = ~US$57,47
+(faixa de incerteza +-15%: US$48,85-US$66,09) -- já acima da linha de
+"parar e perguntar" (US$48) do teto de US$60 fixado na mensagem
+anterior do mesmo dia, com a faixa de incerteza cobrindo a
+possibilidade de já estar acima do próprio teto. Reportado de
+imediato, toda ação nova na AWS pausada (nenhuma janela de campanha,
+nenhuma execução medida -- só a troca de perfil do servidor sa-east-1
+para PQC, já feita antes do achado, para investigar o item 1).
+**Decisão do Luciano: novo teto de US$80, seguir normalmente com os
+testes** -- substitui o teto de US$60/linha de US$48 da mensagem
+anterior deste mesmo dia (vigora a partir de agora; a estimativa de
+~US$57-58 continua sendo a melhor leitura do gasto real até este
+ponto, não resetada a zero). Trabalho dos 5 itens retomado sob este
+teto.
+
+**Item 3 -- "modo campanha" implementado em `campaign_run.py`, testado
+em modo seco (sem AWS), não ativado ainda (nenhuma janela 2/3
+autorizada nesta mensagem):**
+- `CAMPAIGN_ALERT_ONLY_BUDGET` (env var, padrão "0"/desligado): quando
+  "1", `check_time_budget()` só registra um aviso (`write_status` +
+  linha no journal) e CONTINUA, nunca bloqueia -- o piloto desta noite
+  (bloqueio real, já exercitado) fica intocado por padrão.
+- Novo `check_cost_budget(inventory)`: única parada de segurança que
+  sobrevive em modo campanha, mesmo com `CAMPAIGN_ALERT_ONLY_BUDGET=1`.
+  Estimativa de custo (`estimate_fleet_cost_usd()`, mesma lógica do
+  achado de orçamento acima, agora no próprio orquestrador: tarifa
+  por região x horas decorridas desde `FLEET_BOOT_UTC`, lido de
+  `/proc/stat`'s `btime` no controle -- a mesma frota, mesmo apply, boot
+  idêntico ao confirmado no achado) >= `CAMPAIGN_COST_HARD_STOP_USD`
+  (padrão US$80, overridable) BLOQUEIA de verdade -- só libera com
+  `/home/ec2-user/campaign_cost_hard_stop_override`, criado manualmente
+  por mim, e só depois de confirmação direta do Luciano (nunca
+  automático -- a regra da Decision 100). Abaixo do teto mas acima de
+  60% dele, registra um aviso único (`cost_alert`) e continua.
+- Achado real durante a implementação: `estimate_fleet_cost_usd()`
+  tentou ler `server["region"]` em cada servidor do inventário, mas o
+  `inventory.json` real NÃO tem esse campo em servidores -- eles são
+  identificados pela própria chave do dicionário (ex. `servers["sa-
+  east-1"]`), diferente de clientes, que TÊM um campo `region` (porque
+  a chave do cliente é o rótulo do cenário, ex. `L123@sa-east-1`, não a
+  região real). Corrigido antes de rodar o teste seco; sem essa
+  correção, a primeira chamada real em produção teria lançado
+  `KeyError` no primeiro bloco de qualquer janela real.
+- Teste seco (`test_campaign_mode.py`, scratchpad da sessão, não
+  commitado): 5 casos, todos PASS -- (1) alerta sem bloqueio quando
+  `CAMPAIGN_ALERT_ONLY_BUDGET=1` e o tempo já passou do orçamento; (2)
+  bloqueio real (comportamento do piloto, inalterado) quando a flag
+  está desligada, liberado só ao criar o marcador; (3) custo abaixo do
+  teto não bloqueia; (4) custo acima do teto BLOQUEIA mesmo com
+  `CAMPAIGN_ALERT_ONLY_BUDGET=1`, liberado só ao criar o marcador de
+  custo; (5) o quadrado latino abaixo é uma permutação válida (cada
+  perfil em cada posição exatamente uma vez nas 3 janelas).
+- Script observador (`wait_window1.sh`, nunca commitado, mencionado na
+  Decision 100 original) **removido** do scratchpad da sessão -- não
+  tem mais função sob este modo (o único bloqueio que sobra já é
+  liberado só por confirmação direta, não por um script).
+- **Não ativado**: nenhuma variável de ambiente foi setada no
+  `campaign_run.service` real, nenhuma janela 2/3 foi disparada. Fica
+  pronto para quando uma janela futura for autorizada explicitamente.
+
+**Proposta de quadrado latino para as janelas 2 e 3** (janela 1 já
+rodada, ordem fixa `["hybrid", "pqc", "classic"]`):
+- Janela 1 (já rodada): hybrid, pqc, classic
+- Janela 2 (proposta): classic, hybrid, pqc
+- Janela 3 (proposta): pqc, classic, hybrid
+Cada posição (1a, 2a, 3a) recebe cada perfil exatamente uma vez ao
+longo das 3 janelas (rotação cíclica simples) -- confirmado
+mecanicamente no teste seco acima, item (5).
+
