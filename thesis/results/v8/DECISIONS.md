@@ -9935,3 +9935,21 @@ usa (A.4) -- nunca uma pausa esperando liberação, como pedido.
 teto de US$80 só para esta campanha -- "US$40 acumulados desde esta
 subida", um número menor e mais apertado que o teto geral).
 
+## Decision 109 (2026-10-31) -- confirmado: os pcaps da janela 1 capturam
+## o handshake completo, RTT derivável (item 1, não bloqueou a janela 2)
+
+**Pergunta:** os pcaps contêm SYN e SYN-ACK das 6 conexões mTLS por
+execução, com RTT derivável? Checado com um leitor pcap mínimo em
+Python puro (sem scapy/tshark/tcpdump disponíveis localmente) --
+parseia Ethernet/SLL -> IP -> TCP, isola SYN e SYN-ACK por par de
+endpoints.
+
+**Resultado: SIM**, confirmado em 3 arquivos reais e independentes:
+- sa-east-1/L0 (pqc, colocado): 6/6 conexões com SYN+SYN-ACK, RTT
+  0,14-0,40ms.
+- sa-east-1/L325 (pqc, maior RTT do conjunto): 6/6, RTT 328-343ms.
+- us-east-1/L14 (classic): 6/6, RTT 14,4-15,2ms.
+
+Nenhuma correção necessária -- a janela 2 seguiu sem atraso, como
+instruído ("se SIM, não toque em nada").
+
