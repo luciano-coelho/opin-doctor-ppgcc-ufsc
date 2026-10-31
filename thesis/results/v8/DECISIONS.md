@@ -10102,3 +10102,43 @@ que a viagens de rede extras dentro do handshake de uma única conexão.
 específica para as ~6 viagens do resíduo dentro do orçamento de 30
 minutos; registrado como tal, não forçada uma explicação.
 
+## Decision 113 (2026-10-31) -- janela 2 completa; checagem
+## confirmatória (v8-prereg-3) contra a janela 2: PQC não replica as
+## previsões 3 e 4
+
+**Janela 2 (hybrid/pqc/classic)**: 240/240, 0 erros, steal 0,01%.
+Pull+scan+commit+consolidate feitos dentro do intervalo de 30min,
+antes da janela 3. Drift Mann-Kendall: 4/24 (16,7%), todas em queda --
+similar à janela 1 (3/24).
+
+**As 5 previsões da Decision 111, checadas separadamente contra a
+janela 2:**
+1. k=56±1 nos 3 perfis: classic 56,04 [55,89;56,58], pqc 56,25
+   [55,99;56,39], hybrid 56,07 [55,87;56,22] -- **PASSOU** (os 3 IC
+   contêm 56).
+2. Hybrid `a`>0: +110,56ms, IC95%=[+79,50;+143,41]ms -- **PASSOU**
+   (não cruza zero).
+3. PQC `a` indistinguível de zero: +32,33ms, IC95%=[+15,34;+53,14]ms
+   -- **FALHOU** (não cruza zero nesta janela -- na janela 1 cruzava).
+4. `b` indistinguível de zero nos dois: Hybrid -0,0988
+   IC95%=[-0,5336;+0,0293] -- passou (cruza zero); **PQC -0,1611
+   IC95%=[-0,2860;-0,0277] -- FALHOU** (não cruza zero, e o sinal é
+   NEGATIVO -- PQC fica relativamente mais rápido que Classic quanto
+   maior o RTT, o oposto do que a Decision 111 previa como limite
+   superior).
+5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8 (ainda sem
+   direção forte e consistente, mas mais perto de uma do que na
+   janela 1).
+
+**Achado real, reportado sem forçar a narrativa da janela 1 sobre os
+dados da janela 2**: PQC não se comporta igual nas duas janelas --
+na janela 1 não tinha custo fixo detectável nem tendência com RTT; na
+janela 2 tem os dois, e o sinal do `b` é inesperado (negativo). Pode
+ser ruído real de amostra (n=8 rotas por janela é pouco para um
+coeficiente de regressão) ou uma diferença real entre janelas (rede,
+hardware, ou efeito de ordem dos perfis -- janela 1 rodou classic
+antes, janela 2 rodou hybrid/pqc antes). Não investigado a fundo
+agora -- a combinação formal das 3 janelas (depois da janela 3) é o
+lugar certo para julgar isso com mais poder estatístico, não uma
+leitura isolada de 2 janelas.
+
