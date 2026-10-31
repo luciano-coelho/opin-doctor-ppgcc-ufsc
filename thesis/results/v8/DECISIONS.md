@@ -10389,3 +10389,53 @@ Nenhum account ID, ARN ou IP é impresso neste registro, por instrução
 explícita. A frota v8 está completamente destruída e confirmada limpa
 nas 7 regiões.
 
+## Decision 120 (2026-10-31) -- rodada 4 de revisão, só texto e análise
+## offline sobre dados já coletados (frota já destruída, Decision 117);
+## sem tag nova, por instrução explícita
+
+1. **Direção do mTLS, dita explicitamente**: o cliente nunca verifica o
+   certificado do servidor, em nenhum perfil (`InsecureSkipVerify: true`,
+   `tls_kem_proxy/main.go:212`). O servidor também nunca executa a
+   verificação DEFAULT do Go para o certificado do cliente (mesma flag,
+   `mock_mtls/main.go:500`) -- depende inteiramente do seu próprio
+   `VerifyPeerCertificate`, que é um no-op em Classic/PQC e, em Hybrid,
+   checa só a extensão ML-DSA-65 `AltSignatureValue` (não a assinatura
+   RSA primária, apesar da mensagem de log do wrapper sugerir o
+   contrário). Microbenchmark offline (certificados/chaves reais locais,
+   mesma imagem `golang:1.27-rc-alpine` usada em toda a campanha, n=2000):
+   validação de cadeia 157-241µs/conexão; assinatura RSA-4096 5,94ms vs.
+   ML-DSA-65 0,69ms -- ambos reportados como estimativa acrescentada, não
+   medida durante a campanha real. Fonte completa:
+   `thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`.
+2. **Setup/teardown decomposto por fase, perfil e janela**:
+   `callback_server_teardown` é genuinamente constante (<0,02ms de
+   espalhamento); o aparente "+24ms do PQC" em `generate_callback_cert`
+   é um artefato de UMA única célula de referência (sa-east-1/L0) -- com
+   todas as 8 rotas e as 3 janelas reunidas (n=480/perfil), a diferença
+   real é de ~1ms e não é significativa (Mann-Whitney p=0,14/0,22). Não
+   explica, com confiança, o efeito de +23,6ms do PQC na regressão
+   (Seção 7/Predição 3).
+3. **Seção 3**: uma unidade por termo, dita explicitamente; o valor de
+   1.330,82 bytes do `JWT_size` (Classic) é a mediana, nas 30 execuções
+   da célula de referência, do total por execução somado sobre os 28
+   JWTs do fluxo, dividido por 28 -- não o tamanho de um token isolado.
+4. **Seção 6**: RSA-4096 confirmado como contribuinte real e consistente
+   em direção para o custo do handshake de Classic/Hybrid, mas qualificado
+   -- explica ~16% do gap Classic-menos-PQC no handshake em sa-east-1/L0,
+   não a maioria dele. "12 round trips" qualificado na rota de menor RTT
+   (us-east-1/L14, RTT~14ms), onde a razão ms÷RTT é visivelmente menos
+   estável.
+5. Detalhes: `/auth` agora reportado como `n/a` (nunca foi cronometrado,
+   não é um zero real); título da tabela de handshake-em-round-trips
+   agora cita o próprio aviso ms÷RTT; os 360 bytes de diferença
+   `handshake_bytes` contra a v7 decompostos por conexão (60 bytes/
+   conexão) com a constatação honesta de que uma decomposição por
+   mensagem TLS não é possível a partir dos dados salvos de nenhuma das
+   duas versões (v7 nunca teve pcaps); contas de 744 e 48 pcaps
+   reconciliadas explicitamente (48 = 24 do lado cliente + 24 do lado
+   servidor do estágio de validação); item 4.2 da Seção 9 alterado para
+   "Closed, com exceção do PQC".
+6. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Commit e push realizados; nenhuma tag nova criada,
+   por instrução explícita desta rodada.
+
