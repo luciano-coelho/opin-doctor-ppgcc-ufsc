@@ -10066,3 +10066,39 @@ qualquer coleta), `exploratorio-janela1` (a origem das 5 previsões,
 nunca tratado como confirmação), `v8-prereg-3` (a checagem
 confirmatória em si, esta decisão).
 
+## Decision 112 (2026-10-31) -- handshake em viagens confirma 12 nos 3
+## perfis; hipótese do resíduo de ~6 viagens NÃO ATRIBUÍDA (30min,
+## offline, nada tocado na campanha)
+
+**Item 1 -- handshake em viagens (soma das 6 conexões ÷ RTT medido),
+L123/L219/L325, mediana por célula, IC95% bootstrap:**
+- classic: L123=12,33 [12,32;12,34], L219=12,20 [12,19;12,21],
+  L325=12,10 [12,07;12,13]
+- pqc: L123=12,07 [12,06;28,07*], L219=12,03 [12,03;12,04],
+  L325=12,03 [12,00;12,11]
+- hybrid: L123=12,35 [12,34;16,30*], L219=12,20 [12,19;12,20],
+  L325=12,19 [12,13;19,43*]
+(*cauda superior do bootstrap puxada por 1 execução com handshake mais
+longo -- a mediana em si é limpa e consistente nos 9 casos)
+
+**Conclusão: todos muito perto de 12, sem diferença real entre
+perfis** -- confirma diretamente que certificados/chaves maiores
+(PQC/Hybrid) não custam viagens extras de handshake. Isto é o
+complemento direto do item 6 da Decision 110 (k igual nos 3 perfis).
+
+**Item 2 -- hipótese barata para o resíduo de ~6 viagens (L325,
+timeline real de uma conexão, perfil classic, 30min de orçamento):**
+montada a timeline completa (SYN/handshake/dados/FIN) de uma das 6
+conexões reais. Achado real: em TLS 1.3, só o ClientHello/ServerHello
+inicial usa o tipo de record "handshake" (22) sem criptografia -- TUDO
+depois (EncryptedExtensions, Certificate, CertificateVerify, Finished,
+E os dados de aplicação reais) usa o tipo "application_data" (23),
+indistinguível a olho sem decifrar. Gaps reais e grandes encontrados
+na timeline (~4 RTTs entre 1,01s e 2,32s; ~10,8 RTTs entre 4,76s e
+8,32s) parecem mais ligados a sequenciamento do lado cliente (as 6
+conexões não ficam ocupadas continuamente nem correm em paralelo) do
+que a viagens de rede extras dentro do handshake de uma única conexão.
+**NÃO ATRIBUÍDO** -- não consegui isolar com confiança uma causa
+específica para as ~6 viagens do resíduo dentro do orçamento de 30
+minutos; registrado como tal, não forçada uma explicação.
+
