@@ -10036,3 +10036,33 @@ script da campanha tocado. Será estendida às janelas 2 e 3 e aplicada
 retroativamente (substituindo o `consolidate_v8.py` real só depois da
 janela 3), como instruído no item 2.
 
+## Decision 111 (2026-10-31) -- pré-registro confirmatório (tag
+## `v8-prereg-3`): as 5 previsões da janela 1, antes de olhar as
+## janelas 2 e 3
+
+As 5 previsões abaixo foram derivadas EXPLORATORIAMENTE da janela 1
+(Decision 110) -- agora pré-registradas, antes de qualquer análise dos
+dados das janelas 2/3, como critérios CONFIRMATÓRIOS. Cada uma será
+checada separadamente contra a janela 2, separadamente contra a janela
+3, e depois combinada (1+2+3). Registrado também em
+`ANALYSIS_PLAN.md`, seção "Pré-registro confirmatório", commitado com
+a nova tag `v8-prereg-3` (mantendo `v8-prereg` e `v8-prereg-2`).
+
+1. k = 56 ± 1 nos três perfis -- IC95% de k contém 56.
+2. Hybrid: custo fixo `a` > 0 -- IC95% de `a` não cruza zero.
+3. PQC: `a` indistinguível de zero -- IC95% de `a` cruza zero.
+4. `b` indistinguível de zero nos dois -- IC95% de `b` cruza zero;
+   limite superior reportado em viagens extras por execução (a própria
+   unidade de `b`, segundos-de-delta/segundos-de-RTT, já é um número de
+   RTTs): **PQC até +0,50 viagem extra, Hybrid até +0,46 viagem extra**
+   -- limites superiores, não achados, já que o IC cruza zero.
+5. Ordem: Hybrid > Classic nas 8/8 rotas (teste do sinal); PQC vs.
+   Classic sem direção fixa -- não forçar uma ordem onde o teste não
+   sustentar uma.
+
+**Rótulos para o consolidate** (cópia experimental agora, retroativo
+depois da janela 3): `v8-prereg` (critérios originais, antes de
+qualquer coleta), `exploratorio-janela1` (a origem das 5 previsões,
+nunca tratado como confirmação), `v8-prereg-3` (a checagem
+confirmatória em si, esta decisão).
+

@@ -95,6 +95,50 @@ aquela mesma célula (`PILOT3_T_FLUXO_CI95`, hardcoded a partir de
 `CAMPAIGN_PARALLEL_INSTALLATIONS` e as janelas reais rodam
 sequenciais -- sem intervenção manual.
 
+## Pré-registro confirmatório (Decision 111, 2026-10-31, tag `v8-prereg-3`)
+
+As 5 previsões abaixo foram **derivadas exploratoriamente da janela 1**
+(Decision 110) -- rotuladas aqui como exploratórias naquela janela, e
+**pré-registradas como confirmatórias para as janelas 2 e 3**, cada
+uma analisada separadamente primeiro, depois combinada com a janela 1.
+Nenhum ajuste de critério depois de olhar os dados de 2 ou 3.
+
+1. **k = 56 ± 1 nos três perfis** (classic, pqc, hybrid) -- critério:
+   o IC95% de k (regressão T_fluxo = T0 + k·RTT_medido, 8 rotas) contém
+   56.
+2. **Hybrid tem custo fixo real**: o IC95% de `a` (regressão
+   delta = a + b·RTT_medido, Hybrid vs. Classic) **não cruza zero**.
+3. **PQC não tem custo fixo detectável**: o IC95% de `a` (mesma
+   regressão, PQC vs. Classic) **cruza zero**.
+4. **`b` indistinguível de zero nos dois perfis**: o IC95% de `b`
+   cruza zero tanto para PQC quanto para Hybrid -- reportar também o
+   limite superior do IC de `b` convertido em "viagens extras por
+   execução" (unidade já é adimensional, segundos de delta por segundo
+   de RTT = número de RTTs).
+5. **Ordem entre perfis**: Hybrid > Classic nas 8/8 rotas (teste do
+   sinal); PQC vs. Classic **sem direção fixa** (não forçar uma ordem
+   onde o teste do sinal/Mann-Whitney não sustentar uma).
+
+**Rótulos a usar no consolidate (cópia experimental e, depois da
+janela 3, na versão retroativa)**:
+- `v8-prereg`: critérios de aceitação originais (os 11 de
+  `pilot_acceptance.py`, o aquecimento K=5, o calendário/avanço
+  automático) -- já declarados antes de qualquer coleta oficial.
+- `exploratorio-janela1`: os achados que GERARAM as 5 previsões acima
+  (o ajuste de k/a/b em si, feito olhando os dados da janela 1) --
+  nunca tratado como confirmação, só como a origem da hipótese.
+- `v8-prereg-3` (confirmatorio): a checagem das 5 previsões acima
+  contra os dados da janela 2, da janela 3, separadamente, e depois
+  combinados (1+2+3) -- esta tag marca especificamente essa checagem,
+  declarada ANTES de olhar os dados de 2 ou 3.
+
+---
+
+Este arquivo foi commitado com a tag `v8-prereg` antes de qualquer
+janela oficial, e com a tag `v8-prereg-3` antes de qualquer análise
+dos dados das janelas 2/3 -- o mesmo princípio dos dois: a declaração
+tem que existir antes dos dados que ela vai julgar, não depois.
+
 ## Decomposição por participante
 
 `bytes_by_participant()` (`consolidate_v8.py`) já existe e já roda
