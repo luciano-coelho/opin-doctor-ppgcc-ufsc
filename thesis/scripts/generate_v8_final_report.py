@@ -663,6 +663,19 @@ signing_bench_ms = {
 signing_bench_gap_ms = signing_bench_ms["rsa_4096_pss"]["mean"] - signing_bench_ms["mldsa_65"]["mean"]
 handshake_gap_classic_pqc_l0_ms = handshake_ms_at_l0["classic"]["median"] - handshake_ms_at_l0["pqc"]["median"]
 signing_bench_gap_share_of_handshake = signing_bench_gap_ms / handshake_gap_classic_pqc_l0_ms
+# Round-4 correction (Luciano's B.2): TLS 1.3 mTLS sends a CertificateVerify
+# from BOTH sides (the server signs for itself, and -- since ClientAuth=
+# VerifyClientCertIfGiven and this project's real client always presents a
+# cert -- the client signs for itself too, confirmed via Go's
+# handshake_client_tls13.go/handshake_server_tls13.go, both unconditionally
+# sign their own CertificateVerify). The single-operation estimate above
+# undercounts this by half; the server's own chain-validation of the
+# client's cert (Section 2, item 5) is real and always paid too (not a
+# skipped, hypothetical cost like the client's own skipped check of the
+# server). Combined estimate:
+chain_verify_diff_ms = chain_verification_bench_us["classic"]["mean"] / 1000 - chain_verification_bench_us["pqc"]["mean"] / 1000
+signing_bench_gap_both_sides_ms = 2 * signing_bench_gap_ms + chain_verify_diff_ms
+signing_bench_gap_both_sides_share_of_handshake = signing_bench_gap_both_sides_ms / handshake_gap_classic_pqc_l0_ms
 
 print("Computing OPINsize terms (N_JWK corrected to 4), participant decomposition reconciliation,")
 print("Holm-corrected Mann-Whitney, exact sign-test p, pooled handshake-in-trips, Shapiro-Wilk count,")
@@ -733,6 +746,9 @@ intermediate = {
     "chain_verification_bench_us": chain_verification_bench_us,
     "signing_bench_ms": signing_bench_ms,
     "signing_bench_gap_share_of_handshake": signing_bench_gap_share_of_handshake,
+    "signing_bench_gap_both_sides_ms": signing_bench_gap_both_sides_ms,
+    "signing_bench_gap_both_sides_share_of_handshake": signing_bench_gap_both_sides_share_of_handshake,
+    "chain_verify_diff_ms": chain_verify_diff_ms,
 }
 (V8 / "global_v2" / "report_generation_intermediate.json").write_text(json.dumps(intermediate, indent=2), encoding="utf-8")
 print(f"\nWrote {V8 / 'global_v2' / 'report_generation_intermediate.json'}")

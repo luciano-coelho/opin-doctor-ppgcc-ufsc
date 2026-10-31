@@ -1,25 +1,48 @@
 # Item 1/4 (round 4): offline chain-verification and signing microbenchmarks
 
-Both benchmarks below are **offline, added estimates of what a cost WOULD be
-if performed** -- neither is a measurement taken during the real campaign.
-Run after the fleet was destroyed (Decision 117), against the real local
-certificate/key material in `mock-service-os/certs/`, inside the same
-`golang:1.27-rc-alpine` Docker image used throughout this project, so the
-exact same Go `crypto/x509`, `crypto/rsa`, and `crypto/mldsa` implementations
-measure the numbers quoted in the main report.
+Both benchmarks below are **offline, run after the fleet was destroyed**
+(Decision 117), against the real local certificate/key material in
+`mock-service-os/certs/`, inside the same `golang:1.27-rc-alpine` Docker
+image used throughout this project, so the exact same Go `crypto/x509`,
+`crypto/rsa`, and `crypto/mldsa` implementations measure the numbers quoted
+in the main report.
 
 ## Why these estimates exist at all
 
-- **Chain verification**: the real client sets `InsecureSkipVerify: true`
-  (`tls_kem_proxy/main.go:212`), so it never validates the server's
-  certificate chain; T_fluxo therefore never includes this cost. Section 2 /
-  Limitations quote this benchmark only as a "what it would cost" figure.
+**Correction (same round, after a second pass through Go's own
+`crypto/tls` source): benchmark 1's framing below was only half right in
+an earlier draft of this document.** `InsecureSkipVerify` is CLIENT-ONLY in
+Go's implementation -- referenced only in `handshake_client.go`, never in
+`handshake_server.go`/`handshake_server_tls13.go` (grepped across the whole
+`crypto/tls` package to confirm). So:
+
+- **Chain verification, client->server direction: genuinely skipped.** The
+  real client sets `InsecureSkipVerify: true` (`tls_kem_proxy/main.go:212`),
+  so it never validates the server's certificate chain; T_fluxo never
+  includes this cost. The "classic"/"pqc"/"hybrid" rows below, read for
+  THIS direction, remain a hypothetical "what it would cost if performed"
+  estimate.
+- **Chain verification, server->client direction: real, and always paid.**
+  `mock_mtls/main.go:502` sets `ClientAuth: tls.VerifyClientCertIfGiven`
+  with `ClientCAs: caCertPool()`; Go's own `processCertsFromClient()`
+  (`handshake_server.go:970-990`) runs exactly this same `x509.Verify()`
+  call, against exactly these same certificate/CA pairs, on every real
+  connection, under all three profiles -- confirmed by matching this
+  benchmark's own cert/CA arguments one-for-one against that function's
+  real `ClientCAs`/`Intermediates` construction. Read for THIS direction,
+  the same numbers below are an estimate of a REAL, always-performed cost
+  that simply isn't separately instrumented in the campaign's own phase
+  timers -- not a skipped, hypothetical one.
 - **RSA-4096 vs. ML-DSA-65 signing**: no per-operation timer exists inside
   Go's TLS 1.3 handshake internals (unlike the JWT-level operations in
-  Section 6's CPU-per-operation table), so the server's own certificate-
-  signing cost during the handshake cannot be read directly from any
-  campaign log. This benchmark isolates that one operation, using the real
-  server private keys, to let Section 6 qualify (not merely assert) the
+  Section 6's CPU-per-operation table), so the certificate-signing cost
+  during the handshake cannot be read directly from any campaign log. TLS
+  1.3 mTLS has BOTH peers sign their own `CertificateVerify` (confirmed
+  unconditional in `handshake_server_tls13.go`/`handshake_client_tls13.go`,
+  given this project's `ClientAuth=VerifyClientCertIfGiven` and a client
+  that always presents a certificate) -- this benchmark isolates one such
+  operation using the real server private keys; Section 6 doubles it to
+  account for both peers before using it to qualify (not merely assert) the
   RSA-4096-dominance hypothesis for Classic's/Hybrid's handshake cost.
 
 ## Benchmark 1: X.509 chain verification, per profile
@@ -242,13 +265,23 @@ Per Section 2's own finding, Hybrid's live TLS handshake authenticates via
 its **RSA-4096 primary signature** (the ML-DSA-65 `AltSignatureValue` is a
 non-critical extension the handshake itself never checks) -- so Classic and
 Hybrid share the same real signing key type at the TLS layer, while PQC's is
-pure ML-DSA-65. This benchmark's own RSA-4096-vs-ML-DSA-65 signing-time gap
-(5.94ms vs 0.69ms, a 5.25ms difference) is **directionally consistent** with
-that pattern and is, among the operations this project can isolate and
-measure at all, the single largest one -- but it explains only roughly
-5.25/33.3 =~ 16% of the 33.3ms Classic-minus-PQC gap in the real handshake
-duration itself. The qualified conclusion used in Section 6: this is real,
-measured, consistent-in-direction evidence that RSA-4096 signing is **a**
-contributor, not a demonstration that it is **the** dominant one in
-wall-clock terms -- the remaining ~84% of the gap stays in the existing
-"handshake residual ... not attributed" limitation.
+pure ML-DSA-65.
+
+**Corrected to count both signing peers, plus the real (not hypothetical)
+server-side chain-verify cost (see the correction note above).** TLS 1.3
+mTLS has BOTH the server and the client sign their own `CertificateVerify`
+-- confirmed unconditional in Go's own
+`handshake_server_tls13.go`/`handshake_client_tls13.go`, given this
+project's `ClientAuth=VerifyClientCertIfGiven` and a client that always
+presents a certificate. Combined estimate: 2x(5.94ms-0.69ms) signing +
+(0.241ms-0.157ms) chain-verify = **10.60ms**. This is **directionally
+consistent** with the Classic/Hybrid-vs-PQC pattern and is, among the
+operations this project can isolate and measure at all, the largest
+combined one -- but it explains only roughly 10.60/33.3 =~ 32% of the
+33.3ms Classic-minus-PQC gap in the real handshake duration itself. The
+qualified conclusion used in Section 6: this is real, measured,
+consistent-in-direction evidence that RSA-4096 signing (both peers) plus
+the server's real chain-check of the client's certificate are **a**
+substantial contributor, not a demonstration that they are **the**
+dominant one in wall-clock terms -- the remaining ~68% of the gap stays in
+the existing "handshake residual ... not attributed" limitation.

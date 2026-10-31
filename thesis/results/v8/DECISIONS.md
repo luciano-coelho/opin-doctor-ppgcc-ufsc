@@ -10439,3 +10439,40 @@ nas 7 regiões.
    segredos: limpo. Commit e push realizados; nenhuma tag nova criada,
    por instrução explícita desta rodada.
 
+## Decision 121 (2026-10-31) -- correção de uma afirmação errada da
+## Decision 120 (item 1), encontrada ao responder às perguntas de
+## evidência do autor; sem tag nova
+
+**O item 1 da Decision 120 estava ERRADO quanto ao lado do servidor.**
+Ao responder com evidência de código (arquivo e linha, a pedido do
+autor) se o servidor valida ou não a cadeia do certificado do cliente,
+a leitura do código-fonte real do `crypto/tls` do Go 1.27rc mostrou que
+`InsecureSkipVerify` é uma flag **exclusiva do lado cliente**: aparece
+só em `handshake_client.go` (nunca em `handshake_server.go` ou
+`handshake_server_tls13.go`, confirmado por grep em todo o pacote). A
+verificação da cadeia do certificado do CLIENTE pelo SERVIDOR
+(`processCertsFromClient()`, `handshake_server.go:970-990`) roda
+`certs[0].Verify()` contra `ClientCAs` sempre que
+`ClientAuth>=VerifyClientCertIfGiven` -- sem nenhuma referência a
+`InsecureSkipVerify`. Como `mock_mtls/main.go:502` define exatamente
+`ClientAuth: tls.VerifyClientCertIfGiven`, **o servidor verifica
+realmente a cadeia do certificado do cliente, nos três perfis** -- a
+afirmação anterior ("sob Classic e PQC, o servidor não faz nenhuma
+verificação criptográfica do certificado do cliente") estava errada e
+foi removida/corrigida na Seção 2 (item 5), nas Limitações e na Seção
+6 (que agora conta a assinatura RSA-4096 dos DOIS lados do handshake
+TLS 1.3 -- servidor E cliente, já que `CertificateVerify` é enviado
+pelos dois quando o cliente apresenta certificado -- e soma o custo
+real, não hipotético, da verificação de cadeia já feita pelo servidor).
+A estimativa de contribuição do RSA-4096 para o gap Classic-menos-PQC
+no handshake subiu de ~16% (uma única operação) para ~32% (as duas
+assinaturas + a diferença real de verificação de cadeia), ainda
+qualificada como contribuinte real, não explicação completa. O que
+permanece correto, sem alteração: o CLIENTE nunca verifica o servidor,
+em nenhum perfil (essa parte da Decision 120 estava certa). Seção 7
+também ganhou uma frase explícita (pedido do autor): o efeito de
++23,6ms do PQC na regressão é dito como pequeno, não nulo, e não
+atribuído a nenhuma fase medida isoladamente com confiança.
+`audit_v8_from_raw.py` reexecutado após a correção: **0 divergências**.
+Scanner de segredos: limpo. Sem tag nova.
+
