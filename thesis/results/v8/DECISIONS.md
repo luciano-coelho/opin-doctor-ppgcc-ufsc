@@ -10291,3 +10291,58 @@ regra de Decision 49 para artefatos do Terraform), local em `thesis/
 results/v8/campaign/terraform/tfdestroy`. Aplicar é decisão do autor,
 presente.
 
+## Decision 116 (2026-10-31) -- auditoria final pré-destroy: matriz de
+## camadas por perfil, verificação criptográfica independente do PQC,
+## matriz promessa-evidência contra o parecer técnico (tempo-box 60min)
+
+Frota ainda de pé, nenhuma campanha nova. Três itens, detalhados em
+`thesis/results/v8/artifacts/item1_layer_matrix.md` e `item3_promise_
+evidence_matrix.md`:
+
+**1. Matriz de camadas (7 camadas x 3 perfis)**: troca de chaves TLS,
+autenticação (servidor/cliente), cadeia de certificados, assinatura
+JWT, JWE, conexão interna AS→RS, Diretório/PKI -- cada célula com
+algoritmo real, evidência arquivo:linha, e se foi verificado
+criptograficamente. **Achados reais que não são o que o rótulo
+sugere**: (a) JWE do id_token é RSA-OAEP/A256GCM IDÊNTICO nos 3
+perfis -- limitação já declarada em código (`opin_flow.py:798-802`),
+não um gap silencioso; (b) o header `alg` de um JWT Hybrid lê "PS256"
+mesmo quando a assinatura real é dupla (Strong Nesting PS256+ML-DSA-65)
+-- documentado mas visualmente enganoso para quem não olhar a segunda
+assinatura; (c) o certificado do servidor sob Hybrid mantém a chave
+RSA-4096 base, só soma uma extensão ML-DSA-65 -- não troca de chave.
+**Achado que RESOLVE uma pendência do parecer**: a cadeia PQC (raiz
+`root_ca_pqc.crt` + emissora `issuer_ca_pqc.crt`) e o Diretório/PKI
+mock estão, confirmado agora ao vivo (`openssl x509 -noout -text`),
+assinados em ML-DSA-65 -- não mais classicamente assinados como na
+v7. Isso fecha a assimetria do parecer (item 4.3/Rec. 2): só o mTLS
+tinha sido corrigido antes; agora a cadeia completa também está.
+
+**2. Verificação criptográfica independente do PQC, rodada agora**:
+`mock-service-os/certs/main.go -verify-pqc-cert client_one_pqc` e
+`-verify-hybrid client_one` (via `docker run golang:1.27-rc-alpine`,
+no próprio servidor `sa-east-1`, certs/chaves reais já em disco) --
+**RESULT: verificado** nos dois casos (desafio assinado e checado
+contra a SubjectPublicKeyInfo real do certificado, não apenas um
+campo do tamanho/OID esperado). Saída completa em `artifacts/pqc/
+verify_pqc_cert_output.txt` e `artifacts/hybrid/verify_hybrid_cert_
+output.txt` -- antes, `artifacts/pqc/` só tinha o log do gateway e o
+certificado estático, sem essa verificação independente.
+
+**3. Matriz promessa-evidência**: contra o parecer técnico (nota
+importante: o parecer -- Manuel Matos, 2026-09-28 -- avalia uma
+versão ANTERIOR/menor do relatório, 7 páginas, não a v8 atual),
+`ANALYSIS_PLAN.md`, `METRICS_COVERAGE.md`, `DECISIONS.md`. Itens 4.2,
+4.3, 4.4, 4.6a, 4.6c, 4.6e, Rec. 1-8, mais as promessas do orientador
+(cobertura Schardong 2022, estatística de distribuição, aviso final)
+-- status FEITO/LIMITAÇÃO DECLARADA/NÃO FEITO, cada um com evidência
+citada. **6 itens NÃO FEITO, nenhum depende da frota** (são redação/
+análise sobre dados já coletados, ou pedem infraestrutura fora de
+escopo de 60min): 4.6a (unidade de medida única), 4.6c (conformidade
+do perfil Clássico contra a norma OPIN), Rec. 1 (4º perfil), Rec. 6
+(navegador real), Rec. 7 (reformular texto de custo fixo), aviso de
+limitações consolidado no relatório final -- aguardando decisão do
+Luciano, nenhum executado sem autorização.
+
+Frota NÃO destruída -- aplicar `tfdestroy` é decisão do autor, presente.
+
