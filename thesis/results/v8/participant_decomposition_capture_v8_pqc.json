@@ -1,0 +1,420 @@
+{
+  "profile": "pqc",
+  "remote_gateway_host": "172.31.12.1",
+  "n_calls": 44,
+  "totals_by_participant": {
+    "AS": {
+      "sent_bytes": 100009,
+      "received_bytes": 45836,
+      "count": 22
+    },
+    "PKI/CRL": {
+      "sent_bytes": 32440,
+      "received_bytes": 732,
+      "count": 4
+    },
+    "RS": {
+      "sent_bytes": 97026,
+      "received_bytes": 5611,
+      "count": 18
+    }
+  },
+  "calls": [
+    {
+      "endpoint": "/jwks",
+      "host_header": "auth.local",
+      "participant": "AS",
+      "request_bytes": 184,
+      "response_bytes": 4071,
+      "method": "GET",
+      "src": "FetchServerKeys"
+    },
+    {
+      "endpoint": "/root-ca.pem",
+      "host_header": "directory",
+      "participant": "PKI/CRL",
+      "request_bytes": 183,
+      "response_bytes": 8104,
+      "method": "GET",
+      "src": "OpinInsertMtlsCa"
+    },
+    {
+      "endpoint": "/issuer-ca.pem",
+      "host_header": "directory",
+      "participant": "PKI/CRL",
+      "request_bytes": 183,
+      "response_bytes": 8116,
+      "method": "GET",
+      "src": "OpinInsertMtlsCa"
+    },
+    {
+      "endpoint": "/token",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 5113,
+      "response_bytes": 1083,
+      "method": "POST",
+      "src": "CallTokenEndpoint"
+    },
+    {
+      "endpoint": "/jwks",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 2887,
+      "method": "GET",
+      "src": "FetchServerKeys"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 788,
+      "response_bytes": 5435,
+      "method": "POST",
+      "src": "CallConsentEndpointWithBearerToken"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:1f9a2d92-5e40-4520-bd2f-65a916954e8a",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5435,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:1f9a2d92-5e40-4520-bd2f-65a916954e8a",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5435,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:1f9a2d92-5e40-4520-bd2f-65a916954e8a",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5435,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/auth",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 123,
+      "response_bytes": 1756,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/stpcNN09Gp_TvUDwPzHVr_FwTPQXAVK7pzFLch9jyej",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 235,
+      "response_bytes": 8725,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/stpcNN09Gp_TvUDwPzHVr_FwTPQXAVK7pzFLch9jyej/login",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 366,
+      "response_bytes": 837,
+      "method": "POST",
+      "src": "login"
+    },
+    {
+      "endpoint": "/auth/stpcNN09Gp_TvUDwPzHVr_FwTPQXAVK7pzFLch9jyej",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 249,
+      "response_bytes": 2339,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/nf3FQQzgKNxT7I3ktEhpAbMdedsmtYpfXNyKf3g6W4E",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 331,
+      "response_bytes": 8242,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/nf3FQQzgKNxT7I3ktEhpAbMdedsmtYpfXNyKf3g6W4E/confirm",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 350,
+      "response_bytes": 837,
+      "method": "POST",
+      "src": "login"
+    },
+    {
+      "endpoint": "/auth/nf3FQQzgKNxT7I3ktEhpAbMdedsmtYpfXNyKf3g6W4E",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 345,
+      "response_bytes": 10959,
+      "method": "GET",
+      "src": "JARM"
+    },
+    {
+      "endpoint": "/request",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 10384,
+      "response_bytes": 1074,
+      "method": "POST",
+      "src": "CallPAREndpoint"
+    },
+    {
+      "endpoint": "/token",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 5281,
+      "response_bytes": 8627,
+      "method": "POST",
+      "src": "CallTokenEndpoint"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:1f9a2d92-5e40-4520-bd2f-65a916954e8a",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5419,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:1f9a2d92-5e40-4520-bd2f-65a916954e8a",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5419,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/jwks",
+      "host_header": "auth.local",
+      "participant": "AS",
+      "request_bytes": 184,
+      "response_bytes": 4071,
+      "method": "GET",
+      "src": "FetchServerKeys"
+    },
+    {
+      "endpoint": "/root-ca.pem",
+      "host_header": "directory",
+      "participant": "PKI/CRL",
+      "request_bytes": 183,
+      "response_bytes": 8104,
+      "method": "GET",
+      "src": "OpinInsertMtlsCa"
+    },
+    {
+      "endpoint": "/issuer-ca.pem",
+      "host_header": "directory",
+      "participant": "PKI/CRL",
+      "request_bytes": 183,
+      "response_bytes": 8116,
+      "method": "GET",
+      "src": "OpinInsertMtlsCa"
+    },
+    {
+      "endpoint": "/token",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 5113,
+      "response_bytes": 1083,
+      "method": "POST",
+      "src": "CallTokenEndpoint"
+    },
+    {
+      "endpoint": "/jwks",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 2887,
+      "method": "GET",
+      "src": "FetchServerKeys"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 823,
+      "response_bytes": 5481,
+      "method": "POST",
+      "src": "CallConsentEndpointWithBearerToken"
+    },
+    {
+      "endpoint": "/open-insurance/consents/v3/consents/urn:raidiaminsurance:3b221c88-97f6-4db1-9b03-c748f6054650",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5481,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/auth",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 123,
+      "response_bytes": 1756,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/quj3FcVtkfCm7gUV7UcY_O0kYRr_0zMZO80USjFl4t3",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 235,
+      "response_bytes": 8585,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/quj3FcVtkfCm7gUV7UcY_O0kYRr_0zMZO80USjFl4t3/login",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 366,
+      "response_bytes": 837,
+      "method": "POST",
+      "src": "login"
+    },
+    {
+      "endpoint": "/auth/quj3FcVtkfCm7gUV7UcY_O0kYRr_0zMZO80USjFl4t3",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 249,
+      "response_bytes": 2339,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/VCCwWBivSr_z9IU07bw5qhDHssrk_Q601vdDgZue5US",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 331,
+      "response_bytes": 11431,
+      "method": "GET",
+      "src": "login"
+    },
+    {
+      "endpoint": "/interaction/VCCwWBivSr_z9IU07bw5qhDHssrk_Q601vdDgZue5US/confirm",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 452,
+      "response_bytes": 837,
+      "method": "POST",
+      "src": "login"
+    },
+    {
+      "endpoint": "/auth/VCCwWBivSr_z9IU07bw5qhDHssrk_Q601vdDgZue5US",
+      "host_header": null,
+      "participant": "AS",
+      "request_bytes": 345,
+      "response_bytes": 10959,
+      "method": "GET",
+      "src": "JARM"
+    },
+    {
+      "endpoint": "/request",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 10196,
+      "response_bytes": 1074,
+      "method": "POST",
+      "src": "CallPAREndpoint"
+    },
+    {
+      "endpoint": "/token",
+      "host_header": "matls-auth.local",
+      "participant": "AS",
+      "request_bytes": 5281,
+      "response_bytes": 8487,
+      "method": "POST",
+      "src": "CallTokenEndpoint"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5143,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5143,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/claim",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5630,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/claim",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5630,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/policy-info",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 7373,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/policy-info",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 7373,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/premium",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5710,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    },
+    {
+      "endpoint": "/open-insurance/insurance-person/v2/insurance-person/0549fb5f-5eeb-43ec-90fc-e225b9fad6fb/premium",
+      "host_header": "api.local",
+      "participant": "RS",
+      "request_bytes": 250,
+      "response_bytes": 5710,
+      "method": "GET",
+      "src": "CallProtectedResource"
+    }
+  ]
+}

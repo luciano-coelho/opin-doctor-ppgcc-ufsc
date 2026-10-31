@@ -20,6 +20,20 @@ OPINsize -- constant-per-profile check (report_data_v8_combined.json)
   hybrid  : OPINsize = 360857 bytes (constant across all 8 routes)
 
 ==============================================================================
+N_JWK -- independently counted from raw calls.jsonl (not assumed from v7)
+==============================================================================
+  classic : /jwks called 4 times, every one carrying a 'sig'-use JWK entry -- N_JWK=4 confirmed from raw data
+  pqc     : /jwks called 4 times, every one carrying a 'sig'-use JWK entry -- N_JWK=4 confirmed from raw data
+  hybrid  : /jwks called 4 times, every one carrying a 'sig'-use JWK entry -- N_JWK=4 confirmed from raw data
+
+==============================================================================
+Participant decomposition (AS/RS/PKI-CRL) -- reconciled against official bytes_by_participant
+==============================================================================
+  classic : AS+RS one-off capture reconciles exactly with the official 'Other' bucket (AS=68325, RS=27246, PKI/CRL=8852)
+  pqc     : AS+RS one-off capture reconciles exactly with the official 'Other' bucket (AS=100009, RS=97026, PKI/CRL=32440)
+  hybrid  : AS+RS one-off capture reconciles exactly with the official 'Other' bucket (AS=102901, RS=128622, PKI/CRL=37768)
+
+==============================================================================
 k-model (T_fluxo = T0 + k*RTT_measured), independently fit, vs. global_v2/consolidated_combined.json's models.k_model
 ==============================================================================
   classic : k=56.025 (raw) vs 56.025 (consolidated) -- matches within 0.05

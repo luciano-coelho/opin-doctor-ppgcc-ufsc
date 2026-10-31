@@ -275,6 +275,57 @@ for profile in EXP_DIRS:
     else:
         say(f"  {profile:8s}: OPINsize = {next(iter(vals)):.0f} bytes (constant across all 8 routes)")
 
+# ---- N_JWK, independently counted from raw calls.jsonl -- Luciano's review round,
+# item B: the report's first draft wrongly assumed N_JWK=2 (copied from v7's own
+# flow structure); re-verify here that the real call count is 4, with "sig"-use
+# entries on every one of the 4 calls, every profile. ----
+say("\n" + "=" * 78)
+say("N_JWK -- independently counted from raw calls.jsonl (not assumed from v7)")
+say("=" * 78)
+for profile, expdir in EXP_DIRS.items():
+    calls_path = V8_ROOT / "janela1" / expdir / "sa-east-1" / "L0" / "runs" / "w01_run01.calls.jsonl"
+    if not calls_path.is_file():
+        continue
+    n_jwks_calls = 0
+    n_sig_entries = 0
+    for line in calls_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        c = json.loads(line)
+        if c.get("endpoint") == "/jwks":
+            n_jwks_calls += 1
+            if any(j.get("use") == "sig" for j in c.get("jwk_sizes", [])):
+                n_sig_entries += 1
+    if n_jwks_calls != 4 or n_sig_entries != 4:
+        problem(f"{profile}: /jwks calls={n_jwks_calls} (expected 4), with a 'sig' entry on {n_sig_entries} of them (expected 4)")
+    else:
+        say(f"  {profile:8s}: /jwks called 4 times, every one carrying a 'sig'-use JWK entry -- N_JWK=4 confirmed from raw data")
+
+# ---- participant decomposition (item A) -- reconcile the one-off AS/RS/PKI-CRL
+# capture against the official per-cell bytes_by_participant "Other" totals ----
+say("\n" + "=" * 78)
+say("Participant decomposition (AS/RS/PKI-CRL) -- reconciled against official bytes_by_participant")
+say("=" * 78)
+for profile in EXP_DIRS:
+    capture_path = V8_ROOT / f"participant_decomposition_capture_v8_{profile}.json"
+    if not capture_path.is_file():
+        problem(f"{profile}: participant_decomposition_capture_v8_{profile}.json missing")
+        continue
+    capture = json.loads(capture_path.read_text(encoding="utf-8"))
+    tot = capture["totals_by_participant"]
+    official_bp = consolidated["profiles"][profile]["sa-east-1"]["L0"]["bytes_by_participant"]
+    n_runs_official = rows_by_key[(profile, "sa-east-1", "L0")]["n"]
+    as_rs_sent = tot["AS"]["sent_bytes"] + tot["RS"]["sent_bytes"]
+    as_rs_recv = tot["AS"]["received_bytes"] + tot["RS"]["received_bytes"]
+    off_other_sent = official_bp["Other"]["sent_bytes"] / n_runs_official
+    off_other_recv = official_bp["Other"]["received_bytes"] / n_runs_official
+    if abs(as_rs_sent - off_other_recv) > 1 or abs(as_rs_recv - off_other_sent) > 1:
+        problem(f"{profile}: AS+RS capture (sent={as_rs_sent}, recv={as_rs_recv}) does not reconcile with "
+                f"official Other (recv={off_other_recv}, sent={off_other_sent})")
+    else:
+        say(f"  {profile:8s}: AS+RS one-off capture reconciles exactly with the official 'Other' bucket "
+            f"(AS={tot['AS']['sent_bytes']}, RS={tot['RS']['sent_bytes']}, PKI/CRL={tot['PKI/CRL']['sent_bytes']})")
+
 # ---- k-model ----
 say("\n" + "=" * 78)
 say("k-model (T_fluxo = T0 + k*RTT_measured), independently fit, vs. global_v2/consolidated_combined.json's models.k_model")
