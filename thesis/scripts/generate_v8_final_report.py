@@ -593,6 +593,77 @@ for p in PROFILES:
         "k_ci95_ols_t": [k_lo_t, k_hi_t], "se_k": se_k, "n_boot": nb,
     }
 
+# -------------------------------------------------------------- setup/teardown phase decomposition (round 4, item 2)
+# generate_callback_cert/callback_server_teardown appear TWICE per run file
+# (confirmed by inspection -- opin_flow.py's own "two-flows-one-process"
+# pattern, cross-referenced in its _generate_callback_tls_cert() docstring
+# to v4 DECISIONS.md Etapa 7); both occurrences of each phase are pooled
+# here, same as every other raw-timing figure in this report.
+setup_phase_samples = {p: {"generate_callback_cert": [], "callback_server_teardown": []} for p in PROFILES}
+setup_phase_samples_by_window = {p: {wn: {"generate_callback_cert": [], "callback_server_teardown": []} for wn in WINDOWS} for p in PROFILES}
+for p in PROFILES:
+    for wn in WINDOWS:
+        for inst, scen in ROUTES:
+            runs_dir = V8 / f"janela{wn}" / EXP_DIRS[p] / inst / scen / "runs"
+            if not runs_dir.is_dir():
+                continue
+            for f in sorted(runs_dir.glob("run*.json")):
+                if "calls" in f.name:
+                    continue
+                d = json.loads(f.read_text(encoding="utf-8"))
+                for item in d["result"].get("setup_timings") or []:
+                    phase = item.get("phase")
+                    if phase in setup_phase_samples[p]:
+                        setup_phase_samples[p][phase].append(item["duration_ms"])
+                        setup_phase_samples_by_window[p][wn][phase].append(item["duration_ms"])
+
+setup_phase_pooled = {
+    p: {
+        phase: {"median": statistics.median(vals), "n": len(vals), "mean": statistics.mean(vals)}
+        for phase, vals in setup_phase_samples[p].items() if vals
+    }
+    for p in PROFILES
+}
+setup_phase_by_window = {
+    p: {
+        wn: {
+            phase: {"median": statistics.median(vals), "n": len(vals)}
+            for phase, vals in setup_phase_samples_by_window[p][wn].items() if vals
+        }
+        for wn in WINDOWS
+    }
+    for p in PROFILES
+}
+setup_phase_significance = {}
+for p1 in ("pqc", "hybrid"):
+    a = setup_phase_samples[p1]["generate_callback_cert"]
+    b = setup_phase_samples["classic"]["generate_callback_cert"]
+    u, pval, effect = mann_whitney_u(a, b)
+    setup_phase_significance[f"{p1}_vs_classic"] = {
+        "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
+        "median_a": statistics.median(a), "median_b": statistics.median(b),
+    }
+
+# -------------------------------------------------------------- offline microbenchmarks (round 4, items 1/4)
+# Both benchmarks are OFFLINE, ADDED ESTIMATES -- neither is a measurement
+# taken during the real campaign (the fleet was already destroyed, Decision
+# 117). Run against this project's own real local cert/key material, inside
+# the same golang:1.27-rc-alpine image used throughout this project. Full
+# source, exact commands, and raw output:
+# thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md
+chain_verification_bench_us = {
+    "classic": {"mean": 241.057, "min": 191.323, "max": 1317.417, "n": 2000},
+    "pqc": {"mean": 157.038, "min": 143.699, "max": 1732.417, "n": 2000},
+    "hybrid": {"mean": 236.819, "min": 182.843, "max": 1294.907, "n": 2000},
+}
+signing_bench_ms = {
+    "rsa_4096_pss": {"mean": 5.944638, "min": 4.779089, "max": 17.66055, "n": 2000, "key": "mtls.key"},
+    "mldsa_65": {"mean": 0.68816, "min": 0.136776, "max": 5.199236, "n": 2000, "key": "mtls_pqc.key"},
+}
+signing_bench_gap_ms = signing_bench_ms["rsa_4096_pss"]["mean"] - signing_bench_ms["mldsa_65"]["mean"]
+handshake_gap_classic_pqc_l0_ms = handshake_ms_at_l0["classic"]["median"] - handshake_ms_at_l0["pqc"]["median"]
+signing_bench_gap_share_of_handshake = signing_bench_gap_ms / handshake_gap_classic_pqc_l0_ms
+
 print("Computing OPINsize terms (N_JWK corrected to 4), participant decomposition reconciliation,")
 print("Holm-corrected Mann-Whitney, exact sign-test p, pooled handshake-in-trips, Shapiro-Wilk count,")
 print("and the T_fluxo ~ profile+route+position+window regression -- all from raw/published data.")
@@ -615,6 +686,14 @@ for p in PROFILES:
     kpe = k_per_execution[p]
     print(f"  k per-execution ({p}, n={kpe['n_executions']}): k={kpe['k']:.3f} "
           f"bootstrap_CI={kpe['k_ci95_bootstrap']} ols_t_CI={kpe['k_ci95_ols_t']}")
+print(f"  Setup/teardown, pooled all routes+windows: "
+      f"{ {p: setup_phase_pooled[p]['generate_callback_cert']['median'] for p in PROFILES} }")
+for key, sig in setup_phase_significance.items():
+    print(f"  generate_callback_cert {key}: U={sig['u']:.1f} p={sig['p']:.5f} "
+          f"median_a={sig['median_a']:.3f} median_b={sig['median_b']:.3f} n={sig['n_a']}/{sig['n_b']}")
+print(f"  Signing bench: RSA-4096-PSS={signing_bench_ms['rsa_4096_pss']['mean']:.3f}ms "
+      f"ML-DSA-65={signing_bench_ms['mldsa_65']['mean']:.3f}ms, gap explains "
+      f"{signing_bench_gap_share_of_handshake*100:.1f}% of the Classic-PQC L0 handshake gap")
 
 intermediate = {
     "terms": terms,
@@ -648,6 +727,12 @@ intermediate = {
     "fleet_status": fleet_status,
     "tfluxo_min_max": {f"{p}|{inst}|{scen}": [min(pooled_tfluxo[(p, inst, scen)]), max(pooled_tfluxo[(p, inst, scen)])]
                         for p in PROFILES for inst, scen in ROUTES},
+    "setup_phase_pooled": setup_phase_pooled,
+    "setup_phase_by_window": setup_phase_by_window,
+    "setup_phase_significance": setup_phase_significance,
+    "chain_verification_bench_us": chain_verification_bench_us,
+    "signing_bench_ms": signing_bench_ms,
+    "signing_bench_gap_share_of_handshake": signing_bench_gap_share_of_handshake,
 }
 (V8 / "global_v2" / "report_generation_intermediate.json").write_text(json.dumps(intermediate, indent=2), encoding="utf-8")
 print(f"\nWrote {V8 / 'global_v2' / 'report_generation_intermediate.json'}")

@@ -15,6 +15,8 @@ Every prior version of this thesis (v1-v7) measured the cost of the OPIN post-qu
 
 **Relation to v7.** v7 fixed a real measurement artifact (a container-spawn cost contaminating every PQC/Hybrid signing call) and closed the PQC profile's certificate chain to be post-quantum end-to-end at the CA level; this report inherits both fixes as a starting point and adds a dimension v7 never attempted: a real network, instead of a single-host emulation of one. v7 itself never measured handshake round trips or repeated the experiment across multiple independent collection windows, so neither "12 round trips" nor "PQC's fixed cost is stable" are v7 findings being replicated here -- both are new to v8 (Decision 112; Section 7). What does carry over directly is a real accounting gap: v7's own published Classic OPINsize (76,929 bytes) undercounts `N_JWK` the same way this report's own first draft did (2 instead of the real 4 `/jwks` calls per execution, Section 3) -- correcting for that alone accounts for 512 of the 872-byte gap between v7's reported Classic total and v8's own (77,801 bytes); the remaining 360 bytes come from a slightly larger measured `handshake_bytes` in this real environment. This is reported here as a reconciliation of v8's own number against v7's published one, not as a correction this document makes to v7's own results.
 
+**That 360-byte figure, decomposed per connection, honestly: it cannot be broken down further by TLS message type, on either side.** 360 bytes over `N_mTLS=6` connections is 60.0 bytes/connection. Both v7's own source (`compute_v7_report_data.py`'s `gateway_metrics.handshake_bytes`) and v8's `term_handshake()` read the exact same single aggregate counter -- `mtlsHandshakeBytes` from the gateway's `countingConn` (`mock_mtls/main.go`) -- which was never broken down by TLS message type (ClientHello/ServerHello/Certificate/Finished) in either version's own logs, and v7 kept no pcaps at all (confirmed: `thesis/results/v7/` has no `*.pcap*` files, only the same `handshake_log.json` gateway-log export) to re-derive that breakdown from afterward. A per-message decomposition of this 60.0-byte/connection gap against v7 is **not possible** from either side's own saved data -- not a gap this report chooses to leave open, but one that cannot be closed from what either version recorded.
+
 **Infrastructure.** Server and client instances: `m7i-flex.large` -- an Intel-based "flex" instance type with a baseline-and-burst performance model, **not** the credit-based burstable model of the T-series. The control instance (orchestration only, never part of any measured flow): `t4g.micro`, an ARM Graviton T-series instance, which **is** credit-based burstable. CPU steal was monitored on the measured instances throughout the campaign (mean below 5% in every window); the control instance's own credit behavior was not specifically tested, since it does no flow work. **A single gateway image** is used for all three profiles and all three installations (the profile is selected at runtime by `CRYPTO_PROFILE`, not by a separate image per profile) -- its digest was checked at every profile-block switch against one registered value, all 3 windows, 0 mismatches.
 
 **Topology.** Three server installations (`sa-east-1`, `us-east-1`, `ap-northeast-1`), eight client scenarios across them (four routes from `sa-east-1` -- `L0`, co-located; `L123`, `L219`, `L325` -- and two each from `us-east-1` and `ap-northeast-1` -- `L0` and `L14`/`L30`), chosen empirically by real measured RTT rather than assumed from the literature. Each of the three crypto profiles (Classic, PQC, Hybrid) runs the identical client code against every route. **The AS-to-RS internal channel stays classical (`CurveP256`) in every profile, including PQC and Hybrid.** This is not new migration scope left undone: the channel itself was already classical in the original system, before this thesis's PQC work began -- there was no profile concept yet to make it anything else. What **was** built in this project (v6) is the *mechanism* that keeps it classical once a global PQC/Hybrid curve preference exists: `mock_mtls`'s `GetConfigForClient` answers the internal hostname `matls-api.local` with classical-only curve preferences regardless of `CRYPTO_PROFILE`, an SNI carve-out added specifically so switching the gateway's profile-wide group preference for the client-facing channel would not also break this always-classical internal one (v6, `Level 1/DECISIONS.md`, Decision 1/5). The AS's own calls to the RS use that SNI and therefore never see the active profile's PQC/Hybrid group, on every one of the 720 executions (confirmed by gateway-log correlation, 0 violations).
@@ -76,6 +78,17 @@ A live, pre-destroy audit (Decision 116) verified every cryptographic layer of a
 2. **The AS<->RS internal channel stays classical under PQC and Hybrid**, by the SNI carve-out mechanism v6 built specifically to protect this already-classical channel once a global PQC/Hybrid group preference existed (Section 1.1) -- not new, unmigrated scope.
 3. **Hybrid's JWT `alg` header reads `PS256`** even when the underlying signature is the dual Strong Nesting construction -- a reader checking only the header sees a classical algorithm where a second, real ML-DSA-65 signature also exists.
 4. **Hybrid's TLS channel authentication is, in practice, secured by RSA alone -- but message-level authentication is genuinely hybrid.** These are two different layers, with different outcomes. At the TLS layer, Hybrid's server and client certificates carry a real ML-DSA-65 signature (the `AltSignatureValue` X.509 extension) that the live TLS handshake itself never checks -- X.509 non-critical extensions are, by the standard's own definition, not required to be processed by a verifier that doesn't understand them, and Go's `crypto/tls` (both sides of this project's real connections) validates only the certificate's primary RSA signature during the handshake. The ML-DSA-65 signature is real and independently checkable out-of-band (confirmed live via `-verify-hybrid`'s own preTBS reconstruction), but nothing in the live connection path verifies it -- Hybrid's practical TLS-layer authentication strength is exactly Classic's against an attacker who can forge an RSA signature. **At the message level, this is not the case**: `client_assertion`, the request object, `id_token`, and the JARM all carry a real, dual signature (Strong Nesting or payload-extension, Section 2's own table above), and the receiving party's own verification code (`thesis/scripts/pqc-signer/signer_core.mjs`) genuinely checks **both** signatures before accepting the artifact -- message-level authentication is real hybrid defense-in-depth; only the TLS channel's own certificate authentication is effectively RSA-only.
+5. **Which direction of mTLS is actually verified, stated plainly: the client never verifies the server, under any profile; the server never verifies the client, under Classic or PQC.** `tls_kem_proxy/main.go:212` sets `InsecureSkipVerify: true` on the CLIENT config -- this disables Go's default certificate verification outright, so the client never checks the server's chain, purpose, or validity, under any of the three profiles. The SERVER's own config (`mock_mtls/main.go:500`) sets the identical flag, which disables Go's DEFAULT verification of the client's certificate too -- the server's only remaining check of the client is its own custom `VerifyPeerCertificate` callback (`hybridVerifyPeerCertificateFunc()`, `hybridVerification.go:123-166`), which returns `nil` (no check at all) unless `CRYPTO_PROFILE=="hybrid"`. **Under Classic and PQC, the server therefore performs zero cryptographic verification of the client's certificate.** Under Hybrid, `verifyHybridClientCert()` (`hybridVerification.go:97-116`) checks ONLY the ML-DSA-65 `AltSignatureValue` extension against a hardcoded CA public key -- it does not verify the client's primary RSA signature at all, despite the wrapper's own log message claiming "RSA + ML-DSA-65 both valid" (a misleading message relative to what the code actually checks).
+
+**The cost of validating the peer's chain is not in T_fluxo, under any profile -- an offline, added estimate of what it would cost if performed, measured separately, not read from any campaign log:**
+
+| Profile | Chain verified | Mean (µs) | Min (µs) | Max (µs) | n |
+|---|---|---:|---:|---:|---:|
+| Classic | client_one.crt -> ca.crt (RSA) | 241.1 | 191.3 | 1,317.4 | 2000 |
+| PQC | client_one_pqc.crt -> issuer_ca_pqc.crt -> root_ca_pqc.crt (ML-DSA-65) | 157.0 | 143.7 | 1,732.4 | 2000 |
+| Hybrid | client_one_hybrid.crt -> ca.crt (RSA primary chain only) | 236.8 | 182.8 | 1,294.9 | 2000 |
+
+Full benchmark source, exact commands, and raw output: `thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`.
 
 Full matrix, with file:line evidence for every cell: `thesis/results/v8/artifacts/item1_layer_matrix.md`.
 
@@ -98,6 +111,8 @@ All four `N_x` counts are identical across profiles and across all 8 real routes
 | **OPINsize (total)** | **77,801** | **326,799** | **360,857** |
 
 PQC is 4.20x Classic (+320.04%); Hybrid is 4.64x Classic (+363.82%) and 1.10x PQC (+10.42%). With the PQC profile's certificate chain confirmed ML-DSA-65 end-to-end in this campaign's own live deployment (Section 2), the pattern already found in v7 holds here too: most of Hybrid's premium over Classic is already paid by PQC alone.
+
+**One unit per term, stated explicitly.** `handshake_bytes` is bytes PER CONNECTION (there are `N_mTLS=6` connections/execution); `JWT_size` and `JWK_PK_size` are bytes PER ARTIFACT (compact-serialization/base64url, Section 3's own 4.6a below); `PKI_bytes` is the average PEM-body byte count PER CERTIFICATE. OPINsize itself (the bottom row) is the one TOTAL-bytes-per-execution figure that sums all four already-multiplied terms -- no other row mixes a per-item unit with a per-execution one. **Which JWT gives the 1,330.82-byte `JWT_size` figure for Classic, stated precisely:** not any single token -- it is the MEDIAN, across the 30 executions at the reference cell (sa-east-1/L0), of that execution's own total compact-serialization byte count summed over all `N_JWT=28` JWTs in the flow, divided by 28 -- i.e. the average compact-serialization size per JWT in a real execution, not the raw/decoded size (4.6a below reports that separately) and not any one artifact's own individual size.
 
 ### 4.6a: JWT size, raw and base64url-encoded
 
@@ -271,7 +286,30 @@ This phase-level sum (94.6ms, at the single near-zero-RTT reference route) is no
 | Residual | 240.1 ms | 260.3 ms | 253.9 ms |
 | Residual, % of T_fluxo | 13.8% | 15.0% | 14.0% |
 
-Setup/teardown (~1.07s: a fixed callback-server teardown wait plus certificate generation) is declared as a fixed, profile-independent component, not part of any profile's cryptographic cost -- same amount in all three columns, by construction of the test harness.
+Setup/teardown (~1.07s: a fixed callback-server teardown wait plus certificate generation) is declared as a fixed, profile-independent component, not part of any profile's cryptographic cost in this table's own single reference cell. **Decomposed by its own two phases, by profile, and by window below -- not left as one aggregate -- because "same by construction" turns out to hold for one phase and not the other.**
+
+#### Setup/teardown, decomposed by phase, profile, and window (pooled across all 8 routes)
+
+| Phase | Classic | PQC | Hybrid | n/profile (pooled) |
+|---|---:|---:|---:|---:|
+| callback_server_teardown | 500.203 | 500.197 | 500.189 | 480 |
+| generate_callback_cert | 35.111 | 36.139 | 36.148 | 480 |
+
+**`callback_server_teardown` is genuinely constant**: 500.20 / 500.20 / 500.19 ms (classic/PQC/hybrid, n=480 each) -- a spread under 0.02ms, consistent with its own fixed-sleep implementation. "Same by construction" remains accurate for this phase specifically.
+
+#### `generate_callback_cert`, by profile and window (pooled across all 8 routes)
+
+| Window | Classic (ms) | PQC (ms) | Hybrid (ms) |
+|---|---:|---:|---:|
+| 1 | 34.76 | 36.20 | 37.63 |
+| 2 | 37.57 | 40.53 | 37.29 |
+| 3 | 34.58 | 33.14 | 32.48 |
+
+**No consistent ordering across windows**: PQC is highest of the three in window 2 (40.53ms) but LOWEST of the three in window 3 (33.14ms, below even classic's 34.58ms). This phase's own code (`_generate_callback_tls_cert()`, `thesis/scripts/opin_flow.py:1455`) is a throwaway RSA-2048 keygen, identical regardless of `CRYPTO_PROFILE` -- the cross-window pattern above is consistent with that: not a stable, profile-ordered cost.
+
+**Tested formally, pooled across all 8 routes and all 3 windows (n=480/profile): not statistically significant.** Mann-Whitney, `generate_callback_cert`, PQC vs. Classic: median 36.139ms vs. 35.111ms, U=108,901.0, 0.1425. Hybrid vs. Classic: median 36.148ms vs. 35.111ms, U=109,913.5, 0.2184. Neither crosses any conventional significance threshold.
+
+**What this means for the table's own 1.07s/1.095s figures above, and for Section 7's regression +23.6ms PQC effect (Prediction 3): little to nothing, with confidence.** The ~24ms gap this table's own single reference cell (sa-east-1/L0) shows is a LOCAL appearance, not a general one -- pooled across the full dataset, the real `generate_callback_cert` gap is 1.03ms (PQC) and 1.04ms (Hybrid), neither significant. Since this setup-phase gap at full statistical power is both small and not statistically distinguishable from zero, it cannot be credited with explaining a meaningful share of the regression's own, CI-confirmed +23.6ms PQC effect (Section 7) -- that effect's source stays where it already was: partly in the signing phase (which DOES show a consistent PQC-over-Classic difference even pooled, Section 8's own sign test) and partly in the residual, not fully attributed (below).
 
 ### Per-endpoint latency (sa-east-1/L0, the near-zero-RTT reference route)
 
@@ -279,14 +317,14 @@ Setup/teardown (~1.07s: a fixed callback-server teardown wait plus certificate g
 |---|---:|---:|---:|
 | `/jwks` | 12.22 | 6.93 | 13.78 |
 | `/token` | 16.17 | 22.67 | 20.86 |
-| `/open-insurance/consents/v3/consents` | 16.81 | 16.98 | 18.25 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 11.92 | 12.14 | 13.18 |
-| `/root-ca.pem` | 16.61 | 5.20 | 16.98 |
 | `/issuer-ca.pem` | 1.29 | 1.15 | 1.30 |
-| `/auth` | 0.00 | 0.00 | 0.00 |
+| `/open-insurance/consents/v3/consents` | 16.81 | 16.98 | 18.25 |
+| `/auth` | n/a | n/a | n/a |
+| `/root-ca.pem` | 16.61 | 5.20 | 16.98 |
 | `/request` | 6.55 | 6.88 | 9.13 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 11.92 | 12.14 | 13.18 |
 
-**`/auth` = 0.00ms, explained, not just shown.** Its own raw call record has `start_utc` and `end_utc` identical to the microsecond (`2026-10-30T23:13:01.872106+00:00`) and a `303 See Other` response, with `src: "login"` -- this call belongs to the automated login/consent interaction, which (v7 Decision 12) never routes through the timed `do_call()` path at all. The 0.00ms is an artifact of that call never being timed, not a real sub-millisecond server response.
+**`/auth` = n/a, explained, not shown as a measured zero.** Its own raw call record has `start_utc` and `end_utc` identical to the microsecond (`2026-10-30T23:13:01.872106+00:00`) and a `303 See Other` response, with `src: "login"` -- this call belongs to the automated login/consent interaction, which (v7 Decision 12) never routes through the timed `do_call()` path at all. This call was never timed at all -- not a real, measured sub-millisecond server response, and not a real zero; reported as `n/a` in the table above for that reason, correcting an earlier draft that showed it as `0.00ms`.
 
 ### CPU per operation: verification and signing, by artifact (sa-east-1/L0)
 
@@ -300,9 +338,9 @@ Setup/teardown (~1.07s: a fixed callback-server teardown wait plus certificate g
 | signing:client_assertion:token_cc | 2.305 | 2.823 | 5.816 |
 | signing:request_object:par | 1.950 | 3.284 | 5.269 |
 
-### Handshake in round trips (sum of the 6 connections' own SYN-to-handshake-done time, divided by measured RTT) -- pooled across all 3 windows, per route
+### Handshake in round trips (ms ÷ measured RTT per connection, summed over the 6 connections -- NOT a direct count, a derived ratio) -- pooled across all 3 windows, per route
 
-L0 routes are excluded from the round-trips column (RTT ~0.2-0.3ms -- same reason given in Section 4); shown instead in milliseconds only, which remains meaningful at any RTT.
+**This column is milliseconds divided by RTT, not an independently counted number of packets.** It is only as stable as that division -- small, fixed per-connection overhead unrelated to round trips (TLS library setup, OS scheduling) becomes a proportionally LARGER, noisier contribution to the ratio as RTT shrinks. L0 routes are excluded entirely (RTT ~0.2-0.3ms -- same reason given in Section 4); shown instead in milliseconds only, which remains meaningful at any RTT.
 
 | Installation | Scenario | Classic | PQC | Hybrid |
 |---|---|---:|---:|---:|
@@ -328,9 +366,13 @@ L0 routes are excluded from the round-trips column (RTT ~0.2-0.3ms -- same reaso
 | PQC | 12.07 | 5 | 12.04 | 12.55 |
 | Hybrid | 12.35 | 5 | 12.15 | 14.93 |
 
-All three profiles sit close to 12 round trips -- direct confirmation, now at full statistical power across all 3 windows and every non-L0 route, that larger certificates/keys (PQC/Hybrid) do not cost extra handshake round trips.
+All three profiles sit close to 12 round trips at the higher-RTT sa-east-1 routes and at ap-northeast-1/L30 -- direct confirmation, now at full statistical power across all 3 windows, that larger certificates/keys (PQC/Hybrid) do not cost extra handshake round trips there. **Qualified at the lowest-RTT non-L0 route, us-east-1/L14 (RTT~14ms): the ratio itself is measurably less stable** -- 14.70 (classic) and 14.93 (hybrid), vs. 12.55 (PQC) and 12.0-12.4 at every higher-RTT route for all three profiles. This is the exact instability the title's own warning above predicts (a small, fixed per-connection overhead becoming proportionally larger as RTT shrinks), not a real route-specific extra round trip for classic/hybrid specifically. **"12 round trips" should be read as a stable estimate at moderate-to-high RTT, and as a less-precise, upper-bound-leaning estimate at low RTT (L14 and below) -- not a literal, fixed count that holds uniformly at every RTT scale.
 
 **The residual beyond the 6-connection handshake is not attributed.** A full per-connection timeline (SYN through FIN) of one real high-RTT execution found gaps of several RTTs that look more consistent with client-side sequencing (the 6 connections are not kept busy continuously or run in parallel) than with extra network round trips inside a single connection's own handshake. No specific cause could be isolated with confidence from that investigation -- recorded as **not attributed**.
+
+### RSA-4096 signing as a contributor to Classic's/Hybrid's handshake cost (qualified)
+
+Section 2 (item 5) establishes that Hybrid's live TLS handshake authenticates via its RSA-4096 primary signature, same as Classic -- the ML-DSA-65 `AltSignatureValue` is a non-critical extension the handshake itself never checks. Classic's (43.62ms) and Hybrid's (45.99ms) median handshake durations at sa-east-1/L0 sit close together, both well above PQC's pure-ML-DSA-65 (10.32ms). An offline microbenchmark, real server private keys, same Go image used throughout this project (`thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`): RSA-4096-PSS signing (`mtls.key`) averages 5.94ms/operation; ML-DSA-65 pure-mode signing (`mtls_pqc.key`) averages 0.69ms -- RSA-4096 is the single most expensive cryptographic operation this project can isolate and measure at all, roughly 8.6x ML-DSA-65's own signing cost. **This confirms the hypothesis as a real, directionally-consistent CONTRIBUTOR, not as the full explanation**: the 5.26ms signing-time gap accounts for roughly 16% of the 33.3ms Classic-minus-PQC handshake-duration gap at sa-east-1/L0 -- real and measured, but a minority share. No per-operation timer exists inside Go's TLS 1.3 handshake internals to isolate the rest; it remains inside the "residual ... not attributed" limitation directly above, not newly explained by this benchmark.
 
 ## 7. Model: T_fluxo = T0 + k x RTT_measured, per profile
 
@@ -410,7 +452,7 @@ Against the advisor's/reviewer's parecer técnico (which evaluated an earlier, s
 
 | Item | Status |
 |---|---|
-| 4.2 (latency model / round-trip count) | **Closed** -- Section 7's k-model and joint regression |
+| 4.2 (latency model / round-trip count) | **Closed, with the exception of PQC** -- Section 7's k-model and joint regression hold for Classic/Hybrid; PQC's own k/fixed-cost estimates show real, statistically detectable variation across the 3 windows (Section 7/10) and its k bootstrap CI does not cleanly pass at this sample size |
 | 4.3 (PQC/Hybrid asymmetry, CA signature) | **Closed** -- Section 2, PQC's chain confirmed ML-DSA-65 end-to-end live |
 | 4.4 (transport/front-channel realism) | **Partially closed** -- real network conditions now in scope; no real browser/app front-channel tested |
 | 4.6a (single unit of measure for JWT/keys) | **Closed** -- Section 3, raw vs. base64url both reported, compact serialization stated as the equation's own unit |
@@ -433,6 +475,8 @@ Against the advisor's/reviewer's parecer técnico (which evaluated an earlier, s
 - **The AS<->RS internal channel stays classical under PQC and Hybrid**, by the SNI carve-out mechanism v6 built to protect this already-classical channel from the profile-wide group preference (Section 1.1) -- listed in Section 1.2's own profile table too, so it is not mistaken for new, unmigrated PQC/Hybrid scope.
 - **Hybrid's TLS-layer certificate authentication relies on RSA alone in practice**: the live handshake never checks the real ML-DSA-65 signature Hybrid's certificates also carry (Section 2) -- its authentication strength against an attacker who can forge an RSA signature is the same as Classic's. **Message-level authentication (JWTs) is not affected by this** -- `client_assertion`, the request object, `id_token`, and the JARM remain genuinely dual-signed and dual-verified in every execution.
 - **Hybrid's TLS server/client authentication reuses Classic's RSA key as its base**, adding ML-DSA-65 as an extension rather than replacing the key material.
+
+- **Neither mTLS direction performs its DEFAULT X.509 verification, under any profile.** The client sets `InsecureSkipVerify: true` (`tls_kem_proxy/main.go:212`) and never checks the server's certificate. The server sets the same flag (`mock_mtls/main.go:500`) and relies entirely on its own custom callback for the client's certificate -- which is a no-op under Classic and PQC, and checks only the ML-DSA-65 `AltSignatureValue` (not the RSA primary signature) under Hybrid (Section 2, item 5). **The cost of validating a peer's chain is therefore not in T_fluxo, under any profile** -- an offline microbenchmark (Section 2) estimates that cost at 157-241µs/connection, had it been performed; this is an added estimate, not a measurement taken during the real campaign.
 - **A single gateway image is used for all three profiles and all three installations** (Section 1.1) -- `code_hash`/image digest were checked at every profile-block switch (Decision 108) but the binary itself is shared infrastructure, not a per-profile or per-window variable.
 - **ICMP is blocked by the security groups**; RTT and loss come from TCP/pcap evidence (SYN/SYN-ACK, retransmissions), never from `ping`.
 - **No real browser or app front-channel was tested** -- the client is this project's own HTTP client, not a real user agent subject to URL-length or redirect-chain limits.
@@ -448,7 +492,7 @@ Against the advisor's/reviewer's parecer técnico (which evaluated an earlier, s
 - **Git tags:** `v8-prereg` (acceptance criteria, before any official window), `v8-prereg-3` (the 5 confirmatory predictions, before windows 2/3 were analyzed), `v8-official-data` and `v8-official-data-2` (the official 720-execution dataset and its corrected/extended consolidate).
 - **Code/image integrity:** every profile block checked `CODE_HASH` against a registered value and the live gateway image digest against `sha256:0839867545f3170f6198e7e2f6f3a9a7f6803c2b4feba2bb54f181195b341901`, every block, all 3 windows -- 0 violations (Decision 108's `check_artifact_health`).
 - **sha256 manifests:** every file in `janela1/`, `janela2/`, `janela3/` has a per-file sha256 manifest under `_campaign-control/sha256_manifest.txt`.
-- **Data inventory: 744 = 720 + 24, confirmed by location, not assumed.** 720 official execution files + 360 discarded K=5 warm-up files (the K=5 warm-ups never capture pcap/cpu, by design -- Decision 103). Pcap/cpu artifact counts are 744 per side (client and server), not 720. **The extra 24 are NOT a per-cell warm-up** (an earlier draft of this report said so, incorrectly) -- confirmed now by their own file path: 48 client-pcap files live under `janela1/_campaign-control/validation_stage/`, the one-off 24-execution (8 scenarios x 3 profiles) **parallel validation stage** run before window 1 began (`run_validation_stage()`, `campaign_run.py`) -- never pooled into any cell's own 30-execution statistic, physically separate from the official per-cell data tree, pulled alongside window 1's own data because both live under the same `janela1/` pull.
+- **Data inventory: 744 = 720 + 24, confirmed by location, not assumed.** 720 official execution files + 360 discarded K=5 warm-up files (the K=5 warm-ups never capture pcap/cpu, by design -- Decision 103). Pcap/cpu artifact counts are 744 per side (client and server), not 720. **The extra 24 are NOT a per-cell warm-up** (an earlier draft of this report said so, incorrectly) -- confirmed now by their own file path: 48 pcap files (24 client-side + 24 server-side, confirmed by their own client/server subdirectory, not by filename -- neither side's filename says 'client' or 'server') live under `janela1/_campaign-control/validation_stage/`, the one-off 24-execution (8 scenarios x 3 profiles) **parallel validation stage** run before window 1 began (`run_validation_stage()`, `campaign_run.py`) -- never pooled into any cell's own 30-execution statistic, physically separate from the official per-cell data tree, pulled alongside window 1's own data because both live under the same `janela1/` pull.
 - **Secret scanning:** every commit in this campaign's history passed the project's secret scanner (staged diff, full history, and a manual decompress-and-grep pass over every pcap) before being pushed.
 - **This audit:** `thesis/scripts/audit_v8_from_raw.py` independently recomputed T_fluxo (24 cells), bytes-per-participant, RTT measured, OPINsize constancy, N_JWK, the participant decomposition, the k-model, and the 72-cell drift table directly from the raw run files, calls.jsonl, and pcaps, pooled across all 3 windows -- **0 divergences** against the published consolidate outputs (one noted finding, not a divergence: the PQC k bootstrap CI's upper tail is sensitive to the resampling stream at this sample size -- see Section 7).
 

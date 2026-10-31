@@ -162,6 +162,27 @@ w(
     f"own results."
 )
 w()
+hs_diff_per_conn = inter['v7_v8_classic_opinsize_diff']['handshake_contribution'] / terms['classic']['n_mtls']
+w(
+    f"**That {n(inter['v7_v8_classic_opinsize_diff']['handshake_contribution'],0)}-byte "
+    f"figure, decomposed per connection, honestly: it cannot be broken down "
+    f"further by TLS message type, on either side.** "
+    f"{n(inter['v7_v8_classic_opinsize_diff']['handshake_contribution'],0)} bytes "
+    f"over `N_mTLS={terms['classic']['n_mtls']}` connections is "
+    f"{n(hs_diff_per_conn,1)} bytes/connection. Both v7's own source "
+    f"(`compute_v7_report_data.py`'s `gateway_metrics.handshake_bytes`) and v8's "
+    f"`term_handshake()` read the exact same single aggregate counter -- "
+    f"`mtlsHandshakeBytes` from the gateway's `countingConn` (`mock_mtls/"
+    f"main.go`) -- which was never broken down by TLS message type (ClientHello/"
+    f"ServerHello/Certificate/Finished) in either version's own logs, and v7 kept "
+    f"no pcaps at all (confirmed: `thesis/results/v7/` has no `*.pcap*` files, "
+    f"only the same `handshake_log.json` gateway-log export) to re-derive that "
+    f"breakdown from afterward. A per-message decomposition of this "
+    f"{n(hs_diff_per_conn,1)}-byte/connection gap against v7 is **not possible** "
+    f"from either side's own saved data -- not a gap this report chooses to leave "
+    f"open, but one that cannot be closed from what either version recorded."
+)
+w()
 w(
     f"**Infrastructure.** Server and client instances: `m7i-flex.large` -- an "
     f"Intel-based \"flex\" instance type with a baseline-and-burst performance "
@@ -421,6 +442,50 @@ w(
     "message-level authentication is real hybrid defense-in-depth; only the "
     "TLS channel's own certificate authentication is effectively RSA-only."
 )
+w(
+    "5. **Which direction of mTLS is actually verified, stated plainly: the "
+    "client never verifies the server, under any profile; the server never "
+    "verifies the client, under Classic or PQC.** `tls_kem_proxy/main.go:212` "
+    "sets `InsecureSkipVerify: true` on the CLIENT config -- this disables Go's "
+    "default certificate verification outright, so the client never checks the "
+    "server's chain, purpose, or validity, under any of the three profiles. "
+    "The SERVER's own config (`mock_mtls/main.go:500`) sets the identical flag, "
+    "which disables Go's DEFAULT verification of the client's certificate too -- "
+    "the server's only remaining check of the client is its own custom "
+    "`VerifyPeerCertificate` callback (`hybridVerifyPeerCertificateFunc()`, "
+    "`hybridVerification.go:123-166`), which returns `nil` (no check at all) "
+    "unless `CRYPTO_PROFILE==\"hybrid\"`. **Under Classic and PQC, the server "
+    "therefore performs zero cryptographic verification of the client's "
+    "certificate.** Under Hybrid, `verifyHybridClientCert()` "
+    "(`hybridVerification.go:97-116`) checks ONLY the ML-DSA-65 "
+    "`AltSignatureValue` extension against a hardcoded CA public key -- it does "
+    "not verify the client's primary RSA signature at all, despite the "
+    "wrapper's own log message claiming \"RSA + ML-DSA-65 both valid\" (a "
+    "misleading message relative to what the code actually checks)."
+)
+w()
+w(
+    "**The cost of validating the peer's chain is not in T_fluxo, under any "
+    "profile -- an offline, added estimate of what it would cost if performed, "
+    "measured separately, not read from any campaign log:**"
+)
+w()
+w("| Profile | Chain verified | Mean (µs) | Min (µs) | Max (µs) | n |")
+w("|---|---|---:|---:|---:|---:|")
+cvb = inter['chain_verification_bench_us']
+cvb_labels = {
+    'classic': 'client_one.crt -> ca.crt (RSA)',
+    'pqc': 'client_one_pqc.crt -> issuer_ca_pqc.crt -> root_ca_pqc.crt (ML-DSA-65)',
+    'hybrid': 'client_one_hybrid.crt -> ca.crt (RSA primary chain only)',
+}
+for p in PROFILES:
+    v = cvb[p]
+    w(f"| {LABEL[p]} | {cvb_labels[p]} | {n(v['mean'],1)} | {n(v['min'],1)} | {n(v['max'],1)} | {v['n']} |")
+w()
+w(
+    "Full benchmark source, exact commands, and raw output: "
+    "`thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`."
+)
 w()
 w(
     "Full matrix, with file:line evidence for every cell: "
@@ -469,6 +534,25 @@ w(
     f"this campaign's own live deployment (Section 2), the pattern already found "
     f"in v7 holds here too: most of Hybrid's premium over Classic is already paid "
     f"by PQC alone."
+)
+w()
+w(
+    f"**One unit per term, stated explicitly.** `handshake_bytes` is bytes "
+    f"PER CONNECTION (there are `N_mTLS={terms['classic']['n_mtls']}` "
+    f"connections/execution); `JWT_size` and `JWK_PK_size` are bytes PER "
+    f"ARTIFACT (compact-serialization/base64url, Section 3's own 4.6a below); "
+    f"`PKI_bytes` is the average PEM-body byte count PER CERTIFICATE. "
+    f"OPINsize itself (the bottom row) is the one TOTAL-bytes-per-execution "
+    f"figure that sums all four already-multiplied terms -- no other row "
+    f"mixes a per-item unit with a per-execution one. **Which JWT gives the "
+    f"{n(terms['classic']['jwt_size'])}-byte `JWT_size` figure for Classic, "
+    f"stated precisely:** not any single token -- it is the MEDIAN, across the "
+    f"30 executions at the reference cell (sa-east-1/L0), of that execution's "
+    f"own total compact-serialization byte count summed over all "
+    f"`N_JWT={terms['classic']['n_jwt']}` JWTs in the flow, divided by "
+    f"{terms['classic']['n_jwt']} -- i.e. the average compact-serialization "
+    f"size per JWT in a real execution, not the raw/decoded size (4.6a below "
+    f"reports that separately) and not any one artifact's own individual size."
 )
 w()
 w("### 4.6a: JWT size, raw and base64url-encoded")
@@ -717,8 +801,86 @@ w()
 w(
     "Setup/teardown (~1.07s: a fixed callback-server teardown wait plus "
     "certificate generation) is declared as a fixed, profile-independent "
-    "component, not part of any profile's cryptographic cost -- same amount in "
-    "all three columns, by construction of the test harness."
+    "component, not part of any profile's cryptographic cost in this table's "
+    "own single reference cell. **Decomposed by its own two phases, by "
+    "profile, and by window below -- not left as one aggregate -- because "
+    "\"same by construction\" turns out to hold for one phase and not the "
+    "other.**"
+)
+w()
+w("#### Setup/teardown, decomposed by phase, profile, and window (pooled across all 8 routes)")
+w()
+sp = inter["setup_phase_pooled"]
+spw = inter["setup_phase_by_window"]
+ssig = inter["setup_phase_significance"]
+w("| Phase | Classic | PQC | Hybrid | n/profile (pooled) |")
+w("|---|---:|---:|---:|---:|")
+for phase_key, phase_label in (("callback_server_teardown", "callback_server_teardown"), ("generate_callback_cert", "generate_callback_cert")):
+    cols = [n(sp[p][phase_key]["median"], 3) for p in PROFILES]
+    w(f"| {phase_label} | {cols[0]} | {cols[1]} | {cols[2]} | {sp['classic'][phase_key]['n']} |")
+w()
+w(
+    f"**`callback_server_teardown` is genuinely constant**: "
+    f"{n(sp['classic']['callback_server_teardown']['median'],2)} / "
+    f"{n(sp['pqc']['callback_server_teardown']['median'],2)} / "
+    f"{n(sp['hybrid']['callback_server_teardown']['median'],2)} ms "
+    f"(classic/PQC/hybrid, n=480 each) -- a spread under 0.02ms, consistent "
+    f"with its own fixed-sleep implementation. \"Same by construction\" "
+    f"remains accurate for this phase specifically."
+)
+w()
+w("#### `generate_callback_cert`, by profile and window (pooled across all 8 routes)")
+w()
+w("| Window | Classic (ms) | PQC (ms) | Hybrid (ms) |")
+w("|---|---:|---:|---:|")
+for wn in (1, 2, 3):
+    cols = [n(spw[p][str(wn)]["generate_callback_cert"]["median"], 2) for p in PROFILES]
+    w(f"| {wn} | {cols[0]} | {cols[1]} | {cols[2]} |")
+w()
+w(
+    f"**No consistent ordering across windows**: PQC is highest of the three "
+    f"in window 2 ({n(spw['pqc']['2']['generate_callback_cert']['median'],2)}ms) "
+    f"but LOWEST of the three in window 3 "
+    f"({n(spw['pqc']['3']['generate_callback_cert']['median'],2)}ms, below even "
+    f"classic's {n(spw['classic']['3']['generate_callback_cert']['median'],2)}ms). "
+    f"This phase's own code (`_generate_callback_tls_cert()`, "
+    f"`thesis/scripts/opin_flow.py:1455`) is a throwaway RSA-2048 keygen, "
+    f"identical regardless of `CRYPTO_PROFILE` -- the cross-window pattern "
+    f"above is consistent with that: not a stable, profile-ordered cost."
+)
+w()
+w(
+    f"**Tested formally, pooled across all 8 routes and all 3 windows "
+    f"(n=480/profile): not statistically significant.** Mann-Whitney, "
+    f"`generate_callback_cert`, PQC vs. Classic: median "
+    f"{n(ssig['pqc_vs_classic']['median_a'],3)}ms vs. "
+    f"{n(ssig['pqc_vs_classic']['median_b'],3)}ms, U={n(ssig['pqc_vs_classic']['u'],1)}, "
+    f"{pfmt(ssig['pqc_vs_classic']['p'])}. Hybrid vs. Classic: median "
+    f"{n(ssig['hybrid_vs_classic']['median_a'],3)}ms vs. "
+    f"{n(ssig['hybrid_vs_classic']['median_b'],3)}ms, U={n(ssig['hybrid_vs_classic']['u'],1)}, "
+    f"{pfmt(ssig['hybrid_vs_classic']['p'])}. Neither crosses any conventional "
+    f"significance threshold."
+)
+w()
+pqc_beta_ms = reg["beta"][reg["names"].index("profile_pqc")] * 1000
+w(
+    f"**What this means for the table's own 1.07s/1.095s figures above, and "
+    f"for Section 7's regression +{n(pqc_beta_ms,1)}ms PQC effect "
+    f"(Prediction 3): little to nothing, with confidence.** The ~24ms gap "
+    f"this table's own single reference cell (sa-east-1/L0) shows is a LOCAL "
+    f"appearance, not a general one -- pooled across the full dataset, the "
+    f"real `generate_callback_cert` gap is "
+    f"{n(sp['pqc']['generate_callback_cert']['median']-sp['classic']['generate_callback_cert']['median'],2)}ms "
+    f"(PQC) and "
+    f"{n(sp['hybrid']['generate_callback_cert']['median']-sp['classic']['generate_callback_cert']['median'],2)}ms "
+    f"(Hybrid), neither significant. Since this setup-phase gap at full "
+    f"statistical power is both small and not statistically distinguishable "
+    f"from zero, it cannot be credited with explaining a meaningful share of "
+    f"the regression's own, CI-confirmed +{n(pqc_beta_ms,1)}ms PQC effect "
+    f"(Section 7) -- that effect's source stays where it already was: partly "
+    f"in the signing phase (which DOES show a consistent PQC-over-Classic "
+    f"difference even pooled, Section 8's own sign test) and partly in the "
+    f"residual, not fully attributed (below)."
 )
 w()
 w("### Per-endpoint latency (sa-east-1/L0, the near-zero-RTT reference route)")
@@ -728,20 +890,21 @@ w("|---|---:|---:|---:|")
 common_endpoints = sorted(set(endpoint_latency["classic"]) & set(endpoint_latency["pqc"]) & set(endpoint_latency["hybrid"]),
                             key=lambda e: -endpoint_latency["classic"][e]["n"])[:10]
 for ep in common_endpoints:
-    cols = [n(endpoint_latency[p][ep]["median"], 2) for p in PROFILES]
+    if ep == "/auth":
+        cols = ["n/a", "n/a", "n/a"]
+    else:
+        cols = [n(endpoint_latency[p][ep]["median"], 2) for p in PROFILES]
     w(f"| `{ep}` | {cols[0]} | {cols[1]} | {cols[2]} |")
 w()
 auth_fact = inter.get("auth_zero_latency_explained")
 if auth_fact:
     w(
-        f"**`/auth` = 0.00ms, explained, not just shown.** Its own raw call "
+        f"**`/auth` = n/a, explained, not shown as a measured zero.** Its own raw call "
         f"record has `start_utc` and `end_utc` identical to the microsecond "
         f"(`{auth_fact['start_utc']}`) and a `{auth_fact['status_code']}` "
         f"response, with `src: \"{auth_fact['src']}\"` -- this call belongs to "
         f"the automated login/consent interaction, which (v7 Decision 12) never "
-        f"routes through the timed `do_call()` path at all. The 0.00ms is an "
-        f"artifact of that call never being timed, not a real sub-millisecond "
-        f"server response."
+        f"routes through the timed `do_call()` path at all. This call was never timed at all -- not a real, measured sub-millisecond server response, and not a real zero; reported as `n/a` in the table above for that reason, correcting an earlier draft that showed it as `0.00ms`."
     )
 
 w()
@@ -759,14 +922,19 @@ for kind in ("verification", "signing"):
         w(f"| {kind}:{op} | {cols[0]} | {cols[1]} | {cols[2]} |")
 w()
 w(
-    "### Handshake in round trips (sum of the 6 connections' own SYN-to-handshake-"
-    "done time, divided by measured RTT) -- pooled across all 3 windows, per route"
+    "### Handshake in round trips (ms ÷ measured RTT per connection, summed "
+    "over the 6 connections -- NOT a direct count, a derived ratio) -- pooled "
+    "across all 3 windows, per route"
 )
 w()
 w(
-    "L0 routes are excluded from the round-trips column (RTT ~0.2-0.3ms -- same "
-    "reason given in Section 4); shown instead in milliseconds only, which "
-    "remains meaningful at any RTT."
+    "**This column is milliseconds divided by RTT, not an independently "
+    "counted number of packets.** It is only as stable as that division -- "
+    "small, fixed per-connection overhead unrelated to round trips (TLS "
+    "library setup, OS scheduling) becomes a proportionally LARGER, noisier "
+    "contribution to the ratio as RTT shrinks. L0 routes are excluded "
+    "entirely (RTT ~0.2-0.3ms -- same reason given in Section 4); shown "
+    "instead in milliseconds only, which remains meaningful at any RTT."
 )
 w()
 w("| Installation | Scenario | Classic | PQC | Hybrid |")
@@ -799,10 +967,21 @@ for p in PROFILES:
         w(f"| {LABEL[p]} | {n(h['median'],2)} | {h['n']} | {n(h['min'],2)} | {n(h['max'],2)} |")
 w()
 w(
-    "All three profiles sit close to 12 round trips -- direct confirmation, now "
-    "at full statistical power across all 3 windows and every non-L0 route, that "
-    "larger certificates/keys (PQC/Hybrid) do not cost extra handshake round "
-    "trips."
+    "All three profiles sit close to 12 round trips at the higher-RTT "
+    "sa-east-1 routes and at ap-northeast-1/L30 -- direct confirmation, now "
+    "at full statistical power across all 3 windows, that larger "
+    "certificates/keys (PQC/Hybrid) do not cost extra handshake round trips "
+    "there. **Qualified at the lowest-RTT non-L0 route, us-east-1/L14 "
+    "(RTT~14ms): the ratio itself is measurably less stable** -- "
+    "14.70 (classic) and 14.93 (hybrid), vs. "
+    "12.55 (PQC) and 12.0-12.4 at every higher-RTT route for "
+    "all three profiles. This is the exact instability the title's own "
+    "warning above predicts (a small, fixed per-connection overhead becoming "
+    "proportionally larger as RTT shrinks), not a real route-specific extra "
+    "round trip for classic/hybrid specifically. **\"12 round trips\" should "
+    "be read as a stable estimate at moderate-to-high RTT, and as a "
+    "less-precise, upper-bound-leaning estimate at low RTT (L14 and below) -- "
+    "not a literal, fixed count that holds uniformly at every RTT scale."
 )
 w()
 w(
@@ -813,6 +992,37 @@ w(
     "run in parallel) than with extra network round trips inside a single "
     "connection's own handshake. No specific cause could be isolated with "
     "confidence from that investigation -- recorded as **not attributed**."
+)
+
+w()
+w("### RSA-4096 signing as a contributor to Classic's/Hybrid's handshake cost (qualified)")
+w()
+sb = inter["signing_bench_ms"]
+w(
+    f"Section 2 (item 5) establishes that Hybrid's live TLS handshake "
+    f"authenticates via its RSA-4096 primary signature, same as Classic -- the "
+    f"ML-DSA-65 `AltSignatureValue` is a non-critical extension the handshake "
+    f"itself never checks. Classic's (43.62ms) and Hybrid's (45.99ms) median "
+    f"handshake durations at sa-east-1/L0 sit close together, both well above "
+    f"PQC's pure-ML-DSA-65 (10.32ms). An offline microbenchmark, real server "
+    f"private keys, same Go image used throughout this project "
+    f"(`thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`): "
+    f"RSA-4096-PSS signing (`mtls.key`) averages "
+    f"{n(sb['rsa_4096_pss']['mean'],2)}ms/operation; ML-DSA-65 pure-mode "
+    f"signing (`mtls_pqc.key`) averages {n(sb['mldsa_65']['mean'],2)}ms -- RSA-"
+    f"4096 is the single most expensive cryptographic operation this project "
+    f"can isolate and measure at all, roughly "
+    f"{n(sb['rsa_4096_pss']['mean']/sb['mldsa_65']['mean'],1)}x ML-DSA-65's own "
+    f"signing cost. **This confirms the hypothesis as a real, directionally-"
+    f"consistent CONTRIBUTOR, not as the full explanation**: the "
+    f"{n(sb['rsa_4096_pss']['mean']-sb['mldsa_65']['mean'],2)}ms signing-time gap "
+    f"accounts for roughly "
+    f"{n(inter['signing_bench_gap_share_of_handshake']*100,0)}% of the 33.3ms "
+    f"Classic-minus-PQC handshake-duration gap at sa-east-1/L0 -- real and "
+    f"measured, but a minority share. No per-operation timer exists inside "
+    f"Go's TLS 1.3 handshake internals to isolate the rest; it remains inside "
+    f"the \"residual ... not attributed\" limitation directly above, not "
+    f"newly explained by this benchmark."
 )
 
 # ------------------------------------------------------------- Section 7
@@ -1037,7 +1247,7 @@ w(
 w()
 w("| Item | Status |")
 w("|---|---|")
-w("| 4.2 (latency model / round-trip count) | **Closed** -- Section 7's k-model and joint regression |")
+w("| 4.2 (latency model / round-trip count) | **Closed, with the exception of PQC** -- Section 7's k-model and joint regression hold for Classic/Hybrid; PQC's own k/fixed-cost estimates show real, statistically detectable variation across the 3 windows (Section 7/10) and its k bootstrap CI does not cleanly pass at this sample size |")
 w("| 4.3 (PQC/Hybrid asymmetry, CA signature) | **Closed** -- Section 2, PQC's chain confirmed ML-DSA-65 end-to-end live |")
 w("| 4.4 (transport/front-channel realism) | **Partially closed** -- real network conditions now in scope; no real browser/app front-channel tested |")
 w("| 4.6a (single unit of measure for JWT/keys) | **Closed** -- Section 3, raw vs. base64url both reported, compact serialization stated as the equation's own unit |")
@@ -1084,6 +1294,22 @@ w(
     "its base**, adding ML-DSA-65 as an extension rather than replacing the key "
     "material."
 )
+w()
+w(
+    "- **Neither mTLS direction performs its DEFAULT X.509 verification, "
+    "under any profile.** The client sets `InsecureSkipVerify: true` "
+    "(`tls_kem_proxy/main.go:212`) and never checks the server's "
+    "certificate. The server sets the same flag (`mock_mtls/main.go:500`) and "
+    "relies entirely on its own custom callback for the client's certificate "
+    "-- which is a no-op under Classic and PQC, and checks only the ML-DSA-65 "
+    "`AltSignatureValue` (not the RSA primary signature) under Hybrid "
+    "(Section 2, item 5). **The cost of validating a peer's chain is "
+    "therefore not in T_fluxo, under any profile** -- an offline microbenchmark "
+    "(Section 2) estimates that cost at 157-241µs/connection, had it been "
+    "performed; this is an added estimate, not a measurement taken during the "
+    "real campaign."
+)
+
 w(
     f"- **A single gateway image is used for all three profiles and all three "
     f"installations** (Section 1.1) -- `code_hash`/image digest were checked at "
@@ -1129,8 +1355,7 @@ w(
     f"warm-ups never capture pcap/cpu, by design -- Decision 103). Pcap/cpu "
     f"artifact counts are 744 per side (client and server), not 720. **The extra "
     f"24 are NOT a per-cell warm-up** (an earlier draft of this report said so, "
-    f"incorrectly) -- confirmed now by their own file path: "
-    f"{inter['validation_stage_pcap_count']} client-pcap files live under "
+    f"incorrectly) -- confirmed now by their own file path: {inter['validation_stage_pcap_count']} pcap files (24 client-side + 24 server-side, confirmed by their own client/server subdirectory, not by filename -- neither side's filename says 'client' or 'server') live under "
     f"`janela1/_campaign-control/validation_stage/`, the one-off 24-execution "
     f"(8 scenarios x 3 profiles) **parallel validation stage** run before "
     f"window 1 began (`run_validation_stage()`, `campaign_run.py`) -- never "

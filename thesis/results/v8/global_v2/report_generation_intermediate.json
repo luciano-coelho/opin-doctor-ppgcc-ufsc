@@ -43172,5 +43172,198 @@
       3.544689,
       3.74648
     ]
-  }
+  },
+  "setup_phase_pooled": {
+    "classic": {
+      "generate_callback_cert": {
+        "median": 35.1115,
+        "n": 480,
+        "mean": 39.8856375
+      },
+      "callback_server_teardown": {
+        "median": 500.203,
+        "n": 480,
+        "mean": 500.24517083333336
+      }
+    },
+    "pqc": {
+      "generate_callback_cert": {
+        "median": 36.1395,
+        "n": 480,
+        "mean": 42.55807083333333
+      },
+      "callback_server_teardown": {
+        "median": 500.197,
+        "n": 480,
+        "mean": 500.2277375
+      }
+    },
+    "hybrid": {
+      "generate_callback_cert": {
+        "median": 36.1485,
+        "n": 480,
+        "mean": 41.078102083333334
+      },
+      "callback_server_teardown": {
+        "median": 500.189,
+        "n": 480,
+        "mean": 500.22879375
+      }
+    }
+  },
+  "setup_phase_by_window": {
+    "classic": {
+      "1": {
+        "generate_callback_cert": {
+          "median": 34.759,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.19,
+          "n": 160
+        }
+      },
+      "2": {
+        "generate_callback_cert": {
+          "median": 37.573,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.2155,
+          "n": 160
+        }
+      },
+      "3": {
+        "generate_callback_cert": {
+          "median": 34.5815,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.2075,
+          "n": 160
+        }
+      }
+    },
+    "pqc": {
+      "1": {
+        "generate_callback_cert": {
+          "median": 36.204,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.20550000000003,
+          "n": 160
+        }
+      },
+      "2": {
+        "generate_callback_cert": {
+          "median": 40.5305,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.182,
+          "n": 160
+        }
+      },
+      "3": {
+        "generate_callback_cert": {
+          "median": 33.1385,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.2075,
+          "n": 160
+        }
+      }
+    },
+    "hybrid": {
+      "1": {
+        "generate_callback_cert": {
+          "median": 37.634,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.1835,
+          "n": 160
+        }
+      },
+      "2": {
+        "generate_callback_cert": {
+          "median": 37.292500000000004,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.189,
+          "n": 160
+        }
+      },
+      "3": {
+        "generate_callback_cert": {
+          "median": 32.483000000000004,
+          "n": 160
+        },
+        "callback_server_teardown": {
+          "median": 500.20349999999996,
+          "n": 160
+        }
+      }
+    }
+  },
+  "setup_phase_significance": {
+    "pqc_vs_classic": {
+      "u": 108901.0,
+      "p": 0.14253305065617017,
+      "effect": 0.054678819444444415,
+      "n_a": 480,
+      "n_b": 480,
+      "median_a": 36.1395,
+      "median_b": 35.1115
+    },
+    "hybrid_vs_classic": {
+      "u": 109913.5,
+      "p": 0.21843113572098138,
+      "effect": 0.045889756944444415,
+      "n_a": 480,
+      "n_b": 480,
+      "median_a": 36.1485,
+      "median_b": 35.1115
+    }
+  },
+  "chain_verification_bench_us": {
+    "classic": {
+      "mean": 241.057,
+      "min": 191.323,
+      "max": 1317.417,
+      "n": 2000
+    },
+    "pqc": {
+      "mean": 157.038,
+      "min": 143.699,
+      "max": 1732.417,
+      "n": 2000
+    },
+    "hybrid": {
+      "mean": 236.819,
+      "min": 182.843,
+      "max": 1294.907,
+      "n": 2000
+    }
+  },
+  "signing_bench_ms": {
+    "rsa_4096_pss": {
+      "mean": 5.944638,
+      "min": 4.779089,
+      "max": 17.66055,
+      "n": 2000,
+      "key": "mtls.key"
+    },
+    "mldsa_65": {
+      "mean": 0.68816,
+      "min": 0.136776,
+      "max": 5.199236,
+      "n": 2000,
+      "key": "mtls_pqc.key"
+    }
+  },
+  "signing_bench_gap_share_of_handshake": 0.15787177290363974
 }
