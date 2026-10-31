@@ -10209,3 +10209,85 @@ nenhum momento.** Próximo passo: captura de artefatos reais
 participante, tag `v8-official-data` -- sem destruir a frota (reservado
 para o autor, presente).
 
+## Decision 115 (2026-10-31) -- pré-destroy: introspecção TLS
+## independente, inventário de completude, consolidate novo (por
+## perfil e global, RTT/perda corrigidas/k/deltas), teste de
+## heterogeneidade do PQC, tabela de deriva de 72 células, plano de
+## destroy salvo (NÃO aplicado)
+
+Frota ainda de pé, sem nenhuma execução oficial tocada. Seis itens,
+nesta ordem, antes do destroy:
+
+**1. Introspecção TLS independente por perfil** -- `openssl s_client`
+real contra o gateway de `sa-east-1` (troca de perfil + 5 settling
+runs por perfil, mesma mecânica de qualquer troca já feita).
+Classic e Hybrid confirmados por sonda independente: grupo negociado
+(`secp384r1`/`SecP384r1MLKEM1024`), TLS 1.3, `TLS_AES_128_GCM_SHA256`,
+assinatura `rsa_pss_rsae_sha256` -- batem exatamente com
+`_CLIENT_EXPECTED_CURVE`. **PQC não negociou com OpenSSL puro**
+(handshake failure, grupo `mlkem1024` reconhecido pelo nome mas sem
+interoperar com o `crypto/tls` do Go) -- achado real de
+interoperabilidade entre bibliotecas, não um bug do projeto;
+confirmado em vez disso pelo próprio log real do gateway durante a
+execução 21 da janela 3 (`curveID:"MLKEM1024"`, já commitado).
+Detalhe completo em `thesis/results/v8/artifacts/item1_tls_
+introspection.md`.
+
+**2. Inventário de completude**: 720 execuções, 360 aquecimentos
+(K=5 x 24 células x 3 janelas), 744 pcaps/744 cpu.jsonl por lado
+(720 oficiais + 24 do aquecimento único por célula `w00_run01`,
+capturado uma vez antes da janela 1 e corretamente presente só na
+pasta da janela 1) -- controle (`~/campaign-data`) e repositório
+local batem exatamente, nada existia só nas instâncias. Puxados e
+commitados os 6 arquivos de log/snapshot do control que nunca tinham
+sido pulados (`campaign-status.json`, `delivered_images_manifest.
+json`, `inventory.json`, `official_campaign.log`, `preflight_tcp_
+result.json`, `validation_parallel.log`) -- escaneados, sem segredos
+(IPs públicos das instâncias EC2 presentes em `inventory.json`, não o
+IP do operador; nenhum padrão do scanner disparou). Manifesto sha256
+de cada arquivo das 3 janelas gerado e commitado em
+`_campaign-control/sha256_manifest.txt`.
+
+**3. Consolidate novo, por perfil e global**: `consolidate_v8_new.py`
+(cópia de `consolidate_v8.py`, nunca substitui o original) adiciona
+RTT medido de pcap (`rtt_measured_ms`, SYN/SYN-ACK real, não mais o
+ping sempre nulo) e um bloco `models` (k, delta=a+b·RTT vs. Classic,
+teste do sinal) a cada consolidação. Rodado para as 3 janelas
+separadamente (`janela{N}/_v2/`) e uma vez combinado (30 execuções/
+célula, árvore mesclada por hardlink em `janela_combined`, resultado
+em `global_v2/`). Três linhas de exemplo (janela 1, sa-east-1/L0/
+classic):
+```
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.29ms (bootstrap 95% CI (0.196, 0.322))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2544 segments): 0 retransmissions observed -- upper bound 0.1179% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments); Duplicate-ACK (own field, NOT packet loss): 0.4324% (11 events)
+```
+A tag `v8-official-data` NÃO foi movida -- estes são arquivos NOVOS,
+paralelos aos oficiais, nunca os substituindo.
+
+**4. PQC -- k com as duas leituras + teste de heterogeneidade**:
+combinado (30 execuções/célula), k_pqc=56,13, IC95%=[56,03;57,52] --
+**IC não contém 56** (FALHOU por essa leitura) **mas k está dentro de
+56±1** (PASSOU pela leitura mais permissiva); ambas reportadas, Classic
+e Hybrid passam nas duas. Teste de heterogeneidade do custo fixo `a`
+entre as 3 janelas (Z par a par + Cochran's Q): janela2 vs. janela3
+**Z=+2,63, p=0,0086 -- SIGNIFICATIVO**; Q=7,160, df=2, **p=0,0279**
+(omnibus, significativo). **Correção à Decision 114**: a frase "a
+janela 2 era mais provavelmente ruído de amostra" não é sustentada por
+este teste -- a variação do custo fixo do PQC entre janelas é
+estatisticamente detectável, causa não identificada, registrado como
+achado aberto. Detalhe completo em `global_v2/item4_pqc_heterogeneity.md`.
+
+**5. Tabela de deriva, 72 células** (24 x 3 janelas, Mann-Kendall):
+10/72 (13,9%) significativas, todas em queda -- por janela: 3/24
+(12,5%), 4/24 (16,7%), 3/24 (12,5%), consistente entre si. CSV completo
+em `thesis/results/v8/drift_table_72cells.csv`, para a seção de
+Limitações.
+
+**6. Plano de destroy salvo, NÃO aplicado**: `terraform plan -destroy
+-out=tfdestroy` -- **Plan: 0 to add, 0 to change, 65 to destroy**
+(bate com o esperado). Arquivo `tfdestroy` fica fora do git (mesma
+regra de Decision 49 para artefatos do Terraform), local em `thesis/
+results/v8/campaign/terraform/tfdestroy`. Aplicar é decisão do autor,
+presente.
+
