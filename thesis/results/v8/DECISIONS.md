@@ -10142,3 +10142,70 @@ agora -- a combinação formal das 3 janelas (depois da janela 3) é o
 lugar certo para julgar isso com mais poder estatístico, não uma
 leitura isolada de 2 janelas.
 
+## Decision 114 (2026-10-31) -- janela 3 completa; checagem
+## confirmatória (v8-prereg-3) contra a janela 3 isolada E combinada
+## (janelas 1+2+3); campanha de 3 janelas oficiais concluída
+
+**Janela 3 (pqc/classic/hybrid)**: 240/240, 0 erros, steal médio
+0,01%. Pull via tar+scp, sha256 verificado em ambos os lados
+(`d5953a08e41246a070ead2b2c5372c3d1f4b9927ce9615997c387e7b4d722db`),
+escaneado por segredos (texto staged + histórico completo + 480
+pcaps descomprimidos manualmente, 0 hits em todos) -- commit
+`18985107` em `main`. Drift Mann-Kendall: 3/24 (12,5%), todas em
+queda -- semelhante às janelas 1 (3/24) e 2 (4/24).
+
+**As 5 previsões da Decision 111, checadas separadamente contra a
+janela 3 isolada (10 execuções/célula):**
+1. k=56±1 nos 3 perfis: classic 56,23 [56,12;56,60] -- **FALHOU**
+   (fora por pouco); pqc 56,16 [56,01;56,83] -- **FALHOU** (fora por
+   pouco); hybrid 55,81 [55,60;56,81] -- **PASSOU**.
+2. Hybrid `a`>0: +80,78ms, IC95%=[+62,09;+101,42]ms -- **PASSOU**.
+3. PQC `a` indistinguível de zero: -1,66ms, IC95%=[-19,77;+16,47]ms
+   -- **PASSOU** (volta a cruzar zero, diferente da janela 2).
+4. `b` indistinguível de zero nos dois: Hybrid +0,1383
+   IC95%=[-0,1412;+0,2735] -- **PASSOU**; PQC +0,2682
+   IC95%=[-0,0131;+0,4149] -- **PASSOU** (cruza zero por pouco,
+   diferente da janela 2 onde o sinal era negativo e significativo).
+5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8.
+
+**Checagem COMBINADA (janelas 1+2+3 pooled, 30 execuções/célula,
+24 células) -- a análise com mais poder estatístico, a que importa
+para a conclusão final:**
+1. k=56±1: classic 56,03 [55,91;56,37] -- **PASSOU**; pqc 56,13
+   [56,03;56,58] -- **FALHOU** (fora por pouco, mesmo com 30
+   execuções); hybrid 55,99 [55,90;56,52] -- **PASSOU**.
+2. Hybrid `a`>0: +87,88ms, IC95%=[+79,85;+96,27]ms -- **PASSOU**.
+3. PQC `a` indistinguível de zero: +13,74ms,
+   IC95%=[-1,26;+31,20]ms -- **PASSOU** (cruza zero no combinado).
+4. `b` indistinguível de zero nos dois: Hybrid +0,0550
+   IC95%=[-0,1301;+0,1298] -- **PASSOU**; PQC +0,2094
+   IC95%=[-0,0658;+0,3354] -- **PASSOU**.
+5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8 (sem direção
+   fixa consistente, como a Decision 111 já previa para este par).
+
+**Conclusão honesta, sem forçar consistência entre janelas**: das 5
+previsões, 4/5 passam no combinado (2, 3, 4, 5); a previsão 1 (k=56)
+passa para Classic e Hybrid mas fica marginalmente fora para PQC
+mesmo com 30 execuções -- k_pqc=56,13 contra um IC que exclui 56 por
+apenas 0,13 unidades, a margem mais estreita das três. Isso é
+consistente com um k real ligeiramente mais alto para PQC (talvez
+por alguma chamada extra de verificação não contabilizada nas 56
+esperadas) ou com ruído residual de amostra -- não investigado a
+fundo aqui, registrado como achado aberto. PQC oscilou entre janelas
+no custo fixo (`a`) e na inclinação (`b`): sem custo fixo detectável
+nas janelas 1 e 3, com custo fixo pequeno só na janela 2; no
+combinado, o efeito da janela 2 é diluído e `a`/`b` voltam a cruzar
+zero. Isso sugere que o achado da janela 2 (Decision 113) era mais
+provavelmente ruído de amostra (n=8 rotas por janela) do que um
+efeito real e estável do PQC -- mas o combinado também não teve
+poder suficiente pra confirmar k=56 pro PQC, então a história não
+está completamente fechada.
+
+**Campanha de 3 janelas oficiais concluída: 720 execuções reais
+(janelas 1+2+3), 0 erros em qualquer janela, nenhuma trava de
+segurança acionada (`check_artifact_health`, custo, steal) em
+nenhum momento.** Próximo passo: captura de artefatos reais
+(`capture_real_artifacts.sh`), confirmação da decomposição por
+participante, tag `v8-official-data` -- sem destruir a frota (reservado
+para o autor, presente).
+
