@@ -10346,3 +10346,45 @@ Luciano, nenhum executado sem autorização.
 
 Frota NÃO destruída -- aplicar `tfdestroy` é decisão do autor, presente.
 
+## Decision 117 (2026-10-31) -- destroy final da frota v8, autorizado pelo
+## autor presente; confirmado pela API real da AWS nas 7 regiões; horas
+## e custo totais da frota registrados
+
+**Nota de numeração**: as três rodadas de revisão do relatório final
+(correções de N_JWK/decomposição por participante; diagnóstico do
+interop PQC/OpenSSL e modelo conjunto; diagnóstico do EKU/purpose e
+distinção autenticação-TLS-vs-mensagem) foram descritas nas mensagens
+de commit como Decisions 117-119, mas nunca foram escritas como
+entradas separadas aqui -- o número 117 é reaproveitado agora para o
+destroy real, que é o próximo evento efetivamente registrado neste
+arquivo. O conteúdo técnico de cada rodada de revisão está preservado
+nas mensagens de commit correspondentes (`git log`), não perdido --
+só não duplicado aqui por restrição de tempo.
+
+**Snapshot final antes do destroy** (capturado com a frota ainda viva,
+via `estimate_fleet_cost_usd()`, o mesmo estimador usado durante toda
+a campanha -- AWS Cost Explorer continua indisponível para o usuário
+IAM deste projeto):
+- Boot da frota: 2026-10-30T21:08:56Z.
+- Horas totais de frota até o pedido de destroy: **22,45 horas**.
+- Custo estimado total: **≈ US$29,34**.
+- Pedido de destroy (presença confirmada do autor): 2026-10-31T19:36:11Z.
+
+**Apply do plano salvo** (`terraform apply "tfdestroy"`, sem
+recalcular, exatamente o plano já revisado e commitado como artefato
+local fora do git): `Apply complete! Resources: 0 added, 0 changed,
+65 destroyed` -- bate exatamente com o esperado (Decision 116, item 6).
+
+**Confirmação pela API real da AWS, não apenas pelo código de saída do
+Terraform** -- `boto3`, localmente (o control, que antes relaiava
+esses comandos, já foi destruído nesta mesma operação):
+- `describe_instances` (filtro `tag:Project=mockopin-pqc-aws`, estados
+  pending/running/stopping/stopped) nas 7 regiões usadas pela campanha:
+  **0 instâncias remanescentes em cada uma das 7**.
+- `describe_key_pairs` (`mockopin-pqc-campaign*`) e `describe_security_
+  groups` (mesma tag) nas mesmas 7 regiões: **0 em cada uma**.
+
+Nenhum account ID, ARN ou IP é impresso neste registro, por instrução
+explícita. A frota v8 está completamente destruída e confirmada limpa
+nas 7 regiões.
+

@@ -4,7 +4,40 @@ Extends v1-v7 (simulated `tc`/`netem` latency) with the same experiment
 run across **real** AWS regions. See `DECISIONS.md` for the full rationale.
 v7 remains the thesis's official simulated-latency result; v8 is additive.
 
-## Status
+## Campaign complete, fleet destroyed (2026-10-31)
+
+The real campaign described below as planned/in-progress has since
+**run to completion and the fleet has been destroyed** -- the
+"Status"/"Resuming" sections further down are kept as the historical
+planning record, not current state. Summary:
+
+- **3 official windows, 720 executions, 0 errors**, 3 server
+  installations (`sa-east-1`, `us-east-1`, `ap-northeast-1`) x 8 real
+  routes x 3 crypto profiles (Classic/PQC/Hybrid), Latin-square
+  ordered (seed 0), K=5 warm-up per cell discarded.
+- **Final report**: `Consolidated_Metrics_Report_FINAL.md` -- every
+  number generated from `global_v2/report_data_v8_combined.json`/
+  `consolidated_combined.json` by `thesis/scripts/generate_v8_final_
+  report.py` + `render_v8_final_report.py`, independently re-verified
+  by `thesis/scripts/audit_v8_from_raw.py` (0 divergences against the
+  raw run files/pcaps).
+- **Consolidate script, made canonical (Decision 117)**:
+  `campaign/scripts/consolidate_v8.py` now has pcap-measured RTT,
+  correctly-defined packet loss (retransmissions/segments only, never
+  conflated with duplicate-ACK/out-of-order), and the k/delta/order
+  models built in -- it is no longer the version with the two bugs
+  this project's own review found (`consolidate_v8_legacy.py` keeps
+  that old version for history only, never run again).
+- **Destroy**: `terraform apply "tfdestroy"` (saved plan, not
+  recalculated) -- 65 resources destroyed, confirmed via the real AWS
+  API (`boto3`, not just Terraform's own exit code) across all 7
+  regions the campaign used: 0 instances, key pairs, or tagged
+  security groups remaining anywhere. Full details, fleet hours, and
+  cost: `DECISIONS.md`, Decision 117.
+- Tags: `v8-prereg`, `v8-prereg-3`, `v8-official-data`,
+  `v8-official-data-2`, `v8-official-data-3` (current).
+
+## Status (historical -- planning phase, see above for what actually ran)
 
 - [x] **Phase 0** — AWS account, root MFA, dedicated IAM user
       (`mockopin-pqc-experiment`, EC2/VPC-only policy scoped to 10

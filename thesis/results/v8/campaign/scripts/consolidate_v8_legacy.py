@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Reads the real `v8/latency/...` tree (Decision 53's own layout -- see
+"""SUPERSEDED (Decision 117, 2026-10-31) -- kept for provenance/history
+only, never run again. `consolidate_v8.py` (this file's old content)
+had two real bugs this project's own review rounds found and fixed:
+(1) `pcap_loss_summary()` summed retransmissions+duplicate-ACK+out-of-
+order into one conflated "loss_pct"; (2) no pcap-measured RTT or k/
+delta/order models existed at all. Both are fixed in the file now
+actually named `consolidate_v8.py` (originally drafted as a parallel
+copy, `consolidate_v8_new.py`, per instruction not to touch the
+production script until after window 3 -- now promoted to canonical,
+this file demoted to historical reference under this new name).
+
+Reads the real `v8/latency/...` tree (Decision 53's own layout -- see
 METRICS_COVERAGE.md) and writes `consolidated.json` (source) and
 `CONSOLIDATED_REPORT.md` (derived) into the given output directory, with
 the same field structure as v7's own `report_data_v7.json`/
@@ -77,7 +88,6 @@ from campaign_run import (  # reused, not reimplemented -- see module docstring 
 )
 from pcap_utils import (  # noqa: E402 -- shared, see pcap_utils.py's own docstring
     extract_clean_handshake_bytes, detect_loss_signals, rtt_jitter_seconds,
-    find_all_syn_synack_rtts,
 )
 
 # Decision 94 (2026-10-28, Schardong-coverage check): the ONLY external,
@@ -573,21 +583,12 @@ def pcap_loss_summary(client_pcap_paths):
     if n_pcaps == 0:
         return None
     out = {"n_executions": n_pcaps, "total_segments": total_segments, **totals}
-    # Luciano, 2026-10-31, item 4: "packet loss" significa estritamente
-    # retransmissoes/segmentos -- NUNCA a soma com duplicate-ACK/out-of-
-    # order, que sao sinais de REORDENACAO (podem ocorrer sem nenhum
-    # pacote perdido) e ficam em seus proprios campos
-    # (*_pct), nunca chamados de "loss". `loss_events` (a soma antiga,
-    # conflada) fica no dict por compatibilidade mas nao alimenta mais
-    # loss_pct.
-    if totals["retransmissions"] == 0:
+    if totals["loss_events"] == 0:
         out["loss_pct"] = None
         out["loss_pct_upper_bound_rule_of_three"] = round(3 / total_segments * 100, 4) if total_segments else None
     else:
-        out["loss_pct"] = round(totals["retransmissions"] / total_segments * 100, 4) if total_segments else None
+        out["loss_pct"] = round(totals["loss_events"] / total_segments * 100, 4) if total_segments else None
         out["loss_pct_upper_bound_rule_of_three"] = None
-    out["out_of_order_pct"] = round(totals["out_of_order"] / total_segments * 100, 4) if total_segments else None
-    out["duplicate_ack_pct"] = round(totals["duplicate_ack_events"] / total_segments * 100, 4) if total_segments else None
     return out
 
 
@@ -806,17 +807,6 @@ def consolidate_profile_scenario(scenario_path, profile):
             j = rtt_jitter_seconds(r["client_pcap"])
             if j is not None:
                 jitter_samples_ms.append(j * 1000)
-    # Luciano, 2026-10-31 (item 3 do pedido de "consolidate novo"): RTT
-    # medido de verdade, direto do pcap (SYN/SYN-ACK das 6 conexões mTLS
-    # por execucao), nao mais o ping (sempre nulo, Decision 105) nem o
-    # jitter (que mede VARIACAO, nao o RTT em si). Mediana por execucao,
-    # depois agregada em stats_block como qualquer outra metrica v8.
-    rtt_measured_ms_per_run = []
-    for r in clean_rows:
-        if r["client_pcap"] and Path(r["client_pcap"]).is_file():
-            rtts = find_all_syn_synack_rtts(r["client_pcap"])
-            if rtts:
-                rtt_measured_ms_per_run.append(statistics.median(rtts) * 1000)
     cpu_server = [load_cpu_mem(scenario_path / "server" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
     cpu_server = [c for c in cpu_server if c]
     cpu_client = [load_cpu_mem(scenario_path / "client" / f"{r['run_stem']}_cpu.jsonl") for r in clean_rows]
@@ -952,10 +942,6 @@ def consolidate_profile_scenario(scenario_path, profile):
             "n_samples": len(ping_samples),
             "rtt_avg_ms": stats_block([p["rtt_avg_ms"] for p in ping_samples if "rtt_avg_ms" in p]) if ping_samples else None,
             "loss_pct_upper_bound_max_from_ping": max((p["loss_pct_upper_bound"] for p in ping_samples if "loss_pct_upper_bound" in p), default=None) if ping_samples else None,
-            # Luciano, 2026-10-31, item 3: RTT real medido do pcap (SYN/
-            # SYN-ACK), nao o ping (sempre nulo) -- fonte primaria de RTT
-            # a partir de agora.
-            "rtt_measured_ms": stats_block(rtt_measured_ms_per_run) if rtt_measured_ms_per_run else None,
             "pcap_loss_signals": pcap_loss,
             # Decision 94: new -- jitter (RTT variability) was never
             # actually computed anywhere in this pipeline before (a real
@@ -1074,119 +1060,7 @@ def build_consolidated(v8_latency_root):
                 if result is not None:
                     out["profiles"][profile][server][scenario] = result
     out["cross_profile_t_fluxo_comparisons"] = add_cross_profile_t_fluxo_comparisons(out)
-    out["models"] = build_models(out)
     return out
-
-
-def _ols(xs, ys):
-    xm, ym = statistics.mean(xs), statistics.mean(ys)
-    sxy = sum((x - xm) * (y - ym) for x, y in zip(xs, ys))
-    sxx = sum((x - xm) ** 2 for x in xs)
-    b = sxy / sxx
-    a = ym - b * xm
-    return a, b
-
-
-def _bootstrap_ols_ci(xs, ys, n_boot=3000, seed=42):
-    rnd = random.Random(seed)
-    a0, b0 = _ols(xs, ys)
-    boots_a, boots_b = [], []
-    idx = list(range(len(xs)))
-    for _ in range(n_boot):
-        sample = [rnd.choice(idx) for _ in idx]
-        bxs, bys = [xs[i] for i in sample], [ys[i] for i in sample]
-        if len(set(bxs)) < 2:
-            continue
-        a, b = _ols(bxs, bys)
-        boots_a.append(a); boots_b.append(b)
-    boots_a.sort(); boots_b.sort()
-    n = len(boots_a)
-    return (a0, boots_a[int(0.025 * n)], boots_a[int(0.975 * n)]), (b0, boots_b[int(0.025 * n)], boots_b[int(0.975 * n)])
-
-
-def build_models(data):
-    """Luciano, 2026-10-31, item 3 ("consolidate novo ... k, deltas"):
-    por perfil, T_fluxo = T0 + k*RTT_medido (k esperado ~56 = 44
-    chamadas + 2x6 conexoes, Decision 111); delta = a + b*RTT_medido
-    para PQC/Hybrid vs. Classic (a = componente fixo, b = cresce com a
-    distancia); ordem entre perfis (teste do sinal, 8 rotas reais).
-    Usa rtt_and_loss.rtt_measured_ms (pcap, nao ping) e t_fluxo_seconds
-    ja presentes em `data["profiles"]`, cell a cell -- nao reabre pcaps.
-    """
-    profiles = data.get("profiles", {})
-    cell_tfluxo, cell_rtt = {}, {}
-    for profile, servers in profiles.items():
-        for server, scenarios in servers.items():
-            for scenario, m in scenarios.items():
-                tf = m.get("t_fluxo_seconds")
-                rtt = (m.get("rtt_and_loss") or {}).get("rtt_measured_ms")
-                if tf and rtt:
-                    cell_tfluxo[(profile, server, scenario)] = tf["median"]
-                    cell_rtt[(profile, server, scenario)] = rtt["median"]
-    routes = sorted({(server, scenario) for (_, server, scenario) in cell_tfluxo})
-
-    k_model = {}
-    for profile in profiles:
-        pairs = [(cell_rtt[(profile, s, sc)] / 1000, cell_tfluxo[(profile, s, sc)])
-                  for s, sc in routes if (profile, s, sc) in cell_tfluxo]
-        if len(pairs) < 2:
-            continue
-        xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
-        t0, k = _ols(xs, ys)
-        (_, k_lo, k_hi) = (None, None, None)
-        boots_k = []
-        rnd = random.Random(42)
-        idx = list(range(len(xs)))
-        for _ in range(3000):
-            sample = [rnd.choice(idx) for _ in idx]
-            bxs = [xs[i] for i in sample]; bys = [ys[i] for i in sample]
-            if len(set(bxs)) < 2:
-                continue
-            _, bk = _ols(bxs, bys)
-            boots_k.append(bk)
-        boots_k.sort()
-        n = len(boots_k)
-        k_lo, k_hi = boots_k[int(0.025 * n)], boots_k[int(0.975 * n)]
-        k_model[profile] = {
-            "t0_seconds": t0, "k": k, "k_ci95": [k_lo, k_hi],
-            "k_contains_56": k_lo <= 56 <= k_hi, "n_routes": len(xs),
-        }
-
-    delta_model = {}
-    if "classic" in profiles:
-        for profile in profiles:
-            if profile == "classic":
-                continue
-            pairs = []
-            for s, sc in routes:
-                if (profile, s, sc) in cell_tfluxo and ("classic", s, sc) in cell_tfluxo:
-                    rtt_s = cell_rtt[("classic", s, sc)] / 1000
-                    delta_s = cell_tfluxo[(profile, s, sc)] - cell_tfluxo[("classic", s, sc)]
-                    pairs.append((rtt_s, delta_s))
-            if len(pairs) < 2:
-                continue
-            xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
-            (a0, a_lo, a_hi), (b0, b_lo, b_hi) = _bootstrap_ols_ci(xs, ys)
-            delta_model[profile] = {
-                "a_seconds": a0, "a_ci95": [a_lo, a_hi], "a_crosses_zero": a_lo <= 0 <= a_hi,
-                "b": b0, "b_ci95": [b_lo, b_hi], "b_crosses_zero": b_lo <= 0 <= b_hi,
-                "n_routes": len(xs),
-            }
-
-    order = {}
-    if "classic" in profiles:
-        for profile in profiles:
-            if profile == "classic":
-                continue
-            pos = sum(1 for s, sc in routes
-                       if (profile, s, sc) in cell_tfluxo and ("classic", s, sc) in cell_tfluxo
-                       and cell_tfluxo[(profile, s, sc)] > cell_tfluxo[("classic", s, sc)])
-            total = sum(1 for s, sc in routes
-                         if (profile, s, sc) in cell_tfluxo and ("classic", s, sc) in cell_tfluxo)
-            order[f"{profile}>classic"] = {"routes_greater": pos, "routes_total": total}
-
-    return {"k_model": k_model, "delta_vs_classic_model": delta_model, "order_sign_test": order,
-            "n_routes_available": len(routes)}
 
 
 def add_cross_profile_t_fluxo_comparisons(data):
@@ -1251,34 +1125,22 @@ def render_report(data):
                         lines.append(f"- OPINsize: INCOMPLETE -- {m['opinsize']['note']} "
                                       f"(partial, excl. handshake: {m['opinsize']['partial_value_bytes_excl_handshake']:.0f} bytes)")
                 if m["rtt_and_loss"]:
-                    rtt_measured = m["rtt_and_loss"].get("rtt_measured_ms")
-                    if rtt_measured:
-                        lines.append(f"- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): "
-                                      f"{rtt_measured['median']:.2f}ms (bootstrap 95% CI "
-                                      f"{rtt_measured['bootstrap_median_ci95']})")
-                    else:
-                        lines.append("- RTT measured (pcap): no samples")
+                    rtt = m["rtt_and_loss"]["rtt_avg_ms"]
+                    lines.append(f"- RTT avg: {rtt['median']:.2f}ms (median of samples)" if rtt else "- RTT: no samples")
                     ping_loss = m["rtt_and_loss"]["loss_pct_upper_bound_max_from_ping"]
                     if ping_loss is not None:
-                        lines.append(f"- Packet loss (ICMP ping upper bound, legacy/always null -- Decision 105): {ping_loss}%")
+                        lines.append(f"- Packet loss (ICMP ping upper bound): {ping_loss}%")
                     pl = m["rtt_and_loss"]["pcap_loss_signals"]
                     if pl:
-                        # Luciano, item 4: "loss" = estritamente retransmissoes/
-                        # segmentos. duplicate-ACK e out-of-order sao campos
-                        # PROPRIOS, nunca somados a "loss".
-                        if pl["retransmissions"] == 0:
-                            lines.append(f"- Packet loss (retransmissions/segments, TCP pcap evidence, "
-                                          f"{pl['n_executions']} executions, {pl['total_segments']} segments): "
-                                          f"0 retransmissions observed -- upper bound "
-                                          f"{pl['loss_pct_upper_bound_rule_of_three']}% (rule of three)")
+                        if pl["loss_events"] == 0:
+                            lines.append(f"- Packet loss (TCP pcap evidence, {pl['n_executions']} executions, "
+                                          f"{pl['total_segments']} segments): 0 events observed -- "
+                                          f"upper bound {pl['loss_pct_upper_bound_rule_of_three']}% (rule of three)")
                         else:
-                            lines.append(f"- Packet loss (retransmissions/segments, TCP pcap evidence, "
-                                          f"{pl['n_executions']} executions, {pl['total_segments']} segments): "
-                                          f"{pl['loss_pct']}% ({pl['retransmissions']} retransmissions)")
-                        lines.append(f"- Out-of-order (own field, NOT packet loss): {pl['out_of_order_pct']}% "
-                                      f"({pl['out_of_order']} segments)")
-                        lines.append(f"- Duplicate-ACK (own field, NOT packet loss): {pl['duplicate_ack_pct']}% "
-                                      f"({pl['duplicate_ack_events']} events)")
+                            lines.append(f"- Packet loss (TCP pcap evidence, {pl['n_executions']} executions, "
+                                          f"{pl['total_segments']} segments): {pl['loss_pct']}% "
+                                          f"({pl['retransmissions']} retransmissions, {pl['out_of_order']} "
+                                          f"out-of-order, {pl['duplicate_ack_events']} duplicate-ACK events)")
                 vt = m["verification_timings_ms"]
                 if vt["status"] == "covered":
                     per_artifact_str = ", ".join(

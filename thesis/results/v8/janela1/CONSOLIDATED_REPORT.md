@@ -11,8 +11,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2544 segments): 0.4324% (0 retransmissions, 0 out-of-order, 11 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.29ms (bootstrap 95% CI (0.1964569091796875, 0.32150745391845703))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2544 segments): 0 retransmissions observed -- upper bound 0.1179% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.4324% (11 events)
 - Verification timing (10 runs with data): id_token 5.93ms, jarm 2.90ms, rs_response 2.64ms
 - Signing timing (10 runs with data): client_assertion:par 1.75ms, client_assertion:token_ac 1.99ms, client_assertion:token_cc 2.35ms, request_object:par 1.96ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.18ms, generate_callback_cert 42.53ms
@@ -23,8 +25,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2684 segments): 0.0373% (0 retransmissions, 0 out-of-order, 1 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 32.00ms (bootstrap 95% CI (31.82804584503174, 32.229721546173096))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2684 segments): 0 retransmissions observed -- upper bound 0.1118% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.0373% (1 events)
 - Verification timing (10 runs with data): id_token 5.69ms, jarm 2.72ms, rs_response 2.65ms
 - Signing timing (10 runs with data): client_assertion:par 1.63ms, client_assertion:token_ac 1.84ms, client_assertion:token_cc 2.23ms, request_object:par 1.83ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.20ms, generate_callback_cert 27.72ms
@@ -36,8 +40,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2533 segments): 0.2764% (0 retransmissions, 0 out-of-order, 7 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.25ms (bootstrap 95% CI (0.213623046875, 0.3211498260498047))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2533 segments): 0 retransmissions observed -- upper bound 0.1184% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2764% (7 events)
 - Verification timing (10 runs with data): id_token 6.16ms, jarm 2.86ms, rs_response 2.61ms
 - Signing timing (10 runs with data): client_assertion:par 1.92ms, client_assertion:token_ac 2.11ms, client_assertion:token_cc 2.41ms, request_object:par 2.04ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.18ms, generate_callback_cert 30.26ms
@@ -48,8 +54,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2684 segments): 0.1118% (0 retransmissions, 0 out-of-order, 3 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 122.59ms (bootstrap 95% CI (122.49404191970825, 122.74408340454102))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2684 segments): 0 retransmissions observed -- upper bound 0.1118% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1118% (3 events)
 - Verification timing (10 runs with data): id_token 6.09ms, jarm 2.91ms, rs_response 2.75ms
 - Signing timing (10 runs with data): client_assertion:par 1.83ms, client_assertion:token_ac 2.05ms, client_assertion:token_cc 2.33ms, request_object:par 2.00ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 27.15ms
@@ -60,8 +68,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2701 segments): 0.3332% (0 retransmissions, 0 out-of-order, 9 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 219.58ms (bootstrap 95% CI (219.45327520370483, 219.69294548034668))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2701 segments): 0 retransmissions observed -- upper bound 0.1111% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.3332% (9 events)
 - Verification timing (10 runs with data): id_token 6.10ms, jarm 2.89ms, rs_response 2.75ms
 - Signing timing (10 runs with data): client_assertion:par 1.81ms, client_assertion:token_ac 2.09ms, client_assertion:token_cc 2.34ms, request_object:par 2.01ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.18ms, generate_callback_cert 35.76ms
@@ -72,8 +82,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2693 segments): 0.2599% (0 retransmissions, 0 out-of-order, 7 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 330.46ms (bootstrap 95% CI (327.91101932525635, 333.2209587097168))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2693 segments): 0 retransmissions observed -- upper bound 0.1114% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2599% (7 events)
 - Verification timing (10 runs with data): id_token 6.06ms, jarm 2.85ms, rs_response 2.73ms
 - Signing timing (10 runs with data): client_assertion:par 1.75ms, client_assertion:token_ac 2.04ms, client_assertion:token_cc 2.35ms, request_object:par 1.99ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.21ms, generate_callback_cert 29.26ms
@@ -85,8 +97,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2554 segments): 0.5482% (0 retransmissions, 0 out-of-order, 14 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.33ms (bootstrap 95% CI (0.30350685119628906, 0.3535747528076172))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2554 segments): 0 retransmissions observed -- upper bound 0.1175% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.5482% (14 events)
 - Verification timing (10 runs with data): id_token 5.56ms, jarm 2.59ms, rs_response 2.50ms
 - Signing timing (10 runs with data): client_assertion:par 1.55ms, client_assertion:token_ac 1.78ms, client_assertion:token_cc 2.07ms, request_object:par 1.73ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.26ms, generate_callback_cert 33.14ms
@@ -97,8 +111,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 77801 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 2696 segments): 0.2967% (0 retransmissions, 0 out-of-order, 8 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 14.42ms (bootstrap 95% CI (14.372050762176514, 14.701545238494873))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2696 segments): 0 retransmissions observed -- upper bound 0.1113% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2967% (8 events)
 - Verification timing (10 runs with data): id_token 6.07ms, jarm 2.86ms, rs_response 2.64ms
 - Signing timing (10 runs with data): client_assertion:par 1.78ms, client_assertion:token_ac 2.07ms, client_assertion:token_cc 2.31ms, request_object:par 2.00ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 39.51ms
@@ -111,8 +127,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 3836 segments): 0.2346% (0 retransmissions, 0 out-of-order, 9 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.21ms (bootstrap 95% CI (0.18090009689331055, 0.2517104148864746))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 3836 segments): 0 retransmissions observed -- upper bound 0.0782% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2346% (9 events)
 - Verification timing (10 runs with data): id_token 6.27ms, jarm 3.04ms, rs_response 2.79ms
 - Signing timing (10 runs with data): client_assertion:par 2.90ms, client_assertion:token_ac 3.60ms, client_assertion:token_cc 2.84ms, request_object:par 3.47ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.21ms, generate_callback_cert 36.90ms
@@ -123,8 +141,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4525 segments): 0.1326% (0 retransmissions, 0 out-of-order, 6 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 32.07ms (bootstrap 95% CI (31.96084499359131, 32.411813735961914))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4525 segments): 0 retransmissions observed -- upper bound 0.0663% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1326% (6 events)
 - Verification timing (10 runs with data): id_token 5.82ms, jarm 2.83ms, rs_response 2.73ms
 - Signing timing (10 runs with data): client_assertion:par 2.96ms, client_assertion:token_ac 3.76ms, client_assertion:token_cc 2.56ms, request_object:par 3.66ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.28ms, generate_callback_cert 35.78ms
@@ -136,8 +156,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 3824 segments): 0.2615% (0 retransmissions, 0 out-of-order, 10 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.23ms (bootstrap 95% CI (0.20903348922729492, 0.2790689468383789))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 3824 segments): 0 retransmissions observed -- upper bound 0.0785% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2615% (10 events)
 - Verification timing (10 runs with data): id_token 6.34ms, jarm 3.00ms, rs_response 2.70ms
 - Signing timing (10 runs with data): client_assertion:par 3.02ms, client_assertion:token_ac 3.86ms, client_assertion:token_cc 2.95ms, request_object:par 3.49ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.20ms, generate_callback_cert 42.23ms
@@ -148,8 +170,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4525 segments): 0.0442% (0 retransmissions, 0 out-of-order, 2 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 122.72ms (bootstrap 95% CI (122.5709319114685, 122.84636497497559))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4525 segments): 0 retransmissions observed -- upper bound 0.0663% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.0442% (2 events)
 - Verification timing (10 runs with data): id_token 6.13ms, jarm 2.95ms, rs_response 2.82ms
 - Signing timing (10 runs with data): client_assertion:par 2.98ms, client_assertion:token_ac 3.88ms, client_assertion:token_cc 2.73ms, request_object:par 3.60ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.19ms, generate_callback_cert 34.17ms
@@ -160,8 +184,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4646 segments): 0.1507% (0 retransmissions, 0 out-of-order, 7 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 219.73ms (bootstrap 95% CI (219.57075595855713, 219.96688842773438))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4646 segments): 0 retransmissions observed -- upper bound 0.0646% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1507% (7 events)
 - Verification timing (10 runs with data): id_token 6.17ms, jarm 2.97ms, rs_response 2.87ms
 - Signing timing (10 runs with data): client_assertion:par 2.92ms, client_assertion:token_ac 4.07ms, client_assertion:token_cc 2.69ms, request_object:par 3.80ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.20ms, generate_callback_cert 40.45ms
@@ -172,8 +198,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4642 segments): 0.0646% (0 retransmissions, 0 out-of-order, 3 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 332.33ms (bootstrap 95% CI (328.31770181655884, 333.1649899482727))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4642 segments): 0 retransmissions observed -- upper bound 0.0646% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.0646% (3 events)
 - Verification timing (10 runs with data): id_token 6.37ms, jarm 3.10ms, rs_response 2.87ms
 - Signing timing (10 runs with data): client_assertion:par 3.20ms, client_assertion:token_ac 4.05ms, client_assertion:token_cc 2.92ms, request_object:par 3.61ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.19ms, generate_callback_cert 35.68ms
@@ -185,8 +213,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 3843 segments): 0.1561% (0 retransmissions, 0 out-of-order, 6 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.29ms (bootstrap 95% CI (0.27126073837280273, 0.34117698669433594))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 3843 segments): 0 retransmissions observed -- upper bound 0.0781% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1561% (6 events)
 - Verification timing (10 runs with data): id_token 5.89ms, jarm 2.79ms, rs_response 2.62ms
 - Signing timing (10 runs with data): client_assertion:par 2.83ms, client_assertion:token_ac 3.95ms, client_assertion:token_cc 2.61ms, request_object:par 3.23ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.26ms, generate_callback_cert 29.28ms
@@ -197,8 +227,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 326799 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4539 segments): 0.1983% (0 retransmissions, 0 out-of-order, 9 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 14.44ms (bootstrap 95% CI (14.33408260345459, 14.705419540405273))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4539 segments): 0 retransmissions observed -- upper bound 0.0661% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1983% (9 events)
 - Verification timing (10 runs with data): id_token 6.32ms, jarm 3.00ms, rs_response 2.81ms
 - Signing timing (10 runs with data): client_assertion:par 3.00ms, client_assertion:token_ac 3.82ms, client_assertion:token_cc 2.77ms, request_object:par 3.60ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 33.97ms
@@ -211,8 +243,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 3993 segments): 0.1503% (1 retransmissions, 0 out-of-order, 5 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.22ms (bootstrap 95% CI (0.18107891082763672, 0.2734661102294922))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 3993 segments): 0.025% (1 retransmissions)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1252% (5 events)
 - Verification timing (10 runs with data): id_token 6.40ms, jarm 3.20ms, rs_response 2.95ms
 - Signing timing (10 runs with data): client_assertion:par 5.21ms, client_assertion:token_ac 5.87ms, client_assertion:token_cc 6.13ms, request_object:par 5.21ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.19ms, generate_callback_cert 32.96ms
@@ -223,8 +257,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4810 segments): 0.1871% (0 retransmissions, 0 out-of-order, 9 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 31.98ms (bootstrap 95% CI (31.805038452148438, 32.17804431915283))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4810 segments): 0 retransmissions observed -- upper bound 0.0624% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1871% (9 events)
 - Verification timing (10 runs with data): id_token 6.46ms, jarm 3.23ms, rs_response 3.08ms
 - Signing timing (10 runs with data): client_assertion:par 5.02ms, client_assertion:token_ac 5.79ms, client_assertion:token_cc 6.57ms, request_object:par 5.50ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.20ms, generate_callback_cert 34.66ms
@@ -236,8 +272,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4011 segments): 0.1247% (0 retransmissions, 0 out-of-order, 5 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.23ms (bootstrap 95% CI (0.1895427703857422, 0.27954578399658203))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4011 segments): 0 retransmissions observed -- upper bound 0.0748% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1247% (5 events)
 - Verification timing (10 runs with data): id_token 6.67ms, jarm 3.23ms, rs_response 2.99ms
 - Signing timing (10 runs with data): client_assertion:par 5.29ms, client_assertion:token_ac 5.95ms, client_assertion:token_cc 5.90ms, request_object:par 5.64ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 32.66ms
@@ -248,8 +286,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4820 segments): 0.2075% (0 retransmissions, 0 out-of-order, 10 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 122.73ms (bootstrap 95% CI (122.60603904724121, 122.87497520446777))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4820 segments): 0 retransmissions observed -- upper bound 0.0622% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2075% (10 events)
 - Verification timing (10 runs with data): id_token 6.24ms, jarm 3.28ms, rs_response 3.09ms
 - Signing timing (10 runs with data): client_assertion:par 5.50ms, client_assertion:token_ac 5.81ms, client_assertion:token_cc 6.40ms, request_object:par 5.58ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.16ms, generate_callback_cert 41.07ms
@@ -260,8 +300,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4862 segments): 0.1851% (0 retransmissions, 0 out-of-order, 9 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 219.69ms (bootstrap 95% CI (219.51591968536377, 219.84148025512695))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4862 segments): 0 retransmissions observed -- upper bound 0.0617% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1851% (9 events)
 - Verification timing (10 runs with data): id_token 6.38ms, jarm 3.28ms, rs_response 3.09ms
 - Signing timing (10 runs with data): client_assertion:par 5.35ms, client_assertion:token_ac 5.69ms, client_assertion:token_cc 6.43ms, request_object:par 5.64ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 42.56ms
@@ -272,8 +314,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4853 segments): 0.103% (0 retransmissions, 0 out-of-order, 5 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 331.07ms (bootstrap 95% CI (326.3776898384094, 331.595778465271))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4853 segments): 0 retransmissions observed -- upper bound 0.0618% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.103% (5 events)
 - Verification timing (10 runs with data): id_token 6.40ms, jarm 3.27ms, rs_response 3.09ms
 - Signing timing (10 runs with data): client_assertion:par 5.31ms, client_assertion:token_ac 5.95ms, client_assertion:token_cc 6.57ms, request_object:par 5.60ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.17ms, generate_callback_cert 31.34ms
@@ -285,8 +329,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4004 segments): 0.1249% (0 retransmissions, 0 out-of-order, 5 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.28ms (bootstrap 95% CI (0.2684593200683594, 0.29909610748291016))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4004 segments): 0 retransmissions observed -- upper bound 0.0749% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.1249% (5 events)
 - Verification timing (10 runs with data): id_token 5.91ms, jarm 3.01ms, rs_response 2.88ms
 - Signing timing (10 runs with data): client_assertion:par 4.54ms, client_assertion:token_ac 5.54ms, client_assertion:token_cc 5.70ms, request_object:par 4.99ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.24ms, generate_callback_cert 44.47ms
@@ -297,8 +343,10 @@ v8's data supports it -- see `METRICS_COVERAGE.md` for exactly which fields and 
 - call_count: [44]
 - N_mTLS: [6]  N_JWT: [28]  N_JWK: [4]  N_PKI: [4]
 - OPINsize: 360857 bytes
-- RTT: no samples
-- Packet loss (TCP pcap evidence, 10 executions, 4800 segments): 0.2292% (0 retransmissions, 0 out-of-order, 11 duplicate-ACK events)
+- RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 14.52ms (bootstrap 95% CI (14.399528503417969, 14.703035354614258))
+- Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 4800 segments): 0 retransmissions observed -- upper bound 0.0625% (rule of three)
+- Out-of-order (own field, NOT packet loss): 0.0% (0 segments)
+- Duplicate-ACK (own field, NOT packet loss): 0.2292% (11 events)
 - Verification timing (10 runs with data): id_token 6.45ms, jarm 3.25ms, rs_response 3.06ms
 - Signing timing (10 runs with data): client_assertion:par 5.24ms, client_assertion:token_ac 6.13ms, client_assertion:token_cc 6.29ms, request_object:par 5.52ms
 - Client setup/teardown timing (10 runs with data): callback_server_teardown 500.20ms, generate_callback_cert 35.37ms
