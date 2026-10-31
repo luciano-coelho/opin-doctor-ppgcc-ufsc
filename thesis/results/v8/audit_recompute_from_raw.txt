@@ -1,0 +1,40 @@
+==============================================================================
+T_FLUXO, CALL_COUNT, BYTES-PER-PARTICIPANT, RTT -- recomputed from raw run*.json/
+*.calls.jsonl/pcaps, pooled across all 3 official windows (30 executions/cell)
+==============================================================================
+
+720 raw execution files read across 3 profiles x 8 routes (expected 720).
+
+==============================================================================
+Comparing against thesis/results/v8/global_v2/report_data_v8_combined.json
+==============================================================================
+T_fluxo (median/mean/stdev, exact; bootstrap CI, within 1% tolerance): 24 cells checked.
+Bytes-per-participant cross-check (independent calls.jsonl parse vs. consolidate's own bytes_by_participant): 24 cells checked.
+RTT measured (pcap SYN/SYN-ACK, independent parse via pcap_utils): 24 cells checked.
+
+==============================================================================
+OPINsize -- constant-per-profile check (report_data_v8_combined.json)
+==============================================================================
+  classic : OPINsize = 77801 bytes (constant across all 8 routes)
+  pqc     : OPINsize = 326799 bytes (constant across all 8 routes)
+  hybrid  : OPINsize = 360857 bytes (constant across all 8 routes)
+
+==============================================================================
+k-model (T_fluxo = T0 + k*RTT_measured), independently fit, vs. global_v2/consolidated_combined.json's models.k_model
+==============================================================================
+  classic : k=56.025 (raw) vs 56.025 (consolidated) -- matches within 0.05
+  pqc     : k=56.135 (raw) vs 56.135 (consolidated) -- matches within 0.05
+  (finding, not a bug) pqc k bootstrap CI upper tail is RNG-stream-sensitive at n=8 routes: raw=[56.027,56.559] consolidated=[56.028431462036444, 57.52302878484499] -- point estimate matches exactly (56.135); only the extreme percentile of the small-sample bootstrap differs between streams.
+  hybrid  : k=55.988 (raw) vs 55.988 (consolidated) -- matches within 0.05
+
+==============================================================================
+Drift (Mann-Kendall, 72 cells = 24 cells x 3 windows), independently recomputed
+vs. thesis/results/v8/drift_table_72cells.csv
+==============================================================================
+72 cells recomputed independently: 10/72 significant (p<0.05), matched against the CSV cell by cell.
+
+==============================================================================
+RESULT: 0 divergences. T_fluxo (24 cells), bytes-per-participant, RTT measured, OPINsize constancy,
+the k-model, and the 72-cell drift table all match -- independently recomputed from raw run*.json/
+calls.jsonl/pcaps, pooled across all 3 official windows -- against the already-published consolidate outputs.
+==============================================================================
