@@ -10383,6 +10383,7 @@ esses comandos, já foi destruído nesta mesma operação):
   **0 instâncias remanescentes em cada uma das 7**.
 - `describe_key_pairs` (`mockopin-pqc-campaign*`) e `describe_security_
   groups` (mesma tag) nas mesmas 7 regiões: **0 em cada uma**.
+- **Checagem adicional (pedido do autor, antes da rodada 4)**: `describe_volumes`/`describe_addresses`/`describe_snapshots`/`describe_images`/`describe_nat_gateways` (com e sem filtro de tag) e `describe_vpcs`/`describe_subnets` (com o filtro de tag do projeto) nas mesmas 7 regiões -- **0 volumes EBS, IPs elásticos, snapshots, AMIs, NAT gateways, VPCs ou subnets criados por este projeto em qualquer uma das 7** (nenhum desses tipos de recurso jamais existiu como `resource` próprio no Terraform desta campanha -- só volume raiz efêmero por instância, sem IP elástico, sem VPC/subnet própria, todos já cobertos pelos 65 recursos já destruídos).
 
 Nenhum account ID, ARN ou IP é impresso neste registro, por instrução
 explícita. A frota v8 está completamente destruída e confirmada limpa
