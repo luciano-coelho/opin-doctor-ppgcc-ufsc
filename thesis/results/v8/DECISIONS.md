@@ -9953,3 +9953,86 @@ endpoints.
 Nenhuma correção necessária -- a janela 2 seguiu sem atraso, como
 instruído ("se SIM, não toque em nada").
 
+## Decision 110 (2026-10-31) -- RTT real dos pcaps, perda corrigida,
+## decomposição do residual, modelo T_fluxo=T0+k.RTT, delta vs. Classic,
+## ordem entre perfis, CPU no L0, setup/teardown -- janela 1, análise
+## paralela (cópia, nenhum script da campanha alterado)
+
+Trabalho feito numa cópia (`consolidate_v8_rtt_experimental.py` +
+scripts de apoio, scratchpad da sessão, nenhum commitado ainda) e um
+leitor de pcap mínimo em Python puro (sem scapy/tshark/tcpdump
+localmente) que também decodifica os cabeçalhos TLS (não
+criptografados: tipo/versão/tamanho do record) para achar o último
+record de handshake e o primeiro de dados de aplicação, sem precisar
+de chaves. Tudo sobre os dados já commitados da janela 1 -- nenhuma
+execução nova.
+
+**Item 3 -- RTT medido por célula** (mediana das 6 conexões,
+SYN->SYN-ACK, todas as 10 execuções, IC95% bootstrap): bate com o RTT
+nominal esperado por cenário -- L0 ~0,2-0,3ms (colocado), L30/L14
+~14-32ms, L123 ~122,6ms, L219 ~219,6ms, L325 ~330ms. Todos os 24
+valores reportados na íntegra no log desta decisão (não reproduzidos
+aqui por espaço).
+
+**Item 4 -- perda corrigida, achado real**: `detect_loss_signals()`
+(`pcap_utils.py`) já separa `retransmissions`/`out_of_order`/
+`duplicate_ack_events` em campos próprios, mas `pcap_loss_summary()`
+(`consolidate_v8.py`) soma os três em `loss_events` antes de dividir
+por `total_segments` -- a "perda" reportada até aqui é na verdade
+retransmissão+fora-de-ordem+ACK-duplicado combinados, não só perda
+real. Recalculado SÓ com retransmissões: **0,0000% em 23 das 24
+células, 0,0250% na 24a (hybrid/ap-northeast-1/L0, 1 retransmissão em
+3993 segmentos)** -- a "perda" antiga reportada (0,04%-0,55%) era
+inteiramente ACK duplicado, não perda real. **Não corrigido no
+`consolidate_v8.py` real** (seria alterar um script que a campanha já
+está usando) -- guardado para aplicar retroativamente depois da
+janela 3, como instruído.
+
+**Item 5 -- decomposição do residual** (soma de TCP connect + último
+record de handshake TLS, das 6 conexões, por execução): explica entre
+4% (PQC, cenários de baixíssimo RTT) e 65% (cenários de RTT alto,
+L123-L325) do residual reportado pelo `phase_accounting` existente.
+Ex.: classic/sa-east-1/L325: residual=6,128s, handshake total das 6
+conexões=3,987s (65% explicado, ~12,1 RTTs). **Não fecha perto de
+zero** -- fecha bem mais que antes (0% explicado), mas ~35% do
+residual nos cenários de RTT alto ainda não tem causa identificada
+aqui (hipóteses não testadas: tempo de fechamento de conexão/FIN,
+serialização na abertura de conexões novas). Achado real, reportado
+honestamente, não uma decomposição completa.
+
+**Item 6 -- T_fluxo = T0 + k·RTT_medido, por perfil** (OLS entre as 8
+rotas de cada perfil, IC95% bootstrap de k): **k=55,84 (classic),
+55,87 (pqc), 55,91 (hybrid)** -- os 3 ICs se sobrepõem fortemente
+(nenhuma diferença detectável entre perfis), e os 3 ficam muito
+próximos de 56 (44 chamadas + 2x6 conexões), exatamente como você
+previu.
+
+**Item 7 -- delta vs. Classic**: Hybrid sempre mais lento (+0,46% a
++5,47% dependendo da rota); PQC misto (-1,97% a +1,63%, incluindo 2
+rotas onde PQC é mais RÁPIDO que Classic). Ajuste delta=a+b·RTT:
+**Hybrid tem componente fixo real e significativo (a=+69,57ms,
+IC95%=[+48,30,+90,32]ms, não cruza zero)** -- um custo de CPU
+genuíno, não dependente de distância; **PQC não tem componente fixo
+detectável** (IC=[-28,20,+37,17]ms, cruza zero). Nenhum dos dois tem
+`b` (crescimento com RTT) detectável -- o IC de ambos cruza zero.
+
+**Item 8 -- ordem entre perfis, Mann-Whitney + teste do sinal (8
+rotas)**: **Hybrid > Classic em 8/8 rotas, Hybrid > PQC em 8/8** --
+ordem consistente e forte. **PQC > Classic em só 6/8 rotas, e só
+2/8 com p<0,05** -- "diferença não detectável" entre PQC e Classic na
+maioria das rotas, relatado como tal, sem forçar uma ordem.
+
+**Item 9 -- decomposição de CPU no L0, ms/execução**: signing
+classic~16ms, pqc~27ms (+~70%), hybrid~43ms (~2,7x classic,
+assinatura dupla); verification similar nos 3 (~24-29ms); http
+~344-425ms, sem padrão claro por perfil.
+
+**Item 10 -- setup/teardown fixo**: ~1058-1105ms nos 3 perfis e nas 3
+instalações -- confirmado como componente fixo e igual entre perfis,
+como esperado (2 esperas de 500ms do servidor de callback).
+
+**Status**: análise completa para a janela 1, numa cópia, nenhum
+script da campanha tocado. Será estendida às janelas 2 e 3 e aplicada
+retroativamente (substituindo o `consolidate_v8.py` real só depois da
+janela 3), como instruído no item 2.
+
