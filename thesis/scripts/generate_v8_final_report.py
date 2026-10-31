@@ -651,11 +651,20 @@ for p1 in ("pqc", "hybrid"):
 # the same golang:1.27-rc-alpine image used throughout this project. Full
 # source, exact commands, and raw output:
 # thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md
+# Round-5 update (Luciano, item 3): re-run with median added alongside mean,
+# and a 4th row for Hybrid's EXTRA, server-side ML-DSA-65 AltSignatureValue
+# check (verifyHybridClientCert(), reproduced byte-for-byte from
+# hybridVerification.go in the benchmark source) -- NOT included in the
+# "hybrid" row below, which times only the standard RSA chain-walk shared
+# with Classic/PQC's own rows; the two costs are reported separately
+# because the real server pays BOTH for a Hybrid connection, in sequence
+# (standard chain check first, then this extra callback).
 chain_verification_bench_us = {
-    "classic": {"mean": 241.057, "min": 191.323, "max": 1317.417, "n": 2000},
-    "pqc": {"mean": 157.038, "min": 143.699, "max": 1732.417, "n": 2000},
-    "hybrid": {"mean": 236.819, "min": 182.843, "max": 1294.907, "n": 2000},
+    "classic": {"mean": 253.999, "median": 224.25, "min": 195.831, "max": 1444.824, "n": 2000},
+    "pqc": {"mean": 171.002, "median": 163.921, "min": 153.74, "max": 826.702, "n": 2000},
+    "hybrid": {"mean": 226.252, "median": 204.87, "min": 182.089, "max": 1402.049, "n": 2000},
 }
+hybrid_altsig_bench_us = {"mean": 224.528, "median": 203.215, "min": 179.365, "max": 1115.584, "n": 2000}
 signing_bench_ms = {
     "rsa_4096_pss": {"mean": 5.944638, "min": 4.779089, "max": 17.66055, "n": 2000, "key": "mtls.key"},
     "mldsa_65": {"mean": 0.68816, "min": 0.136776, "max": 5.199236, "n": 2000, "key": "mtls_pqc.key"},
@@ -744,11 +753,26 @@ intermediate = {
     "setup_phase_by_window": setup_phase_by_window,
     "setup_phase_significance": setup_phase_significance,
     "chain_verification_bench_us": chain_verification_bench_us,
+    "hybrid_altsig_bench_us": hybrid_altsig_bench_us,
     "signing_bench_ms": signing_bench_ms,
     "signing_bench_gap_share_of_handshake": signing_bench_gap_share_of_handshake,
     "signing_bench_gap_both_sides_ms": signing_bench_gap_both_sides_ms,
     "signing_bench_gap_both_sides_share_of_handshake": signing_bench_gap_both_sides_share_of_handshake,
     "chain_verify_diff_ms": chain_verify_diff_ms,
+    # Round-5, item 1: live TLS probe against this project's own LOCAL
+    # (v7) docker-compose stack -- not the destroyed AWS fleet -- one real
+    # connection per (profile, case) cell, via a minimal Go crypto/tls
+    # client matching tls_kem_proxy's own per-profile CurvePreferences.
+    # Full source, exact commands, and raw output:
+    # thesis/results/v8/artifacts/item2_mtls_local_probe.md
+    "mtls_local_probe": {
+        "classic": {"valid": "ACCEPTED", "wrongca": "REJECTED: tls: unknown certificate authority",
+                     "expired": "REJECTED: tls: expired certificate", "nocert": "ACCEPTED (anonymous)"},
+        "pqc": {"valid": "ACCEPTED", "wrongca": "REJECTED: tls: unknown certificate authority",
+                 "expired": "REJECTED: tls: expired certificate", "nocert": "ACCEPTED (anonymous)"},
+        "hybrid": {"valid": "ACCEPTED", "wrongca": "REJECTED: tls: unknown certificate authority",
+                    "expired": "REJECTED: tls: expired certificate", "nocert": "ACCEPTED (anonymous)"},
+    },
 }
 (V8 / "global_v2" / "report_generation_intermediate.json").write_text(json.dumps(intermediate, indent=2), encoding="utf-8")
 print(f"\nWrote {V8 / 'global_v2' / 'report_generation_intermediate.json'}")

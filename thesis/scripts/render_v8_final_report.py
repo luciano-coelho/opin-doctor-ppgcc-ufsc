@@ -443,7 +443,10 @@ w(
     "TLS channel's own certificate authentication is effectively RSA-only."
 )
 w(
-    "5. **Which direction of mTLS is actually verified, stated plainly and "
+    "5. **Which direction has the peer's certificate verified when "
+    "presented (the precise phrase this report uses from here on, in place "
+    "of the loose \"mTLS\" label, wherever that literal distinction "
+    "matters) -- stated plainly and "
     "corrected against an earlier draft of this round that got the server "
     "side wrong: the client never verifies the server, under any profile; "
     "the server DOES verify the client, under all three profiles.** "
@@ -482,10 +485,12 @@ w(
 w()
 w(
     "**What happens today if the client's certificate is invalid, with "
-    "evidence:** a certificate from the wrong CA fails `certs[0].Verify()` "
-    "with `x509.UnknownAuthorityError`, which `handshake_server.go:977` "
-    "turns into a fatal `alertUnknownCA` -- handshake aborts, under all "
-    "three profiles. An expired certificate aborts the same way via "
+    "evidence -- confirmed live, round 5, against this project's own "
+    "local (v7) docker-compose stack, not just read from the code:** a "
+    "certificate from the wrong CA fails `certs[0].Verify()` with "
+    "`x509.UnknownAuthorityError`, which `handshake_server.go:977` turns "
+    "into a fatal `alertUnknownCA` -- handshake aborts, under all three "
+    "profiles. An expired certificate aborts the same way via "
     "`alertCertificateExpired` (`handshake_server.go:978`). Under Hybrid "
     "specifically, a certificate whose RSA chain is otherwise valid but "
     "whose `AltSignatureValue` is missing or does not verify against the "
@@ -493,21 +498,57 @@ w(
     "(`alertBadCertificate`). **A client that presents no certificate at "
     "all is accepted** -- `ClientAuth: VerifyClientCertIfGiven` is the "
     "OPTIONAL level (not `RequireAndVerifyClientCert`), so an anonymous "
-    "TLS connection is allowed at this layer under every profile; nothing "
-    "in this report's own data suggests any real execution relies on that "
-    "path (every real client in this campaign always presents a cert)."
+    "TLS connection is allowed at this layer under every profile."
+)
+w()
+w("| Case | Classic | PQC | Hybrid |")
+w("|---|---|---|---|")
+w("| Wrong-CA client cert | REJECTED (unknown CA) | REJECTED (unknown CA) | REJECTED (unknown CA) |")
+w("| Expired client cert | REJECTED (expired) | REJECTED (expired) | REJECTED (expired) |")
+w("| No client cert | ACCEPTED (anonymous) | ACCEPTED (anonymous) | ACCEPTED (anonymous) |")
+w("| Valid client cert | ACCEPTED | ACCEPTED | ACCEPTED |")
+w()
+w(
+    "Live-probed against the local stack, one real connection per cell, "
+    "via a minimal Go `crypto/tls` client (same per-profile "
+    "`CurvePreferences` as `tls_kem_proxy`) -- confirms the paragraph "
+    "above by direct test, not inference from code alone; full source and "
+    "raw output: `thesis/results/v8/artifacts/item2_mtls_local_probe.md`. "
+    "**No result here contradicted this section's own text; no "
+    "correction to this item was needed from the test.** Nothing in this "
+    "report's OWN campaign data suggests any real execution relies on the "
+    "no-cert path either way (every real client in this campaign always "
+    "presents a cert)."
 )
 w()
 w(
-    "**Is \"mTLS\" still the right word for the rest of this report to "
-    "use, given the above?** Yes, in the sense this project and the "
-    "OIDC/FAPI ecosystem use it (RFC 8705, mTLS client authentication: the "
-    "server authenticates the client via its certificate) -- confirmed "
-    "real above. It is not literally bidirectional (the client's own "
-    "non-verification of the server, Limitations below, is a real, "
-    "already-declared gap in that direction specifically), but that "
-    "asymmetry does not make \"mTLS\" itself a misnomer for what this "
-    "report measures."
+    "**Is client-certificate presentation required anywhere, if not at "
+    "this TLS layer?** Yes, conditionally, one layer up: "
+    "`verifyCertificateThumbprint()` (`mock_mtls/main.go:1004`), called "
+    "from the gateway's own access-token introspection path "
+    "(`mock_mtls/main.go:948`) whenever the introspected token carries a "
+    "`cnf.x5t#S256` confirmation claim (RFC 8705's mTLS-bound-token "
+    "mechanism), returns `false` -- rejecting the request -- if "
+    "`req.TLS.PeerCertificates` is empty. So a cert-bound access token "
+    "cannot be used without presenting a certificate, but an anonymous "
+    "connection with no token at all, or a token without a `cnf` claim, "
+    "is never stopped at any layer this report found."
+)
+w()
+w(
+    "**Registered as a divergence from OPIN's own declared security "
+    "profile, tied to 4.6c (Section 9/10):** OPIN/FAPI's mTLS profile "
+    "requires client-certificate presentation unconditionally for "
+    "protected endpoints, enforced at the TLS layer itself; this "
+    "project's gateway instead sets the OPTIONAL `VerifyClientCertIfGiven` "
+    "at the TLS layer and defers enforcement to the conditional, "
+    "application-layer `cnf` check above -- a real, structural difference "
+    "in WHERE and HOW STRICTLY presentation is enforced, not merely a "
+    "detail of this lab's own setup. This is the same open item 4.6c "
+    "(\"Classic profile's documented conformance to OPIN's own live "
+    "security profile\") already lists as open by scope, not oversight -- "
+    "this finding is additional, concrete evidence for that same open "
+    "item, not a new, separate one."
 )
 w()
 w(
@@ -517,8 +558,8 @@ w(
     "the exact certificates and CA pools the real server uses:**"
 )
 w()
-w("| Profile | Chain verified (matches the server's own real `ClientCAs`) | Mean (µs) | Min (µs) | Max (µs) | n |")
-w("|---|---|---:|---:|---:|---:|")
+w("| Profile | Chain verified (matches the server's own real `ClientCAs`) | Mean (µs) | Median (µs) | Min (µs) | Max (µs) | n |")
+w("|---|---|---:|---:|---:|---:|---:|")
 cvb = inter['chain_verification_bench_us']
 cvb_labels = {
     'classic': 'client_one.crt -> ca.crt (RSA)',
@@ -527,7 +568,13 @@ cvb_labels = {
 }
 for p in PROFILES:
     v = cvb[p]
-    w(f"| {LABEL[p]} | {cvb_labels[p]} | {n(v['mean'],1)} | {n(v['min'],1)} | {n(v['max'],1)} | {v['n']} |")
+    w(f"| {LABEL[p]} | {cvb_labels[p]} | {n(v['mean'],1)} | {n(v['median'],1)} | {n(v['min'],1)} | {n(v['max'],1)} | {v['n']} |")
+has = inter['hybrid_altsig_bench_us']
+w(f"| Hybrid (extra) | ML-DSA-65 `AltSignatureValue` only, `verifyHybridClientCert()` -- NOT included in the Hybrid row above | {n(has['mean'],1)} | {n(has['median'],1)} | {n(has['min'],1)} | {n(has['max'],1)} | {has['n']} |")
+w()
+w(
+    f"**Hybrid's real total server-side verification cost is the SUM of its own row and the extra row above** (run in sequence, standard chain check first): mean {n(cvb['hybrid']['mean']+has['mean'],1)}µs, roughly double Classic's or PQC's single check -- stated explicitly here (item 3) rather than left to be inferred from two separate rows."
+)
 w()
 w(
     "Full benchmark source, exact commands, and raw output: "
@@ -1372,7 +1419,7 @@ w(
 )
 w()
 w(
-    "- **Only one mTLS direction is verified, corrected against an "
+    "- **Only one direction has the peer's certificate verified when presented (not literally mutual, corrected against an "
     "earlier draft of this round that wrongly claimed the server skips it "
     "too.** The client never verifies the server's certificate "
     "(`InsecureSkipVerify: true`, `tls_kem_proxy/main.go:212`, confirmed "
@@ -1388,10 +1435,10 @@ w(
     "of that already-passing standard check. The one real, remaining gap "
     "is the client's own skipped verification of the server -- an "
     "offline microbenchmark (Section 2) estimates what that specific, "
-    "skipped check would cost: 157-241µs/connection, had it been "
+    "skipped check would cost: 171-254µs/connection, had it been "
     "performed; this is an added estimate for the client's side only, not "
     "a measurement, and not applicable to the server's side, which is "
-    "real and already paid (also benchmarked, same table, Section 2)."
+    "real and already paid (also benchmarked, same table, Section 2). **Separately: client-certificate presentation is OPTIONAL at the TLS layer itself (`ClientAuth: VerifyClientCertIfGiven`), confirmed by a live local probe (Section 2, item 5) -- a connection with no certificate at all is accepted under every profile; presentation is required only conditionally, one layer up, for cert-bound access tokens (`cnf.x5t#S256`). Registered as a divergence from OPIN's own declared security profile (unconditional TLS-layer enforcement), tied to item 4.6c (Section 9), not a new, separate limitation.**"
 )
 
 w(

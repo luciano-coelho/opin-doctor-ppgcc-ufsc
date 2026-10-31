@@ -43331,23 +43331,33 @@
   },
   "chain_verification_bench_us": {
     "classic": {
-      "mean": 241.057,
-      "min": 191.323,
-      "max": 1317.417,
+      "mean": 253.999,
+      "median": 224.25,
+      "min": 195.831,
+      "max": 1444.824,
       "n": 2000
     },
     "pqc": {
-      "mean": 157.038,
-      "min": 143.699,
-      "max": 1732.417,
+      "mean": 171.002,
+      "median": 163.921,
+      "min": 153.74,
+      "max": 826.702,
       "n": 2000
     },
     "hybrid": {
-      "mean": 236.819,
-      "min": 182.843,
-      "max": 1294.907,
+      "mean": 226.252,
+      "median": 204.87,
+      "min": 182.089,
+      "max": 1402.049,
       "n": 2000
     }
+  },
+  "hybrid_altsig_bench_us": {
+    "mean": 224.528,
+    "median": 203.215,
+    "min": 179.365,
+    "max": 1115.584,
+    "n": 2000
   },
   "signing_bench_ms": {
     "rsa_4096_pss": {
@@ -43366,7 +43376,27 @@
     }
   },
   "signing_bench_gap_share_of_handshake": 0.15787177290363974,
-  "signing_bench_gap_both_sides_ms": 10.596975,
-  "signing_bench_gap_both_sides_share_of_handshake": 0.3182669518764366,
-  "chain_verify_diff_ms": 0.08401899999999998
+  "signing_bench_gap_both_sides_ms": 10.595953000000002,
+  "signing_bench_gap_both_sides_share_of_handshake": 0.3182362573787316,
+  "chain_verify_diff_ms": 0.08299699999999996,
+  "mtls_local_probe": {
+    "classic": {
+      "valid": "ACCEPTED",
+      "wrongca": "REJECTED: tls: unknown certificate authority",
+      "expired": "REJECTED: tls: expired certificate",
+      "nocert": "ACCEPTED (anonymous)"
+    },
+    "pqc": {
+      "valid": "ACCEPTED",
+      "wrongca": "REJECTED: tls: unknown certificate authority",
+      "expired": "REJECTED: tls: expired certificate",
+      "nocert": "ACCEPTED (anonymous)"
+    },
+    "hybrid": {
+      "valid": "ACCEPTED",
+      "wrongca": "REJECTED: tls: unknown certificate authority",
+      "expired": "REJECTED: tls: expired certificate",
+      "nocert": "ACCEPTED (anonymous)"
+    }
+  }
 }

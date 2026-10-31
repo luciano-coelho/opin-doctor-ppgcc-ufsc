@@ -45,23 +45,34 @@ Go's implementation -- referenced only in `handshake_client.go`, never in
   account for both peers before using it to qualify (not merely assert) the
   RSA-4096-dominance hypothesis for Classic's/Hybrid's handshake cost.
 
-## Benchmark 1: X.509 chain verification, per profile
+## Benchmark 1: X.509 chain verification, per profile (v2: round 5, item 3 -- adds median + Hybrid's extra ML-DSA-65 AltSignatureValue check)
 
 `leaf.Verify(x509.VerifyOptions{Roots, Intermediates, KeyUsages:
 [ExtKeyUsageAny]})`, `KeyUsages` set to `ExtKeyUsageAny` specifically to
 bypass the client-auth-only EKU restriction found in Section 2 (`Verify
-return code: 26`) -- this benchmark times the chain-WALK cost alone, not the
+return code: 26`) -- this times the chain-WALK cost alone, not the
 EKU/purpose check a real TLS stack would also apply. One untimed warm-up
-call, then n=2000 timed iterations per profile.
+call, then n=2000 timed iterations per profile. **v2 adds a 4th benchmark,
+`hybrid_altsig_verify`: Hybrid's own EXTRA, server-side-only check (the
+ML-DSA-65 `AltSignatureValue` extension, `verifyHybridClientCert()`,
+reproduced byte-for-byte from `hybridVerification.go` below) -- this cost
+is NOT included in the "hybrid" row above it, which times only the
+standard RSA chain-walk shared with Classic/PQC; the real server pays
+BOTH, in sequence, for a Hybrid connection.**
 
 ```go
 package main
 
 import (
+	"crypto/mldsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -79,6 +90,20 @@ func loadCert(path string) *x509.Certificate {
 		panic(err)
 	}
 	return cert
+}
+
+func summarize(label string, times []time.Duration) {
+	sorted := make([]time.Duration, len(times))
+	copy(sorted, times)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var total time.Duration
+	for _, t := range times {
+		total += t
+	}
+	n := len(times)
+	mean := total / time.Duration(n)
+	median := sorted[n/2]
+	fmt.Printf("%s: n=%d mean=%v median=%v min=%v max=%v\n", label, n, mean, median, sorted[0], sorted[n-1])
 }
 
 func bench(label string, leaf *x509.Certificate, roots *x509.CertPool, intermediates *x509.CertPool, n int) {
@@ -99,19 +124,85 @@ func bench(label string, leaf *x509.Certificate, roots *x509.CertPool, intermedi
 		}
 		times[i] = time.Since(start)
 	}
-	var total time.Duration
-	min_, max_ := times[0], times[0]
-	for _, t := range times {
-		total += t
-		if t < min_ {
-			min_ = t
+	summarize(label, times)
+}
+
+// --- Reproduced byte-for-byte from mock-service-os/mock_mtls/hybridVerification.go
+var oidAltSignatureValue = asn1.ObjectIdentifier{2, 5, 29, 74}
+
+type tbsCertificateForSurgery struct {
+	Raw                asn1.RawContent
+	Version            int `asn1:"optional,explicit,default:0,tag:0"`
+	SerialNumber       *big.Int
+	SignatureAlgorithm pkix.AlgorithmIdentifier
+	Issuer             asn1.RawValue
+	Validity           asn1.RawValue
+	Subject            asn1.RawValue
+	PublicKey          asn1.RawValue
+	Extensions         []pkix.Extension `asn1:"optional,explicit,tag:3"`
+}
+
+func reconstructPreTBS(finalTBS []byte) ([]byte, error) {
+	var tbs tbsCertificateForSurgery
+	if _, err := asn1.Unmarshal(finalTBS, &tbs); err != nil {
+		return nil, err
+	}
+	var filtered []pkix.Extension
+	removed := 0
+	for _, ext := range tbs.Extensions {
+		if ext.Id.Equal(oidAltSignatureValue) {
+			removed++
+			continue
 		}
-		if t > max_ {
-			max_ = t
+		filtered = append(filtered, ext)
+	}
+	if removed != 1 {
+		return nil, fmt.Errorf("expected exactly one AltSignatureValue extension, found %d", removed)
+	}
+	tbs.Extensions = filtered
+	tbs.Raw = nil
+	return asn1.Marshal(tbs)
+}
+
+func findExtension(cert *x509.Certificate, oid asn1.ObjectIdentifier) ([]byte, bool) {
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(oid) {
+			return ext.Value, true
 		}
 	}
-	mean := total / time.Duration(n)
-	fmt.Printf("%s: n=%d mean=%v min=%v max=%v\n", label, n, mean, min_, max_)
+	return nil, false
+}
+
+func verifyHybridClientCert(leaf *x509.Certificate, caAltPub *mldsa.PublicKey) error {
+	altSigDER, ok := findExtension(leaf, oidAltSignatureValue)
+	if !ok {
+		return fmt.Errorf("missing AltSignatureValue extension")
+	}
+	var altSig asn1.BitString
+	if _, err := asn1.Unmarshal(altSigDER, &altSig); err != nil {
+		return err
+	}
+	preTBS, err := reconstructPreTBS(leaf.RawTBSCertificate)
+	if err != nil {
+		return err
+	}
+	return mldsa.Verify(caAltPub, preTBS, altSig.Bytes, nil)
+}
+
+func benchHybridAltSig(leaf *x509.Certificate, caAltPub *mldsa.PublicKey, n int) {
+	if err := verifyHybridClientCert(leaf, caAltPub); err != nil {
+		fmt.Printf("hybrid_altsig: VERIFY ERROR (not timed): %v\n", err)
+		return
+	}
+	times := make([]time.Duration, n)
+	for i := 0; i < n; i++ {
+		start := time.Now()
+		if err := verifyHybridClientCert(leaf, caAltPub); err != nil {
+			panic(err)
+		}
+		times[i] = time.Since(start)
+	}
+	summarize("hybrid_altsig_verify (AltSignatureValue only, ML-DSA-65)", times)
 }
 
 func main() {
@@ -134,6 +225,10 @@ func main() {
 	hybridRoot := x509.NewCertPool()
 	hybridRoot.AddCert(loadCert(certsDir + "/ca.crt"))
 	bench("hybrid (RSA primary chain only, client_one_hybrid.crt -> ca.crt)", hybridLeaf, hybridRoot, x509.NewCertPool(), n)
+
+	issuerCaPqc := loadCert(certsDir + "/issuer_ca_pqc.crt")
+	caAltPub := issuerCaPqc.PublicKey.(*mldsa.PublicKey)
+	benchHybridAltSig(hybridLeaf, caAltPub, n)
 }
 ```
 
@@ -147,10 +242,19 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/app" -v ".../mock-service-os/cert
 Output:
 
 ```
-classic (RSA chain, client_one.crt -> ca.crt): n=2000 mean=241.057µs min=191.323µs max=1.317417ms
-pqc (ML-DSA-65 chain, client_one_pqc.crt -> issuer_ca_pqc.crt -> root_ca_pqc.crt): n=2000 mean=157.038µs min=143.699µs max=1.732417ms
-hybrid (RSA primary chain only, client_one_hybrid.crt -> ca.crt): n=2000 mean=236.819µs min=182.843µs max=1.294907ms
+classic (RSA chain, client_one.crt -> ca.crt): n=2000 mean=253.999µs median=224.25µs min=195.831µs max=1.444824ms
+pqc (ML-DSA-65 chain, client_one_pqc.crt -> issuer_ca_pqc.crt -> root_ca_pqc.crt): n=2000 mean=171.002µs median=163.921µs min=153.74µs max=826.702µs
+hybrid (RSA primary chain only, client_one_hybrid.crt -> ca.crt): n=2000 mean=226.252µs median=204.87µs min=182.089µs max=1.402049ms
+hybrid_altsig_verify (AltSignatureValue only, ML-DSA-65): n=2000 mean=224.528µs median=203.215µs min=179.365µs max=1.115584ms
 ```
+
+**Hybrid's real total server-side verification cost is therefore the SUM
+of its own "hybrid" row above and this `hybrid_altsig_verify` row** (run
+in sequence, standard chain check first per `hybridVerification.go`'s own
+comment): mean 226.252+224.528 = **450.78µs**, roughly double Classic's
+or PQC's single check -- not previously stated in v1 of this benchmark,
+which reported Hybrid's chain-walk cost alone and left the extra callback
+unquantified.
 
 ## Benchmark 2: real private-key signing, RSA-4096 vs. ML-DSA-65
 

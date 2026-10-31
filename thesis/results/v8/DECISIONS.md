@@ -10476,3 +10476,59 @@ atribuído a nenhuma fase medida isoladamente com confiança.
 `audit_v8_from_raw.py` reexecutado após a correção: **0 divergências**.
 Scanner de segredos: limpo. Sem tag nova.
 
+## Decision 122 (2026-10-31) -- rodada 5: prova viva local (pilha v7, não
+## AWS) do item 1 da Decision 121; certificado de cliente opcional na
+## camada TLS e divergência de perfil registrada; mediana + custo do
+## ML-DSA-65 do Hybrid acrescentados à tabela de verificação de cadeia;
+## sem tag nova
+
+1. **Teste local, 3 perfis x 4 casos**, pilha `insurance-server-lambdas`
+   local (CRYPTO_PROFILE alternado via `docker compose --profile main up
+   -d --force-recreate --no-deps mtls`), sondado por um cliente Go
+   `crypto/tls` mínimo (mesmas `CurvePreferences` por perfil do
+   `tls_kem_proxy` real), para `host.docker.internal:443`:
+
+   | Caso | Classic | PQC | Hybrid |
+   |---|---|---|---|
+   | CA errada | REJECTED (unknown CA) | REJECTED (unknown CA) | REJECTED (unknown CA) |
+   | Expirado | REJECTED (expired) | REJECTED (expired) | REJECTED (expired) |
+   | Sem certificado | ACCEPTED (anônimo) | ACCEPTED (anônimo) | ACCEPTED (anônimo) |
+   | Válido | ACCEPTED | ACCEPTED | ACCEPTED |
+
+   **Nenhum resultado contradisse o item 5 da Seção 2; nenhuma correção
+   de texto foi necessária a partir deste teste.** Dois bugs reais foram
+   encontrados e corrigidos na própria sonda (não no gateway) antes deste
+   resultado final: (a) o handshake TLS 1.3 do lado cliente conclui sem
+   nunca ler de volta o resultado do servidor -- foi preciso um round-trip
+   HTTP real após o `Dial()` para expor o alerta; (b) o próprio
+   `getClientCertificate()` do Go filtra silenciosamente um certificado
+   cujo emissor não está entre as `AcceptableCAs` anunciadas pelo
+   servidor, enviando um certificado VAZIO em vez do certificado
+   defeituoso -- foi preciso forçar o envio via `GetClientCertificate`
+   para realmente testar o servidor. Fonte completa, com os dois bugs
+   documentados: `thesis/results/v8/artifacts/item2_mtls_local_probe.md`.
+2. **Certificado de cliente é opcional na camada TLS**
+   (`ClientAuth: VerifyClientCertIfGiven`), confirmado agora pelo teste
+   vivo acima. A presença É exigida, condicionalmente, uma camada acima:
+   `verifyCertificateThumbprint()` (`mock_mtls/main.go:1004`), chamada a
+   partir da introspecção de token (`mock_mtls/main.go:948`) quando o
+   token carrega `cnf.x5t#S256` -- rejeita a requisição se
+   `req.TLS.PeerCertificates` estiver vazio. Registrado como divergência
+   do próprio perfil de segurança declarado do OPIN (que exige a
+   apresentação do certificado de cliente incondicionalmente na camada
+   TLS), ligada ao item 4.6c, não como um limitador novo e separado.
+   Troca terminológica aplicada onde o sentido literal importa: "mTLS" ->
+   "certificado verificado quando apresentado" na Seção 2 item 5 e no
+   bullet correspondente das Limitações.
+3. **Tabela de verificação de cadeia (Seção 2)**: mediana acrescentada ao
+   lado da média; nova linha "Hybrid (extra)" com o custo isolado da
+   verificação do `AltSignatureValue` ML-DSA-65
+   (`verifyHybridClientCert()`, reproduzido byte a byte do código real) --
+   não incluído na linha "Hybrid" original, que mede só a cadeia RSA
+   padrão. Custo total real do Hybrid, somando as duas linhas: ~450,8µs,
+   o dobro de Classic/PQC isolados.
+4. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Commit e push realizados; nenhuma tag nova criada.
+   Pilha local do `mtls` restaurada ao seu perfil original
+   (`CRYPTO_PROFILE=pqc`) ao final do teste.
+
