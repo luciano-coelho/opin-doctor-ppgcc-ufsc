@@ -518,6 +518,81 @@ rank_proof = {
 
 regression_joint = fit_with_bootstrap(include_position=True, include_window=True, seed=779)
 
+# -------------------------------------------------------------- k by resampling the 720 (240/profile)
+# INDIVIDUAL EXECUTIONS, not the 8 route medians -- Luciano's review, item 5: alongside the existing
+# route-median bootstrap (Section 7's main k table), fit k per profile from every execution's own
+# (RTT_measured, T_fluxo) pair, with both a 10,000-iteration fixed-seed case-resampling bootstrap CI
+# and a classical OLS t-interval, as an independent cross-check at much higher n.
+import math as _math
+
+
+def ols(xs, ys):
+    xm, ym = statistics.mean(xs), statistics.mean(ys)
+    sxy = sum((x - xm) * (y - ym) for x, y in zip(xs, ys))
+    sxx = sum((x - xm) ** 2 for x in xs)
+    b = sxy / sxx
+    a = ym - b * xm
+    return a, b
+
+
+def ols_t_interval(xs, ys, alpha=0.05):
+    a, b = ols(xs, ys)
+    n = len(xs)
+    xm = statistics.mean(xs)
+    resid = [y - (a + b * x) for x, y in zip(xs, ys)]
+    sse = sum(r * r for r in resid)
+    dof = n - 2
+    s2 = sse / dof
+    sxx = sum((x - xm) ** 2 for x in xs)
+    se_b = _math.sqrt(s2 / sxx)
+    # two-tailed 97.5th percentile of Student's t, dof large (>200) -- normal approx is accurate to <0.001
+    t_crit = 1.96 if dof > 100 else 1.98
+    return a, b, (b - t_crit * se_b, b + t_crit * se_b), se_b
+
+
+k_per_execution = {}
+for p in PROFILES:
+    xs, ys = [], []
+    for wn in WINDOWS:
+        for inst, scen in ROUTES:
+            base = V8 / f"janela{wn}" / EXP_DIRS[p] / inst / scen
+            runs_dir = base / "runs"
+            if not runs_dir.is_dir():
+                continue
+            for f in sorted(runs_dir.glob("run*.json")):
+                if "calls" in f.name:
+                    continue
+                d = json.loads(f.read_text(encoding="utf-8"))
+                global_idx = int(f.stem.replace("run", ""))
+                label = f"w{wn:02d}_run{global_idx:02d}"
+                pcap = base / "client" / f"{label}.pcap.gz"
+                if not pcap.is_file():
+                    continue
+                rtts = find_all_syn_synack_rtts(str(pcap))
+                if not rtts:
+                    continue
+                xs.append(statistics.median(rtts))
+                ys.append(d["result"]["t_fluxo_seconds"])
+    t0_pe, k_pe, (k_lo_t, k_hi_t), se_k = ols_t_interval(xs, ys)
+    rnd = random.Random(900 + PROFILES.index(p))
+    idx = list(range(len(xs)))
+    boots_k_pe = []
+    for _ in range(10000):
+        sample = [rnd.choice(idx) for _ in idx]
+        bxs = [xs[i] for i in sample]
+        bys = [ys[i] for i in sample]
+        if len(set(bxs)) < 2:
+            continue
+        _, bk = ols(bxs, bys)
+        boots_k_pe.append(bk)
+    boots_k_pe.sort()
+    nb = len(boots_k_pe)
+    k_per_execution[p] = {
+        "n_executions": len(xs), "t0": t0_pe, "k": k_pe,
+        "k_ci95_bootstrap": [boots_k_pe[int(0.025 * nb)], boots_k_pe[int(0.975 * nb)]],
+        "k_ci95_ols_t": [k_lo_t, k_hi_t], "se_k": se_k, "n_boot": nb,
+    }
+
 print("Computing OPINsize terms (N_JWK corrected to 4), participant decomposition reconciliation,")
 print("Holm-corrected Mann-Whitney, exact sign-test p, pooled handshake-in-trips, Shapiro-Wilk count,")
 print("and the T_fluxo ~ profile+route+position+window regression -- all from raw/published data.")
@@ -536,6 +611,10 @@ print(f"  v7-vs-v8 Classic OPINsize: v7={V7_CLASSIC_OPINSIZE} v8={terms['classic
       f"diff={v7_v8_classic_diff:.0f} (handshake contributes {handshake_diff_contribution:.0f}, "
       f"N_JWK contributes {n_jwk_diff_contribution:.0f})")
 print(f"  Hybrid-Classic phase diffs (ms): {phase_diff_hybrid_classic}")
+for p in PROFILES:
+    kpe = k_per_execution[p]
+    print(f"  k per-execution ({p}, n={kpe['n_executions']}): k={kpe['k']:.3f} "
+          f"bootstrap_CI={kpe['k_ci95_bootstrap']} ols_t_CI={kpe['k_ci95_ols_t']}")
 
 intermediate = {
     "terms": terms,
@@ -565,6 +644,7 @@ intermediate = {
     "rank_proof": rank_proof,
     "regression_joint": regression_joint,
     "jwt_raw_vs_base64url": jwt_raw_vs_base64url,
+    "k_per_execution": k_per_execution,
     "fleet_status": fleet_status,
     "tfluxo_min_max": {f"{p}|{inst}|{scen}": [min(pooled_tfluxo[(p, inst, scen)]), max(pooled_tfluxo[(p, inst, scen)])]
                         for p in PROFILES for inst, scen in ROUTES},

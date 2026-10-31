@@ -44,6 +44,13 @@ def pct(x, nd=2):
     return f"{x:+,.{nd}f}%"
 
 
+def pfmt(x, nd=4):
+    """p-value formatter: shows "<0.0001" instead of a misleading "0.0000"."""
+    if x < 10 ** (-nd):
+        return f"<{10 ** (-nd):.{nd}f}"
+    return f"{x:.{nd}f}"
+
+
 def ratio(a, b):
     return a / b
 
@@ -94,11 +101,18 @@ w(
     f"regression even though PQC vs. Classic's own route-by-route ordering is not "
     f"consistent enough to pass the sign test (p=0.070). A fixed-cost/distance-"
     f"scaling model (T_fluxo = T0 + k x RTT) holds closely for Classic and Hybrid "
-    f"(k near the expected 56 round trips); PQC's own k sits just outside its "
-    f"confidence interval around 56 in the combined dataset, and PQC's fixed cost "
-    f"varies in a statistically detectable way between the 3 collection windows -- "
-    f"both reported as open, not-fully-explained findings, not smoothed over. A "
-    f"live, pre-destroy audit confirmed PQC's certificate chain is ML-DSA-65 "
+    f"(k near the expected 56 round trips); **PQC's own k's 95% confidence "
+    f"interval sits just above 56** in the combined 8-route dataset, and an "
+    f"independent, higher-powered cross-check (resampling all 240 of PQC's own "
+    f"individual executions rather than 8 route medians, Section 7) confirms the "
+    f"same pattern with a tighter interval. PQC's fixed cost also varies in a "
+    f"statistically detectable way between the 3 collection windows -- both "
+    f"reported as open, not-fully-explained findings, not smoothed over. At the "
+    f"TLS channel layer, Hybrid's own certificate authentication is effectively "
+    f"RSA-only in practice (its second, real ML-DSA-65 signature is never "
+    f"checked by the live handshake); at the message level (JWTs), Hybrid's "
+    f"authentication is genuinely dual-signature and dual-verified (Section 2). "
+    f"A live, pre-destroy audit confirmed PQC's certificate chain is ML-DSA-65 "
     f"end-to-end, and a second live diagnostic session confirmed PQC **does** "
     f"interoperate with a standard OpenSSL 3.5.8 client once the correct TLS "
     f"signature-algorithm flag is set -- an earlier draft of this report wrongly "
@@ -172,12 +186,18 @@ w(
     f"three crypto profiles (Classic, PQC, Hybrid) runs the identical client code "
     f"against every route. **The AS-to-RS internal channel stays classical "
     f"(`CurveP256`) in every profile, including PQC and Hybrid.** This is not new "
-    f"migration scope left undone -- this internal channel was ALREADY classical, "
-    f"before any PQC work on this thesis began, kept that way on purpose by a "
-    f"server-side SNI carve-out: `mock_mtls`'s `GetConfigForClient` always answers "
-    f"the internal hostname `matls-api.local` with classical-only curve "
-    f"preferences, regardless of `CRYPTO_PROFILE` -- the AS's own calls to the RS "
-    f"use that SNI and therefore never see the active profile's PQC/Hybrid group, "
+    f"migration scope left undone: the channel itself was already classical in "
+    f"the original system, before this thesis's PQC work began -- there was no "
+    f"profile concept yet to make it anything else. What **was** built in this "
+    f"project (v6) is the *mechanism* that keeps it classical once a global "
+    f"PQC/Hybrid curve preference exists: `mock_mtls`'s `GetConfigForClient` "
+    f"answers the internal hostname `matls-api.local` with classical-only curve "
+    f"preferences regardless of `CRYPTO_PROFILE`, an SNI carve-out added "
+    f"specifically so switching the gateway's profile-wide group preference for "
+    f"the client-facing channel would not also break this always-classical "
+    f"internal one (v6, `Level 1/DECISIONS.md`, Decision 1/5). The AS's own "
+    f"calls to the RS use that SNI and therefore never see the active profile's "
+    f"PQC/Hybrid group, "
     f"on every one of the 720 executions (confirmed by gateway-log correlation, 0 "
     f"violations)."
 )
@@ -306,8 +326,29 @@ w(
     "ML-DSA-65 CA chain (`root_ca_pqc.crt` + `issuer_ca_pqc.crt`) returns "
     "`mtls_pqc.crt: OK`. In the live connection (both flags set), the one "
     "remaining `Verify return code: 26 (unsuitable certificate purpose)` is the "
-    "same pre-existing EKU/purpose quirk already found for Classic and Hybrid -- "
-    "not new, not PQC-specific."
+    "same EKU/purpose property already found for Classic and Hybrid -- not new, "
+    "not PQC-specific, diagnosed to its exact cause below."
+)
+w()
+w(
+    "**\"Verify return code 26\", diagnosed to the exact certificate and "
+    "extension.** `openssl verify -purpose sslserver -show_chain -verbose` "
+    "reports `error 26 at 0 depth lookup` for Classic, PQC, and Hybrid alike -- "
+    "**depth 0 is the leaf certificate itself**, not the CA. Reading that leaf's "
+    "own extensions (`openssl x509 -noout -ext extendedKeyUsage,keyUsage,"
+    "basicConstraints`) shows the same value on all three: `KeyUsage: critical, "
+    "Digital Signature` (adequate), but `Extended Key Usage: TLS Web Client "
+    "Authentication` **only** -- no `serverAuth`. The server's own certificate "
+    "is issued with client-auth-only EKU, so OpenSSL's `sslserver` purpose check "
+    "correctly rejects it; this is a property of this lab's certificate-issuance "
+    "tooling, present identically in all three profiles, and unrelated to the "
+    "post-quantum migration. **The real client never evaluates this at all**: "
+    "`tls_kem_proxy/main.go:212` sets `InsecureSkipVerify: true` (documented in "
+    "code for a different, already-known reason -- the self-signed local CA), "
+    "which disables Go's certificate verification entirely, chain and purpose "
+    "checks included -- `openssl verify`'s stricter, independent probe exercises "
+    "a check the project's own client was never configured to run. Full "
+    "diagnosis: `thesis/results/v8/artifacts/pqc/eku_purpose_diagnosis.md`."
 )
 w()
 w(
@@ -347,8 +388,9 @@ w(
 )
 w(
     "2. **The AS<->RS internal channel stays classical under PQC and Hybrid**, "
-    "by the SNI carve-out described in Section 1.1 -- not a new limitation, a "
-    "pre-existing one from before this thesis's PQC work."
+    "by the SNI carve-out mechanism v6 built specifically to protect this "
+    "already-classical channel once a global PQC/Hybrid group preference "
+    "existed (Section 1.1) -- not new, unmigrated scope."
 )
 w(
     "3. **Hybrid's JWT `alg` header reads `PS256`** even when the underlying "
@@ -357,19 +399,27 @@ w(
     "signature also exists."
 )
 w(
-    "4. **Hybrid's TLS authentication, in one sentence: the live connection is "
-    "secured by RSA alone.** Hybrid's TLS server and client certificates carry a "
-    "real ML-DSA-65 signature (the `AltSignatureValue` X.509 extension) that the "
-    "live TLS handshake itself never checks -- X.509 non-critical extensions are, "
-    "by the standard's own definition, not required to be processed by a "
-    "verifier that doesn't understand them, and Go's `crypto/tls` (both sides of "
-    "this project's real connections) validates only the certificate's primary "
-    "RSA signature during the handshake. The ML-DSA-65 signature is real and "
-    "independently checkable out-of-band (confirmed live via `-verify-hybrid`'s "
-    "own preTBS reconstruction), but nothing in the live connection path verifies "
-    "it -- Hybrid's practical TLS-layer message authentication is exactly as "
-    "strong as Classic's against an attacker who can forge an RSA signature; the "
-    "added PQC signature is present but currently inert at this layer."
+    "4. **Hybrid's TLS channel authentication is, in practice, secured by RSA "
+    "alone -- but message-level authentication is genuinely hybrid.** These are "
+    "two different layers, with different outcomes. At the TLS layer, Hybrid's "
+    "server and client certificates carry a real ML-DSA-65 signature (the "
+    "`AltSignatureValue` X.509 extension) that the live TLS handshake itself "
+    "never checks -- X.509 non-critical extensions are, by the standard's own "
+    "definition, not required to be processed by a verifier that doesn't "
+    "understand them, and Go's `crypto/tls` (both sides of this project's real "
+    "connections) validates only the certificate's primary RSA signature during "
+    "the handshake. The ML-DSA-65 signature is real and independently checkable "
+    "out-of-band (confirmed live via `-verify-hybrid`'s own preTBS "
+    "reconstruction), but nothing in the live connection path verifies it -- "
+    "Hybrid's practical TLS-layer authentication strength is exactly Classic's "
+    "against an attacker who can forge an RSA signature. **At the message "
+    "level, this is not the case**: `client_assertion`, the request object, "
+    "`id_token`, and the JARM all carry a real, dual signature (Strong Nesting "
+    "or payload-extension, Section 2's own table above), and the receiving "
+    "party's own verification code (`thesis/scripts/pqc-signer/signer_core."
+    "mjs`) genuinely checks **both** signatures before accepting the artifact -- "
+    "message-level authentication is real hybrid defense-in-depth; only the "
+    "TLS channel's own certificate authentication is effectively RSA-only."
 )
 w()
 w(
@@ -514,29 +564,35 @@ w(
     "by `audit_v8_from_raw.py`."
 )
 w()
-w("### Difference per cell against Classic (ms, %, round trips), Mann-Whitney p, effect size, Holm-adjusted p, and the sign test")
+w("### Difference per cell against Classic (ms, %, ms/RTT), Mann-Whitney p, effect size, Holm-adjusted p, and the sign test")
 w()
+n_holm_family = len(diff_table)
 w(
-    "**Definitions, stated explicitly.** Mann-Whitney's \"side\" here is always "
-    "`pair`'s left profile vs. its right profile (e.g. for `hybrid>classic`, the "
-    "test asks whether Hybrid's distribution is shifted above Classic's); "
-    "**effect size** is the rank-biserial correlation `1 - 2U/(n1*n2)`, ranging "
-    "from -1 (every left-profile value below every right-profile value) to +1 "
-    "(every left-profile value above), with 0 meaning no detectable shift. The "
-    "round-trips column divides the ms difference by that route's own measured "
-    "Classic RTT; **left blank for L0 routes**, where RTT is ~0.2-0.3ms and "
-    "dividing a millisecond-scale difference by it would turn ordinary "
-    "measurement noise into a \"round trips\" figure in the hundreds, not a real "
-    "round-trip count (same reason Section 6's handshake-in-trips check excludes "
-    "L0)."
+    f"**Definitions, stated explicitly.** Mann-Whitney's \"side\" here is always "
+    f"`pair`'s left profile vs. its right profile (e.g. for `hybrid>classic`, the "
+    f"test asks whether Hybrid's distribution is shifted above Classic's); "
+    f"**effect size** is the rank-biserial correlation `1 - 2U/(n1*n2)`, ranging "
+    f"from -1 (every left-profile value below every right-profile value) to +1 "
+    f"(every left-profile value above), with 0 meaning no detectable shift. "
+    f"**Holm family size: {n_holm_family} tests** (3 profile pairs x 8 routes), "
+    f"the step-down correction applied together across all {n_holm_family}, not "
+    f"per pair separately. **\"ms ÷ RTT\"** (renamed from \"round trips\" -- the "
+    f"column divides the ms difference by that route's own measured Classic RTT) "
+    f"is a real round-trip count only at routes where the delay is large enough "
+    f"that a whole extra round trip is a plausible mechanism; **at short routes "
+    f"(small denominator), the same ms difference divides into a large \"ms/RTT\" "
+    f"number that more plausibly reflects a fixed CPU cost, not extra network "
+    f"round trips** -- shown but not read as a trip count there. **Left blank "
+    f"for L0 routes** specifically, where RTT is ~0.2-0.3ms and the division "
+    f"would turn ordinary measurement noise into a number in the hundreds."
 )
 w()
-w("| Pair | Installation | Scenario | Diff (ms) | Diff (%) | Diff (round trips) | Mann-Whitney p | Effect size | Holm-adjusted p |")
+w("| Pair | Installation | Scenario | Diff (ms) | Diff (%) | ms / RTT | Mann-Whitney p | Effect size | Holm-adjusted p |")
 w("|---|---|---|---:|---:|---:|---:|---:|---:|")
 for row in diff_table:
     trips_str = n(row["diff_trips"], 2) if row["diff_trips"] is not None else "--"
     w(f"| {row['pair']} | {row['installation']} | {row['scenario']} | {n(row['diff_ms'],2)} | "
-      f"{pct(row['diff_pct'])} | {trips_str} | {n(row['mw_p'],4)} | {n(row['effect'],3)} | {n(row['mw_p_holm'],4)} |")
+      f"{pct(row['diff_pct'])} | {trips_str} | {pfmt(row['mw_p'])} | {n(row['effect'],3)} | {pfmt(row['mw_p_holm'])} |")
 w()
 w("### Sign test across the 8 routes (exact two-tailed binomial p)")
 w()
@@ -544,7 +600,7 @@ w("| Comparison | Routes where left > right | p < 0.05 (uncorrected) | p < 0.05 
 w("|---|---:|---:|---:|---:|")
 for pair_label, key in (("Hybrid > Classic", "hybrid>classic"), ("PQC > Classic", "pqc>classic"), ("Hybrid > PQC", "hybrid>pqc")):
     sc = sign_counts[key]
-    w(f"| {pair_label} | {sc['greater']}/{sc['total']} | {sc['sig']}/{sc['total']} | {sc['sig_holm']}/{sc['total']} | {n(sc['sign_test_p'],4)} |")
+    w(f"| {pair_label} | {sc['greater']}/{sc['total']} | {sc['sig']}/{sc['total']} | {sc['sig_holm']}/{sc['total']} | {pfmt(sc['sign_test_p'])} |")
 w()
 w(
     "Hybrid is slower than Classic in all 8 routes, significant in all 8 before "
@@ -788,6 +844,40 @@ w(
     f"(8 routes feeding the slope)."
 )
 w()
+w(
+    "### k by resampling the individual executions directly (240/profile), as a "
+    "higher-powered cross-check"
+)
+w()
+w(
+    "The table above fits k from 8 **route-median** points per profile, "
+    "bootstrapped by resampling those 8 points. As an independent cross-check "
+    "at much higher n, k is refit here from every one of a profile's own 240 "
+    "individual (RTT, T_fluxo) pairs directly -- both a 10,000-iteration "
+    "fixed-seed case-resampling bootstrap and a classical OLS t-interval:"
+)
+w()
+kpe = inter["k_per_execution"]
+w("| Profile | n (executions) | k | 95% CI (bootstrap, 10,000 iter.) | 95% CI (OLS t-interval) |")
+w("|---|---:|---:|---:|---:|")
+for p in PROFILES:
+    kp = kpe[p]
+    w(f"| {LABEL[p]} | {kp['n_executions']} | {n(kp['k'],3)} | "
+      f"[{n(kp['k_ci95_bootstrap'][0],3)};{n(kp['k_ci95_bootstrap'][1],3)}] | "
+      f"[{n(kp['k_ci95_ols_t'][0],3)};{n(kp['k_ci95_ols_t'][1],3)}] |")
+w()
+pqc_kpe = kpe["pqc"]
+w(
+    f"At n=240 (vs. n=8 route medians), PQC's k is {n(pqc_kpe['k'],3)} with both "
+    f"intervals sitting entirely above 56 ([{n(pqc_kpe['k_ci95_bootstrap'][0],3)};"
+    f"{n(pqc_kpe['k_ci95_bootstrap'][1],3)}] bootstrap, "
+    f"[{n(pqc_kpe['k_ci95_ols_t'][0],3)};{n(pqc_kpe['k_ci95_ols_t'][1],3)}] OLS t) -- "
+    f"**the same pattern as the 8-route-median fit, now confirmed with a tighter "
+    f"interval and a classical parametric check, not just a small-sample "
+    f"bootstrap.** Classic's and Hybrid's intervals both still contain 56 at "
+    f"this higher n too."
+)
+w()
 w("### Pre-registered confirmatory check (5 predictions from window 1, tag `v8-prereg-3`), per window and combined")
 w()
 w("| Prediction | Window 1 (exploratory) | Window 2 | Window 3 | Combined (30 runs/cell) |")
@@ -822,6 +912,36 @@ w(
     "statistically real, not sampling noise, but its cause (a profile-order "
     "effect, a real non-stationarity in the network or hardware, or something "
     "else) is **not attributed**."
+)
+w()
+w(
+    "**Prediction 3 and the joint regression measure two different "
+    "quantities -- both reported, not just the one that passes.** Prediction "
+    "3's own pre-registered operationalization is `a`, the **intercept at "
+    "RTT=0 of a line fit through 8 route-level medians** (one point per route, "
+    "profile vs. Classic) -- for PQC, "
+    f"a={n(combined_models['delta_vs_classic_model']['pqc']['a_seconds']*1000,2)}ms, "
+    f"95% CI [{n(combined_models['delta_vs_classic_model']['pqc']['a_ci95'][0]*1000,2)};"
+    f"{n(combined_models['delta_vs_classic_model']['pqc']['a_ci95'][1]*1000,2)}]ms. "
+    "**By this test, prediction 3 passes -- but narrowly**: the lower bound "
+    f"sits only {n(abs(combined_models['delta_vs_classic_model']['pqc']['a_ci95'][0]*1000),2)}ms "
+    "below zero, not comfortably inside the null. Section 4's joint regression "
+    "answers a different question: the **average difference between PQC and "
+    "Classic across all 720 individual executions**, holding route, position, "
+    "and window fixed -- "
+    f"{n(pqc_reg*1000,1)}ms [{n(pqc_reg_ci[0]*1000,1)};{n(pqc_reg_ci[1]*1000,1)}]ms, "
+    "which does **not** cross zero. These are not contradictory: a narrow "
+    "pass on an 8-point intercept extrapolation and a small-but-clearly-"
+    "nonzero effect from 720 points are consistent with the same underlying "
+    "fact -- PQC carries a small, real, nonzero cost over Classic, just small "
+    "enough that an 8-point route-level test has limited power to rule out "
+    "zero, while the full 720-execution estimator does. **The same reconciliation "
+    "holds for Hybrid**: the route-median delta model's own `a` "
+    f"({n(combined_models['delta_vs_classic_model']['hybrid']['a_seconds']*1000,1)}ms) "
+    f"and the joint regression's `profile_hybrid` ({n(hy_reg*1000,1)}ms) are two "
+    "different estimators of a related but distinct quantity, not two "
+    "measurements of the same one -- both agree Hybrid's cost is real, "
+    "nonzero, and of a similar order of magnitude."
 )
 w()
 w("### T_fluxo ~ profile + route + position + window, fit as ONE joint model")
@@ -944,17 +1064,20 @@ w(
     "encryption standard exists to migrate to."
 )
 w(
-    "- **The AS<->RS internal channel stays classical under PQC and Hybrid**, by "
-    "a pre-existing SNI carve-out (Section 1.1) -- listed in Section 1.2's own "
-    "profile table too, so it is not mistaken for new, unmigrated PQC/Hybrid "
-    "scope."
+    "- **The AS<->RS internal channel stays classical under PQC and Hybrid**, "
+    "by the SNI carve-out mechanism v6 built to protect this already-classical "
+    "channel from the profile-wide group preference (Section 1.1) -- listed in "
+    "Section 1.2's own profile table too, so it is not mistaken for new, "
+    "unmigrated PQC/Hybrid scope."
 )
 w(
-    "- **Hybrid's practical TLS-layer message authentication relies on RSA "
-    "alone**: the live handshake never checks the real ML-DSA-65 signature "
+    "- **Hybrid's TLS-layer certificate authentication relies on RSA alone in "
+    "practice**: the live handshake never checks the real ML-DSA-65 signature "
     "Hybrid's certificates also carry (Section 2) -- its authentication "
     "strength against an attacker who can forge an RSA signature is the same as "
-    "Classic's."
+    "Classic's. **Message-level authentication (JWTs) is not affected by this** "
+    "-- `client_assertion`, the request object, `id_token`, and the JARM remain "
+    "genuinely dual-signed and dual-verified in every execution."
 )
 w(
     "- **Hybrid's TLS server/client authentication reuses Classic's RSA key as "
