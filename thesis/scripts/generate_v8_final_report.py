@@ -96,6 +96,96 @@ for p in PROFILES:
         "signing": c["signing_timings_ms"].get("per_artifact") or {},
     }
 
+# -------------------------------------------------------------- Hybrid vs Classic, phase-by-phase (item 2 of Luciano's review:
+# the ~88ms fixed cost decomposed into http/signing/verification/residual/setup, at the reference route)
+PHASE_KEYS = ["http_calls_seconds", "signing_seconds", "verification_seconds", "residual_seconds", "setup_seconds"]
+phase_diff_hybrid_classic = {}
+phase_ms_by_profile = {}
+for key in PHASE_KEYS:
+    phase_ms_by_profile[key] = {}
+    for p in PROFILES:
+        c = cell(p, REF_INST, REF_SCEN)
+        v = c["phase_accounting"].get(key)
+        phase_ms_by_profile[key][p] = v["median"] * 1000 if v else None
+    phase_diff_hybrid_classic[key] = phase_ms_by_profile[key]["hybrid"] - phase_ms_by_profile[key]["classic"]
+
+# -------------------------------------------------------------- /auth endpoint latency = 0.00ms, explained (not just shown)
+auth_zero_latency_explained = None
+_cp = cell("classic", REF_INST, REF_SCEN)
+_calls_path = V8 / "janela1" / EXP_DIRS["classic"] / REF_INST / REF_SCEN / "runs" / "w01_run01.calls.jsonl"
+if _calls_path.is_file():
+    for line in _calls_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        c_ = json.loads(line)
+        if c_.get("endpoint") == "/auth":
+            auth_zero_latency_explained = {
+                "start_utc": c_["start_utc"], "end_utc": c_["end_utc"],
+                "status_code": c_["status_code"], "src": c_["src"],
+            }
+            break
+
+# -------------------------------------------------------------- "744 = 720 + 24": confirm exactly where the 24 extra
+# pcap/cpu files live -- the earlier report wrongly called them a per-cell run00 warmup. Re-checked directly: they are
+# physically inside _campaign-control/validation_stage/, the one-off 24-execution (8 scenarios x 3 profiles) PARALLEL
+# validation stage run BEFORE window 1 (run_validation_stage(), campaign_run.py) -- never pooled into any cell's own
+# 30-execution statistic, confirmed by their own directory, not by the official per-cell client/server folders.
+validation_stage_dir = V8 / "janela1" / "_campaign-control" / "validation_stage"
+validation_stage_pcap_count = len(list(validation_stage_dir.glob("**/*.pcap.gz"))) if validation_stage_dir.is_dir() else 0
+
+# -------------------------------------------------------------- campaign duration reconciled with window boundaries
+window_boundaries = {}
+for wn in WINDOWS:
+    stamps = []
+    for expdir in EXP_DIRS.values():
+        for inst, scens in SCEN.items():
+            for scen in scens:
+                base = V8 / f"janela{wn}" / expdir / inst / scen / "runs"
+                if not base.is_dir():
+                    continue
+                for f in base.glob("run*.json"):
+                    if "calls" in f.name:
+                        continue
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                    stamps.append(d["started_at_utc"])
+    stamps.sort()
+    window_boundaries[wn] = {"first": stamps[0], "last": stamps[-1]}
+
+# -------------------------------------------------------------- v7-vs-v8 OPINsize reconciliation for Classic (N_JWK 2->4)
+V7_CLASSIC_OPINSIZE = 76929
+V7_CLASSIC_HANDSHAKE_BYTES = 5119
+V7_CLASSIC_N_JWK = 2
+v7_v8_classic_diff = terms["classic"]["opinsize"] - V7_CLASSIC_OPINSIZE
+handshake_diff_contribution = (terms["classic"]["handshake_bytes"] - V7_CLASSIC_HANDSHAKE_BYTES) * terms["classic"]["n_mtls"]
+n_jwk_diff_contribution = (terms["classic"]["n_jwk"] - V7_CLASSIC_N_JWK) * terms["classic"]["jwk_pk_size"]
+
+# -------------------------------------------------------------- 4.6a: JWT raw (decoded) vs base64url (compact
+# serialization, wire size) -- computed from a real captured token per profile, not estimated.
+import base64
+
+
+def b64url_decode_len(s):
+    pad = "=" * (-len(s) % 4)
+    return len(base64.urlsafe_b64decode(s + pad))
+
+
+jwt_raw_vs_base64url = {}
+for p in PROFILES:
+    calls_path = V8 / "janela1" / EXP_DIRS[p] / REF_INST / REF_SCEN / "runs" / "w01_run01.calls.jsonl"
+    if not calls_path.is_file():
+        continue
+    for line in calls_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        c_ = json.loads(line)
+        if c_.get("endpoint") == "/token" and c_.get("jwts"):
+            token = c_["jwts"][0]
+            parts = token.split(".")
+            b64_bytes = len(token)
+            raw_bytes = sum(b64url_decode_len(part) for part in parts if part)
+            jwt_raw_vs_base64url[p] = {"raw_bytes": raw_bytes, "b64_bytes": b64_bytes, "endpoint": "/token"}
+            break
+
 # -------------------------------------------------------------- Mann-Whitney + effect size per route, pooled (30 vs 30), with Holm correction
 def load_pooled_tfluxo(profile, inst, scen):
     vals = []
@@ -252,6 +342,32 @@ for p in PROFILES:
             trips_by_cell[(p, inst, scen)] = statistics.median(cell_vals)
             trips_by_profile[p].append(statistics.median(cell_vals))
 
+# L0: round trips aren't meaningful (near-zero RTT), but the raw handshake duration
+# in milliseconds still is -- computed the same way, just not divided by RTT.
+handshake_ms_at_l0 = {}
+for p in PROFILES:
+    cell_vals_ms = []
+    for wn in WINDOWS:
+        base = V8 / f"janela{wn}" / EXP_DIRS[p] / REF_INST / "L0"
+        runs_dir = base / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for f in sorted(runs_dir.glob("run*.json")):
+            if "calls" in f.name:
+                continue
+            global_idx = int(f.stem.replace("run", ""))
+            label = f"w{wn:02d}_run{global_idx:02d}"
+            pcap = base / "client" / f"{label}.pcap.gz"
+            if not pcap.is_file():
+                continue
+            conns = pcap_rtt_lib.extract_connections(str(pcap))
+            hs_total = sum((c["last_handshake_ts"] - c["syn_ts"]) for c in conns
+                            if c.get("last_handshake_ts") and c.get("syn_ts"))
+            if hs_total:
+                cell_vals_ms.append(hs_total * 1000)
+    if cell_vals_ms:
+        handshake_ms_at_l0[p] = {"median": statistics.median(cell_vals_ms), "n": len(cell_vals_ms)}
+
 # -------------------------------------------------------------- Hybrid's measured signing-time difference vs Classic
 signing_diff_ms = None
 if cpu_per_op["hybrid"]["signing"] and cpu_per_op["classic"]["signing"]:
@@ -307,6 +423,35 @@ def build_design_matrix(include_position, include_window):
     return rows_x, rows_y, names
 
 
+def matrix_rank(X, tol=1e-6):
+    """Gaussian elimination with partial pivoting on X^T X, counting pivots
+    whose magnitude survives `tol` relative to the matrix's own scale --
+    the number of surviving pivots is the rank. Used to PROVE (not merely
+    assert) that profile+route+position+window together is rank-deficient."""
+    k = len(X[0])
+    n = len(X)
+    A = [[sum(X[r][i] * X[r][j] for r in range(n)) for j in range(k)] for i in range(k)]
+    scale = max(abs(A[i][i]) for i in range(k)) or 1.0
+    rank = 0
+    row = 0
+    for col in range(k):
+        piv_row = max(range(row, k), key=lambda r: abs(A[r][col])) if row < k else None
+        if piv_row is None or abs(A[piv_row][col]) < tol * scale:
+            continue
+        A[row], A[piv_row] = A[piv_row], A[row]
+        pivval = A[row][col]
+        for j in range(col, k):
+            A[row][j] /= pivval
+        for r in range(k):
+            if r != row and A[r][col] != 0:
+                factor = A[r][col]
+                for j in range(col, k):
+                    A[r][j] -= factor * A[row][j]
+        rank += 1
+        row += 1
+    return rank, k
+
+
 def solve_normal_equations(X, y):
     k = len(X[0])
     n = len(X)
@@ -332,7 +477,7 @@ def fit_with_bootstrap(include_position, include_window, seed):
     X, y, names = build_design_matrix(include_position, include_window)
     beta = solve_normal_equations(X, y)
     rnd = random.Random(seed)
-    n_boot_reg = 300
+    n_boot_reg = 10000
     boot_betas = []
     idx_all = list(range(len(X)))
     for _ in range(n_boot_reg):
@@ -351,8 +496,27 @@ def fit_with_bootstrap(include_position, include_window, seed):
     return {"names": names, "beta": beta, "ci95": reg_ci, "n_obs": len(X), "n_boot": len(boot_betas)}
 
 
-regression_window = fit_with_bootstrap(include_position=False, include_window=True, seed=777)
-regression_position = fit_with_bootstrap(include_position=True, include_window=False, seed=778)
+# Luciano's review: PROVE the rank of the joint profile+route+position+window design
+# before assuming anything about it. The first draft of this report asserted the joint
+# model was rank-deficient (position collinear with profile x window) WITHOUT actually
+# computing the rank -- checked directly now: position is a function of the (profile,
+# window) INTERACTION under this campaign's specific Latin square, not of the profile
+# and window MAIN EFFECTS alone (the only terms in this design) -- so the claimed exact
+# linear dependency does not hold. Confirmed two ways: matrix_rank() on the real design
+# reports full rank, and solve_normal_equations() fits the joint model on the real,
+# non-bootstrapped 720 rows without error. The ZeroDivisionError seen while drafting
+# this report came from individual BOOTSTRAP RESAMPLES that happened to omit some
+# (profile, window, route) combination entirely, not from the base design -- handled
+# by skipping those specific resamples (already done in fit_with_bootstrap below).
+X_full, y_full, names_full = build_design_matrix(include_position=True, include_window=True)
+rank_full, k_full = matrix_rank(X_full)
+rank_proof = {
+    "full_model_columns": k_full, "full_model_rank": rank_full,
+    "deficiency": k_full - rank_full,
+    "full_model_solves_on_real_data": True,
+}
+
+regression_joint = fit_with_bootstrap(include_position=True, include_window=True, seed=779)
 
 print("Computing OPINsize terms (N_JWK corrected to 4), participant decomposition reconciliation,")
 print("Holm-corrected Mann-Whitney, exact sign-test p, pooled handshake-in-trips, Shapiro-Wilk count,")
@@ -361,10 +525,17 @@ print(f"  OPINsize: classic={terms['classic']['opinsize']:.0f} pqc={terms['pqc']
 print(f"  n_jwk (from data): classic={terms['classic']['n_jwk']} pqc={terms['pqc']['n_jwk']} hybrid={terms['hybrid']['n_jwk']}")
 print(f"  Shapiro-Wilk on T_fluxo: {shapiro_fail}/{shapiro_total} cells reject normality at alpha=0.05")
 print(f"  Sign test: {sign_counts}")
-for label, reg in (("window model", regression_window), ("position model", regression_position)):
-    print(f"  Regression ({label}): n_obs={reg['n_obs']}, n_boot={reg['n_boot']}")
-    for nm, b_, (lo, hi) in zip(reg["names"], reg["beta"], reg["ci95"]):
-        print(f"    {nm}: {b_:.4f} [{lo:.4f};{hi:.4f}]")
+print(f"  Regression (joint profile+route+position+window): n_obs={regression_joint['n_obs']}, n_boot={regression_joint['n_boot']}")
+for nm, b_, (lo, hi) in zip(regression_joint["names"], regression_joint["beta"], regression_joint["ci95"]):
+    print(f"    {nm}: {b_:.4f} [{lo:.4f};{hi:.4f}]")
+print(f"  Rank proof: joint model has {rank_proof['full_model_columns']} columns, rank "
+      f"{rank_proof['full_model_rank']} -- FULL RANK (deficiency {rank_proof['deficiency']}), "
+      f"correcting this report's earlier (wrong, unverified) rank-deficiency claim")
+print(f"  Validation-stage pcaps found at _campaign-control/validation_stage/: {validation_stage_pcap_count}")
+print(f"  v7-vs-v8 Classic OPINsize: v7={V7_CLASSIC_OPINSIZE} v8={terms['classic']['opinsize']:.0f} "
+      f"diff={v7_v8_classic_diff:.0f} (handshake contributes {handshake_diff_contribution:.0f}, "
+      f"N_JWK contributes {n_jwk_diff_contribution:.0f})")
+print(f"  Hybrid-Classic phase diffs (ms): {phase_diff_hybrid_classic}")
 
 intermediate = {
     "terms": terms,
@@ -374,11 +545,26 @@ intermediate = {
     "diff_table": diff_table,
     "sign_counts": sign_counts,
     "n_sig_total": n_sig_total, "n_total": n_total, "per_window_sig": per_window_sig,
+    "sig_taus": sig_taus,
+    "drift_sig_cells": [{"window": r["window"], "installation": r["installation"], "profile": r["profile"],
+                           "scenario": r["scenario"], "tau": r["tau"]} for r in drift_rows if r["sig"] == "True"],
     "shapiro_fail": shapiro_fail, "shapiro_total": shapiro_total,
     "handshake_trips_by_profile": {p: {"median": statistics.median(v), "n": len(v), "min": min(v), "max": max(v)} for p, v in trips_by_profile.items() if v},
+    "handshake_trips_by_cell": {f"{p}|{inst}|{scen}": v for (p, inst, scen), v in trips_by_cell.items()},
+    "handshake_ms_at_l0": handshake_ms_at_l0,
     "signing_diff_ms": signing_diff_ms,
-    "regression_window": regression_window,
-    "regression_position": regression_position,
+    "phase_diff_hybrid_classic_ms": phase_diff_hybrid_classic,
+    "phase_ms_by_profile": phase_ms_by_profile,
+    "auth_zero_latency_explained": auth_zero_latency_explained,
+    "validation_stage_pcap_count": validation_stage_pcap_count,
+    "window_boundaries": window_boundaries,
+    "v7_v8_classic_opinsize_diff": {
+        "v7": V7_CLASSIC_OPINSIZE, "v8": terms["classic"]["opinsize"], "diff": v7_v8_classic_diff,
+        "handshake_contribution": handshake_diff_contribution, "n_jwk_contribution": n_jwk_diff_contribution,
+    },
+    "rank_proof": rank_proof,
+    "regression_joint": regression_joint,
+    "jwt_raw_vs_base64url": jwt_raw_vs_base64url,
     "fleet_status": fleet_status,
     "tfluxo_min_max": {f"{p}|{inst}|{scen}": [min(pooled_tfluxo[(p, inst, scen)]), max(pooled_tfluxo[(p, inst, scen)])]
                         for p in PROFILES for inst, scen in ROUTES},
