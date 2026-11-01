@@ -388,7 +388,7 @@ if cpu_per_op["hybrid"]["signing"] and cpu_per_op["classic"]["signing"]:
 # confound is reported rather than hidden:
 #   Model 1: T_fluxo ~ profile + route + window   (drops position)
 #   Model 2: T_fluxo ~ profile + route + position (drops window)
-def build_design_matrix(include_position, include_window):
+def build_design_matrix(include_position, include_window, subtract_setup=False):
     rows_y = []
     rows_x = []
     for n in WINDOWS:
@@ -400,6 +400,15 @@ def build_design_matrix(include_position, include_window):
                         continue
                     d = json.loads(f.read_text(encoding="utf-8"))
                     y = d["result"]["t_fluxo_seconds"]
+                    if subtract_setup:
+                        # Luciano's sensitivity check: subtract BOTH occurrences of
+                        # both setup/teardown phases (callback_server_teardown +
+                        # generate_callback_cert), same raw per-execution data the
+                        # Section 6 reconciliation table sums.
+                        setup_total_ms = sum(
+                            item["duration_ms"] for item in (d["result"].get("setup_timings") or [])
+                        )
+                        y -= setup_total_ms / 1000.0
                     pos = d["profile_position_in_window"]
                     row = [1.0]
                     row.append(1.0 if p == "pqc" else 0.0)
@@ -473,8 +482,8 @@ def solve_normal_equations(X, y):
     return [A[i][k] for i in range(k)]
 
 
-def fit_with_bootstrap(include_position, include_window, seed):
-    X, y, names = build_design_matrix(include_position, include_window)
+def fit_with_bootstrap(include_position, include_window, seed, subtract_setup=False):
+    X, y, names = build_design_matrix(include_position, include_window, subtract_setup=subtract_setup)
     beta = solve_normal_equations(X, y)
     rnd = random.Random(seed)
     n_boot_reg = 10000
@@ -517,6 +526,11 @@ rank_proof = {
 }
 
 regression_joint = fit_with_bootstrap(include_position=True, include_window=True, seed=779)
+# Luciano's sensitivity check (round 7): same model, same seed, response = T_fluxo
+# MINUS setup/teardown (both occurrences of callback_server_teardown +
+# generate_callback_cert) -- does NOT replace regression_joint above, reported
+# alongside it.
+regression_joint_minus_setup = fit_with_bootstrap(include_position=True, include_window=True, seed=779, subtract_setup=True)
 
 # -------------------------------------------------------------- k by resampling the 720 (240/profile)
 # INDIVIDUAL EXECUTIONS, not the 8 route medians -- Luciano's review, item 5: alongside the existing
@@ -761,6 +775,10 @@ print(f"  Sign test: {sign_counts}")
 print(f"  Regression (joint profile+route+position+window): n_obs={regression_joint['n_obs']}, n_boot={regression_joint['n_boot']}")
 for nm, b_, (lo, hi) in zip(regression_joint["names"], regression_joint["beta"], regression_joint["ci95"]):
     print(f"    {nm}: {b_:.4f} [{lo:.4f};{hi:.4f}]")
+print(f"  Sensitivity (same model/seed, T_fluxo minus setup/teardown): n_obs={regression_joint_minus_setup['n_obs']}, n_boot={regression_joint_minus_setup['n_boot']}")
+for nm, b_, (lo, hi) in zip(regression_joint_minus_setup["names"], regression_joint_minus_setup["beta"], regression_joint_minus_setup["ci95"]):
+    if nm in ("profile_pqc", "profile_hybrid"):
+        print(f"    {nm}: {b_:.4f} [{lo:.4f};{hi:.4f}]")
 print(f"  Rank proof: joint model has {rank_proof['full_model_columns']} columns, rank "
       f"{rank_proof['full_model_rank']} -- FULL RANK (deficiency {rank_proof['deficiency']}), "
       f"correcting this report's earlier (wrong, unverified) rank-deficiency claim")
@@ -809,6 +827,7 @@ intermediate = {
     },
     "rank_proof": rank_proof,
     "regression_joint": regression_joint,
+    "regression_joint_minus_setup": regression_joint_minus_setup,
     "jwt_raw_vs_base64url": jwt_raw_vs_base64url,
     "k_per_execution": k_per_execution,
     "fleet_status": fleet_status,

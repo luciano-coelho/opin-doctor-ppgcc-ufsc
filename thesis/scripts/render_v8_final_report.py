@@ -1184,10 +1184,16 @@ w("### RSA-4096 signing as a contributor to Classic's/Hybrid's handshake cost (q
 w()
 sb = inter["signing_bench_ms"]
 w(
-    f"Section 2 (item 5) establishes that Hybrid's live TLS handshake "
-    f"authenticates via its RSA-4096 primary signature, same as Classic -- the "
-    f"ML-DSA-65 `AltSignatureValue` is a non-critical extension the handshake "
-    f"itself never checks. Classic's (43.62ms) and Hybrid's (45.99ms) median "
+    f"Section 2 (items 4/5) establishes the asymmetry by direction: the "
+    f"SERVER's own certificate never has its ML-DSA-65 `AltSignatureValue` "
+    f"checked at all (the client never verifies the server, under any "
+    f"profile), so Hybrid's live handshake authenticates the SERVER via its "
+    f"RSA-4096 primary signature alone, same as Classic. The CLIENT's own "
+    f"certificate is the opposite case -- its `AltSignatureValue` IS checked "
+    f"by the server (`hybridVerifyPeerCertificateFunc()`), on top of its RSA "
+    f"primary signature. The handshake-duration comparison below is about "
+    f"the SERVER's own signing cost specifically. Classic's (43.62ms) and "
+    f"Hybrid's (45.99ms) median "
     f"handshake durations at sa-east-1/L0 sit close together, both well above "
     f"PQC's pure-ML-DSA-65 (10.32ms). An offline microbenchmark, real server "
     f"private keys, same Go image used throughout this project "
@@ -1406,6 +1412,45 @@ w(
     f"not attributed to a specific cause beyond that. Both position "
     f"coefficients cross zero -- no detectable ordering effect from where in a "
     f"window's block a profile happens to run."
+)
+w()
+w("### Sensitivity check: the same joint model with setup/teardown subtracted out")
+w()
+regms = inter["regression_joint_minus_setup"]
+pqc_orig = reg["beta"][reg["names"].index("profile_pqc")] * 1000
+hybrid_orig = reg["beta"][reg["names"].index("profile_hybrid")] * 1000
+pqc_orig_ci = [c * 1000 for c in reg["ci95"][reg["names"].index("profile_pqc")]]
+hybrid_orig_ci = [c * 1000 for c in reg["ci95"][reg["names"].index("profile_hybrid")]]
+pqc_ms_val = regms["beta"][regms["names"].index("profile_pqc")] * 1000
+hybrid_ms_val = regms["beta"][regms["names"].index("profile_hybrid")] * 1000
+pqc_ms_ci = [c * 1000 for c in regms["ci95"][regms["names"].index("profile_pqc")]]
+hybrid_ms_ci = [c * 1000 for c in regms["ci95"][regms["names"].index("profile_hybrid")]]
+w(
+    f"Exact same model (profile+route+position+window) and the same seed "
+    f"(720 executions, {regms['n_boot']:,} case-resampling bootstrap "
+    f"iterations) as the fit above -- only the response variable changes, "
+    f"to T_fluxo MINUS setup/teardown (both occurrences of "
+    f"`callback_server_teardown` and `generate_callback_cert`, the exact "
+    f"same per-execution sum Section 6's own reconciliation table uses). "
+    f"**Does not replace the original fit above -- reported alongside it:**"
+)
+w()
+w("| Term | Original T_fluxo (ms) | Original 95% CI | T_fluxo minus setup/teardown (ms) | Minus-setup 95% CI |")
+w("|---|---:|---:|---:|---:|")
+w(f"| profile_pqc | {n(pqc_orig,1)} | [{n(pqc_orig_ci[0],1)};{n(pqc_orig_ci[1],1)}] | {n(pqc_ms_val,1)} | [{n(pqc_ms_ci[0],1)};{n(pqc_ms_ci[1],1)}] |")
+w(f"| profile_hybrid | {n(hybrid_orig,1)} | [{n(hybrid_orig_ci[0],1)};{n(hybrid_orig_ci[1],1)}] | {n(hybrid_ms_val,1)} | [{n(hybrid_ms_ci[0],1)};{n(hybrid_ms_ci[1],1)}] |")
+w()
+pqc_holds = pqc_ms_ci[0] > 0
+hybrid_holds = hybrid_ms_ci[0] > 0
+w(
+    f"PQC's effect "
+    f"{'holds (CI still excludes zero)' if pqc_holds else 'no longer excludes zero'} "
+    f"once setup/teardown is subtracted out ({n(pqc_orig,1)}ms -> "
+    f"{n(pqc_ms_val,1)}ms); Hybrid's effect "
+    f"{'holds (CI still excludes zero)' if hybrid_holds else 'no longer excludes zero'} "
+    f"the same way ({n(hybrid_orig,1)}ms -> {n(hybrid_ms_val,1)}ms) -- "
+    f"neither profile's effect depends on setup/teardown being included in "
+    f"the response."
 )
 
 # ------------------------------------------------------------- Section 8

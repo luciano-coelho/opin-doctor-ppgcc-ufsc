@@ -10579,3 +10579,34 @@ Scanner de segredos: limpo. Sem tag nova.
 7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
    segredos: limpo. Sem tag nova.
 
+## Decision 124 (2026-10-31) -- rodada 7: Seção 6 corrigida para a
+## assimetria do ML-DSA-65 do Hybrid; análise de sensibilidade da
+## regressão conjunta com T_fluxo menos setup/teardown; sem tag nova,
+## sem dados novos
+
+1. **Seção 6** ("RSA-4096 signing as a contributor..."): a frase "the
+   handshake itself never checks" o `AltSignatureValue` reescrita para
+   refletir a assimetria já estabelecida na Seção 2 -- só o certificado
+   do SERVIDOR nunca tem o ML-DSA-65 verificado (cliente nunca verifica
+   o servidor); o do CLIENTE É verificado pelo servidor
+   (`hybridVerifyPeerCertificateFunc()`). A comparação de custo de
+   assinatura que segue é explicitamente sobre o lado do servidor.
+2. **Análise de sensibilidade (Seção 7)**: mesmo modelo conjunto
+   (profile+route+position+window), mesma semente (779), mesmas 10.000
+   reamostragens, 720 execuções -- variável resposta T_fluxo MENOS
+   setup/teardown (as duas ocorrências de `callback_server_teardown` +
+   `generate_callback_cert`, a mesma soma por execução que a tabela de
+   reconciliação da Seção 6 usa). Resultado, reportado ao lado do
+   original, sem substituí-lo:
+
+   | Termo | T_fluxo original (ms) | IC original | T_fluxo menos setup/teardown (ms) | IC menos-setup |
+   |---|---:|---:|---:|---:|
+   | profile_pqc | 23,6 | [9,0;38,1] | 18,3 | [5,1;31,4] |
+   | profile_hybrid | 91,8 | [75,9;107,8] | 89,4 | [74,8;104,4] |
+
+   O efeito do PQC encolhe (23,6 -> 18,3ms) mas o IC continua excluindo
+   zero; o do Hybrid muda pouco (91,8 -> 89,4ms). Nenhum dos dois efeitos
+   depende de o setup/teardown estar incluído na resposta.
+3. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Sem tag nova.
+

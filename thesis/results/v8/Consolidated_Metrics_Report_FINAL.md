@@ -349,12 +349,12 @@ Matches the phase-decomposition table's own 1,071.2/1,095.2/1,071.6ms row (above
 |---|---:|---:|---:|
 | `/jwks` | 12.22 | 6.93 | 13.78 |
 | `/token` | 16.17 | 22.67 | 20.86 |
-| `/open-insurance/insurance-person/v2/insurance-person` | 11.92 | 12.14 | 13.18 |
 | `/issuer-ca.pem` | 1.29 | 1.15 | 1.30 |
-| `/auth` | n/a | n/a | n/a |
-| `/request` | 6.55 | 6.88 | 9.13 |
 | `/open-insurance/consents/v3/consents` | 16.81 | 16.98 | 18.25 |
+| `/open-insurance/insurance-person/v2/insurance-person` | 11.92 | 12.14 | 13.18 |
+| `/auth` | n/a | n/a | n/a |
 | `/root-ca.pem` | 16.61 | 5.20 | 16.98 |
+| `/request` | 6.55 | 6.88 | 9.13 |
 
 **`/auth` = n/a, explained, not shown as a measured zero.** Its own raw call record has `start_utc` and `end_utc` identical to the microsecond (`2026-10-30T23:13:01.872106+00:00`) and a `303 See Other` response, with `src: "login"` -- this call belongs to the automated login/consent interaction, which (v7 Decision 12) never routes through the timed `do_call()` path at all. This call was never timed at all -- not a real, measured sub-millisecond server response, and not a real zero; reported as `n/a` in the table above for that reason.
 
@@ -404,7 +404,7 @@ All three profiles sit close to 12 round trips at the higher-RTT sa-east-1 route
 
 ### RSA-4096 signing as a contributor to Classic's/Hybrid's handshake cost (qualified)
 
-Section 2 (item 5) establishes that Hybrid's live TLS handshake authenticates via its RSA-4096 primary signature, same as Classic -- the ML-DSA-65 `AltSignatureValue` is a non-critical extension the handshake itself never checks. Classic's (43.62ms) and Hybrid's (45.99ms) median handshake durations at sa-east-1/L0 sit close together, both well above PQC's pure-ML-DSA-65 (10.32ms). An offline microbenchmark, real server private keys, same Go image used throughout this project (`thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`): RSA-4096-PSS signing (`mtls.key`) averages 5.94ms/operation; ML-DSA-65 pure-mode signing (`mtls_pqc.key`) averages 0.69ms -- RSA-4096 is the single most expensive cryptographic operation this project can isolate and measure at all, roughly 8.6x ML-DSA-65's own signing cost.
+Section 2 (items 4/5) establishes the asymmetry by direction: the SERVER's own certificate never has its ML-DSA-65 `AltSignatureValue` checked at all (the client never verifies the server, under any profile), so Hybrid's live handshake authenticates the SERVER via its RSA-4096 primary signature alone, same as Classic. The CLIENT's own certificate is the opposite case -- its `AltSignatureValue` IS checked by the server (`hybridVerifyPeerCertificateFunc()`), on top of its RSA primary signature. The handshake-duration comparison below is about the SERVER's own signing cost specifically. Classic's (43.62ms) and Hybrid's (45.99ms) median handshake durations at sa-east-1/L0 sit close together, both well above PQC's pure-ML-DSA-65 (10.32ms). An offline microbenchmark, real server private keys, same Go image used throughout this project (`thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`): RSA-4096-PSS signing (`mtls.key`) averages 5.94ms/operation; ML-DSA-65 pure-mode signing (`mtls_pqc.key`) averages 0.69ms -- RSA-4096 is the single most expensive cryptographic operation this project can isolate and measure at all, roughly 8.6x ML-DSA-65's own signing cost.
 
 **Both sides sign, not just the server -- the single-operation count above undercounts this by half.** TLS 1.3 mTLS sends a `CertificateVerify` from BOTH peers: the server signs for itself, and -- since `ClientAuth=VerifyClientCertIfGiven` and this project's real client always presents a certificate -- the client signs for itself too (confirmed unconditional in both `handshake_server_tls13.go`/`handshake_client_tls13.go`). Section 2's own correction (item 5) also found the server's real, always-paid chain-validation cost of the CLIENT's certificate (same table, Section 2) -- a second real cost the single-signing estimate left out. Combined: 2x(5.94-0.69)ms signing + 0.083ms chain-verify = 10.60ms. **This confirms the hypothesis as a real, directionally-consistent CONTRIBUTOR, not as the full explanation**: 10.60ms accounts for roughly 32% of the 33.3ms Classic-minus-PQC handshake-duration gap at sa-east-1/L0 -- real and measured, a substantial minority share, but not most of it. No per-operation timer exists inside Go's TLS 1.3 handshake internals to isolate the rest; it remains inside the "residual ... not attributed" limitation directly above, not newly explained by this benchmark.
 
@@ -469,6 +469,17 @@ At n=240 (vs. n=8 route medians), PQC's k is 56.155 with both intervals sitting 
 | window_3 | -0.0181 | [-0.0317;-0.0036] |
 
 n=720 individual executions, 10,000 case-resampling bootstrap iterations (fixed seed, resampling individual executions with replacement and refitting, not resampling cell medians). `profile_pqc` and `profile_hybrid` both have confidence intervals that do not cross zero -- both profiles carry a real, measured cost over Classic, holding route, position, and window fixed simultaneously. **Stated plainly: PQC's own +23.6ms effect is small, non-null, and NOT attributed to any single measured phase with confidence.** Section 6's own phase table (sa-east-1/L0 only) offers candidates -- PQC's signing phase is +10.7ms over Classic there, partly offset by -26.5ms on HTTP calls and +20.2ms on the residual -- but that is a single-cell breakdown, not a pooled decomposition of this regression's own, 720-row-pooled coefficient; Section 6 also shows the setup-phase gap at that same single cell is borderline-significant in isolation (p=0.074) but not significant once pooled across all 8 routes (p=0.1425) -- inconclusive, not a confident "noise" verdict; the signing phase, by contrast, is unambiguous across all 720 executions (Section 6). This report does not claim a phase-by-phase accounting of this specific +23.6ms figure -- only that it is real (CI excludes zero) and small. `window_3`'s coefficient also does not cross zero (T_fluxo measurably lower in window 3 than window 1, holding profile and route fixed) -- a small (~18ms) but real window effect, consistent with the residual settling drift found in Section 8, not attributed to a specific cause beyond that. Both position coefficients cross zero -- no detectable ordering effect from where in a window's block a profile happens to run.
+
+### Sensitivity check: the same joint model with setup/teardown subtracted out
+
+Exact same model (profile+route+position+window) and the same seed (720 executions, 10,000 case-resampling bootstrap iterations) as the fit above -- only the response variable changes, to T_fluxo MINUS setup/teardown (both occurrences of `callback_server_teardown` and `generate_callback_cert`, the exact same per-execution sum Section 6's own reconciliation table uses). **Does not replace the original fit above -- reported alongside it:**
+
+| Term | Original T_fluxo (ms) | Original 95% CI | T_fluxo minus setup/teardown (ms) | Minus-setup 95% CI |
+|---|---:|---:|---:|---:|
+| profile_pqc | 23.6 | [9.0;38.1] | 18.3 | [5.1;31.4] |
+| profile_hybrid | 91.8 | [75.9;107.8] | 89.4 | [74.8;104.4] |
+
+PQC's effect holds (CI still excludes zero) once setup/teardown is subtracted out (23.6ms -> 18.3ms); Hybrid's effect holds (CI still excludes zero) the same way (91.8ms -> 89.4ms) -- neither profile's effect depends on setup/teardown being included in the response.
 
 ## 8. Statistical validity
 
