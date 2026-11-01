@@ -108,15 +108,16 @@ w(
     f"same pattern with a tighter interval. PQC's fixed cost also varies in a "
     f"statistically detectable way between the 3 collection windows -- both "
     f"reported as open, not-fully-explained findings, not smoothed over. At the "
-    f"TLS channel layer, Hybrid's own certificate authentication is effectively "
-    f"RSA-only in practice (its second, real ML-DSA-65 signature is never "
-    f"checked by the live handshake); at the message level (JWTs), Hybrid's "
-    f"authentication is genuinely dual-signature and dual-verified (Section 2). "
+    f"TLS channel layer, Hybrid's certificate authentication is asymmetric by "
+    f"direction: RSA-only for the server's identity (the client never checks "
+    f"it at all, `InsecureSkipVerify`) but genuinely dual, RSA and ML-DSA-65, "
+    f"for the client's identity (the server verifies both, Section 2); at the "
+    f"message level (JWTs), Hybrid's authentication is genuinely "
+    f"dual-signature and dual-verified in both directions (Section 2). "
     f"A live, pre-destroy audit confirmed PQC's certificate chain is ML-DSA-65 "
-    f"end-to-end, and a second live diagnostic session confirmed PQC **does** "
+    f"end-to-end, and a live diagnostic session confirmed PQC **does** "
     f"interoperate with a standard OpenSSL 3.5.8 client once the correct TLS "
-    f"signature-algorithm flag is set -- an earlier draft of this report wrongly "
-    f"called the opposite a \"library finding\" (Section 2). JWE encryption and "
+    f"signature-algorithm flag is set (Section 2). JWE encryption and "
     f"the AS-to-RS internal channel remain classical in every profile, by "
     f"explicit, already-declared scope decision."
 )
@@ -315,12 +316,10 @@ w(
 )
 w()
 w(
-    "**PQC's interoperability with plain OpenSSL, diagnosed properly (correcting "
-    "Decision 115/116).** An earlier probe called PQC's failure to negotiate with "
-    "`openssl s_client -groups MLKEM1024` a \"real cross-implementation finding... "
-    "not a project defect.\" **That framing was wrong**, found by splitting the "
-    "attempt into its three independent pieces and testing each on the live "
-    "fleet:"
+    "**PQC's interoperability with plain OpenSSL.** "
+    "`openssl s_client -groups MLKEM1024` alone fails to negotiate with the "
+    "live PQC server -- diagnosed by splitting the attempt into its three "
+    "independent pieces and testing each on the live fleet:"
 )
 w()
 w(
@@ -373,8 +372,9 @@ w(
 )
 w()
 w(
-    "**Conclusion: this was a test-configuration gap in the earlier probe, not an "
-    "OpenSSL limitation and not a gateway defect.** Once the ClientHello offers "
+    "**Conclusion: this is a test-configuration gap (the missing `-sigalgs` "
+    "flag), not an OpenSSL limitation and not a gateway defect.** Once the "
+    "ClientHello offers "
     "both `MLKEM1024` and `id-ml-dsa-65` -- exactly what the real client "
     "(`tls_kem_proxy`) already does automatically -- OpenSSL 3.5.8 and this "
     "project's Go gateway interoperate completely for PQC. Full diagnosis: "
@@ -385,15 +385,18 @@ w("| Layer | Classic | PQC | Hybrid | Verified how |")
 w("|---|---|---|---|---|")
 w("| TLS key exchange | ECDH secp384r1 | ML-KEM-1024 | SecP384r1MLKEM1024 | `openssl s_client` (all 3 profiles, live, with the correct `-groups`/`-sigalgs` for PQC) |")
 w(
-    "| TLS server certificate -- the key the LIVE HANDSHAKE actually "
-    "authenticates | RSA-4096 | ML-DSA-65 (pure) | **RSA-4096 base + a non-critical "
-    "ML-DSA-65 extension the TLS handshake itself never checks** | `openssl x509 "
+    "| TLS server certificate -- never checked at all by the live client, "
+    "neither signature | RSA-4096 | ML-DSA-65 (pure) | **RSA-4096 base + a "
+    "non-critical ML-DSA-65 extension; the client's `InsecureSkipVerify` "
+    "means NEITHER signature is checked (item 5 below)** | `openssl x509 "
     "-text`, live |"
 )
 w(
-    "| TLS client certificate -- same caveat | RSA-4096 | ML-DSA-65 (pure) | "
-    "**RSA-4096 + AltSignatureValue (ML-DSA-65), same caveat** | Signed-challenge "
-    "verification, live |"
+    "| TLS client certificate -- checked fully by the live server, both "
+    "signatures | RSA-4096 | ML-DSA-65 (pure) | **RSA-4096 + AltSignatureValue "
+    "(ML-DSA-65); BOTH genuinely verified by the server (standard chain "
+    "check + `hybridVerifyPeerCertificateFunc()`, item 5 below)** | "
+    "Signed-challenge verification, live; server-side code read, live |"
 )
 w("| Certificate chain (root, issuer) | RSA | **ML-DSA-65** (both levels) | RSA (classical root reused) | `openssl x509 -text` + `openssl verify`, live |")
 w("| JWT signatures (client_assertion, request object, id_token, JARM) | PS256 | ML-DSA-65 (pure) | Strong Nesting (PS256+ML-DSA-65) or payload-extension (RS256+ML-DSA-65), by artifact | Dual-signature verification |")
@@ -420,36 +423,40 @@ w(
     "signature also exists."
 )
 w(
-    "4. **Hybrid's TLS channel authentication is, in practice, secured by RSA "
-    "alone -- but message-level authentication is genuinely hybrid.** These are "
-    "two different layers, with different outcomes. At the TLS layer, Hybrid's "
-    "server and client certificates carry a real ML-DSA-65 signature (the "
-    "`AltSignatureValue` X.509 extension) that the live TLS handshake itself "
-    "never checks -- X.509 non-critical extensions are, by the standard's own "
-    "definition, not required to be processed by a verifier that doesn't "
-    "understand them, and Go's `crypto/tls` (both sides of this project's real "
-    "connections) validates only the certificate's primary RSA signature during "
-    "the handshake. The ML-DSA-65 signature is real and independently checkable "
-    "out-of-band (confirmed live via `-verify-hybrid`'s own preTBS "
-    "reconstruction), but nothing in the live connection path verifies it -- "
-    "Hybrid's practical TLS-layer authentication strength is exactly Classic's "
-    "against an attacker who can forge an RSA signature. **At the message "
-    "level, this is not the case**: `client_assertion`, the request object, "
-    "`id_token`, and the JARM all carry a real, dual signature (Strong Nesting "
-    "or payload-extension, Section 2's own table above), and the receiving "
-    "party's own verification code (`thesis/scripts/pqc-signer/signer_core."
-    "mjs`) genuinely checks **both** signatures before accepting the artifact -- "
-    "message-level authentication is real hybrid defense-in-depth; only the "
-    "TLS channel's own certificate authentication is effectively RSA-only."
+    "4. **Hybrid's TLS channel authentication is asymmetric BY DIRECTION, "
+    "not uniformly RSA-only -- while message-level authentication is fully "
+    "hybrid in both directions.** Three distinct outcomes, not one: "
+    "**(i) the SERVER's certificate is never checked at all, in either "
+    "signature.** The client runs with `InsecureSkipVerify: true` and never "
+    "verifies the server's chain (item 5 below) -- neither the RSA primary "
+    "signature nor the ML-DSA-65 `AltSignatureValue` is ever checked for the "
+    "server's own certificate, by any part of the live connection path. "
+    "**(ii) the CLIENT's certificate IS checked, in both signatures.** The "
+    "server's standard Go chain verification checks the RSA primary "
+    "signature (`ClientAuth: VerifyClientCertIfGiven`, item 5 below), and "
+    "`hybridVerifyPeerCertificateFunc()` additionally checks the ML-DSA-65 "
+    "`AltSignatureValue` -- both halves genuinely verified, for the client's "
+    "certificate specifically. So Hybrid's TLS-layer authentication of the "
+    "SERVER's identity is exactly Classic's RSA-only strength; its "
+    "authentication of the CLIENT's identity is genuinely dual. "
+    "**(iii) at the message level, this asymmetry does not apply**: "
+    "`client_assertion`, the request object, `id_token`, and the JARM all "
+    "carry a real, dual signature (Strong Nesting or payload-extension, "
+    "Section 2's own table above), and the receiving party's own "
+    "verification code (`thesis/scripts/pqc-signer/signer_core.mjs`) "
+    "genuinely checks **both** signatures before accepting the artifact, "
+    "regardless of which party sent it -- message-level authentication is "
+    "real hybrid defense-in-depth in both directions; only the TLS "
+    "channel's own certificate authentication carries this one-directional "
+    "asymmetry."
 )
 w(
     "5. **Which direction has the peer's certificate verified when "
     "presented (the precise phrase this report uses from here on, in place "
     "of the loose \"mTLS\" label, wherever that literal distinction "
-    "matters) -- stated plainly and "
-    "corrected against an earlier draft of this round that got the server "
-    "side wrong: the client never verifies the server, under any profile; "
-    "the server DOES verify the client, under all three profiles.** "
+    "matters) -- stated plainly: the client never verifies the server, "
+    "under any profile; the server DOES verify the client, under all "
+    "three profiles.** "
     "`tls_kem_proxy/main.go:212` sets `InsecureSkipVerify: true` on the "
     "CLIENT config -- confirmed, by reading Go 1.27's own `crypto/tls` "
     "source, that this field is CLIENT-ONLY: it is referenced only in "
@@ -478,15 +485,14 @@ w(
     "`hybridVerification.go:88-91`'s own comment says), and checks ONLY "
     "the ML-DSA-65 `AltSignatureValue` extension -- so Hybrid's server-side "
     "log line \"RSA + ML-DSA-65 both valid\" is accurate about the "
-    "outcome (both halves genuinely were checked, one by Go's standard "
-    "path, one by this callback); an earlier draft of this round wrongly "
-    "called that message misleading."
+    "outcome: both halves genuinely were checked, one by Go's standard "
+    "path, one by this callback."
 )
 w()
 w(
     "**What happens today if the client's certificate is invalid, with "
-    "evidence -- confirmed live, round 5, against this project's own "
-    "local (v7) docker-compose stack, not just read from the code:** a "
+    "evidence -- confirmed live against this project's own local (v7) "
+    "docker-compose stack, not just read from the code:** a "
     "certificate from the wrong CA fails `certs[0].Verify()` with "
     "`x509.UnknownAuthorityError`, which `handshake_server.go:977` turns "
     "into a fatal `alertUnknownCA` -- handshake aborts, under all three "
@@ -631,11 +637,21 @@ w(
 )
 w()
 w(
-    f"**One unit per term, stated explicitly.** `handshake_bytes` is bytes "
-    f"PER CONNECTION (there are `N_mTLS={terms['classic']['n_mtls']}` "
-    f"connections/execution); `JWT_size` and `JWK_PK_size` are bytes PER "
-    f"ARTIFACT (compact-serialization/base64url, Section 3's own 4.6a below); "
-    f"`PKI_bytes` is the average PEM-body byte count PER CERTIFICATE. "
+    f"**One unit per term, stated explicitly -- each of the three per-artifact "
+    f"terms uses a DIFFERENT encoding, not the same one:** `handshake_bytes` "
+    f"is real wire bytes PER CONNECTION, unaffected by any text encoding "
+    f"(there are `N_mTLS={terms['classic']['n_mtls']}` connections/execution). "
+    f"`JWT_size` is bytes PER ARTIFACT in **compact-serialization, "
+    f"base64url** form (`extract_jwts()`/`len(token)` on the dot-separated "
+    f"token string, Section 3's own 4.6a below) -- the size actually "
+    f"transferred on the wire. `JWK_PK_size` is bytes PER ARTIFACT of the "
+    f"**raw, decoded public-key material** (`b64url_decode_len()` on the "
+    f"key's own `n`/`x+y`/`pub`/`pk_hybrid` field, "
+    f"`thesis/scripts/baseline_automation.py:extract_jwk_sizes()`), **NOT** "
+    f"base64url -- a different encoding from `JWT_size`, despite both being "
+    f"\"bytes per artifact\". `PKI_bytes` is the average PEM-body byte count "
+    f"PER CERTIFICATE (the PEM file's own wire bytes, HTTP framing excluded) "
+    f"-- a third, distinct unit again. "
     f"OPINsize itself (the bottom row) is the one TOTAL-bytes-per-execution "
     f"figure that sums all four already-multiplied terms -- no other row "
     f"mixes a per-item unit with a per-execution one. **Which JWT gives the "
@@ -652,10 +668,13 @@ w()
 w("### 4.6a: JWT size, raw and base64url-encoded")
 w()
 w(
-    "The equation above uses the JWT's raw (decoded) size. The independent "
-    "review's own item 4.6a asked for a single, stated unit of measure; computed "
-    "directly from the same captured tokens used throughout this report (one "
-    "representative JWT per profile, the `id_token`):"
+    "Item 4.6a asked for a single, stated unit of measure for JWT/key "
+    "sizes -- Section 3's own `JWT_size` term already uses one consistently "
+    "(compact-serialization, base64url, stated above); this subsection "
+    "reports the SAME tokens' raw/decoded size too, so both are available "
+    "side by side. Computed directly from the same captured tokens used "
+    "throughout this report (one representative JWT per profile, the "
+    "`id_token`):"
 )
 w()
 jwt_b64 = inter.get("jwt_raw_vs_base64url", {})
@@ -920,7 +939,44 @@ w(
     f"{n(sp['hybrid']['callback_server_teardown']['median'],2)} ms "
     f"(classic/PQC/hybrid, n=480 each) -- a spread under 0.02ms, consistent "
     f"with its own fixed-sleep implementation. \"Same by construction\" "
-    f"remains accurate for this phase specifically."
+    f"remains accurate for this phase specifically. **These medians are "
+    f"SINGLE-OCCURRENCE values, pooled across both phases' own two "
+    f"occurrences per execution (below) -- they do not, by themselves, sum "
+    f"to this section's own 1,071.2/1,095.2/1,071.6ms setup/teardown total; "
+    f"the full reconciliation is next.**"
+)
+w()
+w("#### The table's own 1,071.2/1,095.2/1,071.6ms total, fully reconciled -- sa-east-1/L0, n=30/profile, per-execution sums")
+w()
+w(
+    "**There is no third, hidden phase.** `generate_callback_cert` and "
+    "`callback_server_teardown` each occur TWICE per execution (the "
+    "\"two-flows-one-process\" pattern, `opin_flow.py`'s own "
+    "`_generate_callback_tls_cert()` docstring) -- the pooled table above "
+    "shows the SINGLE-OCCURRENCE median (one of the two), which is why it "
+    "summed to only ~535ms, not the table's own ~1,071-1,095ms total. "
+    "Summing each execution's own 2 occurrences of each phase, THEN taking "
+    "the median across the 30 executions at sa-east-1/L0 specifically, "
+    "reconciles it exactly:"
+)
+w()
+spl = inter["setup_phase_l0_pooled"]
+w("| Phase (both occurrences, summed per execution) | Classic | PQC | Hybrid | n (executions) |")
+w("|---|---:|---:|---:|---:|")
+for phase_key, phase_label in (("callback_server_teardown", "callback_server_teardown"), ("generate_callback_cert", "generate_callback_cert")):
+    cols = [n(spl[p][phase_key]["median"], 3) for p in PROFILES]
+    w(f"| {phase_label} | {cols[0]} | {cols[1]} | {cols[2]} | {spl['classic'][phase_key]['n']} |")
+setup_sum_classic = spl["classic"]["callback_server_teardown"]["median"] + spl["classic"]["generate_callback_cert"]["median"]
+setup_sum_pqc = spl["pqc"]["callback_server_teardown"]["median"] + spl["pqc"]["generate_callback_cert"]["median"]
+setup_sum_hybrid = spl["hybrid"]["callback_server_teardown"]["median"] + spl["hybrid"]["generate_callback_cert"]["median"]
+w(f"| **Sum (= this table's own setup/teardown total)** | **{n(setup_sum_classic,1)}** | **{n(setup_sum_pqc,1)}** | **{n(setup_sum_hybrid,1)}** | |")
+w()
+w(
+    f"Matches the phase-decomposition table's own 1,071.2/1,095.2/1,071.6ms "
+    f"row (above) within rounding -- confirmed, not assumed. The \"missing "
+    f"~536ms\" is the second occurrence of `callback_server_teardown` "
+    f"(~500ms) plus the second occurrence of `generate_callback_cert` "
+    f"(profile-dependent, ~35-60ms) -- not a separately-named phase."
 )
 w()
 w("#### `generate_callback_cert`, by profile and window (pooled across all 8 routes)")
@@ -949,32 +1005,67 @@ w(
     f"`generate_callback_cert`, PQC vs. Classic: median "
     f"{n(ssig['pqc_vs_classic']['median_a'],3)}ms vs. "
     f"{n(ssig['pqc_vs_classic']['median_b'],3)}ms, U={n(ssig['pqc_vs_classic']['u'],1)}, "
-    f"{pfmt(ssig['pqc_vs_classic']['p'])}. Hybrid vs. Classic: median "
+    f"p={pfmt(ssig['pqc_vs_classic']['p'])}. Hybrid vs. Classic: median "
     f"{n(ssig['hybrid_vs_classic']['median_a'],3)}ms vs. "
     f"{n(ssig['hybrid_vs_classic']['median_b'],3)}ms, U={n(ssig['hybrid_vs_classic']['u'],1)}, "
-    f"{pfmt(ssig['hybrid_vs_classic']['p'])}. Neither crosses any conventional "
+    f"p={pfmt(ssig['hybrid_vs_classic']['p'])}. Neither crosses any conventional "
     f"significance threshold."
 )
 w()
+sl0 = inter["setup_phase_l0_significance"]
+w(
+    f"**Tested formally at the L0 reference cell specifically "
+    f"(per-execution sum of both occurrences, n=30/profile): borderline for "
+    f"`generate_callback_cert`, not significant for `callback_server_teardown`.** "
+    f"Mann-Whitney, `generate_callback_cert`, PQC vs. Classic: median "
+    f"{n(sl0['pqc_vs_classic_generate_callback_cert']['median_a'],2)}ms vs. "
+    f"{n(sl0['pqc_vs_classic_generate_callback_cert']['median_b'],2)}ms, "
+    f"U={n(sl0['pqc_vs_classic_generate_callback_cert']['u'],1)}, "
+    f"p={pfmt(sl0['pqc_vs_classic_generate_callback_cert']['p'])} -- just above "
+    f"the conventional 0.05 threshold, closer to significance than the "
+    f"all-routes-pooled test above (p=0.1425). Hybrid vs. Classic at the "
+    f"same cell: p={pfmt(sl0['hybrid_vs_classic_generate_callback_cert']['p'])}, "
+    f"not significant. `callback_server_teardown` at this same cell: PQC vs. "
+    f"Classic p={pfmt(sl0['pqc_vs_classic_callback_server_teardown']['p'])}, "
+    f"Hybrid vs. Classic "
+    f"p={pfmt(sl0['hybrid_vs_classic_callback_server_teardown']['p'])} -- "
+    f"neither significant, consistent with \"same by construction\" for "
+    f"this specific phase."
+)
+w()
 pqc_beta_ms = reg["beta"][reg["names"].index("profile_pqc")] * 1000
+sseq = inter["signing_seconds_significance"]
 w(
     f"**What this means for the table's own 1.07s/1.095s figures above, and "
     f"for Section 7's regression +{n(pqc_beta_ms,1)}ms PQC effect "
-    f"(Prediction 3): little to nothing, with confidence.** The ~24ms gap "
-    f"this table's own single reference cell (sa-east-1/L0) shows is a LOCAL "
-    f"appearance, not a general one -- pooled across the full dataset, the "
-    f"real `generate_callback_cert` gap is "
-    f"{n(sp['pqc']['generate_callback_cert']['median']-sp['classic']['generate_callback_cert']['median'],2)}ms "
-    f"(PQC) and "
-    f"{n(sp['hybrid']['generate_callback_cert']['median']-sp['classic']['generate_callback_cert']['median'],2)}ms "
-    f"(Hybrid), neither significant. Since this setup-phase gap at full "
-    f"statistical power is both small and not statistically distinguishable "
-    f"from zero, it cannot be credited with explaining a meaningful share of "
-    f"the regression's own, CI-confirmed +{n(pqc_beta_ms,1)}ms PQC effect "
-    f"(Section 7) -- that effect's source stays where it already was: partly "
-    f"in the signing phase (which DOES show a consistent PQC-over-Classic "
-    f"difference even pooled, Section 8's own sign test) and partly in the "
-    f"residual, not fully attributed (below)."
+    f"(Prediction 3): inconclusive, not a confident \"noise\" verdict "
+    f"either way.** PQC's `generate_callback_cert` gap at the L0 reference "
+    f"cell ({n(sl0['pqc_vs_classic_generate_callback_cert']['median_a']-sl0['pqc_vs_classic_generate_callback_cert']['median_b'],1)}ms) "
+    f"is borderline-significant in isolation (p=0.074, the specific cell "
+    f"where the gap looks largest) but not significant once pooled across "
+    f"all 8 routes (p=0.1425, where the real gap shrinks to "
+    f"{n(sp['pqc']['generate_callback_cert']['median']-sp['classic']['generate_callback_cert']['median'],2)}ms). "
+    f"This report does not claim the setup phase EXPLAINS the regression's "
+    f"own, CI-confirmed +{n(pqc_beta_ms,1)}ms PQC effect (Section 7) -- the "
+    f"magnitudes do not obviously match even at the most favorable single "
+    f"cell -- but it also does not claim the setup phase is confidently "
+    f"ruled out, given the borderline in-cell result. **The signing phase, "
+    f"by contrast, is unambiguous**: tested directly across all 720 "
+    f"executions (not inferred from a reference elsewhere), PQC's and "
+    f"Hybrid's own `signing_seconds` are higher than Classic's in literally "
+    f"every pairing -- Mann-Whitney PQC vs. Classic: median "
+    f"{n(sseq['pqc_vs_classic']['median_a'],2)}ms vs. "
+    f"{n(sseq['pqc_vs_classic']['median_b'],2)}ms, "
+    f"U={n(sseq['pqc_vs_classic']['u'],1)}, p{pfmt(sseq['pqc_vs_classic']['p'])}, "
+    f"effect size {n(sseq['pqc_vs_classic']['effect'],2)} (complete "
+    f"separation); Hybrid vs. Classic: median "
+    f"{n(sseq['hybrid_vs_classic']['median_a'],2)}ms vs. "
+    f"{n(sseq['hybrid_vs_classic']['median_b'],2)}ms, "
+    f"U={n(sseq['hybrid_vs_classic']['u'],1)}, p{pfmt(sseq['hybrid_vs_classic']['p'])}. "
+    f"The regression's own +{n(pqc_beta_ms,1)}ms PQC effect is therefore "
+    f"best read as partly signing (real, overwhelming evidence), partly "
+    f"setup (real but inconclusive, as above), and partly residual, not "
+    f"fully attributed (below) -- not as a single, cleanly-isolated cause."
 )
 w()
 w("### Per-endpoint latency (sa-east-1/L0, the near-zero-RTT reference route)")
@@ -998,7 +1089,7 @@ if auth_fact:
         f"(`{auth_fact['start_utc']}`) and a `{auth_fact['status_code']}` "
         f"response, with `src: \"{auth_fact['src']}\"` -- this call belongs to "
         f"the automated login/consent interaction, which (v7 Decision 12) never "
-        f"routes through the timed `do_call()` path at all. This call was never timed at all -- not a real, measured sub-millisecond server response, and not a real zero; reported as `n/a` in the table above for that reason, correcting an earlier draft that showed it as `0.00ms`."
+        f"routes through the timed `do_call()` path at all. This call was never timed at all -- not a real, measured sub-millisecond server response, and not a real zero; reported as `n/a` in the table above for that reason."
     )
 
 w()
@@ -1075,7 +1166,7 @@ w(
     "round trip for classic/hybrid specifically. **\"12 round trips\" should "
     "be read as a stable estimate at moderate-to-high RTT, and as a "
     "less-precise, upper-bound-leaning estimate at low RTT (L14 and below) -- "
-    "not a literal, fixed count that holds uniformly at every RTT scale."
+    "not a literal, fixed count that holds uniformly at every RTT scale.**"
 )
 w()
 w(
@@ -1269,18 +1360,18 @@ w()
 w("### T_fluxo ~ profile + route + position + window, fit as ONE joint model")
 w()
 w(
-    "**Correcting this report's own earlier claim.** An earlier draft asserted "
-    "this joint design was rank-deficient (position supposedly collinear with "
-    "profile x window) without actually computing the rank. Checked directly "
-    "now, two ways: `matrix_rank()` on the real design reports "
+    "**Rank, checked directly, not assumed.** The joint design could in "
+    "principle be rank-deficient if `profile_position_in_window` were "
+    "collinear with `profile x window` -- checked two ways: `matrix_rank()` "
+    "on the real design reports "
     f"**{rank_proof['full_model_rank']}/{rank_proof['full_model_columns']}, full "
     f"rank**, and the normal equations solve without error on the real, "
-    f"non-bootstrapped 720 rows. The reasoning behind the original (wrong) claim "
-    f"missed that `profile_position_in_window` depends on the (profile, window) "
-    f"**interaction** under this campaign's specific Latin square, not on the "
-    f"profile and window **main effects** alone -- and only the main effects are "
-    f"in this design, so the exact linear dependency the original claim assumed "
-    f"does not actually hold. One joint model is fit, not two reduced ones."
+    f"non-bootstrapped 720 rows. `profile_position_in_window` depends on the "
+    f"(profile, window) **interaction** under this campaign's specific Latin "
+    f"square, not on the profile and window **main effects** alone -- and "
+    f"only the main effects are in this design, so no exact linear "
+    f"dependency exists between them. One joint model is fit, not two "
+    f"reduced ones."
 )
 w()
 w("| Term | Coefficient (seconds) | 95% CI |")
@@ -1294,16 +1385,19 @@ w(
     f"replacement and refitting, not resampling cell medians). `profile_pqc` and "
     f"`profile_hybrid` both have confidence intervals that do not cross zero -- "
     f"both profiles carry a real, measured cost over Classic, holding route, "
-    f"position, and window fixed simultaneously. **Stated plainly, per "
-    f"Luciano's review: PQC's own +23.6ms effect is small, non-null, and NOT "
-    f"attributed to any single measured phase with confidence.** Section 6's "
+    f"position, and window fixed simultaneously. **Stated plainly: PQC's own "
+    f"+23.6ms effect is small, non-null, and NOT attributed to any single "
+    f"measured phase with confidence.** Section 6's "
     f"own phase table (sa-east-1/L0 only) offers candidates -- PQC's signing "
     f"phase is +10.7ms over Classic there, partly offset by -26.5ms on HTTP "
     f"calls and +20.2ms on the residual -- but that is a single-cell "
     f"breakdown, not a pooled decomposition of this regression's own, "
     f"720-row-pooled coefficient; Section 6 also shows the setup-phase "
-    f"gap that LOOKS large at that same single cell is not statistically "
-    f"significant once pooled. This report does not claim a phase-by-phase "
+    f"gap at that same single cell is borderline-significant in "
+    f"isolation (p=0.074) but not significant once pooled across all 8 "
+    f"routes (p=0.1425) -- inconclusive, not a confident \"noise\" "
+    f"verdict; the signing phase, by contrast, is unambiguous across all "
+    f"720 executions (Section 6). This report does not claim a phase-by-phase "
     f"accounting of this specific +23.6ms figure -- only that it is real "
     f"(CI excludes zero) and small. `window_3`'s coefficient also "
     f"does not cross zero (T_fluxo measurably lower in window 3 than window 1, "
@@ -1404,13 +1498,21 @@ w(
     "unmigrated PQC/Hybrid scope."
 )
 w(
-    "- **Hybrid's TLS-layer certificate authentication relies on RSA alone in "
-    "practice**: the live handshake never checks the real ML-DSA-65 signature "
-    "Hybrid's certificates also carry (Section 2) -- its authentication "
-    "strength against an attacker who can forge an RSA signature is the same as "
-    "Classic's. **Message-level authentication (JWTs) is not affected by this** "
-    "-- `client_assertion`, the request object, `id_token`, and the JARM remain "
-    "genuinely dual-signed and dual-verified in every execution."
+    "- **Hybrid's TLS-layer certificate authentication is RSA-only for the "
+    "SERVER's identity, but genuinely dual (RSA + ML-DSA-65) for the "
+    "CLIENT's** (Section 2, items 4/5) -- the live client never checks the "
+    "server's certificate at all (`InsecureSkipVerify`), so the server's own "
+    "ML-DSA-65 signature is never verified by either signature; the server "
+    "DOES verify the client's certificate fully, the RSA primary signature "
+    "via the standard chain check and the ML-DSA-65 `AltSignatureValue` via "
+    "the extra `hybridVerifyPeerCertificateFunc()` callback. Against an "
+    "attacker who can only forge an RSA signature, Hybrid's TLS-layer "
+    "authentication of the SERVER's identity is exactly Classic's strength; "
+    "authentication of the CLIENT's identity is genuinely stronger. "
+    "**Message-level authentication (JWTs) is not affected by this "
+    "asymmetry** -- `client_assertion`, the request object, `id_token`, and "
+    "the JARM remain genuinely dual-signed and dual-verified in every "
+    "execution, in both directions."
 )
 w(
     "- **Hybrid's TLS server/client authentication reuses Classic's RSA key as "
@@ -1419,9 +1521,8 @@ w(
 )
 w()
 w(
-    "- **Only one direction has the peer's certificate verified when presented (not literally mutual, corrected against an "
-    "earlier draft of this round that wrongly claimed the server skips it "
-    "too.** The client never verifies the server's certificate "
+    "- **Only one direction has the peer's certificate verified when "
+    "presented -- not literally mutual.** The client never verifies the server's certificate "
     "(`InsecureSkipVerify: true`, `tls_kem_proxy/main.go:212`, confirmed "
     "client-only in Go's own `crypto/tls` source) -- this direction is "
     "genuinely skipped, under every profile. **The server DOES verify the "
@@ -1477,7 +1578,7 @@ w(
 w()
 w("## 11. Reproducibility and integrity")
 w()
-w("- **Git tags:** `v8-prereg` (acceptance criteria, before any official window), `v8-prereg-3` (the 5 confirmatory predictions, before windows 2/3 were analyzed), `v8-official-data` and `v8-official-data-2` (the official 720-execution dataset and its corrected/extended consolidate).")
+w("- **Git tags:** `v8-prereg` (acceptance criteria, before any official window), `v8-prereg-3` (the 5 confirmatory predictions, before windows 2/3 were analyzed), `v8-official-data` and `v8-official-data-2` (the official 720-execution dataset and its corrected/extended consolidate), `v8-official-data-3` (post-destroy: fleet teardown confirmed via the real AWS API, `consolidate_v8.py` promoted to canonical, official outputs regenerated -- Decision 117).")
 w("- **Code/image integrity:** every profile block checked `CODE_HASH` against a registered value and the live gateway image digest against `sha256:0839867545f3170f6198e7e2f6f3a9a7f6803c2b4feba2bb54f181195b341901`, every block, all 3 windows -- 0 violations (Decision 108's `check_artifact_health`).")
 w("- **sha256 manifests:** every file in `janela1/`, `janela2/`, `janela3/` has a per-file sha256 manifest under `_campaign-control/sha256_manifest.txt`.")
 w(
@@ -1485,8 +1586,7 @@ w(
     f"720 official execution files + 360 discarded K=5 warm-up files (the K=5 "
     f"warm-ups never capture pcap/cpu, by design -- Decision 103). Pcap/cpu "
     f"artifact counts are 744 per side (client and server), not 720. **The extra "
-    f"24 are NOT a per-cell warm-up** (an earlier draft of this report said so, "
-    f"incorrectly) -- confirmed now by their own file path: {inter['validation_stage_pcap_count']} pcap files (24 client-side + 24 server-side, confirmed by their own client/server subdirectory, not by filename -- neither side's filename says 'client' or 'server') live under "
+    f"24 are NOT a per-cell warm-up** -- confirmed by their own file path: {inter['validation_stage_pcap_count']} pcap files (24 client-side + 24 server-side, confirmed by their own client/server subdirectory, not by filename -- neither side's filename says 'client' or 'server') live under "
     f"`janela1/_campaign-control/validation_stage/`, the one-off 24-execution "
     f"(8 scenarios x 3 profiles) **parallel validation stage** run before "
     f"window 1 began (`run_validation_stage()`, `campaign_run.py`) -- never "

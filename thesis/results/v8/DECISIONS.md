@@ -10532,3 +10532,50 @@ Scanner de segredos: limpo. Sem tag nova.
    Pilha local do `mtls` restaurada ao seu perfil original
    (`CRYPTO_PROFILE=pqc`) ao final do teste.
 
+## Decision 123 (2026-10-31) -- rodada 6: reconciliação Hybrid-no-TLS,
+## decomposição completa do setup/teardown (sem fase oculta), teste real
+## de signing substituindo referência inexistente, limpeza de linguagem
+## de rascunho/rodada, correções de formatação; sem tag nova
+
+1. **Hybrid no TLS, regra única aplicada em todos os lugares** (Seção 2
+   itens 4/5, linha "TLS client certificate" da tabela, Limitação
+   correspondente, resumo executivo): a assinatura ML-DSA-65 do
+   certificado do SERVIDOR nunca é verificada (cliente com
+   `InsecureSkipVerify`); a do certificado do CLIENTE É verificada pelo
+   servidor (`hybridVerifyPeerCertificateFunc()`, além da verificação RSA
+   padrão). A Seção 2 item 4 e a Limitação correspondente diziam
+   incorretamente que NENHUM dos dois lados verificava a extensão
+   ML-DSA-65 -- corrigido para a assimetria real, por direção.
+2. **Seção 6, setup/teardown, decomposição completa** (sa-east-1/L0,
+   n=30/perfil): não existe fase oculta -- `generate_callback_cert` e
+   `callback_server_teardown` ocorrem CADA UMA duas vezes por execução; a
+   soma das duas ocorrências de cada fase, por execução, fecha
+   exatamente com os 1.071,2/1.095,2/1.071,6ms da tabela original. Teste
+   Mann-Whitney na célula L0 específica: `generate_callback_cert` PQC vs.
+   Classic U=329,0 p=0,0736 (limítrofe, mais próximo da significância que
+   o teste pooled em todas as rotas, p=0,1425). Conclusão reescrita para
+   "inconclusivo", sem afirmar que o setup não explica o efeito do PQC na
+   regressão antes dessa decomposição.
+3. **Seção 6, teste real de signing**: a referência a um "sign test da
+   Seção 8" sobre signing, que não existe, foi substituída pelo teste
+   real (Mann-Whitney, `signing_seconds`, as 720 execuções): PQC e Hybrid
+   são maiores que Classic em TODOS os pares (separação completa, p <
+   0,0001 nos dois casos).
+4. **Seção 3**: 4.6a e "uma unidade por termo" tornadas coerentes --
+   `JWT_size` é serialização compacta base64url; `JWK_PK_size` (256,
+   1.952, 2.208) é o tamanho BRUTO (decodificado) da chave pública, NÃO
+   base64url; `PKI_bytes` é o corpo PEM. Frase "the equation above uses
+   the raw size" removida (contradizia a própria seção).
+5. Linguagem de rascunho/rodada/revisor removida do texto científico
+   ("earlier draft", "this round", "round 5", "correcting Decision
+   115/116", "per Luciano's review" e variantes) -- conteúdo técnico e
+   referências a Decisions preservados; o histórico de rodadas continua
+   só aqui no DECISIONS.md.
+6. Correções de formatação: "U=108.901,0, 0,1425" -> "U=108.901,0,
+   p=0,1425"; negrito sem fechar na Seção 6 ("...at every RTT scale");
+   parêntese e negrito sem fechar nas Limitações (item de verificação
+   unidirecional); `v8-official-data-3` incluída na lista de tags da
+   Seção 11.
+7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Sem tag nova.
+

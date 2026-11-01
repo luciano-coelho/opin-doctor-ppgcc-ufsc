@@ -644,6 +644,71 @@ for p1 in ("pqc", "hybrid"):
         "median_a": statistics.median(a), "median_b": statistics.median(b),
     }
 
+# -------------------------------------------------------------- setup/teardown, PER-EXECUTION SUM at the L0
+# reference cell (Luciano's review: the table's own 1,071.2/1,095.2/1,071.6ms
+# total does not equal the pooled-across-all-routes single-occurrence medians
+# above (~535ms) because EACH of the two phases occurs TWICE per execution
+# (the "two-flows-one-process" pattern) -- there is no third, hidden phase;
+# summing each execution's own 2 occurrences of each phase, THEN taking the
+# median across the 30 executions at sa-east-1/L0 specifically, reproduces
+# the table's own total exactly (within rounding).
+setup_phase_l0_per_exec = {p: {"generate_callback_cert": [], "callback_server_teardown": []} for p in PROFILES}
+for p in PROFILES:
+    for wn in WINDOWS:
+        runs_dir = V8 / f"janela{wn}" / EXP_DIRS[p] / REF_INST / REF_SCEN / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for f in sorted(runs_dir.glob("run*.json")):
+            if "calls" in f.name:
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            phase_sum = {"generate_callback_cert": 0.0, "callback_server_teardown": 0.0}
+            for item in d["result"].get("setup_timings") or []:
+                if item["phase"] in phase_sum:
+                    phase_sum[item["phase"]] += item["duration_ms"]
+            for ph in phase_sum:
+                setup_phase_l0_per_exec[p][ph].append(phase_sum[ph])
+
+setup_phase_l0_pooled = {
+    p: {ph: {"median": statistics.median(vals), "n": len(vals)} for ph, vals in setup_phase_l0_per_exec[p].items()}
+    for p in PROFILES
+}
+setup_phase_l0_significance = {}
+for p1 in ("pqc", "hybrid"):
+    for ph in ("generate_callback_cert", "callback_server_teardown"):
+        a = setup_phase_l0_per_exec[p1][ph]
+        b = setup_phase_l0_per_exec["classic"][ph]
+        u, pval, effect = mann_whitney_u(a, b)
+        setup_phase_l0_significance[f"{p1}_vs_classic_{ph}"] = {
+            "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
+            "median_a": statistics.median(a), "median_b": statistics.median(b),
+        }
+
+# -------------------------------------------------------------- signing phase, PQC/Hybrid vs. Classic, all 720
+# executions (Luciano's review: Section 6 referenced a "Section 8 sign
+# test" on signing that does not exist -- this is that test, run for real).
+signing_seconds_samples = {p: [] for p in PROFILES}
+for p in PROFILES:
+    for wn in WINDOWS:
+        for inst, scen in ROUTES:
+            runs_dir = V8 / f"janela{wn}" / EXP_DIRS[p] / inst / scen / "runs"
+            if not runs_dir.is_dir():
+                continue
+            for f in sorted(runs_dir.glob("run*.json")):
+                if "calls" in f.name:
+                    continue
+                d = json.loads(f.read_text(encoding="utf-8"))
+                signing_seconds_samples[p].append(d["result"]["phase_accounting"]["signing_seconds"] * 1000)
+
+signing_seconds_significance = {}
+for p1 in ("pqc", "hybrid"):
+    a, b = signing_seconds_samples[p1], signing_seconds_samples["classic"]
+    u, pval, effect = mann_whitney_u(a, b)
+    signing_seconds_significance[f"{p1}_vs_classic"] = {
+        "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
+        "median_a": statistics.median(a), "median_b": statistics.median(b),
+    }
+
 # -------------------------------------------------------------- offline microbenchmarks (round 4, items 1/4)
 # Both benchmarks are OFFLINE, ADDED ESTIMATES -- neither is a measurement
 # taken during the real campaign (the fleet was already destroyed, Decision
@@ -752,6 +817,9 @@ intermediate = {
     "setup_phase_pooled": setup_phase_pooled,
     "setup_phase_by_window": setup_phase_by_window,
     "setup_phase_significance": setup_phase_significance,
+    "setup_phase_l0_pooled": setup_phase_l0_pooled,
+    "setup_phase_l0_significance": setup_phase_l0_significance,
+    "signing_seconds_significance": signing_seconds_significance,
     "chain_verification_bench_us": chain_verification_bench_us,
     "hybrid_altsig_bench_us": hybrid_altsig_bench_us,
     "signing_bench_ms": signing_bench_ms,
