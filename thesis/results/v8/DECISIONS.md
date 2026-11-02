@@ -10610,3 +10610,70 @@ Scanner de segredos: limpo. Sem tag nova.
 3. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
    segredos: limpo. Sem tag nova.
 
+## Decision 125 (2026-11-02) -- rodada 8: auditoria independente externa
+## -- IC por t do k, F-test de rota, heterogeneidade entre janelas
+## reproduzida com SE correto, Mann-Whitney sem correção de continuidade
+## declarado, N_mTLS=6 corrigido para 719/720, duplicata RSA do /jwks do
+## Hybrid explicada e quantificada, sensibilidade estendida; sem tag
+## nova, sem dados novos
+
+1. **k, IC por t sobre as 8 medianas de rota (df=6)**: reproduzido com o
+   quantil exato de Student (scipy, já dependência fixada do projeto) --
+   contém 56 nos 3 perfis, inclusive PQC ([55,94;56,33]), diferente do IC
+   por reamostragem (3.000 iterações) que fica inteiramente acima de 56
+   só para o PQC. "k do PQC acima de 56" rebaixado, no resumo e nas
+   Seções 7/9/10/11, para "resultado dependente do método de intervalo;
+   k ≈ 56 nos 3 perfis" -- mantendo intacto o achado robusto, não
+   contestado, de que a 240 execuções/perfil ambos os métodos (bootstrap
+   e t) concordam que o IC do PQC exclui 56. F-test (RTT + 7 dummies de
+   rota vs. RTT isolado, 240 execuções/perfil, comparação encaixada real):
+   significativo nos 3 perfis (p entre 4,9e-11 e 1,7e-8) -- rota carrega
+   poder explicativo real além do RTT medido por execução, para todos os
+   perfis, não só o PQC.
+2. **Heterogeneidade entre janelas**: a figura antiga (Q=7,160, p=0,0279)
+   não pôde ser rastreada a nenhum script salvo -- o SE usado é
+   desconhecido. Reproduzido do zero com o SE correto por mínimos
+   quadrados (t, df=6, mesmo ajuste do item 1): Cochran Q=5,304 (p=0,070,
+   não significativo no limiar convencional); o teste par a par janela 2
+   vs. 3 isoladamente SEGUE significativo (Z=2,176, p=0,030). Um
+   contraponto independente, não paramétrico (Kruskal-Wallis sobre o
+   delta PQC-menos-Classic ajustado por rota e janela, sem SE de teoria
+   normal) não encontra diferença alguma entre janelas (H=0,839,
+   p=0,657, medianas 24,1/28,7/16,7ms). Os três testes discordam entre
+   si -- achado reescrito como "não robusto", uma questão aberta, não
+   mais um efeito estatisticamente confirmado.
+3. **Mann-Whitney sem correção de continuidade**: declarado
+   explicitamente na Seção 8. Comparado contra a versão com correção do
+   próprio scipy em 32 testes deste relatório -- maior divergência
+   encontrada: 0,00568 (p=0,78446 sem correção vs. 0,79014 com ela), num
+   teste já claramente não significativo dos dois jeitos; nenhuma
+   conclusão de significância deste relatório muda com a correção.
+4. **N_mTLS=6, verificado em TODAS as 720 execuções via pcap do cliente,
+   não assumido**: 719/720 mostram exatamente 6 conexões TCP reais
+   (SYN+SYN-ACK); exatamente uma (Hybrid, janela 3, sa-east-1/L0,
+   `w03_run30.pcap.gz`) mostra 7 -- a conexão extra foi a um destino de
+   rede diferente (público, não o IP privado da VPC) das outras seis e
+   nunca completou um handshake mTLS logado no gateway, então o `N_mTLS`
+   OFICIAL (fonte: log do gateway, não a pcap) permanece 6 mesmo para
+   essa execução -- o OPINsize não é afetado. A causa exata, no nível da
+   aplicação, não pode mais ser determinada com a frota destruída --
+   registrada como não atribuída. Nenhum account ID, ARN ou IP é
+   impresso neste registro, por instrução já vigente.
+5. **`/jwks` do Hybrid, duplicata RSA 'sig' de 256B**: explicada (mesma
+   chave do componente clássico da chave HYBRID composta, republicada
+   para compatibilidade de descoberta de um consumidor JWKS padrão --
+   já documentado e corretamente excluído em `term_jwk()` desde
+   2026-10-25) e quantificada a partir dos dados reais: contá-la de
+   qualquer forma somaria +512 bytes (+0,14%) ao OPINsize do Hybrid --
+   pequeno, e excluído por um motivo de princípio (uma única chave,
+   contada uma vez), não só porque o efeito é pequeno.
+6. **Sensibilidade sem setup/teardown, estendida**: `window_2` e
+   `position_1` agora também reportados ao lado de `profile_pqc`/
+   `profile_hybrid`. `window_2` deixa de cruzar zero quando o
+   setup/teardown é removido (efeito real que estava mascarado);
+   `position_1` continua cruzando zero, mas com margem mais estreita --
+   "sem efeito de posição detectável" ajustado para refletir essa
+   margem, sem reverter a conclusão.
+7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Sem tag nova.
+

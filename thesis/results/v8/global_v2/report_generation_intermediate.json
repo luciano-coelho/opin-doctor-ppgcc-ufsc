@@ -43093,6 +43093,162 @@
     "n_obs": 720,
     "n_boot": 10000
   },
+  "k_route_t_interval": {
+    "classic": {
+      "k": 56.025360222722995,
+      "se": 0.08143976572207422,
+      "dof": 6,
+      "t_crit": 2.4469118511449692,
+      "ci95_t": [
+        55.82608429482318,
+        56.22463615062281
+      ],
+      "contains_56": true,
+      "n_routes": 8
+    },
+    "pqc": {
+      "k": 56.13470985272441,
+      "se": 0.07895057788567932,
+      "dof": 6,
+      "t_crit": 2.4469118511449692,
+      "ci95_t": [
+        55.9415247480412,
+        56.32789495740762
+      ],
+      "contains_56": true,
+      "n_routes": 8
+    },
+    "hybrid": {
+      "k": 55.988238760850116,
+      "se": 0.06417634043066141,
+      "dof": 6,
+      "t_crit": 2.4469118511449692,
+      "ci95_t": [
+        55.831204912887216,
+        56.145272608813016
+      ],
+      "contains_56": true,
+      "n_routes": 8
+    }
+  },
+  "k_route_f_test": {
+    "classic": {
+      "n_exec": 240,
+      "rss_rtt_only": 1.1259605643943984,
+      "rss_rtt_plus_route": 0.9100739370418942,
+      "df1": 7,
+      "df2": 231,
+      "F": 7.828219678270692,
+      "p": 1.6594060906434225e-08
+    },
+    "pqc": {
+      "n_exec": 240,
+      "rss_rtt_only": 0.988399887384462,
+      "rss_rtt_plus_route": 0.781799633748891,
+      "df1": 7,
+      "df2": 231,
+      "F": 8.720659457565924,
+      "p": 1.6787649132246756e-09
+    },
+    "hybrid": {
+      "n_exec": 240,
+      "rss_rtt_only": 1.1077573744630482,
+      "rss_rtt_plus_route": 0.8477952109135442,
+      "df1": 7,
+      "df2": 231,
+      "F": 10.118895797830206,
+      "p": 4.9223797188943937e-11
+    }
+  },
+  "mw_cc_divergences_top5": [
+    {
+      "label": "L0 callback_server_teardown hybrid_vs_classic",
+      "p_no_cc": 0.7844597689495467,
+      "p_cc": 0.7901413614260696,
+      "diff": 0.00568159247652289
+    },
+    {
+      "label": "T_fluxo pqc>classic us-east-1/L0",
+      "p_no_cc": 0.7227197915710601,
+      "p_cc": 0.7282652959955469,
+      "diff": 0.005545504424486758
+    },
+    {
+      "label": "L0 generate_callback_cert hybrid_vs_classic",
+      "p_no_cc": 0.7227197915710601,
+      "p_cc": 0.7282652959955469,
+      "diff": 0.005545504424486758
+    },
+    {
+      "label": "T_fluxo pqc>classic us-east-1/L14",
+      "p_no_cc": 0.6573804271100814,
+      "p_cc": 0.662734758176107,
+      "diff": 0.005354331066025675
+    },
+    {
+      "label": "T_fluxo pqc>classic ap-northeast-1/L0",
+      "p_no_cc": 0.6048386513275241,
+      "p_cc": 0.6100075520376812,
+      "diff": 0.005168900710157076
+    }
+  ],
+  "window_heterogeneity_q": {
+    "window_a": {
+      "1": 0.005361420453667262,
+      "2": 0.032325515884879044,
+      "3": -0.0016566321268832104
+    },
+    "window_se_a": {
+      "1": 0.018631067174614414,
+      "2": 0.009217816054881001,
+      "3": 0.012603790506281225
+    },
+    "window_dof": {
+      "1": 6,
+      "2": 6,
+      "3": 6
+    },
+    "cochran_q": 5.304320406175613,
+    "cochran_q_df": 2,
+    "cochran_q_p": 0.07049875681932667,
+    "w2_vs_w3_z": 2.1762706098367866,
+    "w2_vs_w3_p": 0.02953503181968742
+  },
+  "window_heterogeneity_kruskal": {
+    "median_by_window": {
+      "1": 24.107250000000356,
+      "2": 28.721499999999956,
+      "3": 16.7350000000015
+    },
+    "n_by_window": {
+      "1": 80,
+      "2": 80,
+      "3": 80
+    },
+    "H": 0.8391908713692828,
+    "p": 0.6573126912893029
+  },
+  "n_mtls_pcap_summary": {
+    "counts": {
+      "6": 719,
+      "7": 1
+    },
+    "anomalies": [
+      {
+        "profile": "hybrid",
+        "window": 3,
+        "installation": "sa-east-1",
+        "scenario": "L0",
+        "file": "w03_run30.pcap.gz",
+        "n_connections": 7
+      }
+    ]
+  },
+  "hybrid_jwk_duplicate_effect": {
+    "duplicate_calls": 2,
+    "duplicate_bytes_total": 512,
+    "pct_of_hybrid_opinsize": 0.1418844583865631
+  },
   "jwt_raw_vs_base64url": {
     "classic": {
       "raw_bytes": 729,

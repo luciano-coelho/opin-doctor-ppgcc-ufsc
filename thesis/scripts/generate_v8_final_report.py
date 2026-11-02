@@ -200,6 +200,12 @@ def load_pooled_tfluxo(profile, inst, scen):
 
 
 def mann_whitney_u(a, b):
+    """Asymptotic normal approximation, NO continuity correction (round 8,
+    item 3 -- stated explicitly here since this is the one Mann-Whitney
+    implementation every test in this report uses). mw_cc_check() below
+    tracks, for every call site, how far this differs from scipy's own
+    continuity-corrected asymptotic p -- not applied here, to leave this
+    function's own already-audited output unchanged."""
     pooled = sorted(a + b)
     ranks = {}
     for v in set(pooled):
@@ -218,6 +224,22 @@ def mann_whitney_u(a, b):
     return u, p, effect
 
 
+mw_cc_divergences = []
+
+
+def mw_cc_check(a, b, label, my_p):
+    """Round 8, item 3: compares mann_whitney_u()'s own no-continuity-
+    correction p against scipy's continuity-corrected asymptotic p, for
+    the SAME two samples -- tracked globally so the report can cite the
+    single largest divergence found, not just assert one exists."""
+    try:
+        from scipy import stats as _sps
+    except ImportError:
+        return
+    _, cc_p = _sps.mannwhitneyu(a, b, alternative="two-sided", method="asymptotic", use_continuity=True)
+    mw_cc_divergences.append({"label": label, "p_no_cc": my_p, "p_cc": float(cc_p), "diff": abs(my_p - float(cc_p))})
+
+
 def binom_two_tailed_p(k, n):
     """Exact two-tailed sign-test p-value, Binomial(n, 0.5)."""
     def pmf(i):
@@ -233,6 +255,7 @@ for p1, p2 in (("hybrid", "classic"), ("pqc", "classic"), ("hybrid", "pqc")):
     for inst, scen in ROUTES:
         a, b = pooled_tfluxo[(p1, inst, scen)], pooled_tfluxo[(p2, inst, scen)]
         u, pval, eff = mann_whitney_u(a, b)
+        mw_cc_check(a, b, f"T_fluxo {p1}>{p2} {inst}/{scen}", pval)
         med_a, med_b = statistics.median(a), statistics.median(b)
         rtt = cell(p2, inst, scen)["rtt_and_loss"]["rtt_measured_ms"]["median"] / 1000
         diff_s = med_a - med_b
@@ -607,6 +630,88 @@ for p in PROFILES:
         "k_ci95_ols_t": [k_lo_t, k_hi_t], "se_k": se_k, "n_boot": nb,
     }
 
+# -------------------------------------------------------------- k, classical t-interval over the 8
+# route medians (round 8, item 1): the existing combined_models["k_model"] CI is a
+# 3000-iteration bootstrap over just 8 points (consolidate_v8.py's own build_models()) --
+# an independent review found that CI's own upper tail unstable at this n, and that the
+# classical OLS t-interval (df=8-2=6) on the SAME 8 points contains 56 for all 3 profiles.
+# scipy is already a pinned project dependency (thesis/results/v8/campaign/scripts/
+# consolidate_v8.py imports it the same way); used here only for the exact t quantile at
+# small df -- NOT a new, unvetted dependency.
+try:
+    from scipy import stats as _scipy_stats
+except ImportError:
+    _scipy_stats = None
+
+k_route_t_interval = {}
+k_route_f_test = {}
+for p in PROFILES:
+    pairs = [
+        (cell(p, inst, scen)["rtt_and_loss"]["rtt_measured_ms"]["median"] / 1000.0,
+         cell(p, inst, scen)["t_fluxo_seconds"]["median"])
+        for inst, scen in ROUTES
+    ]
+    xs8, ys8 = [pr[0] for pr in pairs], [pr[1] for pr in pairs]
+    n8 = len(xs8)
+    a8, b8 = ols(xs8, ys8)
+    xm8 = statistics.mean(xs8)
+    resid8 = [y - (a8 + b8 * x) for x, y in zip(xs8, ys8)]
+    sse8 = sum(r * r for r in resid8)
+    dof8 = n8 - 2
+    s2_8 = sse8 / dof8
+    sxx8 = sum((x - xm8) ** 2 for x in xs8)
+    se_b8 = math.sqrt(s2_8 / sxx8)
+    if _scipy_stats is not None:
+        t_crit8 = float(_scipy_stats.t.ppf(0.975, dof8))
+    else:
+        t_crit8 = 2.4469  # t(0.975, df=6), hardcoded fallback if scipy is ever unavailable
+    ci_t8 = (b8 - t_crit8 * se_b8, b8 + t_crit8 * se_b8)
+    k_route_t_interval[p] = {
+        "k": b8, "se": se_b8, "dof": dof8, "t_crit": t_crit8,
+        "ci95_t": list(ci_t8), "contains_56": ci_t8[0] <= 56 <= ci_t8[1], "n_routes": n8,
+    }
+
+    # F-test: does adding 7 route dummies on top of the continuous per-execution RTT
+    # explain significantly more variance than RTT alone (n=240 individual executions)?
+    xs_exec, route_idx = [], []
+    ys_exec = []
+    for ri, (inst, scen) in enumerate(ROUTES):
+        for wn in WINDOWS:
+            base = V8 / f"janela{wn}" / EXP_DIRS[p] / inst / scen
+            runs_dir = base / "runs"
+            if not runs_dir.is_dir():
+                continue
+            for f in sorted(runs_dir.glob("run*.json")):
+                if "calls" in f.name:
+                    continue
+                d = json.loads(f.read_text(encoding="utf-8"))
+                global_idx = int(f.stem.replace("run", ""))
+                label = f"w{wn:02d}_run{global_idx:02d}"
+                pcap = base / "client" / f"{label}.pcap.gz"
+                if not pcap.is_file():
+                    continue
+                rtts = find_all_syn_synack_rtts(str(pcap))
+                if not rtts:
+                    continue
+                xs_exec.append(statistics.median(rtts))
+                ys_exec.append(d["result"]["t_fluxo_seconds"])
+                route_idx.append(ri)
+    n_exec = len(xs_exec)
+    X_a = [[1.0, x] for x in xs_exec]
+    beta_a = solve_normal_equations(X_a, ys_exec)
+    rss_a = sum((y - sum(c * b for c, b in zip(row, beta_a))) ** 2 for row, y in zip(X_a, ys_exec))
+    X_b = [[1.0, x] + [1.0 if ri == j else 0.0 for j in range(1, 8)] for x, ri in zip(xs_exec, route_idx)]
+    beta_b = solve_normal_equations(X_b, ys_exec)
+    rss_b = sum((y - sum(c * b for c, b in zip(row, beta_b))) ** 2 for row, y in zip(X_b, ys_exec))
+    df_a, df_b = n_exec - 2, n_exec - 9
+    df_diff = df_a - df_b
+    F_stat = ((rss_a - rss_b) / df_diff) / (rss_b / df_b)
+    f_p = float(_scipy_stats.f.sf(F_stat, df_diff, df_b)) if _scipy_stats is not None else None
+    k_route_f_test[p] = {
+        "n_exec": n_exec, "rss_rtt_only": rss_a, "rss_rtt_plus_route": rss_b,
+        "df1": df_diff, "df2": df_b, "F": F_stat, "p": f_p,
+    }
+
 # -------------------------------------------------------------- setup/teardown phase decomposition (round 4, item 2)
 # generate_callback_cert/callback_server_teardown appear TWICE per run file
 # (confirmed by inspection -- opin_flow.py's own "two-flows-one-process"
@@ -653,6 +758,7 @@ for p1 in ("pqc", "hybrid"):
     a = setup_phase_samples[p1]["generate_callback_cert"]
     b = setup_phase_samples["classic"]["generate_callback_cert"]
     u, pval, effect = mann_whitney_u(a, b)
+    mw_cc_check(a, b, f"generate_callback_cert pooled {p1}_vs_classic", pval)
     setup_phase_significance[f"{p1}_vs_classic"] = {
         "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
         "median_a": statistics.median(a), "median_b": statistics.median(b),
@@ -693,6 +799,7 @@ for p1 in ("pqc", "hybrid"):
         a = setup_phase_l0_per_exec[p1][ph]
         b = setup_phase_l0_per_exec["classic"][ph]
         u, pval, effect = mann_whitney_u(a, b)
+        mw_cc_check(a, b, f"L0 {ph} {p1}_vs_classic", pval)
         setup_phase_l0_significance[f"{p1}_vs_classic_{ph}"] = {
             "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
             "median_a": statistics.median(a), "median_b": statistics.median(b),
@@ -718,6 +825,7 @@ signing_seconds_significance = {}
 for p1 in ("pqc", "hybrid"):
     a, b = signing_seconds_samples[p1], signing_seconds_samples["classic"]
     u, pval, effect = mann_whitney_u(a, b)
+    mw_cc_check(a, b, f"signing_seconds {p1}_vs_classic", pval)
     signing_seconds_significance[f"{p1}_vs_classic"] = {
         "u": u, "p": pval, "effect": effect, "n_a": len(a), "n_b": len(b),
         "median_a": statistics.median(a), "median_b": statistics.median(b),
@@ -765,6 +873,48 @@ chain_verify_diff_ms = chain_verification_bench_us["classic"]["mean"] / 1000 - c
 signing_bench_gap_both_sides_ms = 2 * signing_bench_gap_ms + chain_verify_diff_ms
 signing_bench_gap_both_sides_share_of_handshake = signing_bench_gap_both_sides_ms / handshake_gap_classic_pqc_l0_ms
 
+# -------------------------------------------------------------- N_mTLS constancy, checked on EVERY execution's
+# own client pcap (round 8, item 4) -- not just trusted from the gateway-log-based n_mtls field consolidate_v8.py
+# already reports as "[6]" (constant) for every cell. A real TCP-level count (SYN+SYN-ACK pairs) can differ from
+# that gateway-log count if a connection never completes a logged mTLS handshake.
+n_mtls_pcap_counts = Counter()
+n_mtls_anomalies = []
+for p in PROFILES:
+    for wn in WINDOWS:
+        for inst, scen in ROUTES:
+            client_dir = V8 / f"janela{wn}" / EXP_DIRS[p] / inst / scen / "client"
+            if not client_dir.is_dir():
+                continue
+            for pcap in sorted(client_dir.glob("*.pcap.gz")):
+                rtts = find_all_syn_synack_rtts(str(pcap))
+                cnt = len(rtts)
+                n_mtls_pcap_counts[cnt] += 1
+                if cnt != 6:
+                    n_mtls_anomalies.append({"profile": p, "window": wn, "installation": inst, "scenario": scen, "file": pcap.name, "n_connections": cnt})
+n_mtls_pcap_summary = {"counts": dict(n_mtls_pcap_counts), "anomalies": n_mtls_anomalies}
+
+# -------------------------------------------------------------- Hybrid /jwks RSA 'sig' duplicate (round 8, item 5):
+# term_jwk()'s own 2026-10-25 fix (consolidate_v8.py) already EXCLUDES this duplicate by taking the max "sig"-use
+# size per call -- quantifying here what INCLUDING it anyway would have cost, from the real raw calls.jsonl data,
+# not a hand-typed estimate.
+hybrid_rsa_sig_duplicate_bytes = 0
+hybrid_rsa_sig_duplicate_calls = 0
+calls_path = V8 / "janela1" / EXP_DIRS["hybrid"] / REF_INST / REF_SCEN / "runs" / "w01_run01.calls.jsonl"
+for line in calls_path.read_text(encoding="utf-8").splitlines():
+    c_ = json.loads(line)
+    if not c_.get("endpoint", "").rstrip("/").endswith("jwks"):
+        continue
+    sig_entries = [j for j in c_.get("jwk_sizes", []) if j.get("use") == "sig"]
+    if len(sig_entries) > 1:
+        smaller = min(j["size_bytes"] for j in sig_entries)
+        hybrid_rsa_sig_duplicate_bytes += smaller
+        hybrid_rsa_sig_duplicate_calls += 1
+hybrid_jwk_duplicate_effect = {
+    "duplicate_calls": hybrid_rsa_sig_duplicate_calls,
+    "duplicate_bytes_total": hybrid_rsa_sig_duplicate_bytes,
+    "pct_of_hybrid_opinsize": hybrid_rsa_sig_duplicate_bytes / terms["hybrid"]["opinsize"] * 100,
+}
+
 print("Computing OPINsize terms (N_JWK corrected to 4), participant decomposition reconciliation,")
 print("Holm-corrected Mann-Whitney, exact sign-test p, pooled handshake-in-trips, Shapiro-Wilk count,")
 print("and the T_fluxo ~ profile+route+position+window regression -- all from raw/published data.")
@@ -800,6 +950,101 @@ print(f"  Signing bench: RSA-4096-PSS={signing_bench_ms['rsa_4096_pss']['mean']:
       f"ML-DSA-65={signing_bench_ms['mldsa_65']['mean']:.3f}ms, gap explains "
       f"{signing_bench_gap_share_of_handshake*100:.1f}% of the Classic-PQC L0 handshake gap")
 
+mw_cc_divergences.sort(key=lambda r: -r["diff"])
+mw_cc_max = mw_cc_divergences[0] if mw_cc_divergences else None
+if mw_cc_max:
+    print(f"  Mann-Whitney continuity-correction check: {len(mw_cc_divergences)} tests compared; "
+          f"largest divergence at {mw_cc_max['label']}: p_no_cc={mw_cc_max['p_no_cc']:.5f} "
+          f"vs p_cc={mw_cc_max['p_cc']:.5f} (diff={mw_cc_max['diff']:.5f})")
+print(f"  N_mTLS pcap-measured connection counts: {n_mtls_pcap_summary['counts']}, "
+      f"{len(n_mtls_pcap_summary['anomalies'])} anomalies: {n_mtls_pcap_summary['anomalies']}")
+print(f"  Hybrid /jwks RSA 'sig' duplicate: {hybrid_jwk_duplicate_effect}")
+
+# -------------------------------------------------------------- window heterogeneity, reproduced with the
+# correct small-sample SE (round 8, item 2). The report's own earlier Q=7.160/p=0.0279 figure could not be
+# traced to any saved script -- its own SE methodology is unknown. This recomputes the per-window
+# PQC-vs-Classic intercept `a` (8 route points, delta model) with a proper OLS t-based SE (df=6, matching
+# the k_route_t_interval fix above), then Cochran's Q across the 3 windows' own `a` estimates, PLUS an
+# independent, non-parametric cross-check: Kruskal-Wallis on the route+window-adjusted per-execution
+# PQC-minus-Classic delta (each PQC execution's T_fluxo minus the Classic MEDIAN for the SAME route and
+# window), which needs no normal-theory SE at all.
+window_a_estimates = {}
+for wn in WINDOWS:
+    wmodels = json.loads((V8 / f"janela{wn}" / "_v2" / "consolidated_v2.json").read_text(encoding="utf-8"))["profiles"]
+    pairs = []
+    for inst, scen in ROUTES:
+        rtt = wmodels["classic"][inst][scen]["rtt_and_loss"]["rtt_measured_ms"]["median"] / 1000.0
+        tf_classic = wmodels["classic"][inst][scen]["t_fluxo_seconds"]["median"]
+        tf_pqc = wmodels["pqc"][inst][scen]["t_fluxo_seconds"]["median"]
+        pairs.append((rtt, tf_pqc - tf_classic))
+    xs_w, ys_w = [pr[0] for pr in pairs], [pr[1] for pr in pairs]
+    n_w = len(xs_w)
+    a_w, b_w = ols(xs_w, ys_w)
+    xm_w = statistics.mean(xs_w)
+    resid_w = [y - (a_w + b_w * x) for x, y in zip(xs_w, ys_w)]
+    sse_w = sum(r * r for r in resid_w)
+    dof_w = n_w - 2
+    s2_w = sse_w / dof_w
+    sxx_w = sum((x - xm_w) ** 2 for x in xs_w)
+    se_a_w = math.sqrt(s2_w * (1.0 / n_w + xm_w ** 2 / sxx_w))
+    window_a_estimates[wn] = {"a": a_w, "se_a": se_a_w, "dof": dof_w, "n": n_w}
+
+_thetas = [window_a_estimates[wn]["a"] for wn in WINDOWS]
+_ses = [window_a_estimates[wn]["se_a"] for wn in WINDOWS]
+_weights = [1.0 / se ** 2 for se in _ses]
+_theta_bar = sum(w * t for w, t in zip(_weights, _thetas)) / sum(_weights)
+cochran_q = sum(w * (t - _theta_bar) ** 2 for w, t in zip(_weights, _thetas))
+cochran_q_df = len(WINDOWS) - 1
+cochran_q_p = float(_scipy_stats.chi2.sf(cochran_q, cochran_q_df)) if _scipy_stats is not None else None
+_z23 = (window_a_estimates[2]["a"] - window_a_estimates[3]["a"]) / math.sqrt(window_a_estimates[2]["se_a"] ** 2 + window_a_estimates[3]["se_a"] ** 2)
+_p23 = float(2 * (1 - _scipy_stats.norm.cdf(abs(_z23)))) if _scipy_stats is not None else None
+
+window_heterogeneity_q = {
+    "window_a": {wn: window_a_estimates[wn]["a"] for wn in WINDOWS},
+    "window_se_a": {wn: window_a_estimates[wn]["se_a"] for wn in WINDOWS},
+    "window_dof": {wn: window_a_estimates[wn]["dof"] for wn in WINDOWS},
+    "cochran_q": cochran_q, "cochran_q_df": cochran_q_df, "cochran_q_p": cochran_q_p,
+    "w2_vs_w3_z": _z23, "w2_vs_w3_p": _p23,
+}
+
+classic_route_window_median = {}
+for wn in WINDOWS:
+    for inst, scen in ROUTES:
+        runs_dir = V8 / f"janela{wn}" / EXP_DIRS["classic"] / inst / scen / "runs"
+        vals = []
+        for f in sorted(runs_dir.glob("run*.json")):
+            if "calls" in f.name:
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            vals.append(d["result"]["t_fluxo_seconds"])
+        classic_route_window_median[(wn, inst, scen)] = statistics.median(vals)
+
+adjusted_delta_by_window = {wn: [] for wn in WINDOWS}
+for wn in WINDOWS:
+    for inst, scen in ROUTES:
+        runs_dir = V8 / f"janela{wn}" / EXP_DIRS["pqc"] / inst / scen / "runs"
+        for f in sorted(runs_dir.glob("run*.json")):
+            if "calls" in f.name:
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            delta = (d["result"]["t_fluxo_seconds"] - classic_route_window_median[(wn, inst, scen)]) * 1000
+            adjusted_delta_by_window[wn].append(delta)
+
+if _scipy_stats is not None:
+    kw_h, kw_p = _scipy_stats.kruskal(*[adjusted_delta_by_window[wn] for wn in WINDOWS])
+    kw_h, kw_p = float(kw_h), float(kw_p)
+else:
+    kw_h, kw_p = None, None
+window_heterogeneity_kruskal = {
+    "median_by_window": {wn: statistics.median(adjusted_delta_by_window[wn]) for wn in WINDOWS},
+    "n_by_window": {wn: len(adjusted_delta_by_window[wn]) for wn in WINDOWS},
+    "H": kw_h, "p": kw_p,
+}
+print(f"  Window heterogeneity (PQC vs Classic `a`, t-based SE): Cochran Q={cochran_q:.3f} df={cochran_q_df} p={cochran_q_p}, "
+      f"window2-vs-3 Z={_z23:.3f} p={_p23}")
+print(f"  Window heterogeneity cross-check (route+window-adjusted delta, Kruskal-Wallis): H={kw_h} p={kw_p}, "
+      f"medians={window_heterogeneity_kruskal['median_by_window']}")
+
 intermediate = {
     "terms": terms,
     "participant_decomp": participant_decomp,
@@ -828,6 +1073,13 @@ intermediate = {
     "rank_proof": rank_proof,
     "regression_joint": regression_joint,
     "regression_joint_minus_setup": regression_joint_minus_setup,
+    "k_route_t_interval": k_route_t_interval,
+    "k_route_f_test": k_route_f_test,
+    "mw_cc_divergences_top5": mw_cc_divergences[:5],
+    "window_heterogeneity_q": window_heterogeneity_q,
+    "window_heterogeneity_kruskal": window_heterogeneity_kruskal,
+    "n_mtls_pcap_summary": n_mtls_pcap_summary,
+    "hybrid_jwk_duplicate_effect": hybrid_jwk_duplicate_effect,
     "jwt_raw_vs_base64url": jwt_raw_vs_base64url,
     "k_per_execution": k_per_execution,
     "fleet_status": fleet_status,

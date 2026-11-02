@@ -100,14 +100,22 @@ w(
     f"iteration bootstrap over the 720 individual executions) -- detectable in the "
     f"regression even though PQC vs. Classic's own route-by-route ordering is not "
     f"consistent enough to pass the sign test (p=0.070). A fixed-cost/distance-"
-    f"scaling model (T_fluxo = T0 + k x RTT) holds closely for Classic and Hybrid "
-    f"(k near the expected 56 round trips); **PQC's own k's 95% confidence "
-    f"interval sits just above 56** in the combined 8-route dataset, and an "
-    f"independent, higher-powered cross-check (resampling all 240 of PQC's own "
-    f"individual executions rather than 8 route medians, Section 7) confirms the "
-    f"same pattern with a tighter interval. PQC's fixed cost also varies in a "
-    f"statistically detectable way between the 3 collection windows -- both "
-    f"reported as open, not-fully-explained findings, not smoothed over. At the "
+    f"scaling model (T_fluxo = T0 + k x RTT) holds closely for all three "
+    f"profiles -- **k is approximately 56 round trips for Classic, PQC, and "
+    f"Hybrid alike**. At the 8-route-median level, whether PQC's own CI "
+    f"specifically excludes 56 is interval-method-dependent (a 3,000-"
+    f"iteration bootstrap excludes it; the classical OLS t-interval, more "
+    f"appropriate at this small n, does not -- Section 7). At the "
+    f"higher-powered, 240-individual-execution level, both the bootstrap "
+    f"and the OLS t-interval agree PQC's own CI excludes 56 there, a "
+    f"smaller but consistent effect across methods once n is large enough "
+    f"for both to be reliable. PQC's fixed-cost estimate also appears to "
+    f"vary between the 3 collection windows, but that apparent variation "
+    f"is not robust across tests (Cochran's Q and an independent "
+    f"Kruskal-Wallis cross-check disagree, Section 7/10) -- both the "
+    f"8-route-level method-dependence and the window-variance question "
+    f"are reported as open, not-fully-settled findings, not smoothed "
+    f"over. At the "
     f"TLS channel layer, Hybrid's certificate authentication is asymmetric by "
     f"direction: RSA-only for the server's identity (the client never checks "
     f"it at all, `InsecureSkipVerify`) but genuinely dual, RSA and ML-DSA-65, "
@@ -611,9 +619,34 @@ w(
     f"changes. **`N_JWK = {terms['classic']['n_jwk']}`, read directly from the raw "
     f"data's own call count, not assumed from v7's flow structure** -- the flow "
     f"calls `/jwks` 4 times per execution, every one of the 4 carrying a `sig`-use "
-    f"JWK entry of the same size (confirmed by `audit_v8_from_raw.py`); the "
+    f"JWK entry that resolves to the same size once per-call duplicates are "
+    f"handled (next paragraph; confirmed by `audit_v8_from_raw.py`); the "
     f"separate `enc`-use key used for JWE (Section 2) is fetched in the same "
     f"calls but is not part of this equation's `JWK_PK_size` term."
+)
+w()
+jd = inter["hybrid_jwk_duplicate_effect"]
+w(
+    f"**Hybrid specifically: 2 of the 4 `/jwks` calls carry a SECOND "
+    f"`sig`-use entry -- explained and quantified, not silently excluded.** "
+    f"Those 2 calls (the authenticated ones) return both the composed "
+    f"`kty: \"HYBRID\"` key (`pk_hybrid`, 2,208 bytes: the 256-byte classical "
+    f"modulus + the 1,952-byte raw ML-DSA-65 key) AND a plain `kty: \"RSA\"` "
+    f"entry of {n(jd['duplicate_bytes_total']/jd['duplicate_calls'] if jd['duplicate_calls'] else 0,0)} bytes -- the SAME `kid` as the "
+    f"composed key's own classical half, republished alone so a standards-"
+    f"compliant JWKS consumer doing ordinary kid+alg discovery can still "
+    f"find a match for a payload-extension-signed JWT's header "
+    f"(`ResponseSigningService.java`; documented in "
+    f"`consolidate_v8.py`'s own `term_jwk()`, fixed 2026-10-25). This is "
+    f"the SAME key republished in a smaller encoding, not a second "
+    f"artifact -- `term_jwk()` already takes the LARGER of the two "
+    f"`sig`-use sizes per call, correctly excluding the duplicate. "
+    f"Quantified, not just asserted: counting it anyway would add "
+    f"{jd['duplicate_calls']} x {n(jd['duplicate_bytes_total']/jd['duplicate_calls'] if jd['duplicate_calls'] else 0,0)} = "
+    f"{n(jd['duplicate_bytes_total'],0)} bytes to Hybrid's own OPINsize, "
+    f"{n(jd['pct_of_hybrid_opinsize'],2)}% of its total -- small, and "
+    f"excluded on principled grounds (one key, counted once), not merely "
+    f"because the effect happens to be small."
 )
 w()
 w("| Term | Classic | PQC | Hybrid |")
@@ -1243,24 +1276,66 @@ w(
     "not only where one of them fails.**"
 )
 w()
-w("| Profile | T0 (fixed cost) | k | k 95% CI | CI contains 56? | k within 56+-1? |")
-w("|---|---:|---:|---:|---|---|")
+w("| Profile | T0 (fixed cost) | k | k 95% CI (bootstrap, 3,000 iter.) | k 95% CI (OLS t-interval, df=6) | Bootstrap CI contains 56? | t-interval CI contains 56? | k within 56+-1? |")
+w("|---|---:|---:|---:|---:|---|---|---|")
+krt = inter["k_route_t_interval"]
 for p in PROFILES:
     m = combined_models["k_model"][p]
+    mt = krt[p]
     k_str = n(m['k'], 2)
     within_1 = abs(m['k'] - 56) <= 1
-    w(f"| {LABEL[p]} | {n(m['t0_seconds'],4)}s | {k_str} | [{n(m['k_ci95'][0],2)};{n(m['k_ci95'][1],2)}] | {'yes' if m['k_contains_56'] else '**no**'} | {'yes' if within_1 else '**no**'} |")
+    w(f"| {LABEL[p]} | {n(m['t0_seconds'],4)}s | {k_str} | [{n(m['k_ci95'][0],2)};{n(m['k_ci95'][1],2)}] | [{n(mt['ci95_t'][0],2)};{n(mt['ci95_t'][1],2)}] | {'yes' if m['k_contains_56'] else '**no**'} | {'yes' if mt['contains_56'] else '**no**'} | {'yes' if within_1 else '**no**'} |")
 w()
 pqc_k = combined_models['k_model']['pqc']['k']
 w(
     f"56 is the expected trip count: 44 application calls + 2 round trips for "
-    f"each of the flow's 6 mTLS connections (12, confirmed in Section 6). Classic "
-    f"and Hybrid pass both readings. **PQC passes the +-1 tolerance reading "
-    f"(point estimate {n(pqc_k,2)}) but fails the confidence-interval reading** "
-    f"(its 95% CI sits entirely above 56) -- `audit_v8_from_raw.py` independently "
-    f"reproduced the point estimate exactly and found the CI's exact upper bound "
-    f"sensitive to the bootstrap's own random-number stream at this sample size "
-    f"(8 routes feeding the slope)."
+    f"each of the flow's 6 mTLS connections (12, confirmed in Section 6). "
+    f"**The \"does PQC's k exceed 56\" reading is method-dependent, not a "
+    f"single settled fact**: the 3,000-iteration bootstrap CI (8 route "
+    f"medians) sits entirely above 56 for PQC specifically, but the "
+    f"classical OLS t-interval (same 8 points, df=6, exact Student's t "
+    f"critical value) contains 56 for ALL THREE profiles, PQC included "
+    f"([{n(krt['pqc']['ci95_t'][0],2)};{n(krt['pqc']['ci95_t'][1],2)}]). "
+    f"`audit_v8_from_raw.py` independently reproduced the bootstrap point "
+    f"estimate exactly and already flagged its own upper bound as "
+    f"sensitive to the resampling stream at n=8 (a finding, not a bug); "
+    f"the t-interval is the more appropriate tool at this sample size and "
+    f"does not show the same instability. **Read together: k is "
+    f"approximately 56 for all three profiles; whether PQC's own CI "
+    f"specifically excludes 56 depends on which interval-estimation method "
+    f"is used, not on a profile-specific effect independently confirmed by "
+    f"both.**"
+)
+w()
+kft = inter["k_route_f_test"]
+w(
+    f"**A real, separate caveat on the whole T_fluxo = T0 + k*RTT model "
+    f"itself, found while checking the above: route carries real "
+    f"explanatory power beyond what the per-execution measured RTT alone "
+    f"captures, for all three profiles.** F-test (240 individual "
+    f"executions/profile): comparing T_fluxo ~ RTT (2 parameters) against "
+    f"T_fluxo ~ RTT + route (9 parameters, 7 route dummies added on top of "
+    f"the same continuous RTT term -- a proper nested comparison, not route "
+    f"replacing RTT) --"
+)
+w()
+w("| Profile | F | df1 | df2 | p |")
+w("|---|---:|---:|---:|---|")
+for p in PROFILES:
+    kf = kft[p]
+    w(f"| {LABEL[p]} | {n(kf['F'],2)} | {kf['df1']} | {kf['df2']} | {kf['p']:.2e} |")
+w()
+w(
+    f"Significant for all three (p from "
+    f"{kft['classic']['p']:.2e} (Classic) to {kft['hybrid']['p']:.2e} "
+    f"(Hybrid), well below any conventional threshold) -- something route-specific (path MTU, "
+    f"provider peering, routing asymmetry, or similar) explains real "
+    f"variance in T_fluxo that a single linear RTT term does not, for "
+    f"every profile, not only PQC. This does not invalidate the k model's "
+    f"own point estimate (still ~56 for all three, both by the t-interval "
+    f"above and by the 240-execution fit below) -- it qualifies the model "
+    f"as a good first-order approximation, not a complete, "
+    f"RTT-is-everything account of this project's own 8 routes."
 )
 w()
 w(
@@ -1314,6 +1389,8 @@ for idx, (desc, getter) in enumerate([
         row.append(getter(mm))
     w("| " + " | ".join(row) + " |")
 w()
+wq = inter["window_heterogeneity_q"]
+wkr = inter["window_heterogeneity_kruskal"]
 w(
     "**Prediction 1b fails for more than just PQC: Classic itself fails 1b in "
     "window 3** (its own k-CI misses 56 in that window alone, Classic=PASS "
@@ -1324,13 +1401,22 @@ w(
     "[+15.26;+52.30]ms, with a negative, significant `b` too) but passed again "
     "in windows 1 and 3, and passes in the combined fit. **This cross-window "
     "difference is reported as a hypothesis, not a confirmed cause.** A "
-    "heterogeneity test across the three windows' own `a` estimates (pairwise "
-    "Z-test and Cochran's Q, Decision 115 item 4) found window 2 vs. window 3 "
-    "significantly different (p=0.0086) and the omnibus test across all three "
-    "significant too (Q=7.160, df=2, p=0.0279) -- the variation itself is "
-    "statistically real, not sampling noise, but its cause (a profile-order "
-    "effect, a real non-stationarity in the network or hardware, or something "
-    "else) is **not attributed**."
+    "heterogeneity test across the three windows' own `a` estimates, "
+    "computed with the proper small-sample t-based SE (same df=6 fix the "
+    "k-interval above needed): the omnibus Cochran's Q=" + n(wq['cochran_q'],3) + f", df={wq['cochran_q_df']}, "
+    f"p={pfmt(wq['cochran_q_p'])} -- just above the conventional 0.05 "
+    f"threshold, not clearly significant. Window 2 vs. window 3 alone, by "
+    f"itself, IS significant at that threshold: Z={n(wq['w2_vs_w3_z'],3)}, "
+    f"p={pfmt(wq['w2_vs_w3_p'])}. An independent, non-parametric "
+    f"cross-check (Kruskal-Wallis on the route-and-window-adjusted "
+    f"per-execution PQC-minus-Classic delta, no normal-theory SE needed "
+    f"at all) finds no difference across windows at all: H={n(wkr['H'],3)}, "
+    f"p={pfmt(wkr['p'])} (medians "
+    f"{n(wkr['median_by_window']['1'],1)}/{n(wkr['median_by_window']['2'],1)}/"
+    f"{n(wkr['median_by_window']['3'],1)}ms). **The three tests disagree "
+    f"with each other -- this cross-window difference is not robust "
+    f"across tests, reported as an open "
+    f"question, not a confirmed, statistically real effect** (Section 10)."
 )
 w()
 w(
@@ -1439,6 +1525,12 @@ w("| Term | Original T_fluxo (ms) | Original 95% CI | T_fluxo minus setup/teardo
 w("|---|---:|---:|---:|---:|")
 w(f"| profile_pqc | {n(pqc_orig,1)} | [{n(pqc_orig_ci[0],1)};{n(pqc_orig_ci[1],1)}] | {n(pqc_ms_val,1)} | [{n(pqc_ms_ci[0],1)};{n(pqc_ms_ci[1],1)}] |")
 w(f"| profile_hybrid | {n(hybrid_orig,1)} | [{n(hybrid_orig_ci[0],1)};{n(hybrid_orig_ci[1],1)}] | {n(hybrid_ms_val,1)} | [{n(hybrid_ms_ci[0],1)};{n(hybrid_ms_ci[1],1)}] |")
+for extra_nm in ("window_2", "position_1"):
+    _o = reg["beta"][reg["names"].index(extra_nm)] * 1000
+    _o_ci = [c * 1000 for c in reg["ci95"][reg["names"].index(extra_nm)]]
+    _m = regms["beta"][regms["names"].index(extra_nm)] * 1000
+    _m_ci = [c * 1000 for c in regms["ci95"][regms["names"].index(extra_nm)]]
+    w(f"| {extra_nm} | {n(_o,1)} | [{n(_o_ci[0],1)};{n(_o_ci[1],1)}] | {n(_m,1)} | [{n(_m_ci[0],1)};{n(_m_ci[1],1)}] |")
 w()
 pqc_holds = pqc_ms_ci[0] > 0
 hybrid_holds = hybrid_ms_ci[0] > 0
@@ -1452,10 +1544,53 @@ w(
     f"neither profile's effect depends on setup/teardown being included in "
     f"the response."
 )
+w()
+w2_o = reg["beta"][reg["names"].index("window_2")] * 1000
+w2_o_ci = [c * 1000 for c in reg["ci95"][reg["names"].index("window_2")]]
+w2_m = regms["beta"][regms["names"].index("window_2")] * 1000
+w2_m_ci = [c * 1000 for c in regms["ci95"][regms["names"].index("window_2")]]
+p1_o_ci = [c * 1000 for c in reg["ci95"][reg["names"].index("position_1")]]
+p1_m = regms["beta"][regms["names"].index("position_1")] * 1000
+p1_m_ci = [c * 1000 for c in regms["ci95"][regms["names"].index("position_1")]]
+w(
+    f"**This is not limited to the profile terms.** `window_2` crosses "
+    f"zero in the original fit ({n(w2_o,1)}ms [{n(w2_o_ci[0],1)};{n(w2_o_ci[1],1)}]) "
+    f"but does NOT cross zero once setup/teardown is removed "
+    f"({n(w2_m,1)}ms [{n(w2_m_ci[0],1)};{n(w2_m_ci[1],1)}]) -- a real window "
+    f"effect that setup/teardown's own inclusion was masking, on top of "
+    f"`window_3`'s already-real effect in both fits. `position_1` still "
+    f"crosses zero in the minus-setup fit too "
+    f"([{n(p1_m_ci[0],1)};{n(p1_m_ci[1],1)}], vs. "
+    f"[{n(p1_o_ci[0],1)};{n(p1_o_ci[1],1)}] originally) -- **\"no detectable "
+    f"position effect\" (Section 7's own joint-model paragraph above) "
+    f"still holds under this sensitivity check, but more narrowly than in "
+    f"the original fit**, not as a margin wide enough to call fully "
+    f"settled."
+)
 
 # ------------------------------------------------------------- Section 8
 w()
 w("## 8. Statistical validity")
+w()
+mwcc = inter.get("mw_cc_divergences_top5", [])
+mwcc_max = mwcc[0] if mwcc else None
+w(
+    f"**Every Mann-Whitney test in this report uses the asymptotic normal "
+    f"approximation WITHOUT a continuity correction**, stated explicitly "
+    f"here rather than left implicit -- `mann_whitney_u()` "
+    f"(`generate_v8_final_report.py`) computes Z from the raw U statistic "
+    f"and reads the two-tailed p directly off the standard normal, with no "
+    f"+-0.5 continuity adjustment. Checked against scipy's own "
+    f"continuity-corrected asymptotic Mann-Whitney "
+    + "across every T_fluxo/setup-phase/signing-phase test this report runs" +
+    (f": the largest divergence found is at "
+     f"{mwcc_max['label']} (p={n(mwcc_max['p_no_cc'],5)} without the "
+     f"correction vs. p={n(mwcc_max['p_cc'],5)} with it, a "
+     f"{n(mwcc_max['diff'],5)} difference) -- itself a clearly "
+     f"non-significant test either way; no PASS/FAIL or significance "
+     f"conclusion anywhere in this report changes under the "
+     f"continuity-corrected version." if mwcc_max else ".")
+)
 w()
 sig_taus = inter.get("sig_taus", [])
 w(
@@ -1509,7 +1644,7 @@ w(
 w()
 w("| Item | Status |")
 w("|---|---|")
-w("| 4.2 (latency model / round-trip count) | **Closed, with the exception of PQC** -- Section 7's k-model and joint regression hold for Classic/Hybrid; PQC's own k/fixed-cost estimates show real, statistically detectable variation across the 3 windows (Section 7/10) and its k bootstrap CI does not cleanly pass at this sample size |")
+w("| 4.2 (latency model / round-trip count) | **Closed** -- Section 7's k-model holds for all three profiles, k approximately 56 for Classic, PQC, and Hybrid alike; whether PQC's own 8-route-median CI excludes 56 is interval-method-dependent (bootstrap vs. OLS t-interval, Section 7), not a settled profile-specific failure. PQC's own fixed-cost estimate separately shows real, statistically detectable variation across the 3 windows (Section 7/10) |")
 w("| 4.3 (PQC/Hybrid asymmetry, CA signature) | **Closed** -- Section 2, PQC's chain confirmed ML-DSA-65 end-to-end live |")
 w("| 4.4 (transport/front-channel realism) | **Partially closed** -- real network conditions now in scope; no real browser/app front-channel tested |")
 w("| 4.6a (single unit of measure for JWT/keys) | **Closed** -- Section 3, raw vs. base64url both reported, compact serialization stated as the equation's own unit |")
@@ -1611,12 +1746,44 @@ w(
     "T-series) is credit-based burstable, but runs no measured flow work."
 )
 w("- **The handshake residual beyond the 6-connection round-trip cost is not attributed** (Section 6) -- investigated, no specific cause isolated with confidence.")
+nmtls_sum = inter["n_mtls_pcap_summary"]
+nmtls_anom = nmtls_sum["anomalies"][0] if nmtls_sum["anomalies"] else None
 w(
-    "- **PQC's k and fixed-cost estimates show real, statistically detectable "
-    "variation across the 3 windows** (Section 7) -- the cause is a hypothesis, "
-    "not a confirmed finding; the combined estimate across all 3 windows is this "
-    "report's best single figure, not a claim that the underlying quantity is "
-    "provably stable."
+    f"- **N_mTLS=6 is not literally constant in every one of the 720 "
+    f"executions -- confirmed directly from every execution's own client "
+    f"pcap, not assumed.** {nmtls_sum['counts'].get('6',nmtls_sum['counts'].get(6))}/720 show exactly 6 real TCP connections "
+    f"(SYN+SYN-ACK) to the gateway"
+    + (f"; exactly one ({LABEL[nmtls_anom['profile']]}, window "
+       f"{nmtls_anom['window']}, {nmtls_anom['installation']}/{nmtls_anom['scenario']}, "
+       f"`{nmtls_anom['file']}`) shows "
+       f"{nmtls_anom['n_connections']}." if nmtls_anom else ".") +
+    f" The OFFICIAL `N_mTLS` figure used in Section 3's OPINsize equation "
+    f"comes from the gateway's own log of COMPLETED mTLS handshakes, not "
+    f"the raw pcap connection count, and stays exactly 6 for this "
+    f"execution too (its own extra connection reached a different "
+    f"destination -- a public, not the private VPC, network path -- and "
+    f"never completed a logged handshake) -- OPINsize itself is "
+    f"unaffected. The precise application-level reason this one execution "
+    f"dialed an extra connection cannot be determined now that the fleet "
+    f"is destroyed; this project's own retry/discard tracking "
+    f"(`retries`, `wasted_seconds`, `retried`) shows nothing unusual for "
+    f"it either, ruling out a campaign-level discarded retry -- recorded "
+    f"as **not attributed**."
+)
+w(
+    "- **PQC's fixed-cost (`a`) estimate's own variation across the 3 windows "
+    "is not robust to the choice of test or standard error** (Section 7) -- "
+    "an earlier figure for this (Q=7.160, p=0.0279) could not be traced to "
+    "any saved, reproducible script; recomputed with the proper small-"
+    "sample t-based SE (same df=6 fix as the k-interval above), Cochran's Q "
+    "drops to 5.30 (p=0.070, window 2 vs. 3 alone p=0.030), and an "
+    "independent, non-parametric cross-check (Kruskal-Wallis on the "
+    "route-and-window-adjusted per-execution PQC-minus-Classic delta, no "
+    "normal-theory SE at all) finds no significant difference across "
+    "windows at all (p=0.657, medians 24.1/28.7/16.7ms). The combined "
+    "estimate across all 3 windows remains this report's best single "
+    "figure; the window-to-window difference itself is now an open "
+    "question, not a confirmed, robust finding."
 )
 
 # ------------------------------------------------------------- Section 11
@@ -1648,7 +1815,8 @@ w(
     "pcaps, pooled across all 3 windows -- **0 divergences** against the "
     "published consolidate outputs (one noted finding, not a divergence: the "
     "PQC k bootstrap CI's upper tail is sensitive to the resampling stream at "
-    "this sample size -- see Section 7)."
+    "this sample size; the classical OLS t-interval on the same 8 points does "
+    "not share that instability and contains 56 -- see Section 7)."
 )
 
 # ------------------------------------------------------------- Section 12
