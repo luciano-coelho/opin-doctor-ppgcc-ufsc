@@ -10677,3 +10677,34 @@ Scanner de segredos: limpo. Sem tag nova.
 7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
    segredos: limpo. Sem tag nova.
 
+## Decision 126 (2026-11-02) -- rodada 9: ajuste de consistência -- o IC
+## de k por execução (n=240) que exclui 56 para o PQC não pode ser
+## tratado como confirmação, dado o lack-of-fit real de rota (F-test);
+## linguagem de heterogeneidade entre janelas alinhada em todo o
+## relatório; sem tag nova, sem dados novos
+
+1. **Resumo executivo e Seção 7 (k por execução, n=240)**: reescrito --
+   o desvio do PQC em relação a 56 é pequeno (0,155 viagem, ~51ms em
+   ~20s na rota mais longa do projeto, ~0,25%), e tanto o IC por
+   reamostragem quanto o IC por t (n=240) vêm de um modelo que ajusta só
+   T_fluxo ~ RTT, ignorando rota como fator próprio -- o mesmo F-test de
+   rota (Decision 125) já mostra que essa omissão é uma falta de ajuste
+   real e significativa, nos 3 perfis. Um IC estreito vindo de um
+   modelo mal especificado não é confirmação de nada; a conclusão
+   correta é "k ≈ 56 nos 3 perfis; a exclusão de 56 pelo PQC depende do
+   método de intervalo e não é confirmada por nenhum teste que leve em
+   conta a falta de ajuste de rota" -- não mais "confirmado com um
+   teste paramétrico, não só bootstrap."
+2. **Seção 9, item 4.2**: "mostra variação real, estatisticamente
+   detectável, entre as 3 janelas" removido; agora "variação entre as 3
+   janelas que não é robusta entre testes (Seção 7/10)."
+3. **Limitações**: "the heterogeneity found for PQC's fixed cost across
+   windows" trocado por "the possible, non-robust variation in PQC's
+   fixed cost across windows."
+4. Varredura nas Seções 1, 7, 9, 10 e 11 por qualquer outra frase que
+   ainda tratasse a heterogeneidade entre janelas como "real" ou
+   "estatisticamente detectável" -- nenhuma encontrada além das já
+   corrigidas na Decision 125; linguagem já alinhada.
+5. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Sem tag nova.
+

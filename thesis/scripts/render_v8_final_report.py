@@ -85,6 +85,11 @@ hy_cl0 = ratio(terms['hybrid']['opinsize'], terms['classic']['opinsize'])
 pqc_reg = reg["beta"][reg["names"].index("profile_pqc")]
 pqc_reg_ci = reg["ci95"][reg["names"].index("profile_pqc")]
 hy_reg = reg["beta"][reg["names"].index("profile_hybrid")]
+k_per_execution_pqc_k = inter["k_per_execution"]["pqc"]["k"]
+longroute_rtt_ms = cell("pqc", "sa-east-1", "L325")["rtt_and_loss"]["rtt_measured_ms"]["median"]
+longroute_tfluxo_s = cell("pqc", "sa-east-1", "L325")["t_fluxo_seconds"]["median"]
+pqc_dev_ms = (k_per_execution_pqc_k - 56) * longroute_rtt_ms
+pqc_dev_pct = pqc_dev_ms / (longroute_tfluxo_s * 1000) * 100
 w(
     f"Migrating OPIN's consent flow to post-quantum cryptography multiplies the "
     f"cryptographic material transferred by {n(pqc_cl0)}x (PQC) and {n(hy_cl0)}x "
@@ -106,16 +111,23 @@ w(
     f"specifically excludes 56 is interval-method-dependent (a 3,000-"
     f"iteration bootstrap excludes it; the classical OLS t-interval, more "
     f"appropriate at this small n, does not -- Section 7). At the "
-    f"higher-powered, 240-individual-execution level, both the bootstrap "
-    f"and the OLS t-interval agree PQC's own CI excludes 56 there, a "
-    f"smaller but consistent effect across methods once n is large enough "
-    f"for both to be reliable. PQC's fixed-cost estimate also appears to "
-    f"vary between the 3 collection windows, but that apparent variation "
-    f"is not robust across tests (Cochran's Q and an independent "
-    f"Kruskal-Wallis cross-check disagree, Section 7/10) -- both the "
-    f"8-route-level method-dependence and the window-variance question "
-    f"are reported as open, not-fully-settled findings, not smoothed "
-    f"over. At the "
+    f"higher-powered, 240-individual-execution level, PQC's own k point "
+    f"estimate ({n(k_per_execution_pqc_k,3)}) deviates from 56 by only "
+    f"~{n(k_per_execution_pqc_k-56,3)} round trips -- at the longest route "
+    f"this project measured ({n(longroute_rtt_ms,0)}ms RTT), that is "
+    f"~{n(pqc_dev_ms,0)}ms on a ~{n(longroute_tfluxo_s,0)}s flow, "
+    f"~{n(pqc_dev_pct,2)}%. Whether this small deviation's own CI "
+    f"excludes 56 is again interval-method-dependent, and neither "
+    f"interval used for it models route as its own factor -- the same "
+    f"F-test above shows route carries real explanatory power the "
+    f"per-execution RTT-only model ignores, so this narrow CI is not "
+    f"itself a confirmed exclusion of 56, only a reading from a model "
+    f"with its own known lack of fit. PQC's fixed-cost estimate also "
+    f"appears to vary between the 3 collection windows, but that apparent "
+    f"variation is not robust across tests either (Cochran's Q and an "
+    f"independent Kruskal-Wallis cross-check disagree, Section 7/10) -- "
+    f"reported as not robust, without treating it as a confirmed finding. "
+    f"At the "
     f"TLS channel layer, Hybrid's certificate authentication is asymmetric by "
     f"direction: RSA-only for the server's identity (the client never checks "
     f"it at all, `InsecureSkipVerify`) but genuinely dual, RSA and ML-DSA-65, "
@@ -1361,15 +1373,26 @@ for p in PROFILES:
       f"[{n(kp['k_ci95_ols_t'][0],3)};{n(kp['k_ci95_ols_t'][1],3)}] |")
 w()
 pqc_kpe = kpe["pqc"]
+pqc_dev_trips = pqc_kpe['k'] - 56
 w(
-    f"At n=240 (vs. n=8 route medians), PQC's k is {n(pqc_kpe['k'],3)} with both "
-    f"intervals sitting entirely above 56 ([{n(pqc_kpe['k_ci95_bootstrap'][0],3)};"
+    f"At n=240 (vs. n=8 route medians), PQC's k is {n(pqc_kpe['k'],3)}, with "
+    f"both intervals numerically sitting above 56 "
+    f"([{n(pqc_kpe['k_ci95_bootstrap'][0],3)};"
     f"{n(pqc_kpe['k_ci95_bootstrap'][1],3)}] bootstrap, "
-    f"[{n(pqc_kpe['k_ci95_ols_t'][0],3)};{n(pqc_kpe['k_ci95_ols_t'][1],3)}] OLS t) -- "
-    f"**the same pattern as the 8-route-median fit, now confirmed with a tighter "
-    f"interval and a classical parametric check, not just a small-sample "
-    f"bootstrap.** Classic's and Hybrid's intervals both still contain 56 at "
-    f"this higher n too."
+    f"[{n(pqc_kpe['k_ci95_ols_t'][0],3)};{n(pqc_kpe['k_ci95_ols_t'][1],3)}] OLS t) "
+    f"-- **this is NOT a confirmation that PQC's k exceeds 56, read correctly.** "
+    f"The deviation itself is tiny ({n(pqc_dev_trips,3)} round trips -- "
+    f"~{n(pqc_dev_ms,0)}ms on a ~{n(longroute_tfluxo_s,0)}s flow at this "
+    f"project's longest route, ~{n(pqc_dev_pct,2)}%), and BOTH intervals come "
+    f"from a model that fits T_fluxo ~ RTT alone, ignoring route as its own "
+    f"factor -- the F-test above already shows that omission is a real, "
+    f"significant lack of fit for every profile, PQC included. A narrow CI "
+    f"from a misspecified model is not a valid confirmation of anything; "
+    f"k is approximately 56 for all three profiles, and whether PQC's own "
+    f"small deviation from 56 is real stays interval-method-dependent and "
+    f"unconfirmed by any test that accounts for the route lack of fit. "
+    f"Classic's and Hybrid's intervals both still contain 56 at this "
+    f"higher n too."
 )
 w()
 w("### Pre-registered confirmatory check (5 predictions from window 1, tag `v8-prereg-3`), per window and combined")
@@ -1644,7 +1667,7 @@ w(
 w()
 w("| Item | Status |")
 w("|---|---|")
-w("| 4.2 (latency model / round-trip count) | **Closed** -- Section 7's k-model holds for all three profiles, k approximately 56 for Classic, PQC, and Hybrid alike; whether PQC's own 8-route-median CI excludes 56 is interval-method-dependent (bootstrap vs. OLS t-interval, Section 7), not a settled profile-specific failure. PQC's own fixed-cost estimate separately shows real, statistically detectable variation across the 3 windows (Section 7/10) |")
+w("| 4.2 (latency model / round-trip count) | **Closed** -- Section 7's k-model holds for all three profiles, k approximately 56 for Classic, PQC, and Hybrid alike; whether PQC's own CI excludes 56 is interval-method-dependent at both the 8-route-median and the 240-execution level (bootstrap vs. OLS t-interval, Section 7), not a settled profile-specific failure. PQC's own fixed-cost estimate separately shows variation between the 3 windows that is not robust across tests (Section 7/10) |")
 w("| 4.3 (PQC/Hybrid asymmetry, CA signature) | **Closed** -- Section 2, PQC's chain confirmed ML-DSA-65 end-to-end live |")
 w("| 4.4 (transport/front-channel realism) | **Partially closed** -- real network conditions now in scope; no real browser/app front-channel tested |")
 w("| 4.6a (single unit of measure for JWT/keys) | **Closed** -- Section 3, raw vs. base64url both reported, compact serialization stated as the equation's own unit |")
@@ -1733,8 +1756,8 @@ w("- **No real browser or app front-channel was tested** -- the client is this p
 w(
     "- **The campaign spans a little over half a day of real wall-clock time** "
     "(window boundaries reconciled in Section 1.1), not a long-term deployment -- "
-    "the heterogeneity found for PQC's fixed cost across windows (Section 7) "
-    "spans this scale of time, not weeks or months."
+    "the possible, non-robust variation in PQC's fixed cost across windows "
+    "(Section 7) spans this scale of time, not weeks or months."
 )
 w("- **4.6c** (the Classic profile's documented conformance to OPIN's own live security profile) remains open, by scope, not by oversight.")
 w("- **No fourth profile** (hybrid KEM with classical-only signatures) was added.")
