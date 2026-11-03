@@ -10708,3 +10708,65 @@ Scanner de segredos: limpo. Sem tag nova.
 5. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
    segredos: limpo. Sem tag nova.
 
+## Decision 127 (2026-11-03) -- rodada 10: N_JWK 2->4 reconciliado como
+## mudança de fluxo (não erro de v7); respostas sobre regiões AWS,
+## client_cert_der_bytes, N_JWT 26->28, Node.js/BouncyCastle, diff de
+## fluxo v7->v8; sem tag nova, sem dados novos
+
+1. **Seção 1.1 e Seção 3 reescritas**: a frase "v7's own published
+   Classic OPINsize undercounts N_JWK the same way this report's own
+   first draft did" estava errada -- v7 usou `N_JWK=2` corretamente
+   para o PRÓPRIO fluxo da v7 (2 chamadas a `/jwks`, 42 chamadas totais
+   por execução, confirmado nos dados brutos da v7); o fluxo da v8
+   bateu exatamente esse mesmo número (mesmo N_JWK=2, mesmas 42
+   chamadas) até uma etapa posterior do desenvolvimento da v8
+   acrescentar uma capacidade de verificação que a v7 nunca teve: checar
+   as respostas assinadas pelo RS, o que exige buscar o `/jwks` do
+   PRÓPRIO RS, uma vez por sub-fluxo (Decision 87/88,
+   `METRICS_COVERAGE.md`). Essa adição -- 2 chamadas novas, uma por
+   sub-fluxo -- é o que leva `N_JWK` de 2 para 4 e a contagem de
+   chamadas de 42 para 44. Reescrito como mudança de fluxo documentada,
+   não como correção de um erro da v7; a reconciliação de 872 bytes
+   (512 do N_JWK + 360 do handshake_bytes) permanece idêntica, só a
+   narrativa mudou.
+2. **Respostas (consulta, sem alteração de código de medição):**
+   (a) Região AWS do cliente remoto por rota: `sa-east-1` servidor -> L0
+   cliente em `sa-east-1` (co-localizado), L123 em `ca-central-1`, L219
+   em `eu-north-1`, L325 em `ap-southeast-1`; `us-east-1` servidor -> L0
+   cliente em `us-east-1` (co-localizado), L14 em `ca-central-1`
+   (instância separada da de L123); `ap-northeast-1` servidor -> L0
+   cliente em `ap-northeast-1` (co-localizado), L30 em `ap-northeast-2`
+   (tabela de Decision 41/53).
+   (b) `client_cert_der_bytes` por perfil na v8: Classic 1.494 B, PQC
+   5.879 B, Hybrid 6.859 B -- medido direto do DER dos certificados do
+   cliente atualmente usados (`mock-service-os/certs/client_one*.crt`)
+   e confirmado contra `PROFILE_ATTESTATION.md` (Classic/Hybrid) e
+   `apply_pqc_ca_postquantum_correction.py` (PQC, pós-correção
+   ML-DSA-65 end-to-end).
+   (c) N_JWT 26->28: mudança da PRÓPRIA v7 (Decision 11, v7), não algo
+   que mudou entre v7 e v8 -- um JARM real (token assinado do AS,
+   `response=` do callback) existia no fluxo mas nunca era contado;
+   achado por revisão externa, corrigido na v7, e a v8 já herda o
+   N_JWT=28 corrigido sem nenhuma correção adicional do lado da v8
+   (`METRICS_COVERAGE.md`).
+   (d) Versões do assinador: Node.js 24 (`node:24-alpine`, fixado por
+   digest `sha256:d32cdf619f63...`, exigido >=24.7 pelo suporte nativo
+   a ML-DSA-65 em `node:crypto`, ao qual `jose` v6 delega) para o
+   assinador/verificador do lado AS (`thesis/scripts/pqc-signer/
+   signer_core.mjs`); BouncyCastle `bcpkix-jdk18on:1.79`
+   (`insurance-server-lambdas/build.gradle`) para o assinador Java do
+   lado RS (`ResponseSigningService.java`).
+   (e) O que mudou no fluxo entre v7 e v8, além do `/jwks` do RS
+   (Decision 87): v7 nunca verificava nenhum artefato assinado que o
+   cliente recebia (`verify_signature=False` em todo `opin_flow.py`); a
+   v8 tornou o fluxo completo ponta a ponta -- id_token (após
+   decriptar o JWE), JARM, corpos de resposta assinados pelo RS, e a
+   cadeia de CA (`verify_ca_chain()`, nova) passam a ser verificados
+   de verdade, nos 3 perfis, pelo MESMO mecanismo uniforme (serviço
+   Node persistente, `verify_jwt()`/`decrypt_and_verify_jwt()`), com
+   testes negativos reais provando que um artefato adulterado/com
+   chave ou algoritmo errado é de fato rejeitado -- não só que um
+   artefato correto passa (Decision 87).
+3. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
+   segredos: limpo. Sem tag nova.
+
