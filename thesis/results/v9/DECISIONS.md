@@ -127,19 +127,46 @@ impressa "28"), "THREE-TIER MIGRATION URGENCY TAXONOMY" — Nivel 1
 dimensao de autenticacao institucional do BRCAC), Nivel 3 (SHA-256,
 Grover).
 
-**Ponto 5, NAO ENCONTRADO -- divergencia real, nao uma confirmacao.**
-Busquei "Double-Lock"/"Double Lock" nas 36 paginas inteiras (extracao de
-texto completa, busca automatizada): zero ocorrencias. O modelo que de
-fato existe no documento, com esse nome, e o "Phased Hybrid Transition
-Model" (Secao 3.2, pagina 30, impressa "29"): tres fases sequenciais
-(inventario sem mudanca de algoritmo; operacao hibrida simultanea
-classica+PQC nos niveis 1 e 2; consolidacao so-PQC), com a descricao
-tecnica da combinacao hibrida (assinatura: concatena a classica com a
-PQC sobre o mesmo conteudo; KEM: combina o segredo do ECDHE com o do
-MLKEM na derivacao da chave final) na Secao 2.2 (pagina 26-27, impressa
-"25-26"). Conceitualmente parecido com a ideia de "duas fechaduras", mas
-o documento nunca usa esse rotulo. Se "Double-Lock" vem de outra fonte
-(nao esta SAD), preciso que o Luciano indique qual.
+**Ponto 5, NAO ENCONTRADO no SAD -- descartado por instrucao do
+Luciano.** Busquei "Double-Lock"/"Double Lock" nas 36 paginas inteiras
+(extracao de texto completa, busca automatizada): zero ocorrencias.
+Confirmado pelo Luciano: essa expressao vem de outro material (slides),
+que NAO sera usado na v9 -- nao citar nem investigar mais. A fonte
+unica e principal da v9 e este SAD escrito de 36 paginas. O modelo que
+de fato existe no documento, com esse nome, e o "Phased Hybrid
+Transition Model" (Secao 3.2, pagina 30, impressa "29").
+
+**Citacao consolidada, por afirmacao sustentada (pedido do Luciano) --
+pagina do PDF e pagina impressa (a impressa e sempre uma unidade a
+menos que a do PDF, por causa das 2 paginas de capa/rosto sem numeracao
+impressa):**
+
+- **Baseline RSA-2048**: Figura 1 (PDF 11, impressa 10), etapa 3,
+  "Primitive: RSA (IFP), Parameter: RSA-2048"; Tabela 1 (PDF 17,
+  impressa 16), mesma etapa; e a frase da PDF 14 (impressa 13) -- "The
+  FAPI profile additionally requires certificate-based mutual
+  authentication for all API interactions, binding each channel to the
+  RSA-2048 public key of the communicating institution" -- o FAPI amarra
+  cada canal a chave publica RSA-2048 da instituicao. As tres sustentam
+  a mesma afirmacao: o baseline normativo do OPIN e RSA-2048, nunca
+  RSA-4096, em toda etapa com dependencia classica.
+- **Assinatura hibrida**: Secao 2.2 (PDF 26-27, impressa 25-26) --
+  "a hybrid signature concatenates the classical signature, such as
+  PS256, with the post-quantum signature, such as MLDSA, over the same
+  content" -- concatena a assinatura classica (PS256) com a
+  pos-quantica (ML-DSA) sobre o MESMO conteudo. Essa frase sustenta
+  diretamente o desenho do `CertificateVerify` dual do mecanismo AND
+  (duas assinaturas sobre o mesmo valor de transcript, mesmo contexto) e
+  entra no registro de decisao do proprio AND (Decisao 4 abaixo).
+- **Modelo de transicao**: Secao 3.2 (PDF 30, impressa 29), "PHASED
+  HYBRID TRANSITION MODEL" -- tres fases sequenciais (inventario sem
+  mudanca de algoritmo; operacao hibrida simultanea nos niveis 1 e 2;
+  consolidacao so-PQC). Sustenta o modelo de retrocompatibilidade
+  registrado na Decisao 5.
+
+**SAD ja em origin/main**: fica como esta, por instrucao explicita do
+Luciano -- nenhuma acao de git tomada por causa disso nesta sessao, nem
+agora.
 
 **Ponto 6, confirmado.** Secao 3.3 (pagina 30, impressa "29"),
 "NORMATIVE EXTENSION REQUIREMENTS": entre as seis lacunas normativas
@@ -221,3 +248,95 @@ registrado como observacao, nao como alegacao de teste isolado de rede.
 Artefatos committados: `thesis/results/v9/toolchain/Dockerfile`,
 `README.md`, `patches/and.patch` (vazio, placeholder da T3),
 `build_metadata.json`, `crypto_tls_test_summary.txt`.
+
+**go1.27.3 aprovado pelo Luciano como versao final da v9** (confirmado
+explicitamente na resposta ao relatorio desta Decisao). Nada a revisar
+aqui.
+
+## 4. Escopo acrescentado pelo Luciano apos o relatorio de Fato C/T2 (SAD, Secao 3.4): divergencia de pilha, limitacao TLS 1.3, matriz de interoperabilidade
+
+**a) Divergencia de pilha declarada.** O SAD (Secao 3.4, "EXPERIMENTAL
+VALIDATION", PDF 31/impressa 30) prve o ambiente experimental com
+"reference implementations of MLKEM and MLDSA made available by NIST...
+integrated with open-source cryptographic libraries with support for
+hybrid operations, namely OpenSSL and liboqs". A v9 (como toda a serie
+v1-v8 antes dela) usa Go 1.27.3 com ML-DSA-65 e ML-KEM-1024 nativos do
+`crypto/tls`/`crypto/x509`/`crypto/mldsa` da propria stdlib, sem OpenSSL
+nem liboqs. Justificativa registrada: (1) esta e a MESMA pilha que todo
+o projeto desde a v6 (Nivel 1) ja usa para PQC/Hibrido -- trocar para
+OpenSSL+liboqs agora invalidaria a comparabilidade com v6-v8; (2) o
+mecanismo AND exige um fork do proprio `crypto/tls` (ClientHello,
+CertificateRequest, mensagem Certificate, `CertificateVerify` dual) --
+isso so e viavel com acesso ao codigo-fonte do stack TLS, que a stdlib
+do Go oferece diretamente e o OpenSSL (biblioteca C, API binaria) nao
+ofereceria sem um fork equivalente, mais caro, da propria OpenSSL; (3) o
+Go 1.27 ja tem ML-DSA-65/ML-KEM-1024 nativos e testados (confirmado na
+T2), eliminando a dependencia externa do liboqs que o SAD previa quando
+foi escrito (antes dessas APIs existirem na stdlib do Go). Divergencia
+real do que o SAD propos, registrada aqui, nao escondida.
+
+**b) Limitacao declarada: só TLS 1.3, nao TLS 1.2/1.3.** O SAD cita o
+canal de dados do OPIN como "TLS 1.2/1.3" (PDF 12/impressa 11). O
+mecanismo AND, pela propria especificacao recebida do Luciano, so
+funciona em TLS 1.3 (o `signature_algorithms`/`CertificateRequest`
+estendido com o codigo 0xFE65 e o desenho do `CertificateVerify` dual
+nao tem equivalente definido em TLS 1.2, e as "lacunas conhecidas" da
+especificacao listam isso explicitamente: "no explicit TLS 1.2 rejection
+-- uso e TLS 1.3 minimo"). Registrado como limitacao explicita do
+Hibrido-AND medido na v9: ele cobre só o sub-conjunto TLS 1.3 do que o
+SAD descreve para o canal OPIN, nao o TLS 1.2 que o SAD tambem permite.
+
+**c) Matriz de interoperabilidade -- verificacao no que ja existe antes
+de implementar.** Procurei em `Consolidated_Metrics_Report_FINAL.md` e
+em `DECISIONS.md` da v8 por qualquer medicao de interoperabilidade
+cruzada entre perfis (cliente de um perfil contra servidor de outro).
+O unico achado existente e **PQC contra um cliente OpenSSL generico**
+(`thesis/results/v8/artifacts/pqc/openssl_interop_diagnosis.md`,
+Secao 2 do relatorio final) -- um diagnostico de configuracao (falta a
+flag `-sigalgs`), nao uma matriz entre os PROPRIOS perfis do projeto. A
+v8 nunca testou Classico-cliente contra PQC-servidor, ou qualquer outra
+combinacao cruzada: por desenho, o cliente (`tls_kem_proxy`) e o
+servidor (`mock_mtls`) sempre usam o MESMO `CRYPTO_PROFILE` em toda
+execucao oficial. **Confirmado ao Luciano: nao existe matriz de
+interoperabilidade entre perfis em nenhum dado ou relatorio da v8** --
+isso e escopo genuinamente novo da v9, implementado na T3/T4 como teste
+funcional local (nao entra no desempenho oficial), cobrindo Classico,
+PQC, Hibrido-v8, Hibrido-AND-nao-estrito e Hibrido-AND-estrito, por par
+cliente x servidor, com sucesso/falha, motivo, `DualAuthenticated`
+(indica downgrade) e a coluna "protecao AND efetiva: sim/nao".
+
+## 5. Modo estrito e retrocompatibilidade
+
+**Estrito e politica por par, nao protocolo global.** O mecanismo
+(cliente oferece 0xFE65 junto com os esquemas classicos; servidor
+escolhe par dual se tiver cadeia PQ disponivel) suporta tanto
+`Dual.Require=true` (estrito) quanto `Dual.Require=false` (nao
+estrito) -- o patch da T3 mantem as duas configuracoes, sem fallback
+automatico embutido DENTRO do perfil Hibrido-AND medido oficialmente
+(que roda sempre estrito, por D3). O experimento mede so esse perfil,
+onde todo participante e Hibrido-AND, logo o estrito nao distorce a
+metrica official -- ele so apareceria se o experimento testasse um par
+misto, o que a matriz de interoperabilidade (Decisao 4c) faz
+deliberadamente, fora do desempenho oficial.
+
+**Modelo de transicao proposto, alinhado ao SAD (Secao 3.2 e 3.4, via
+Decisao 2):** nao estrito para um par ainda nao migrado (a conexao fica
+marcada como sem protecao AND, via `DualAuthenticated=false`); estrito
+para um par migrado; até o estrito se tornar regra geral do ecossistema.
+Logica semelhante ao HSTS (confia na primeira vez / aplica depois que
+confirmado). **A fonte confiavel de "este par ja migrou" (por exemplo,
+um campo no Diretorio de Participantes do OPIN) NAO e implementada na
+v9** -- registrado aqui como trabalho futuro e dependencia de
+governanca do proprio OPIN, sem afirmar que o Diretorio real ja tem
+esse campo hoje (ele nao tem, pelo que o SAD descreve).
+
+**Participante classico contra servidor estrito e recusado por
+desenho** -- e exatamente o que o teste do impostor (abaixo) e a matriz
+de interoperabilidade demonstram. A alternativa operacional (um
+endpoint separado, nao estrito, para aceitar classicos durante a
+transicao) equivale a nao-estrito NAQUELE endpoint especifico, e deve
+ser descrita como tal, nunca como "o servidor estrito aceitando
+classico".
+
+**Teste do impostor (evidencia de por que o estrito e obrigatorio) --
+resultado registrado apos a T3, nesta mesma Decisao.**
