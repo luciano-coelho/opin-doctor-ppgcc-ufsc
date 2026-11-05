@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# v9, Fase 1, T2: toolchain Go reproduzivel para o fork do AND de dupla
-# assinatura TLS (crypto/tls). Compila o Go a partir do codigo-fonte
-# oficial, na tag fixada go1.27.3 (commit 2aae1000ea1d4b28923b96db28acf4e3b99d6aff,
-# verificado contra go.googlesource.com/go nesta sessao), aplica
-# patches/and.patch via `git apply` se o arquivo nao estiver vazio, e roda
-# a suite de testes do pacote crypto/tls contra o toolchain resultante.
+# v9, Fase 1, T2+T3: toolchain Go reproduzivel e patch real do AND
+# (dupla assinatura TLS, crypto/tls). Compila o Go a partir do
+# codigo-fonte oficial, na tag fixada go1.27.3 (commit
+# 2aae1000ea1d4b28923b96db28acf4e3b99d6aff, verificado contra
+# go.googlesource.com/go nesta sessao), aplica patches/and.patch via
+# `git apply` se o arquivo nao estiver vazio, e roda a suite de testes
+# do pacote crypto/tls (original + os 18 testes do AND) contra o
+# toolchain resultante.
 #
 # Versao escolhida (decisao desta sessao, ver DECISIONS.md da v9):
 # go1.27.3, nao o go1.27rc2 que a v8 usou. Motivos:
@@ -49,14 +51,26 @@ RUN git clone --depth 1 --branch go1.27.3 https://go.googlesource.com/go . \
        fi \
     && echo "${actual_commit}" > /go-src-commit.txt
 
-# patches/and.patch: empty in T2 (no fork code exists yet -- this stage
-# only proves the reproducible build+test pipeline against VANILLA
-# go1.27.3). T3 replaces this file with the real ~220-line crypto/tls
-# patch; the same Dockerfile, unchanged, applies and tests it then.
+# patches/and.patch: the real AND mechanism (T3) -- dual.go (304 lines)
+# plus changes to 6 existing files (529 lines total outside dual.go and
+# the 718-line dual_test.go). Was empty in T2, to prove the
+# reproducible build+test pipeline against vanilla go1.27.3 first; this
+# same Dockerfile, unchanged below this COPY, applies and tests
+# whichever content this file holds.
 COPY patches/and.patch /tmp/and.patch
+# --directory=src/crypto/tls: the patch's own paths are relative to
+# crypto/tls itself (a/common.go, not a/src/crypto/tls/common.go,
+# since it was generated from a diff rooted there) -- git apply
+# resolves paths against the REPO ROOT regardless of the shell's own
+# cwd, not against whatever directory this RUN happens to `cd` into
+# first; found live, the hard way, when a first version of this step
+# (`cd src && git apply ...`) reported success (exit 0) while silently
+# "Skipping" every single file, applying nothing at all. --directory
+# is git apply's own supported way to prepend a prefix to every path
+# in a patch generated with a different root.
 RUN if [ -s /tmp/and.patch ]; then \
       echo "applying patches/and.patch" \
-      && cd src && git apply --whitespace=nowarn /tmp/and.patch && cd .. \
+      && git apply --whitespace=nowarn --directory=src/crypto/tls /tmp/and.patch \
       && sha256sum /tmp/and.patch | awk '{print $1}' > /and-patch-sha256.txt; \
     else \
       echo "patches/and.patch is empty -- building vanilla go1.27.3 (T2 baseline, no fork yet)" \

@@ -1,0 +1,1783 @@
+diff --git a/common.go b/common.go
+index dd4aaf5..04993d6 100644
+--- a/common.go
++++ b/common.go
+@@ -330,6 +330,27 @@ type ConnectionState struct {
+ 	// are not resumed (DidResume is false).
+ 	LocalCertificate [][]byte
+ 
++	// DualAuthenticated is true if the AND dual-certificate mechanism
++	// (Config.Dual) completed for this connection: the peer's
++	// post-quantum chain was independently validated and its
++	// ML-DSA-65 CertificateVerify signature checked, alongside the
++	// classical one. It describes the PAIR, not either half alone --
++	// it is false whenever only the classical chain was authenticated
++	// (including a non-strict downgrade), even if PeerCertificates
++	// itself is set and valid.
++	DualAuthenticated bool
++
++	// DualPeerCertificates are the parsed certificates of the peer's
++	// post-quantum (ML-DSA-65) chain, in the order they were sent. Nil
++	// unless DualAuthenticated is true.
++	DualPeerCertificates []*x509.Certificate
++
++	// DualVerifiedChains mirrors VerifiedChains for the post-quantum
++	// chain: a chain from DualPeerCertificates[0] to a root in
++	// Config.Dual.RootCAs (client) or Config.Dual.ClientCAs (server).
++	// Nil unless DualAuthenticated is true.
++	DualVerifiedChains [][]*x509.Certificate
++
+ 	// ekm is a closure exposed via ExportKeyingMaterial.
+ 	ekm func(label string, context []byte, length int) ([]byte, error)
+ 
+@@ -719,6 +740,14 @@ type Config struct {
+ 	// by the policy in ClientAuth.
+ 	ClientCAs *x509.CertPool
+ 
++	// Dual, if not nil, enables the AND dual-certificate TLS 1.3
++	// authentication mechanism: this side's own classical certificate
++	// (from Certificates/GetCertificate/GetClientCertificate, used
++	// unchanged) is presented and verified ALONGSIDE a post-quantum
++	// (ML-DSA-65) certificate from Dual.Certificates, with both sides'
++	// CertificateVerify signatures required. See DualConfig.
++	Dual *DualConfig
++
+ 	// InsecureSkipVerify controls whether a client verifies the server's
+ 	// certificate chain and host name. If InsecureSkipVerify is true, crypto/tls
+ 	// accepts any certificate presented by the server and any host name in that
+@@ -1028,6 +1057,7 @@ func (c *Config) Clone() *Config {
+ 		ServerName:                          c.ServerName,
+ 		ClientAuth:                          c.ClientAuth,
+ 		ClientCAs:                           c.ClientCAs,
++		Dual:                                c.Dual.clone(),
+ 		InsecureSkipVerify:                  c.InsecureSkipVerify,
+ 		CipherSuites:                        c.CipherSuites,
+ 		PreferServerCipherSuites:            c.PreferServerCipherSuites,
+diff --git a/conn.go b/conn.go
+index c6d3084..322c841 100644
+--- a/conn.go
++++ b/conn.go
+@@ -58,6 +58,13 @@ type Conn struct {
+ 	// verifiedChains contains the certificate chains that we built, as
+ 	// opposed to the ones presented by the server.
+ 	verifiedChains [][]*x509.Certificate
++	// dualAuthenticated, dualPeerCertificates and dualVerifiedChains
++	// mirror peerCertificates/verifiedChains for the AND mechanism's
++	// post-quantum chain (Config.Dual). See ConnectionState's own
++	// fields of the same name.
++	dualAuthenticated    bool
++	dualPeerCertificates []*x509.Certificate
++	dualVerifiedChains   [][]*x509.Certificate
+ 	// serverName contains the server name indicated by the client, if any.
+ 	serverName string
+ 	// secureRenegotiation is true if the server echoed the secure
+@@ -1631,6 +1638,9 @@ func (c *Conn) connectionStateLocked() ConnectionState {
+ 	state.PeerCertificates = c.peerCertificates
+ 	state.LocalCertificate = c.localCertificate
+ 	state.VerifiedChains = c.verifiedChains
++	state.DualAuthenticated = c.dualAuthenticated
++	state.DualPeerCertificates = c.dualPeerCertificates
++	state.DualVerifiedChains = c.dualVerifiedChains
+ 	state.SignedCertificateTimestamps = c.scts
+ 	state.OCSPResponse = c.ocspResponse
+ 	if (!c.didResume || c.extMasterSecret) && c.vers != VersionTLS13 {
+diff --git a/dual.go b/dual.go
+new file mode 100644
+index 0000000..6eba424
+--- /dev/null
++++ b/dual.go
+@@ -0,0 +1,304 @@
++// Copyright 2026 The MockOPIN project. Not part of the Go standard
++// library; a minimal, local fork of crypto/tls for the OPIN
++// post-quantum migration thesis (v9).
++//
++// AND: dual-certificate TLS 1.3 authentication. Classical (RSA-PSS-
++// SHA256) and post-quantum (ML-DSA-65) signatures are produced
++// independently, over the SAME CertificateVerify value and under the
++// SAME TLS 1.3 signature context as an ordinary single signature, and
++// are verified independently, without short-circuiting, against two
++// separately validated certificate chains. Both must be valid for the
++// connection to be dual-authenticated; neither chain substitutes for
++// the other, and neither verification is skipped because the other
++// already succeeded or failed.
++//
++// Private-use codepoint 0xFE65 stands for the pair itself, never for
++// either algorithm alone. draft-yusef-tls-pqt-dual-certs-03 (an
++// individual draft, never adopted, expires January 2027) only defines
++// ECDSA-paired codepoints; 0xFE00-0xFFFF is IANA-reserved for private
++// use, so this fork picks one value from that range for the one pair
++// this project needs.
++//
++// Known gaps, deliberately out of scope for this fork (documented, not
++// hidden): no session resumption for dual connections (a resumed
++// connection never re-runs certificate verification at all, dual or
++// not); no CompressedCertificate (RFC 8879) or Exported Authenticators
++// (RFC 9261) support; no RelatedCertificate (RFC 9440); no explicit
++// rejection of the dual codepoint under TLS 1.2 -- it is simply never
++// offered or accepted below TLS 1.3, which has the same practical
++// effect without a dedicated check; HelloRetryRequest is untested with
++// Dual configured; the client's VerifyConnection/VerifyPeerCertificate
++// callbacks still only ever see the classical chain (c.peerCertificates),
++// exactly as upstream, so they run before the post-quantum chain is
++// validated.
++package tls
++
++import (
++	"crypto"
++	"crypto/mldsa"
++	"crypto/rsa"
++	"crypto/x509"
++	"errors"
++	"fmt"
++	"io"
++	"slices"
++	"time"
++)
++
++// dualSignatureScheme is the AND mechanism's private-use SignatureScheme
++// codepoint. It is never passed to typeAndHashFromSignatureScheme or any
++// other single-key signing/verification path -- it always denotes the
++// (RSA-PSS-SHA256, ML-DSA-65) pair, handled entirely by the functions in
++// this file.
++const dualSignatureScheme SignatureScheme = 0xFE65
++
++// DualConfig enables AND dual-certificate TLS 1.3 authentication
++// alongside -- never instead of -- the classical chain already
++// configured via Config.Certificates/GetCertificate (server side) or
++// Config.Certificates/GetClientCertificate (client side).
++type DualConfig struct {
++	// Certificates holds this side's own post-quantum (ML-DSA-65)
++	// certificate chain and private key, presented ALONGSIDE the
++	// classical chain. Only Certificates[0] is used; present to match
++	// the shape (and future extensibility) of Config.Certificates.
++	Certificates []Certificate
++
++	// RootCAs and ClientCAs are the trust anchors for the PEER's
++	// post-quantum chain. They are independent pools from Config.RootCAs/
++	// Config.ClientCAs, which remain the classical chain's own trust
++	// anchors -- the two chains are validated independently, each
++	// against its own pool, never against the other's.
++	RootCAs   *x509.CertPool
++	ClientCAs *x509.CertPool
++
++	// Require makes dual authentication mandatory for this side of the
++	// connection. In strict mode (Require true), ONLY the dual
++	// codepoint is offered/accepted -- no classical-only fallback --
++	// so a peer without dual support fails the handshake with
++	// handshake_failure, through the ordinary, unmodified
++	// selectSignatureScheme path (it finds no signature algorithm in
++	// common and returns an error; no fork-specific code is needed for
++	// that failure mode). When Require is false, the dual codepoint is
++	// offered/accepted ALONGSIDE the classical ones, and a peer
++	// without dual support is still authenticated classically --
++	// ConnectionState.DualAuthenticated reports false for that
++	// connection, so the downgrade is always observable, never silent.
++	Require bool
++}
++
++func (d *DualConfig) clone() *DualConfig {
++	if d == nil {
++		return nil
++	}
++	return &DualConfig{
++		Certificates: slices.Clone(d.Certificates),
++		RootCAs:      d.RootCAs,
++		ClientCAs:    d.ClientCAs,
++		Require:      d.Require,
++	}
++}
++
++// marshalDualSignature builds a dual CertificateVerify's signature
++// field: uint16(len(classicalSig)) || classicalSig || pqSig. pqSig's own
++// length is implicit (whatever remains), since ML-DSA-65 signatures
++// have one fixed length and there is nothing to follow them.
++func marshalDualSignature(classicalSig, pqSig []byte) []byte {
++	out := make([]byte, 2+len(classicalSig)+len(pqSig))
++	out[0] = byte(len(classicalSig) >> 8)
++	out[1] = byte(len(classicalSig))
++	copy(out[2:], classicalSig)
++	copy(out[2+len(classicalSig):], pqSig)
++	return out
++}
++
++func unmarshalDualSignature(sig []byte) (classicalSig, pqSig []byte, err error) {
++	if len(sig) < 2 {
++		return nil, nil, errors.New("tls: dual: signature field too short")
++	}
++	n := int(sig[0])<<8 | int(sig[1])
++	if n <= 0 || 2+n >= len(sig) {
++		return nil, nil, errors.New("tls: dual: invalid classical-signature length prefix")
++	}
++	return sig[2 : 2+n], sig[2+n:], nil
++}
++
++// signDualMessage produces a dual CertificateVerify signature: the
++// classical certificate's own key signs with RSA-PSS-SHA256, the
++// post-quantum certificate's own ML-DSA-65 key signs separately, BOTH
++// over the identical `signed` bytes -- signedMessage(context,
++// transcript), computed exactly once by the caller and passed to both
++// signing operations, never recomputed or varied between them.
++func signDualMessage(rand io.Reader, signed []byte, classicalCert, pqCert *Certificate) ([]byte, error) {
++	classicalSigner, ok := classicalCert.PrivateKey.(crypto.Signer)
++	if !ok {
++		return nil, errors.New("tls: dual: classical certificate's private key does not implement crypto.Signer")
++	}
++	classicalSig, err := crypto.SignMessage(classicalSigner, rand, signed,
++		&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
++	if err != nil {
++		return nil, fmt.Errorf("tls: dual: classical signature failed: %w", err)
++	}
++
++	pqSigner, ok := pqCert.PrivateKey.(crypto.Signer)
++	if !ok {
++		return nil, errors.New("tls: dual: post-quantum certificate's private key does not implement crypto.Signer")
++	}
++	pqSig, err := crypto.SignMessage(pqSigner, rand, signed, crypto.SignerOpts(directSigning))
++	if err != nil {
++		return nil, fmt.Errorf("tls: dual: post-quantum signature failed: %w", err)
++	}
++
++	return marshalDualSignature(classicalSig, pqSig), nil
++}
++
++// verifyDualMessage checks BOTH halves of a dual CertificateVerify
++// signature. Both verifications always run, in full, regardless of
++// whether the first one already failed -- there is no early return
++// between them -- so which half failed first is never observable from
++// control flow or timing. Either half failing fails the whole dual
++// authentication, with decrypt_error, the same alert an ordinary single
++// bad signature would produce.
++func verifyDualMessage(signed, sig []byte, classicalPub, pqPub crypto.PublicKey) error {
++	classicalSig, pqSig, err := unmarshalDualSignature(sig)
++	if err != nil {
++		return err
++	}
++
++	classicalErr := verifyHandshakeSignature(signatureRSAPSS, classicalPub, crypto.SHA256, signed, classicalSig)
++	pqErr := verifyHandshakeSignature(signatureMLDSA, pqPub, directSigning, signed, pqSig)
++
++	if classicalErr != nil || pqErr != nil {
++		return fmt.Errorf("tls: dual: signature verification failed (classical: %v, post-quantum: %v)", classicalErr, pqErr)
++	}
++	return nil
++}
++
++// verifyDualPeerChain independently validates the peer's post-quantum
++// certificate chain: parses every certificate, confirms the chain is
++// genuinely post-quantum-only (no classical signature algorithm
++// anywhere in it, and the leaf's own public key is specifically
++// ML-DSA-65, never ML-DSA-44 or -87), and verifies it against pool --
++// its own trust root, never the classical chain's -- with the given
++// EKU and, when serverName is non-empty, the given hostname. It never
++// consults the classical chain's own verification result; the two
++// chains are validated as if the other did not exist.
++func verifyDualPeerChain(rawCerts [][]byte, pool *x509.CertPool, serverName string, keyUsage x509.ExtKeyUsage, now time.Time) (certs []*x509.Certificate, verifiedChain []*x509.Certificate, err error) {
++	if len(rawCerts) == 0 {
++		return nil, nil, errors.New("tls: dual: peer's post-quantum certificate chain is empty")
++	}
++	certs = make([]*x509.Certificate, len(rawCerts))
++	for i, raw := range rawCerts {
++		cert, err := x509.ParseCertificate(raw)
++		if err != nil {
++			return nil, nil, fmt.Errorf("tls: dual: failed to parse post-quantum certificate: %w", err)
++		}
++		certs[i] = cert
++	}
++
++	for _, cert := range certs {
++		if cert.PublicKeyAlgorithm != x509.MLDSA {
++			return nil, nil, fmt.Errorf("tls: dual: post-quantum chain contains a non-ML-DSA certificate (%v)", cert.PublicKeyAlgorithm)
++		}
++	}
++	leaf := certs[0]
++	pqPub, ok := leaf.PublicKey.(*mldsa.PublicKey)
++	if !ok {
++		return nil, nil, fmt.Errorf("tls: dual: post-quantum leaf's public key is %T, not ML-DSA", leaf.PublicKey)
++	}
++	if pqPub.Parameters() != mldsa.MLDSA65() {
++		return nil, nil, errors.New("tls: dual: post-quantum leaf is not ML-DSA-65")
++	}
++
++	opts := x509.VerifyOptions{
++		Roots:         pool,
++		CurrentTime:   now,
++		Intermediates: x509.NewCertPool(),
++		KeyUsages:     []x509.ExtKeyUsage{keyUsage},
++		DNSName:       serverName,
++	}
++	for _, cert := range certs[1:] {
++		opts.Intermediates.AddCert(cert)
++	}
++	chains, err := leaf.Verify(opts)
++	if err != nil {
++		return nil, nil, fmt.Errorf("tls: dual: post-quantum chain verification failed: %w", err)
++	}
++	allowed, err := fipsAllowedChains(chains)
++	if err != nil {
++		return nil, nil, fmt.Errorf("tls: dual: post-quantum chain verification failed: %w", err)
++	}
++	if len(allowed) > 0 {
++		verifiedChain = allowed[0]
++	}
++	return certs, verifiedChain, nil
++}
++
++// verifyClassicalHalfIsClassical rejects a classical chain that is not
++// actually classical: every certificate in it must use a classical
++// signature algorithm (never ML-DSA), and the leaf's own public key
++// must be RSA. Dual authentication's security property (break both, not
++// either) depends on the two halves genuinely being different
++// algorithm families, not on their names alone.
++func verifyClassicalHalfIsClassical(classicalLeaf *x509.Certificate, classicalChain []*x509.Certificate) error {
++	if _, ok := classicalLeaf.PublicKey.(*rsa.PublicKey); !ok {
++		return fmt.Errorf("tls: dual: classical leaf's public key is %T, not RSA", classicalLeaf.PublicKey)
++	}
++	for _, cert := range classicalChain {
++		switch cert.SignatureAlgorithm {
++		case x509.MLDSA44, x509.MLDSA65, x509.MLDSA87:
++			return errors.New("tls: dual: classical chain contains an ML-DSA signature")
++		}
++	}
++	return nil
++}
++
++// sameDualIdentity reports whether a client's classical and
++// post-quantum leaf certificates identify the SAME pair, by comparing
++// their Subject Alternative Name sets (DNS names, email addresses, IP
++// addresses, and URIs) as sets, order-independent. This stops an
++// adversary from pairing a legitimately-issued classical certificate
++// with an unrelated post-quantum certificate (or vice versa) to pass
++// dual authentication as someone else.
++func sameDualIdentity(classicalLeaf, pqLeaf *x509.Certificate) bool {
++	sameSet := func(a, b []string) bool {
++		if len(a) != len(b) {
++			return false
++		}
++		as, bs := slices.Clone(a), slices.Clone(b)
++		slices.Sort(as)
++		slices.Sort(bs)
++		return slices.Equal(as, bs)
++	}
++	if !sameSet(classicalLeaf.DNSNames, pqLeaf.DNSNames) {
++		return false
++	}
++	if !sameSet(classicalLeaf.EmailAddresses, pqLeaf.EmailAddresses) {
++		return false
++	}
++	if len(classicalLeaf.IPAddresses) != len(pqLeaf.IPAddresses) {
++		return false
++	}
++	aIPs := make([]string, len(classicalLeaf.IPAddresses))
++	for i, ip := range classicalLeaf.IPAddresses {
++		aIPs[i] = ip.String()
++	}
++	bIPs := make([]string, len(pqLeaf.IPAddresses))
++	for i, ip := range pqLeaf.IPAddresses {
++		bIPs[i] = ip.String()
++	}
++	if !sameSet(aIPs, bIPs) {
++		return false
++	}
++	if len(classicalLeaf.URIs) != len(pqLeaf.URIs) {
++		return false
++	}
++	aURIs := make([]string, len(classicalLeaf.URIs))
++	for i, u := range classicalLeaf.URIs {
++		aURIs[i] = u.String()
++	}
++	bURIs := make([]string, len(pqLeaf.URIs))
++	for i, u := range pqLeaf.URIs {
++		bURIs[i] = u.String()
++	}
++	return sameSet(aURIs, bURIs)
++}
+diff --git a/dual_test.go b/dual_test.go
+new file mode 100644
+index 0000000..6a0190b
+--- /dev/null
++++ b/dual_test.go
+@@ -0,0 +1,718 @@
++// Copyright 2026 The MockOPIN project. Tests for dual.go (the AND
++// dual-certificate TLS 1.3 authentication mechanism), not part of the
++// upstream Go standard library test suite.
++package tls
++
++import (
++	"crypto/mldsa"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"math/big"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++var dualTestSerial atomic.Int64
++
++func nextDualTestSerial() *big.Int {
++	return big.NewInt(dualTestSerial.Add(1))
++}
++
++// dualTestPKI generates a fresh, self-contained pair of root CAs for
++// each test -- one classical (RSA-2048), one post-quantum (ML-DSA-65,
++// genuinely self-signed, never classically signed) -- so every chain
++// built from it is, by construction, ML-DSA-only on the PQ side and
++// RSA-only on the classical side, matching the AND specification's own
++// category requirement.
++type dualTestPKI struct {
++	t testing.TB
++
++	classicalRootCert *x509.Certificate
++	classicalRootKey  *rsa.PrivateKey
++	pqRootCert        *x509.Certificate
++	pqRootKey         *mldsa.PrivateKey
++
++	classicalRootPool *x509.CertPool
++	pqRootPool        *x509.CertPool
++}
++
++func newDualTestPKI(t testing.TB) *dualTestPKI {
++	classicalRootKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		t.Fatal(err)
++	}
++	classicalRootTmpl := &x509.Certificate{
++		SerialNumber:          nextDualTestSerial(),
++		Subject:               pkix.Name{CommonName: "AND test classical root"},
++		NotBefore:              time.Now().Add(-time.Hour),
++		NotAfter:               time.Now().Add(24 * time.Hour),
++		IsCA:                   true,
++		BasicConstraintsValid:  true,
++		KeyUsage:               x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
++	}
++	classicalRootDER, err := x509.CreateCertificate(rand.Reader, classicalRootTmpl, classicalRootTmpl,
++		&classicalRootKey.PublicKey, classicalRootKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	classicalRootCert, err := x509.ParseCertificate(classicalRootDER)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	pqRootKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
++	if err != nil {
++		t.Fatal(err)
++	}
++	pqRootTmpl := &x509.Certificate{
++		SerialNumber:          nextDualTestSerial(),
++		Subject:               pkix.Name{CommonName: "AND test post-quantum root"},
++		NotBefore:             time.Now().Add(-time.Hour),
++		NotAfter:              time.Now().Add(24 * time.Hour),
++		IsCA:                  true,
++		BasicConstraintsValid: true,
++		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
++	}
++	pqRootDER, err := x509.CreateCertificate(rand.Reader, pqRootTmpl, pqRootTmpl, pqRootKey.PublicKey(), pqRootKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	pqRootCert, err := x509.ParseCertificate(pqRootDER)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	classicalRootPool := x509.NewCertPool()
++	classicalRootPool.AddCert(classicalRootCert)
++	pqRootPool := x509.NewCertPool()
++	pqRootPool.AddCert(pqRootCert)
++
++	return &dualTestPKI{
++		t: t,
++
++		classicalRootCert: classicalRootCert,
++		classicalRootKey:  classicalRootKey,
++		pqRootCert:        pqRootCert,
++		pqRootKey:         pqRootKey,
++
++		classicalRootPool: classicalRootPool,
++		pqRootPool:        pqRootPool,
++	}
++}
++
++func (p *dualTestPKI) classicalLeaf(cn string, eku x509.ExtKeyUsage, dnsNames []string) Certificate {
++	key, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		p.t.Fatal(err)
++	}
++	tmpl := &x509.Certificate{
++		SerialNumber: nextDualTestSerial(),
++		Subject:      pkix.Name{CommonName: cn},
++		NotBefore:    time.Now().Add(-time.Hour),
++		NotAfter:     time.Now().Add(24 * time.Hour),
++		KeyUsage:     x509.KeyUsageDigitalSignature,
++		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
++		DNSNames:     dnsNames,
++	}
++	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.classicalRootCert, &key.PublicKey, p.classicalRootKey)
++	if err != nil {
++		p.t.Fatal(err)
++	}
++	return Certificate{Certificate: [][]byte{der}, PrivateKey: key}
++}
++
++// pqLeafWithKey mints a post-quantum leaf whose CERTIFICATE advertises
++// pubKey (the real, legitimately-issued key), but whose returned
++// PrivateKey is signKey -- which may deliberately NOT match pubKey, to
++// simulate an adversary who holds the certificate's own public bytes
++// (always observable on the wire) but not its private key.
++func (p *dualTestPKI) pqLeafWithKey(cn string, eku x509.ExtKeyUsage, dnsNames []string, pubKey *mldsa.PublicKey, signKey *mldsa.PrivateKey) Certificate {
++	tmpl := &x509.Certificate{
++		SerialNumber: nextDualTestSerial(),
++		Subject:      pkix.Name{CommonName: cn},
++		NotBefore:    time.Now().Add(-time.Hour),
++		NotAfter:     time.Now().Add(24 * time.Hour),
++		KeyUsage:     x509.KeyUsageDigitalSignature,
++		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
++		DNSNames:     dnsNames,
++	}
++	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.pqRootCert, pubKey, p.pqRootKey)
++	if err != nil {
++		p.t.Fatal(err)
++	}
++	return Certificate{Certificate: [][]byte{der}, PrivateKey: signKey}
++}
++
++func (p *dualTestPKI) pqLeaf(cn string, eku x509.ExtKeyUsage, dnsNames []string) Certificate {
++	key, err := mldsa.GenerateKey(mldsa.MLDSA65())
++	if err != nil {
++		p.t.Fatal(err)
++	}
++	return p.pqLeafWithKey(cn, eku, dnsNames, key.PublicKey(), key)
++}
++
++// dualHandshakePipe runs a client and a server handshake concurrently
++// over a REAL (loopback TCP, via the existing test suite's own
++// localPipe helper) connection, returning both sides' *Conn (still open
++// -- the caller closes them) and both handshake errors. A plain
++// net.Pipe() is deliberately NOT used here: it is fully synchronous and
++// unbuffered, so if the server's first flight spans more than one
++// record and the client aborts partway through reading it (exactly
++// what several of the negative tests below do, by design), both sides
++// can end up blocked writing at once with neither reading -- a
++// transport-level deadlock, not a protocol bug. A real loopback
++// connection has OS-level socket buffering and does not have this
++// failure mode, matching how the rest of this test suite's own full
++// handshake tests are already built.
++//
++// TLS 1.3 clients return from Handshake once their OWN last flight is
++// sent, without waiting to learn whether the server accepted it (the
++// same asymmetry this project already diagnosed once in the real v8
++// probe work). If the server rejects the client's certificate AFTER
++// that point, its alert has nowhere to land unless the client keeps
++// reading -- so, when the client's own Handshake succeeded, this does
++// one more bounded Read to give a late server-side alert somewhere to
++// go, instead of leaving the server's write pending for the socket's
++// own buffer (harmless) or, in a pathological case, blocking on a full
++// buffer. A timeout with nothing to read is the expected, successful
++// case.
++func dualHandshakePipe(t testing.TB, clientConfig, serverConfig *Config) (clientConn, serverConn *Conn, clientErr, serverErr error) {
++	c, s := localPipe(t)
++	clientConn = Client(c, clientConfig)
++	serverConn = Server(s, serverConfig)
++	errCh := make(chan error, 1)
++	go func() {
++		err := clientConn.Handshake()
++		if err == nil {
++			_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
++			_, readErr := clientConn.Read(make([]byte, 1))
++			if readErr != nil {
++				if ne, ok := readErr.(net.Error); !ok || !ne.Timeout() {
++					err = readErr
++				}
++			}
++			_ = clientConn.SetReadDeadline(time.Time{})
++		}
++		errCh <- err
++	}()
++	serverErr = serverConn.Handshake()
++	clientErr = <-errCh
++	return
++}
++
++const dualTestServerName = "and.test.example"
++
++// baseDualConfigs returns a client/server Config pair with ordinary,
++// mutually-trusting classical RSA chains already wired (server auth
++// only, no mTLS) -- every test below starts from this and adds Dual as
++// needed, so each test's own diff is just the AND-specific part.
++func baseDualConfigs(pki *dualTestPKI) (client, server *Config) {
++	serverClassical := pki.classicalLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server = &Config{
++		Certificates: []Certificate{serverClassical},
++		MinVersion:   VersionTLS13,
++	}
++	client = &Config{
++		RootCAs:    pki.classicalRootPool,
++		ServerName: dualTestServerName,
++		MinVersion: VersionTLS13,
++	}
++	return client, server
++}
++
++// --- 1: full strict mTLS, both sides dual, both chains valid ---
++
++func TestDualStrictFullMTLS(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, Require: true}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	clientPQ := pki.pqLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual.Certificates = []Certificate{clientPQ}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	server.Dual.ClientCAs = pki.pqRootPool
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("handshake failed: client=%v server=%v", cerr, serr)
++	}
++	if cs := cc.ConnectionState(); !cs.DualAuthenticated {
++		t.Error("client: DualAuthenticated = false, want true (server's pair)")
++	}
++	if cs := sc.ConnectionState(); !cs.DualAuthenticated {
++		t.Error("server: DualAuthenticated = false, want true (client's pair)")
++	}
++}
++
++// --- 2: server-only dual (server authenticates its own pair; no mTLS) ---
++
++func TestDualServerOnly(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("handshake failed: client=%v server=%v", cerr, serr)
++	}
++	if cs := cc.ConnectionState(); !cs.DualAuthenticated {
++		t.Error("client: DualAuthenticated = false, want true")
++	}
++	if len(sc.ConnectionState().PeerCertificates) != 0 {
++		t.Error("server: unexpectedly has peer certificates (no client auth was requested)")
++	}
++}
++
++// --- 3/4: strict side against a plain legacy peer must fail, via the
++// existing, unmodified selectSignatureScheme -- no fork-specific
++// rejection code is involved in either direction. ---
++
++func TestDualStrictClientVsLegacyServer(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki) // server has no Dual at all
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil || serr == nil {
++		t.Fatalf("expected handshake failure, got client=%v server=%v", cerr, serr)
++	}
++}
++
++func TestDualStrictServerVsLegacyClient(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki) // client has no Dual at all
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: pki.pqRootPool, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil || serr == nil {
++		t.Fatalf("expected handshake failure, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 5: client offers dual but has no PQ chain configured, against a
++// strict server -- fails the same way as the legacy-client case above. ---
++
++func TestDualClientMissingPQChain(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool} // no Certificates -- can't present a PQ chain
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: pki.pqRootPool, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil || serr == nil {
++		t.Fatalf("expected handshake failure, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 6/7: a PQ chain whose root the OTHER side doesn't trust must fail
++// the handshake, even though the classical chain is perfectly valid. ---
++
++func TestDualServerPQChainUntrustedByClient(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}}
++	client.Dual = &DualConfig{RootCAs: x509.NewCertPool()} // empty: server's PQ root is not in it
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil {
++		t.Fatalf("expected the CLIENT to reject the server's untrusted PQ chain, got client=%v server=%v", cerr, serr)
++	}
++}
++
++func TestDualClientPQChainUntrustedByServer(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	clientPQ := pki.pqLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual = &DualConfig{Certificates: []Certificate{clientPQ}, RootCAs: pki.pqRootPool}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: x509.NewCertPool()} // empty
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("expected the SERVER to reject the client's untrusted PQ chain, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 8: the classical chain's own trust failure still works exactly
++// as upstream -- AND adds a second check, it never bypasses the first. ---
++
++func TestDualClassicalChainUntrusted(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	client.RootCAs = x509.NewCertPool() // server's classical root is not in it
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil {
++		t.Fatalf("expected the CLIENT to reject the server's untrusted classical chain, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 9: the PQ chain's own hostname mismatch is caught independently,
++// even though the classical chain's hostname is correct. ---
++
++func TestDualWrongHostnameInPQChain(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	serverPQ := pki.pqLeaf("wrong.example", x509.ExtKeyUsageServerAuth, []string{"wrong.example"})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil {
++		t.Fatalf("expected the CLIENT to reject the server's PQ chain for the wrong hostname, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 10: a client whose classical and post-quantum certificates name
++// different identities must be rejected -- the dual mechanism's whole
++// point is that both halves vouch for the SAME party. ---
++
++func TestDualClientDivergentIdentities(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	// sameDualIdentity compares SAN sets, not CommonName (RFC 8446-era
++	// TLS treats CN as legacy) -- so the two leaves must actually
++	// differ in their SANs for this test to exercise that check.
++	clientClassical := pki.classicalLeaf("and-client-alice", x509.ExtKeyUsageClientAuth, []string{"alice.and-client.example"})
++	clientPQ := pki.pqLeaf("and-client-bob", x509.ExtKeyUsageClientAuth, []string{"bob.and-client.example"}) // different identity
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual = &DualConfig{Certificates: []Certificate{clientPQ}, RootCAs: pki.pqRootPool}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: pki.pqRootPool}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("expected the SERVER to reject mismatched client identities, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 11/12: a tampered half of the dual signature must fail, whether
++// it's the classical half or the post-quantum half -- neither
++// verification is skipped because of the other. ---
++
++func TestDualTamperedSecondSignature(t *testing.T) {
++	testDualTamperedSignature(t, false /* tamper the post-quantum half */)
++}
++
++func TestDualTamperedFirstSignature(t *testing.T) {
++	testDualTamperedSignature(t, true /* tamper the classical half */)
++}
++
++func testDualTamperedSignature(t *testing.T, tamperClassical bool) {
++	classicalCert := &Certificate{PrivateKey: mustGenerateRSAKeyForTest(t)}
++	pqKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
++	if err != nil {
++		t.Fatal(err)
++	}
++	pqCert := &Certificate{PrivateKey: pqKey}
++
++	signed := []byte("dual signature test transcript value")
++	sig, err := signDualMessage(rand.Reader, signed, classicalCert, pqCert)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if tamperClassical {
++		sig[2] ^= 0xFF // first byte of the classical signature itself
++	} else {
++		sig[len(sig)-1] ^= 0xFF // last byte, always inside the PQ signature
++	}
++
++	classicalPriv := classicalCert.PrivateKey.(*rsa.PrivateKey)
++	err = verifyDualMessage(signed, sig, &classicalPriv.PublicKey, pqKey.PublicKey())
++	if err == nil {
++		t.Fatal("verifyDualMessage succeeded on a tampered signature, want an error")
++	}
++}
++
++func mustGenerateRSAKeyForTest(t *testing.T) *rsa.PrivateKey {
++	key, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return key
++}
++
++// --- 13/14: the quantum adversary that motivates the whole mechanism.
++// An attacker who has stolen only the RSA private key of a legitimate
++// dual pair (the certificates themselves are always public) can
++// authenticate against a Hybrid-v8-style, classical-only verifier, but
++// not against a real dual (AND) verifier -- because they cannot
++// produce the pair's own ML-DSA signature. ---
++
++func TestDualQuantumAdversaryHoldingOnlyRSAKey(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, Require: true}
++
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	// The adversary presents the PAIR's real, legitimately-issued
++	// public PQ certificate (observable on any prior wire capture --
++	// there is no secrecy in a certificate), but signs with a FRESH,
++	// unrelated key: exactly what holding the RSA private key but not
++	// the ML-DSA one looks like on the wire.
++	legitPQKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
++	if err != nil {
++		t.Fatal(err)
++	}
++	adversaryKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
++	if err != nil {
++		t.Fatal(err)
++	}
++	adversaryPQCert := pki.pqLeafWithKey("and-client", x509.ExtKeyUsageClientAuth, nil,
++		legitPQKey.PublicKey(), adversaryKey)
++
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual = &DualConfig{Certificates: []Certificate{adversaryPQCert}, RootCAs: pki.pqRootPool, Require: true}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	server.Dual.ClientCAs = pki.pqRootPool
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("quantum adversary (RSA key only) authenticated against a strict dual server -- classical ok, post-quantum should have failed; client=%v server=%v", cerr, serr)
++	}
++}
++
++func TestSingleChainRSAAdversaryStillAuthenticates(t *testing.T) {
++	// The SAME adversary (only the RSA key, a legitimately-issued
++	// single classical chain, no post-quantum material at all) against
++	// an ORDINARY classical mTLS verifier (Config.Dual == nil on both
++	// sides, the Híbrido-v8 shape: ML-DSA exists only as the CA's own
++	// signature over the certificate, never as a handshake-time proof
++	// of key possession) -- succeeds normally. This is the gap AND
++	// closes, demonstrated directly rather than asserted.
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("expected the RSA-only adversary to authenticate against a classical-only verifier, got client=%v server=%v", cerr, serr)
++	}
++}
++
++// --- 15: a non-strict dual server accepts a classical-only client,
++// but the downgrade is always observable, never silent. ---
++
++func TestDualNonStrictAllowsDowngrade(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki) // client has no Dual at all
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}} // Require: false
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("expected a successful, downgraded handshake, got client=%v server=%v", cerr, serr)
++	}
++	if cs := cc.ConnectionState(); cs.DualAuthenticated {
++		t.Error("DualAuthenticated = true on a connection that never used the dual codepoint")
++	}
++	if len(cc.ConnectionState().PeerCertificates) == 0 {
++		t.Error("classical authentication itself should still have succeeded")
++	}
++}
++
++// --- 16: wire round-trip, both the dual and the ordinary shape. ---
++
++func TestDualCertificateMessageRoundTrip(t *testing.T) {
++	pki := newDualTestPKI(t)
++	classical := pki.classicalLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	pq := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++
++	orig := &certificateMsgTLS13{
++		certificate:       classical,
++		dualPQCertificate: pq.Certificate,
++	}
++	data, err := orig.marshal()
++	if err != nil {
++		t.Fatal(err)
++	}
++	got := new(certificateMsgTLS13)
++	if !got.unmarshal(data) {
++		t.Fatal("unmarshal of a well-formed dual Certificate message returned false")
++	}
++	if len(got.certificate.Certificate) != len(classical.Certificate) ||
++		string(got.certificate.Certificate[0]) != string(classical.Certificate[0]) {
++		t.Error("classical chain did not round-trip")
++	}
++	if len(got.dualPQCertificate) != len(pq.Certificate) ||
++		string(got.dualPQCertificate[0]) != string(pq.Certificate[0]) {
++		t.Error("post-quantum chain did not round-trip")
++	}
++
++	// The non-dual shape must still work exactly as before.
++	plain := &certificateMsgTLS13{certificate: classical}
++	data2, err := plain.marshal()
++	if err != nil {
++		t.Fatal(err)
++	}
++	got2 := new(certificateMsgTLS13)
++	if !got2.unmarshal(data2) {
++		t.Fatal("unmarshal of an ordinary, non-dual Certificate message returned false")
++	}
++	if len(got2.dualPQCertificate) != 0 {
++		t.Error("a non-dual message was parsed as if it had a post-quantum chain")
++	}
++}
++
++// --- 17: malformed delimiter placement must be rejected. ---
++
++func TestDualCertificateMessageMalformedDelimiter(t *testing.T) {
++	pki := newDualTestPKI(t)
++	classical := pki.classicalLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	pq := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++
++	entry := func(cert []byte) []byte {
++		out := []byte{0, 0, 0}
++		out[0] = byte(len(cert) >> 16)
++		out[1] = byte(len(cert) >> 8)
++		out[2] = byte(len(cert))
++		out = append(out, cert...)
++		out = append(out, 0, 0) // empty extensions
++		return out
++	}
++	delimiter := []byte{0, 0, 0} // zero-length entry, no extensions field
++
++	build := func(entries ...[]byte) []byte {
++		var certList []byte
++		for _, e := range entries {
++			certList = append(certList, e...)
++		}
++		listLen := len(certList)
++		body := []byte{0} // certificate_request_context
++		body = append(body, byte(listLen>>16), byte(listLen>>8), byte(listLen))
++		body = append(body, certList...)
++		msg := []byte{typeCertificate}
++		msg = append(msg, byte(len(body)>>16), byte(len(body)>>8), byte(len(body)))
++		msg = append(msg, body...)
++		return msg
++	}
++
++	classicalEntry := entry(classical.Certificate[0])
++	pqEntry := entry(pq.Certificate[0])
++
++	cases := []struct {
++		name string
++		data []byte
++		want bool
++	}{
++		{"valid single delimiter", build(classicalEntry, delimiter, pqEntry), true},
++		{"delimiter first", build(delimiter, classicalEntry, pqEntry), false},
++		{"delimiter last", build(classicalEntry, pqEntry, delimiter), false},
++		{"delimiter repeated", build(classicalEntry, delimiter, pqEntry, delimiter), false},
++		{"no delimiter (ordinary message)", build(classicalEntry, pqEntry), true},
++	}
++	for _, c := range cases {
++		t.Run(c.name, func(t *testing.T) {
++			m := new(certificateMsgTLS13)
++			got := m.unmarshal(c.data)
++			if got != c.want {
++				t.Errorf("unmarshal = %v, want %v", got, c.want)
++			}
++		})
++	}
++}
++
++// --- 18: wire size measurement -- real numbers for the thesis, not
++// just pass/fail. ---
++
++func TestDualWireSizeMeasurement(t *testing.T) {
++	pki := newDualTestPKI(t)
++	classical := pki.classicalLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	pq := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++
++	plainMsg := &certificateMsgTLS13{certificate: classical}
++	plainBytes, err := plainMsg.marshal()
++	if err != nil {
++		t.Fatal(err)
++	}
++	dualMsg := &certificateMsgTLS13{certificate: classical, dualPQCertificate: pq.Certificate}
++	dualBytes, err := dualMsg.marshal()
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	rsaSig := make([]byte, 256)   // RSA-2048 PSS signature size
++	mldsaSig := make([]byte, 3309) // ML-DSA-65 signature size
++	plainVerifyLen := len(rsaSig)
++	dualVerifyLen := len(marshalDualSignature(rsaSig, mldsaSig))
++
++	t.Logf("Certificate message: classical-only %d bytes, dual (classical+ML-DSA-65) %d bytes (+%d, +%.1f%%)",
++		len(plainBytes), len(dualBytes), len(dualBytes)-len(plainBytes),
++		100*float64(len(dualBytes)-len(plainBytes))/float64(len(plainBytes)))
++	t.Logf("CertificateVerify signature field: classical-only %d bytes, dual %d bytes (+%d, +%.1f%%)",
++		plainVerifyLen, dualVerifyLen, dualVerifyLen-plainVerifyLen,
++		100*float64(dualVerifyLen-plainVerifyLen)/float64(plainVerifyLen))
++	t.Logf("post-quantum certificate chain alone: %d bytes", len(pq.Certificate[0]))
++
++	if len(dualBytes) <= len(plainBytes) {
++		t.Error("dual Certificate message is not larger than the classical-only one")
++	}
++	if dualVerifyLen <= plainVerifyLen {
++		t.Error("dual CertificateVerify signature is not larger than the classical-only one")
++	}
++}
+diff --git a/handshake_client.go b/handshake_client.go
+index 7438945..5c908ec 100644
+--- a/handshake_client.go
++++ b/handshake_client.go
+@@ -124,6 +124,23 @@ func (c *Conn) makeClientHello() (*clientHelloMsg, *keySharePrivateKeys, *echCli
+ 		hello.supportedSignatureAlgorithmsCert = supportedSignatureAlgorithmsCert(minVersion, maxVersion)
+ 	}
+ 
++	// AND: offer the dual (RSA-PSS-SHA256, ML-DSA-65) codepoint when
++	// this client wants dual authentication. InsecureSkipVerify is
++	// forbidden with Dual -- dual authentication's whole point is a
++	// peer that is actually verified, independently, twice.
++	if config.Dual != nil {
++		if config.InsecureSkipVerify {
++			return nil, nil, nil, errors.New("tls: Dual is not supported with InsecureSkipVerify")
++		}
++		if config.Dual.Require {
++			// Strict: only the dual codepoint, no classical fallback.
++			hello.supportedSignatureAlgorithms = []SignatureScheme{dualSignatureScheme}
++		} else {
++			hello.supportedSignatureAlgorithms = append(
++				[]SignatureScheme{dualSignatureScheme}, hello.supportedSignatureAlgorithms...)
++		}
++	}
++
+ 	var keyShareKeys *keySharePrivateKeys
+ 	if maxVersion >= VersionTLS13 {
+ 		// Reset the list of ciphers when the client only supports TLS 1.3.
+diff --git a/handshake_client_tls13.go b/handshake_client_tls13.go
+index f551506..d8aeb3b 100644
+--- a/handshake_client_tls13.go
++++ b/handshake_client_tls13.go
+@@ -13,6 +13,7 @@ import (
+ 	"crypto/internal/fips140/tls13"
+ 	"crypto/rsa"
+ 	"crypto/subtle"
++	"crypto/x509"
+ 	"errors"
+ 	"hash"
+ 	"slices"
+@@ -637,6 +638,35 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
+ 		return err
+ 	}
+ 
++	// AND: the server's post-quantum chain, if any, is validated
++	// independently of the classical one just above -- its own trust
++	// root (Dual.RootCAs), its own hostname check, its own category
++	// checks. This happens whether or not the server ends up actually
++	// using the dual signature scheme below, so a server that sends a
++	// dual Certificate message but a classical CertificateVerify still
++	// has its PQ chain's validity confirmed (not strictly required by
++	// the protocol, but it costs nothing and never weakens anything).
++	var dualPeerCerts []*x509.Certificate
++	if len(certMsg.dualPQCertificate) > 0 {
++		if c.config.Dual == nil {
++			c.sendAlert(alertUnexpectedMessage)
++			return errors.New("tls: server sent a dual certificate chain but Dual is not configured")
++		}
++		certs, verified, err := verifyDualPeerChain(certMsg.dualPQCertificate, c.config.Dual.RootCAs,
++			c.config.ServerName, x509.ExtKeyUsageServerAuth, c.config.time())
++		if err != nil {
++			c.sendAlert(alertBadCertificate)
++			return err
++		}
++		if err := verifyClassicalHalfIsClassical(c.peerCertificates[0], c.peerCertificates); err != nil {
++			c.sendAlert(alertBadCertificate)
++			return err
++		}
++		dualPeerCerts = certs
++		c.dualPeerCertificates = certs
++		c.dualVerifiedChains = [][]*x509.Certificate{verified}
++	}
++
+ 	// certificateVerifyMsg is included in the transcript, but not until
+ 	// after we verify the handshake signature, since the state before
+ 	// this message was sent is used.
+@@ -651,28 +681,43 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
+ 		return unexpectedMessageError(certVerify, msg)
+ 	}
+ 
+-	// See RFC 8446, Section 4.4.3.
+-	// We don't use hs.hello.supportedSignatureAlgorithms because it might
+-	// include PKCS#1 v1.5 and SHA-1 if the ClientHello also supported TLS 1.2.
+-	if !isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, supportedSignatureAlgorithms(c.vers, c.vers)) ||
+-		!isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, signatureSchemesForPublicKey(c.vers, c.peerCertificates[0].PublicKey)) {
+-		c.sendAlert(alertIllegalParameter)
+-		return errors.New("tls: certificate used with invalid signature algorithm")
+-	}
+-	sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerify.signatureAlgorithm)
+-	if err != nil {
+-		return c.sendAlert(alertInternalError)
+-	}
+-	if sigType == signaturePKCS1v15 || sigHash == crypto.SHA1 {
+-		return c.sendAlert(alertInternalError)
+-	}
+-	signed := signedMessage(serverSignatureContext, hs.transcript)
+-	if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
+-		sigHash, signed, certVerify.signature); err != nil {
+-		c.sendAlert(alertDecryptError)
+-		return errors.New("tls: invalid signature by the server certificate: " + err.Error())
++	if certVerify.signatureAlgorithm == dualSignatureScheme {
++		if len(dualPeerCerts) == 0 {
++			c.sendAlert(alertIllegalParameter)
++			return errors.New("tls: server used the dual signature algorithm without sending a dual certificate chain")
++		}
++		signed := signedMessage(serverSignatureContext, hs.transcript)
++		if err := verifyDualMessage(signed, certVerify.signature,
++			c.peerCertificates[0].PublicKey, dualPeerCerts[0].PublicKey); err != nil {
++			c.sendAlert(alertDecryptError)
++			return errors.New("tls: " + err.Error())
++		}
++		c.dualAuthenticated = true
++		c.peerSigAlg = certVerify.signatureAlgorithm
++	} else {
++		// See RFC 8446, Section 4.4.3.
++		// We don't use hs.hello.supportedSignatureAlgorithms because it might
++		// include PKCS#1 v1.5 and SHA-1 if the ClientHello also supported TLS 1.2.
++		if !isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, supportedSignatureAlgorithms(c.vers, c.vers)) ||
++			!isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, signatureSchemesForPublicKey(c.vers, c.peerCertificates[0].PublicKey)) {
++			c.sendAlert(alertIllegalParameter)
++			return errors.New("tls: certificate used with invalid signature algorithm")
++		}
++		sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerify.signatureAlgorithm)
++		if err != nil {
++			return c.sendAlert(alertInternalError)
++		}
++		if sigType == signaturePKCS1v15 || sigHash == crypto.SHA1 {
++			return c.sendAlert(alertInternalError)
++		}
++		signed := signedMessage(serverSignatureContext, hs.transcript)
++		if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
++			sigHash, signed, certVerify.signature); err != nil {
++			c.sendAlert(alertDecryptError)
++			return errors.New("tls: invalid signature by the server certificate: " + err.Error())
++		}
++		c.peerSigAlg = certVerify.signatureAlgorithm
+ 	}
+-	c.peerSigAlg = certVerify.signatureAlgorithm
+ 
+ 	if err := transcriptMsg(certVerify, hs.transcript); err != nil {
+ 		return err
+@@ -746,9 +791,34 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+ 		return nil
+ 	}
+ 
++	// AND: if the server's CertificateRequest offers the dual
++	// codepoint and this client has a post-quantum chain configured,
++	// send both certificates and a dual CertificateVerify below,
++	// instead of the ordinary single-chain path. If this client
++	// requires dual authentication but the server didn't ask for it,
++	// refuse outright rather than silently sending a classical-only
++	// certificate.
++	serverWantsDual := slices.Contains(hs.certReq.supportedSignatureAlgorithms, dualSignatureScheme)
++	if c.config.Dual != nil && c.config.Dual.Require && !serverWantsDual {
++		c.sendAlert(alertHandshakeFailure)
++		return errors.New("tls: dual (AND) client authentication required but the server did not request it")
++	}
++
++	// In dual (strict) mode, the server's own CertificateRequest may
++	// advertise ONLY the dual codepoint -- correct for picking the
++	// SIGNATURE ALGORITHM later, but getClientCertificate also uses
++	// this same list to decide whether our classical certificate is
++	// "compatible" at all, and 0xFE65 matches no real classical key
++	// type. The classical half always signs RSA-PSS-SHA256 in dual
++	// mode regardless of what's advertised here, so certificate
++	// SELECTION uses an ordinary classical list instead.
++	sigSchemesForSelection := hs.certReq.supportedSignatureAlgorithms
++	if serverWantsDual {
++		sigSchemesForSelection = supportedSignatureAlgorithms(c.vers, c.vers)
++	}
+ 	cert, err := c.getClientCertificate(&CertificateRequestInfo{
+ 		AcceptableCAs:    hs.certReq.certificateAuthorities,
+-		SignatureSchemes: hs.certReq.supportedSignatureAlgorithms,
++		SignatureSchemes: sigSchemesForSelection,
+ 		Version:          c.vers,
+ 		ctx:              hs.ctx,
+ 	})
+@@ -760,11 +830,16 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+ 		hs.c.localCertificate = cert.Certificate
+ 	}
+ 
++	useDual := serverWantsDual && c.config.Dual != nil && len(c.config.Dual.Certificates) > 0 && len(cert.Certificate) > 0
++
+ 	certMsg := new(certificateMsgTLS13)
+ 
+ 	certMsg.certificate = *cert
+ 	certMsg.scts = hs.certReq.scts && len(cert.SignedCertificateTimestamps) > 0
+ 	certMsg.ocspStapling = hs.certReq.ocspStapling && len(cert.OCSPStaple) > 0
++	if useDual {
++		certMsg.dualPQCertificate = c.config.Dual.Certificates[0].Certificate
++	}
+ 
+ 	if _, err := hs.c.writeHandshakeRecord(certMsg, hs.transcript); err != nil {
+ 		return err
+@@ -778,30 +853,41 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+ 	certVerifyMsg := new(certificateVerifyMsg)
+ 	certVerifyMsg.hasSignatureAlgorithm = true
+ 
+-	certVerifyMsg.signatureAlgorithm, err = selectSignatureScheme(c.vers, cert, hs.certReq.supportedSignatureAlgorithms)
+-	if err != nil {
+-		// getClientCertificate returned a certificate incompatible with the
+-		// CertificateRequestInfo supported signature algorithms.
+-		c.sendAlert(alertHandshakeFailure)
+-		return err
+-	}
++	if useDual {
++		certVerifyMsg.signatureAlgorithm = dualSignatureScheme
++		signed := signedMessage(clientSignatureContext, hs.transcript)
++		sig, err := signDualMessage(c.config.rand(), signed, cert, &c.config.Dual.Certificates[0])
++		if err != nil {
++			c.sendAlert(alertInternalError)
++			return err
++		}
++		certVerifyMsg.signature = sig
++	} else {
++		certVerifyMsg.signatureAlgorithm, err = selectSignatureScheme(c.vers, cert, hs.certReq.supportedSignatureAlgorithms)
++		if err != nil {
++			// getClientCertificate returned a certificate incompatible with the
++			// CertificateRequestInfo supported signature algorithms.
++			c.sendAlert(alertHandshakeFailure)
++			return err
++		}
+ 
+-	sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerifyMsg.signatureAlgorithm)
+-	if err != nil {
+-		return c.sendAlert(alertInternalError)
+-	}
++		sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerifyMsg.signatureAlgorithm)
++		if err != nil {
++			return c.sendAlert(alertInternalError)
++		}
+ 
+-	signed := signedMessage(clientSignatureContext, hs.transcript)
+-	signOpts := crypto.SignerOpts(sigHash)
+-	if sigType == signatureRSAPSS {
+-		signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: sigHash}
+-	}
+-	sig, err := crypto.SignMessage(cert.PrivateKey.(crypto.Signer), c.config.rand(), signed, signOpts)
+-	if err != nil {
+-		c.sendAlert(alertInternalError)
+-		return errors.New("tls: failed to sign handshake: " + err.Error())
++		signed := signedMessage(clientSignatureContext, hs.transcript)
++		signOpts := crypto.SignerOpts(sigHash)
++		if sigType == signatureRSAPSS {
++			signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: sigHash}
++		}
++		sig, err := crypto.SignMessage(cert.PrivateKey.(crypto.Signer), c.config.rand(), signed, signOpts)
++		if err != nil {
++			c.sendAlert(alertInternalError)
++			return errors.New("tls: failed to sign handshake: " + err.Error())
++		}
++		certVerifyMsg.signature = sig
+ 	}
+-	certVerifyMsg.signature = sig
+ 
+ 	if _, err := hs.c.writeHandshakeRecord(certVerifyMsg, hs.transcript); err != nil {
+ 		return err
+diff --git a/handshake_messages.go b/handshake_messages.go
+index 511e073..a2e2c3a 100644
+--- a/handshake_messages.go
++++ b/handshake_messages.go
+@@ -1462,6 +1462,12 @@ type certificateMsgTLS13 struct {
+ 	certificate  Certificate
+ 	ocspStapling bool
+ 	scts         bool
++	// dualPQCertificate, if non-empty, is the raw DER chain of the AND
++	// mechanism's post-quantum (ML-DSA-65) certificate, sent/received
++	// alongside certificate (the classical chain) when dual
++	// authentication is in use. Empty for an ordinary, non-dual
++	// Certificate message.
++	dualPQCertificate [][]byte
+ }
+ 
+ func (m *certificateMsgTLS13) marshal() ([]byte, error) {
+@@ -1477,12 +1483,67 @@ func (m *certificateMsgTLS13) marshal() ([]byte, error) {
+ 		if !m.scts {
+ 			certificate.SignedCertificateTimestamps = nil
+ 		}
+-		marshalCertificate(b, certificate)
++		if len(m.dualPQCertificate) > 0 {
++			marshalDualCertificate(b, certificate, m.dualPQCertificate)
++		} else {
++			marshalCertificate(b, certificate)
++		}
+ 	})
+ 
+ 	return b.Bytes()
+ }
+ 
++// marshalDualCertificate writes the AND mechanism's dual
++// certificate_list: the classical chain (exactly as marshalCertificate
++// would), a 3-zero-byte delimiter entry carrying NO extensions field at
++// all, then the post-quantum chain (each entry carrying an empty
++// extensions field, like any non-leaf classical entry already does).
++// See unmarshalDualAwareCertificate for why this is unambiguous.
++func marshalDualCertificate(b *cryptobyte.Builder, classical Certificate, pq [][]byte) {
++	b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
++		for i, cert := range classical.Certificate {
++			b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
++				b.AddBytes(cert)
++			})
++			b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
++				if i > 0 {
++					return
++				}
++				if classical.OCSPStaple != nil {
++					b.AddUint16(extensionStatusRequest)
++					b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
++						b.AddUint8(statusTypeOCSP)
++						b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
++							b.AddBytes(classical.OCSPStaple)
++						})
++					})
++				}
++				if classical.SignedCertificateTimestamps != nil {
++					b.AddUint16(extensionSCT)
++					b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
++						b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
++							for _, sct := range classical.SignedCertificateTimestamps {
++								b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
++									b.AddBytes(sct)
++								})
++							}
++						})
++					})
++				}
++			})
++		}
++		// Delimiter: 3 zero bytes (an empty cert_data length prefix),
++		// deliberately with no extensions field after it.
++		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {})
++		for _, cert := range pq {
++			b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
++				b.AddBytes(cert)
++			})
++			b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {})
++		}
++	})
++}
++
+ func marshalCertificate(b *cryptobyte.Builder, certificate Certificate) {
+ 	b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+ 		for i, cert := range certificate.Certificate {
+@@ -1527,7 +1588,7 @@ func (m *certificateMsgTLS13) unmarshal(data []byte) bool {
+ 	var context cryptobyte.String
+ 	if !s.Skip(4) || // message type and uint24 length field
+ 		!s.ReadUint8LengthPrefixed(&context) || !context.Empty() ||
+-		!unmarshalCertificate(&s, &m.certificate) ||
++		!unmarshalDualAwareCertificate(&s, &m.certificate, &m.dualPQCertificate) ||
+ 		!s.Empty() {
+ 		return false
+ 	}
+@@ -1538,6 +1599,98 @@ func (m *certificateMsgTLS13) unmarshal(data []byte) bool {
+ 	return true
+ }
+ 
++// unmarshalDualAwareCertificate mirrors unmarshalCertificate exactly,
++// with one addition: a certificate_list entry whose own length prefix
++// is zero (3 zero bytes, never a valid certificate -- no real
++// certificate is ever zero bytes) is treated as the AND mechanism's
++// dual-chain delimiter, not as a certificate. Entries before it fill
++// certificate.Certificate (the classical chain, exactly as
++// unmarshalCertificate would); entries after it fill dualPQ (the
++// post-quantum chain). When no such entry is found, dualPQ stays nil
++// and every other byte is read exactly as unmarshalCertificate itself
++// would read it -- this function does not change the non-dual
++// behavior, it only recognizes a pattern the original parser would
++// otherwise desync on (confirmed by TestDualCertificateMessageRoundTrip).
++// A delimiter as the very first or very last entry, or a second
++// delimiter, is rejected: the classical chain, the single delimiter,
++// and the post-quantum chain must all be present, each non-empty,
++// each exactly once, in that order.
++func unmarshalDualAwareCertificate(s *cryptobyte.String, certificate *Certificate, dualPQ *[][]byte) bool {
++	var certList cryptobyte.String
++	if !s.ReadUint24LengthPrefixed(&certList) {
++		return false
++	}
++	seenDelimiter := false
++	for !certList.Empty() {
++		var cert []byte
++		if !readUint24LengthPrefixed(&certList, &cert) {
++			return false
++		}
++		if len(cert) == 0 {
++			if seenDelimiter || len(certificate.Certificate) == 0 {
++				// A second delimiter, or one before any classical
++				// certificate was seen -- reject either way.
++				return false
++			}
++			seenDelimiter = true
++			continue
++		}
++
++		var extensions cryptobyte.String
++		if !certList.ReadUint16LengthPrefixed(&extensions) {
++			return false
++		}
++		if !seenDelimiter {
++			certificate.Certificate = append(certificate.Certificate, cert)
++		} else {
++			*dualPQ = append(*dualPQ, cert)
++		}
++		if seenDelimiter || len(certificate.Certificate) > 1 {
++			// This library only supports OCSP and SCT for the
++			// classical leaf; every other entry's extensions
++			// (including every post-quantum one) are read above but
++			// never interpreted.
++			continue
++		}
++		for !extensions.Empty() {
++			var extension uint16
++			var extData cryptobyte.String
++			if !extensions.ReadUint16(&extension) ||
++				!extensions.ReadUint16LengthPrefixed(&extData) {
++				return false
++			}
++			switch extension {
++			case extensionStatusRequest:
++				var statusType uint8
++				if !extData.ReadUint8(&statusType) || statusType != statusTypeOCSP ||
++					!readUint24LengthPrefixed(&extData, &certificate.OCSPStaple) ||
++					len(certificate.OCSPStaple) == 0 {
++					return false
++				}
++			case extensionSCT:
++				var sctList cryptobyte.String
++				if !extData.ReadUint16LengthPrefixed(&sctList) || sctList.Empty() {
++					return false
++				}
++				for !sctList.Empty() {
++					var sct []byte
++					if !readUint16LengthPrefixed(&sctList, &sct) || len(sct) == 0 {
++						return false
++					}
++					certificate.SignedCertificateTimestamps = append(
++						certificate.SignedCertificateTimestamps, sct)
++				}
++			default:
++				// Ignore unknown extensions.
++			}
++		}
++	}
++	if seenDelimiter && len(*dualPQ) == 0 {
++		return false // delimiter was the last entry
++	}
++	return true
++}
++
+ func unmarshalCertificate(s *cryptobyte.String, certificate *Certificate) bool {
+ 	var certList cryptobyte.String
+ 	if !s.ReadUint24LengthPrefixed(&certList) {
+diff --git a/handshake_server_tls13.go b/handshake_server_tls13.go
+index 2c96e24..64e5b5e 100644
+--- a/handshake_server_tls13.go
++++ b/handshake_server_tls13.go
+@@ -52,6 +52,7 @@ type serverHandshakeStateTLS13 struct {
+ 	earlyData       bool
+ 	suite           *cipherSuiteTLS13
+ 	cert            *Certificate
++	dualCert        *Certificate // AND: this server's own post-quantum chain, set by pickCertificate when hs.sigAlg == dualSignatureScheme
+ 	sigAlg          SignatureScheme
+ 	earlySecret     *tls13.EarlySecret
+ 	sharedKey       []byte
+@@ -484,6 +485,18 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
+ 		return c.sendAlert(alertMissingExtension)
+ 	}
+ 
++	// AND: a client that didn't offer the dual codepoint fails outright
++	// when this server requires it -- no classical fallback. A client
++	// that DID offer it gets a dual Certificate/CertificateVerify below
++	// if this server also has a post-quantum chain configured; a
++	// server without Dual configured, or without a client offer,
++	// proceeds through the ordinary, unmodified path.
++	clientOffersDual := slices.Contains(hs.clientHello.supportedSignatureAlgorithms, dualSignatureScheme)
++	if c.config.Dual != nil && c.config.Dual.Require && !clientOffersDual {
++		c.sendAlert(alertHandshakeFailure)
++		return errors.New("tls: dual (AND) authentication required but the client did not offer it")
++	}
++
+ 	certificate, err := c.config.getCertificate(clientHelloInfo(hs.ctx, c, hs.clientHello))
+ 	if err != nil {
+ 		if err == errNoCertificates {
+@@ -496,6 +509,14 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
+ 	if certificate != nil {
+ 		hs.c.localCertificate = certificate.Certificate
+ 	}
++
++	if clientOffersDual && c.config.Dual != nil && len(c.config.Dual.Certificates) > 0 {
++		hs.sigAlg = dualSignatureScheme
++		hs.dualCert = &c.config.Dual.Certificates[0]
++		hs.cert = certificate
++		return nil
++	}
++
+ 	hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
+ 	if err != nil {
+ 		// getCertificate returned a certificate that is unsupported or
+@@ -840,6 +861,17 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
+ 		if c.config.ClientCAs != nil {
+ 			certReq.certificateAuthorities = c.config.ClientCAs.Subjects()
+ 		}
++		// AND: ask the client for dual (classical + post-quantum)
++		// authentication too, when this server wants it. Strict: only
++		// the dual codepoint, no classical fallback.
++		if c.config.Dual != nil {
++			if c.config.Dual.Require {
++				certReq.supportedSignatureAlgorithms = []SignatureScheme{dualSignatureScheme}
++			} else {
++				certReq.supportedSignatureAlgorithms = append(
++					[]SignatureScheme{dualSignatureScheme}, certReq.supportedSignatureAlgorithms...)
++			}
++		}
+ 
+ 		if _, err := hs.c.writeHandshakeRecord(certReq, hs.transcript); err != nil {
+ 			return err
+@@ -851,6 +883,9 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
+ 	certMsg.certificate = *hs.cert
+ 	certMsg.scts = hs.clientHello.scts && len(hs.cert.SignedCertificateTimestamps) > 0
+ 	certMsg.ocspStapling = hs.clientHello.ocspStapling && len(hs.cert.OCSPStaple) > 0
++	if hs.sigAlg == dualSignatureScheme && hs.dualCert != nil {
++		certMsg.dualPQCertificate = hs.dualCert.Certificate
++	}
+ 
+ 	if _, err := hs.c.writeHandshakeRecord(certMsg, hs.transcript); err != nil {
+ 		return err
+@@ -860,6 +895,21 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
+ 	certVerifyMsg.hasSignatureAlgorithm = true
+ 	certVerifyMsg.signatureAlgorithm = hs.sigAlg
+ 
++	if hs.sigAlg == dualSignatureScheme {
++		signed := signedMessage(serverSignatureContext, hs.transcript)
++		sig, err := signDualMessage(c.config.rand(), signed, hs.cert, hs.dualCert)
++		if err != nil {
++			c.sendAlert(alertInternalError)
++			return err
++		}
++		certVerifyMsg.signature = sig
++
++		if _, err := hs.c.writeHandshakeRecord(certVerifyMsg, hs.transcript); err != nil {
++			return err
++		}
++		return nil
++	}
++
+ 	sigType, sigHash, err := typeAndHashFromSignatureScheme(hs.sigAlg)
+ 	if err != nil {
+ 		return c.sendAlert(alertInternalError)
+@@ -1060,6 +1110,37 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+ 		return err
+ 	}
+ 
++	// AND: the client's post-quantum chain, if any, is validated
++	// independently of the classical one just above -- its own trust
++	// root (Dual.ClientCAs), its own category checks, and (client
++	// certificates specifically) that the two chains identify the SAME
++	// pair, by SAN set, so a classical certificate for one identity
++	// can't be paired with a post-quantum certificate for another.
++	var dualPeerCerts []*x509.Certificate
++	if len(certMsg.dualPQCertificate) > 0 {
++		if c.config.Dual == nil {
++			c.sendAlert(alertUnexpectedMessage)
++			return errors.New("tls: client sent a dual certificate chain but Dual is not configured")
++		}
++		certs, verified, err := verifyDualPeerChain(certMsg.dualPQCertificate, c.config.Dual.ClientCAs,
++			"", x509.ExtKeyUsageClientAuth, c.config.time())
++		if err != nil {
++			c.sendAlert(alertBadCertificate)
++			return err
++		}
++		if err := verifyClassicalHalfIsClassical(c.peerCertificates[0], c.peerCertificates); err != nil {
++			c.sendAlert(alertBadCertificate)
++			return err
++		}
++		if !sameDualIdentity(c.peerCertificates[0], certs[0]) {
++			c.sendAlert(alertBadCertificate)
++			return errors.New("tls: dual: client's classical and post-quantum certificates do not identify the same pair")
++		}
++		dualPeerCerts = certs
++		c.dualPeerCertificates = certs
++		c.dualVerifiedChains = [][]*x509.Certificate{verified}
++	}
++
+ 	if c.config.VerifyConnection != nil {
+ 		if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
+ 			c.sendAlert(alertBadCertificate)
+@@ -1082,28 +1163,43 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+ 			return unexpectedMessageError(certVerify, msg)
+ 		}
+ 
+-		// See RFC 8446, Section 4.4.3.
+-		// We don't use certReq.supportedSignatureAlgorithms because it would
+-		// require keeping the certificateRequestMsgTLS13 around in the hs.
+-		if !isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, supportedSignatureAlgorithms(c.vers, c.vers)) ||
+-			!isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, signatureSchemesForPublicKey(c.vers, c.peerCertificates[0].PublicKey)) {
+-			c.sendAlert(alertIllegalParameter)
+-			return errors.New("tls: client certificate used with invalid signature algorithm")
+-		}
+-		sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerify.signatureAlgorithm)
+-		if err != nil {
+-			return c.sendAlert(alertInternalError)
+-		}
+-		if sigType == signaturePKCS1v15 || sigHash == crypto.SHA1 {
+-			return c.sendAlert(alertInternalError)
+-		}
+-		signed := signedMessage(clientSignatureContext, hs.transcript)
+-		if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
+-			sigHash, signed, certVerify.signature); err != nil {
+-			c.sendAlert(alertDecryptError)
+-			return errors.New("tls: invalid signature by the client certificate: " + err.Error())
++		if certVerify.signatureAlgorithm == dualSignatureScheme {
++			if len(dualPeerCerts) == 0 {
++				c.sendAlert(alertIllegalParameter)
++				return errors.New("tls: client used the dual signature algorithm without sending a dual certificate chain")
++			}
++			signed := signedMessage(clientSignatureContext, hs.transcript)
++			if err := verifyDualMessage(signed, certVerify.signature,
++				c.peerCertificates[0].PublicKey, dualPeerCerts[0].PublicKey); err != nil {
++				c.sendAlert(alertDecryptError)
++				return errors.New("tls: " + err.Error())
++			}
++			c.dualAuthenticated = true
++			c.peerSigAlg = certVerify.signatureAlgorithm
++		} else {
++			// See RFC 8446, Section 4.4.3.
++			// We don't use certReq.supportedSignatureAlgorithms because it would
++			// require keeping the certificateRequestMsgTLS13 around in the hs.
++			if !isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, supportedSignatureAlgorithms(c.vers, c.vers)) ||
++				!isSupportedSignatureAlgorithm(certVerify.signatureAlgorithm, signatureSchemesForPublicKey(c.vers, c.peerCertificates[0].PublicKey)) {
++				c.sendAlert(alertIllegalParameter)
++				return errors.New("tls: client certificate used with invalid signature algorithm")
++			}
++			sigType, sigHash, err := typeAndHashFromSignatureScheme(certVerify.signatureAlgorithm)
++			if err != nil {
++				return c.sendAlert(alertInternalError)
++			}
++			if sigType == signaturePKCS1v15 || sigHash == crypto.SHA1 {
++				return c.sendAlert(alertInternalError)
++			}
++			signed := signedMessage(clientSignatureContext, hs.transcript)
++			if err := verifyHandshakeSignature(sigType, c.peerCertificates[0].PublicKey,
++				sigHash, signed, certVerify.signature); err != nil {
++				c.sendAlert(alertDecryptError)
++				return errors.New("tls: invalid signature by the client certificate: " + err.Error())
++			}
++			c.peerSigAlg = certVerify.signatureAlgorithm
+ 		}
+-		c.peerSigAlg = certVerify.signatureAlgorithm
+ 
+ 		if err := transcriptMsg(certVerify, hs.transcript); err != nil {
+ 			return err
+diff --git a/tls_test.go b/tls_test.go
+index 6fe4490..83b84d6 100644
+--- a/tls_test.go
++++ b/tls_test.go
+@@ -968,6 +968,11 @@ func TestCloneNonFuncFields(t *testing.T) {
+ 			f.Set(reflect.ValueOf(map[string]*Certificate{"a": nil}))
+ 		case "RootCAs", "ClientCAs":
+ 			f.Set(reflect.ValueOf(x509.NewCertPool()))
++		case "Dual":
++			f.Set(reflect.ValueOf(&DualConfig{
++				Certificates: []Certificate{{Certificate: [][]byte{{'d'}}}},
++				Require:      true,
++			}))
+ 		case "ClientSessionCache":
+ 			f.Set(reflect.ValueOf(NewLRUClientSessionCache(10)))
+ 		case "KeyLogWriter":

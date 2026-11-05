@@ -64,10 +64,37 @@ preexistente dessa suite, nao algo introduzido por este build). O
 resultado real desta rodada esta registrado na Decisao de T2 em
 `DECISIONS.md` da v9, junto com a contagem exata de PASS/FAIL/SKIP.
 
-## O que a T3 muda aqui
+## T3, concluida: patch real aplicado e testado
 
-Nada neste `Dockerfile`. A T3 escreve o patch real em
-`patches/and.patch`, relança o mesmo build, e os 17 testes obrigatorios
-do mecanismo AND (especificados no pedido original da v9) rodam contra
-o toolchain patcheado resultante -- ainda dentro deste mesmo container,
-ainda sem AWS.
+`patches/and.patch` agora contem o mecanismo AND real: `dual.go` (304
+linhas) + mudancas em 6 arquivos existentes (`common.go`, `conn.go`,
+`handshake_client.go`, `handshake_client_tls13.go`,
+`handshake_messages.go`, `handshake_server_tls13.go`, mais um registro
+de 5 linhas em `tls_test.go`) + `dual_test.go` (718 linhas, 18 testes).
+SHA-256 do patch: `cc61d6dec9c774b358d48ff528e8d46bd178ccb71d78e01fbd22bef324fffb95`.
+
+**Bug real encontrado e corrigido no proprio Dockerfile, antes do
+resultado final:** a primeira versao deste passo fazia `cd src &&
+git apply ... && cd ..`, e reportava sucesso (exit 0) enquanto
+"Skipava" (`Skipped patch`) todo arquivo do patch, sem aplicar nada --
+`git apply` resolve os caminhos do patch contra a RAIZ do repositorio
+git, nao contra o diretorio corrente do shell. Corrigido com
+`git apply --directory=src/crypto/tls` (a opcao que prefixa cada
+caminho do patch), rodando a partir da raiz do clone. Confirmado que o
+patch agora aplica de verdade: `dual.go` passa a existir em
+`src/crypto/tls/dual.go` e `common.go` passa a conter o campo `Dual`.
+
+**Resultado real, suite completa de `crypto/tls` (original + os 18
+testes novos), contra o toolchain go1.27.3 reconstruido a partir do
+patch real:** `ok crypto/tls 55.306s` -- **232 PASS, 0 FAIL, 0 SKIP**
+(214 da suite original, inalterados, + 18 novos, todos os 17
+obrigatorios do pedido mais um teste de contraste). Medicao de
+tamanho de fio (`TestDualWireSizeMeasurement`): mensagem Certificate
+classica-so 814 B vs. dual (classica+ML-DSA-65) 6.355 B (+680,7%);
+campo de assinatura do CertificateVerify classico-so 256 B vs. dual
+3.567 B (+1.293,4%); cadeia PQ isolada 5.533 B.
+
+Detalhe completo, incluindo o teste do impostor lado a lado e a
+decisao sobre o tamanho do patch (529 linhas fora de `dual.go`/testes,
+acima do ~400 esperado, seguido como esta por decisao do Luciano):
+Decisao correspondente em `DECISIONS.md` da v9.

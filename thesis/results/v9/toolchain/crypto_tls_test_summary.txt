@@ -1,8 +1,26 @@
-214
+TOTAL:
+232
 0
 0
-    --- PASS: TestLinkerGC/client_and_server (0.47s)
-    --- PASS: TestLinkerGC/only_client (0.40s)
-PASS
-ok  	crypto/tls	48.969s
-?   	crypto/tls/internal/fips140tls	[no test files]
+
+AND-SPECIFIC (18 new tests, included in the totals above):
+--- PASS: TestDualStrictFullMTLS (2.10s)
+--- PASS: TestDualServerOnly (2.08s)
+--- PASS: TestDualStrictClientVsLegacyServer (0.10s)
+--- PASS: TestDualStrictServerVsLegacyClient (0.15s)
+--- PASS: TestDualClientMissingPQChain (0.06s)
+--- PASS: TestDualServerPQChainUntrustedByClient (0.05s)
+--- PASS: TestDualClientPQChainUntrustedByServer (0.09s)
+--- PASS: TestDualClassicalChainUntrusted (0.04s)
+--- PASS: TestDualWrongHostnameInPQChain (0.07s)
+--- PASS: TestDualClientDivergentIdentities (0.08s)
+--- PASS: TestDualTamperedSecondSignature (0.04s)
+--- PASS: TestDualTamperedFirstSignature (0.02s)
+--- PASS: TestDualQuantumAdversaryHoldingOnlyRSAKey (0.06s)
+--- PASS: TestSingleChainRSAAdversaryStillAuthenticates (2.19s)
+--- PASS: TestDualNonStrictAllowsDowngrade (2.06s)
+--- PASS: TestDualCertificateMessageRoundTrip (0.03s)
+--- PASS: TestDualCertificateMessageMalformedDelimiter (0.10s)
+--- PASS: TestDualWireSizeMeasurement (0.06s)
+
+ok  	crypto/tls	55.306s

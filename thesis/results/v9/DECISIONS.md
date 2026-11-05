@@ -339,4 +339,109 @@ ser descrita como tal, nunca como "o servidor estrito aceitando
 classico".
 
 **Teste do impostor (evidencia de por que o estrito e obrigatorio) --
-resultado registrado apos a T3, nesta mesma Decisao.**
+resultado na Decisao 6 (T3).**
+
+## 6. T3, patch do AND em contêiner: implementado do zero conforme a especificacao, 18 testes (17 obrigatorios + 1 de contraste), suite completa de crypto/tls (232 PASS, 0 FAIL, 0 SKIP), aplicado de verdade via git apply no pipeline da T2
+
+**O que foi implementado**, em `thesis/results/v9/toolchain/patches/and.patch` (SHA-256
+`cc61d6dec9c774b358d48ff528e8d46bd178ccb71d78e01fbd22bef324fffb95`):
+
+- `dual.go` (304 linhas, novo): `DualConfig` (`Certificates`,
+  `RootCAs`, `ClientCAs`, `Require`), o codigo privado `0xFE65`, as
+  funcoes de assinatura/verificacao dual (`signDualMessage`/
+  `verifyDualMessage`, sem curto-circuito -- as duas metades sao
+  verificadas sempre, o resultado combinado so no final), a validacao
+  independente da cadeia PQ do par (`verifyDualPeerChain`: raiz propria,
+  EKU, hostname quando aplicavel, categoria -- só ML-DSA, folha
+  ML-DSA-65), a checagem "cadeia classica sem ML-DSA"
+  (`verifyClassicalHalfIsClassical`), e a comparacao de identidade por
+  conjunto de SANs (`sameDualIdentity`).
+- Mudancas em 6 arquivos existentes, 529 linhas no total (fora de
+  `dual.go` e dos testes -- acima do ~400 que o Luciano marcou como
+  ponto de parada; perguntei, ele confirmou seguir como esta, ver nota
+  abaixo): `common.go` (+30, campo `Dual` no `Config`, `Clone()`, 3
+  campos novos no `ConnectionState`), `conn.go` (+10, campos internos
+  do `Conn` + populacao no `connectionStateLocked`), `handshake_client.go`
+  (+17, oferta do codigo dual no ClientHello, proibicao de
+  `InsecureSkipVerify` com `Dual`), `handshake_client_tls13.go` (+172,
+  verificacao da cadeia PQ do servidor e do `CertificateVerify` dual no
+  cliente, envio do certificado+assinatura dual quando o servidor pede),
+  `handshake_messages.go` (+157, o parser/serializador do delimitador de
+  3 bytes zero na mensagem Certificate), `handshake_server_tls13.go`
+  (+138, selecao do certificado dual no servidor, `CertificateRequest`
+  com o codigo dual, verificacao do par do cliente). `tls_test.go` (+5,
+  registro do campo `Dual` em `TestCloneNonFuncFields`, exigido pelo
+  proprio teste existente).
+- `dual_test.go` (718 linhas, novo): 18 testes -- os 17 obrigatorios do
+  pedido original mais `TestSingleChainRSAAdversaryStillAuthenticates`
+  (o contraste direto do teste do impostor, ver abaixo). Nomes exatos
+  dos 3 pedidos pelo Luciano, usados literalmente:
+  `TestDualQuantumAdversaryHoldingOnlyRSAKey`,
+  `TestSingleChainRSAAdversaryStillAuthenticates`,
+  `TestDualNonStrictAllowsDowngrade`.
+
+**Decisao de tamanho do patch, perguntada e confirmada pelo Luciano.**
+529 linhas fora de `dual.go`/testes ultrapassa o ~400 que ele marcou
+como ponto de parada explicito. Perguntei antes de seguir; ele
+confirmou "seguir como esta" -- o excesso vem de precisar da logica
+completa dos dois lados (cliente envia e verifica, servidor envia e
+verifica), com validacao de seguranca real (cadeias independentes, SAN,
+sem curto-circuito), nao de codigo solto ou duplicado sem necessidade.
+
+**Teste do impostor, os dois resultados lado a lado (a evidencia direta
+de por que o modo estrito e obrigatorio):**
+
+| Teste | Adversario | Par verificador | Resultado |
+|---|---|---|---|
+| `TestDualQuantumAdversaryHoldingOnlyRSAKey` | Tem a chave RSA do par legitimo, NAO tem a chave ML-DSA (apresenta o certificado PQ publico e legitimo, mas assina com uma chave ML-DSA diferente, por nao ter a verdadeira) | Servidor AND estrito (`Dual.Require=true`) | **Rejeitado** -- classico ok, pos-quantico falso, servidor recusa o par |
+| `TestSingleChainRSAAdversaryStillAuthenticates` | O MESMO adversario (so a chave RSA, cadeia unica, sem nada pos-quantico) | Servidor classico comum, mTLS sem `Dual` (formato do Hibrido-v8: ML-DSA so como assinatura da CA, nunca verificado no handshake) | **Autentica normalmente** -- nao ha prova de posse de chave PQ para falhar, porque nunca e pedida |
+
+Essa tabela demonstra exatamente a lacuna que motivou a v9 (fato A da
+Decisao 1): o mesmo adversario, com a mesma chave roubada, e recusado
+pelo AND e aceito pelo Hibrido-v8.
+
+**Bug real encontrado e corrigido no proprio `Dockerfile` da T2, antes
+do resultado final.** A primeira tentativa de aplicar o patch real
+(`cd src && git apply /tmp/and.patch && cd ..`) reportava sucesso (exit
+0) mas "Skipava" (`Skipped patch`) todo arquivo, sem aplicar nada --
+`git apply` resolve os caminhos do patch contra a RAIZ do repositorio
+git clonado, nao contra o diretorio corrente do shell, e o patch foi
+gerado com caminhos relativos a `crypto/tls` (`a/common.go`), nao a
+`src/crypto/tls` (a raiz real do clone). Corrigido com
+`git apply --directory=src/crypto/tls`, a opcao que prefixa cada
+caminho do patch -- confirmado em um container de diagnostico isolado
+antes de tocar no Dockerfile real.
+
+**Outros dois bugs reais encontrados e corrigidos durante a propria
+implementacao, nao no Dockerfile:**
+1. `net.Pipe()` nos testes causava deadlock de transporte sempre que o
+   cliente abortava a leitura no meio do primeiro voo do servidor
+   (exatamente o caso dos testes negativos) -- trocado por `localPipe(t)`
+   (TCP real em loopback, o mesmo mecanismo que a propria suite do
+   `crypto/tls` ja usa para handshakes completos).
+2. O proprio `getClientCertificate()` do Go, nao modificado, filtra o
+   certificado classico do cliente pela mesma lista de algoritmos de
+   assinatura que o servidor anunciou no `CertificateRequest` -- em
+   modo estrito essa lista e so `0xFE65`, que nao bate com nenhum
+   algoritmo classico real, fazendo o cliente nao enviar certificado
+   nenhum mesmo tendo um disponivel. Corrigido usando uma lista de
+   algoritmos classica comum apenas para a SELECAO do certificado, nao
+   para a escolha do esquema de assinatura (que continua sendo o
+   codigo dual).
+
+**Resultado final, suite completa de `crypto/tls` (original + os 18
+testes novos), contra o toolchain go1.27.3 reconstruido a partir do
+patch real, via o pipeline completo da T2 (clone -> verifica commit ->
+`git apply` -> `make.bash` -> teste):** `ok crypto/tls 55.306s` --
+**232 PASS, 0 FAIL, 0 SKIP** (214 da suite original, inalterados, + 18
+novos). Medicao de tamanho de fio (`TestDualWireSizeMeasurement`,
+dados reais desta rodada): mensagem Certificate classica-so 814 B vs.
+dual (classica+ML-DSA-65) 6.355 B (+680,7%); campo de assinatura do
+CertificateVerify classico-so 256 B vs. dual 3.567 B (+1.293,4%);
+cadeia PQ isolada 5.533 B.
+
+Artefatos atualizados: `thesis/results/v9/toolchain/Dockerfile`,
+`README.md`, `build_metadata.json`, `crypto_tls_test_summary.txt`,
+`patches/and.patch` (agora com o conteudo real, nao mais vazio).
+
+Nenhuma acao em AWS. Nenhuma tag nova.
