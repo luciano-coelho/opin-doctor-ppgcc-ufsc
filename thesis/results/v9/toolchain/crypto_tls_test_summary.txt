@@ -1,26 +1,41 @@
-TOTAL:
-232
+TOP-LEVEL TOTAL:
+237
 0
 0
 
-AND-SPECIFIC (18 new tests, included in the totals above):
---- PASS: TestDualStrictFullMTLS (2.10s)
---- PASS: TestDualServerOnly (2.08s)
---- PASS: TestDualStrictClientVsLegacyServer (0.10s)
---- PASS: TestDualStrictServerVsLegacyClient (0.15s)
---- PASS: TestDualClientMissingPQChain (0.06s)
---- PASS: TestDualServerPQChainUntrustedByClient (0.05s)
---- PASS: TestDualClientPQChainUntrustedByServer (0.09s)
---- PASS: TestDualClassicalChainUntrusted (0.04s)
---- PASS: TestDualWrongHostnameInPQChain (0.07s)
---- PASS: TestDualClientDivergentIdentities (0.08s)
---- PASS: TestDualTamperedSecondSignature (0.04s)
---- PASS: TestDualTamperedFirstSignature (0.02s)
---- PASS: TestDualQuantumAdversaryHoldingOnlyRSAKey (0.06s)
---- PASS: TestSingleChainRSAAdversaryStillAuthenticates (2.19s)
---- PASS: TestDualNonStrictAllowsDowngrade (2.06s)
---- PASS: TestDualCertificateMessageRoundTrip (0.03s)
---- PASS: TestDualCertificateMessageMalformedDelimiter (0.10s)
---- PASS: TestDualWireSizeMeasurement (0.06s)
+INCLUDING ALL SUBTESTS (e.g. TestBogoSuite internal matrix):
+2991
+0
+2278
 
-ok  	crypto/tls	55.306s
+AND-SPECIFIC (23 tests, included in totals above):
+--- PASS: TestDualStrictFullMTLS (2.15s)
+--- PASS: TestDualServerOnly (2.11s)
+--- PASS: TestDualStrictClientVsLegacyServer (0.08s)
+--- PASS: TestDualStrictServerVsLegacyClient (0.08s)
+--- PASS: TestDualClientMissingPQChain (0.12s)
+--- PASS: TestDualServerPQChainUntrustedByClient (0.09s)
+--- PASS: TestDualClientPQChainUntrustedByServer (0.20s)
+--- PASS: TestDualClassicalChainUntrusted (0.12s)
+--- PASS: TestDualWrongHostnameInPQChain (0.19s)
+--- PASS: TestDualClientDivergentIdentities (0.12s)
+--- PASS: TestDualTamperedSecondSignature (0.03s)
+--- PASS: TestDualTamperedFirstSignature (0.03s)
+--- PASS: TestDualQuantumAdversaryHoldingOnlyRSAKey (0.09s)
+--- PASS: TestSingleChainRSAAdversaryStillAuthenticates (2.17s)
+--- PASS: TestDualNonStrictAllowsDowngrade (2.05s)
+--- PASS: TestDualCertificateMessageRoundTrip (0.08s)
+--- PASS: TestDualCertificateMessageMalformedDelimiter (0.07s)
+--- PASS: TestDualWireSizeMeasurement (0.03s)
+--- PASS: TestDualImpostorSingleChainVsStrict (0.06s)
+--- PASS: TestDualImpostorSingleChainVsNonStrict (2.13s)
+--- PASS: TestDualStrictModeDisablesSessionTickets (4.07s)
+--- PASS: TestDualResumedSessionDoesNotCarryDualAuthentication (4.07s)
+--- PASS: TestDualHandshakeAcrossHelloRetryRequest (2.13s)
+
+Internet-relevant named tests, explicitly checked:
+--- PASS: TestVerifyHostname (0.34s)
+--- PASS: TestRealResumption (1.07s)
+--- PASS: TestBogoSuite (38.69s)
+
+ok  	crypto/tls	69.728s

@@ -83,10 +83,10 @@ index c6d3084..322c841 100644
  	if (!c.didResume || c.extMasterSecret) && c.vers != VersionTLS13 {
 diff --git a/dual.go b/dual.go
 new file mode 100644
-index 0000000..6eba424
+index 0000000..ffd10b0
 --- /dev/null
 +++ b/dual.go
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,321 @@
 +// Copyright 2026 The MockOPIN project. Not part of the Go standard
 +// library; a minimal, local fork of crypto/tls for the OPIN
 +// post-quantum migration thesis (v9).
@@ -108,18 +108,35 @@ index 0000000..6eba424
 +// use, so this fork picks one value from that range for the one pair
 +// this project needs.
 +//
-+// Known gaps, deliberately out of scope for this fork (documented, not
-+// hidden): no session resumption for dual connections (a resumed
-+// connection never re-runs certificate verification at all, dual or
-+// not); no CompressedCertificate (RFC 8879) or Exported Authenticators
-+// (RFC 9261) support; no RelatedCertificate (RFC 9440); no explicit
-+// rejection of the dual codepoint under TLS 1.2 -- it is simply never
-+// offered or accepted below TLS 1.3, which has the same practical
-+// effect without a dedicated check; HelloRetryRequest is untested with
-+// Dual configured; the client's VerifyConnection/VerifyPeerCertificate
-+// callbacks still only ever see the classical chain (c.peerCertificates),
-+// exactly as upstream, so they run before the post-quantum chain is
-+// validated.
++// Session resumption, decided and tested (TestDualStrictModeDisablesSessionTickets,
++// TestDualResumedSessionDoesNotCarryDualAuthentication in dual_test.go),
++// not left as an open gap: TLS 1.3 resumption skips Certificate/
++// CertificateVerify entirely, so a resumed connection would otherwise
++// inherit dual authentication from the original handshake without
++// re-verifying either chain. Strict (Require=true) connections never
++// issue a session ticket at all (shouldSendSessionTickets,
++// handshake_server_tls13.go) -- there is nothing to resume into.
++// Non-strict connections keep issuing tickets as before; a resumed
++// connection's own ConnectionState.DualAuthenticated is always false
++// regardless of the original session's own value (never restored from
++// session state, unlike the classical PeerCertificates/VerifiedChains,
++// which Go's own existing code already does carry over) -- the dual
++// guarantee specifically does not survive resumption, and the API
++// reports that honestly rather than silently implying otherwise.
++//
++// HelloRetryRequest with the project's own hybrid group
++// (SecP384r1MLKEM1024) is tested (TestDualHandshakeAcrossHelloRetryRequest)
++// and completes correctly.
++//
++// Known gaps, still deliberately out of scope for this fork
++// (documented, not hidden): no CompressedCertificate (RFC 8879) or
++// Exported Authenticators (RFC 9261) support; no RelatedCertificate
++// (RFC 9440); no explicit rejection of the dual codepoint under TLS
++// 1.2 -- it is simply never offered or accepted below TLS 1.3, which
++// has the same practical effect without a dedicated check; the
++// client's VerifyConnection/VerifyPeerCertificate callbacks still only
++// ever see the classical chain (c.peerCertificates), exactly as
++// upstream, so they run before the post-quantum chain is validated.
 +package tls
 +
 +import (
@@ -393,10 +410,10 @@ index 0000000..6eba424
 +}
 diff --git a/dual_test.go b/dual_test.go
 new file mode 100644
-index 0000000..6a0190b
+index 0000000..3f9c4df
 --- /dev/null
 +++ b/dual_test.go
-@@ -0,0 +1,718 @@
+@@ -0,0 +1,879 @@
 +// Copyright 2026 The MockOPIN project. Tests for dual.go (the AND
 +// dual-certificate TLS 1.3 authentication mechanism), not part of the
 +// upstream Go standard library test suite.
@@ -1115,6 +1132,167 @@ index 0000000..6a0190b
 +		t.Error("dual CertificateVerify signature is not larger than the classical-only one")
 +	}
 +}
++
++// --- round requested after T3's report: the SAME impostor (holds only
++// the RSA key, presents a single classical chain, no post-quantum
++// material at all -- never even attempts a PQ certificate) against the
++// two AND server policies side by side. TestDualStrictServerVsLegacyClient
++// and TestDualNonStrictAllowsDowngrade already exercise this exact
++// pair of outcomes individually; these two make the comparison
++// explicit and self-contained under one shared name, per Luciano's own
++// request, rather than requiring it to be inferred from two
++// separately-themed tests. ---
++
++func TestDualImpostorSingleChainVsStrict(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki) // client: no Dual, single classical chain, exactly the impostor's own shape
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil || serr == nil {
++		t.Fatalf("impostor (single classical chain) against a STRICT AND server: expected rejection, got client=%v server=%v", cerr, serr)
++	}
++}
++
++func TestDualImpostorSingleChainVsNonStrict(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki) // the SAME impostor shape as above
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}} // Require: false
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("impostor (single classical chain) against a NON-STRICT AND server: expected acceptance (downgrade), got client=%v server=%v", cerr, serr)
++	}
++	if cs := cc.ConnectionState(); cs.DualAuthenticated {
++		t.Error("DualAuthenticated = true on a connection where the client never attempted the dual codepoint at all")
++	}
++	if len(cc.ConnectionState().PeerCertificates) == 0 {
++		t.Error("classical authentication itself should still have succeeded")
++	}
++}
++
++// --- session resumption. Known gap, explicitly tested and documented,
++// not left implicit: TLS 1.3 resumption skips Certificate/
++// CertificateVerify entirely, so a resumed connection would otherwise
++// inherit dual authentication from the original handshake without
++// re-verifying either chain. Decision taken: strict (Require=true)
++// connections never issue a session ticket at all (shouldSendSessionTickets
++// in handshake_server_tls13.go), so there is nothing to resume into.
++// Non-strict connections keep issuing tickets as before, but
++// DualAuthenticated is never restored from session state on resume --
++// confirmed directly below, not just asserted. ---
++
++func TestDualStrictModeDisablesSessionTickets(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, Require: true}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++	client.ClientSessionCache = NewLRUClientSessionCache(4)
++
++	cc1, sc1, cerr1, serr1 := dualHandshakePipe(t, client, server)
++	defer cc1.Close()
++	defer sc1.Close()
++	if cerr1 != nil || serr1 != nil {
++		t.Fatalf("first (full) handshake failed: client=%v server=%v", cerr1, serr1)
++	}
++
++	cc2, sc2, cerr2, serr2 := dualHandshakePipe(t, client, server)
++	defer cc2.Close()
++	defer sc2.Close()
++	if cerr2 != nil || serr2 != nil {
++		t.Fatalf("second handshake failed: client=%v server=%v", cerr2, serr2)
++	}
++	if cc2.ConnectionState().DidResume {
++		t.Error("a second connection resumed a session from a STRICT dual server -- no ticket should ever have been issued to resume from")
++	}
++}
++
++func TestDualResumedSessionDoesNotCarryDualAuthentication(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}} // non-strict: tickets still issued
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool}
++	client.ClientSessionCache = NewLRUClientSessionCache(4)
++
++	cc1, sc1, cerr1, serr1 := dualHandshakePipe(t, client, server)
++	defer cc1.Close()
++	defer sc1.Close()
++	if cerr1 != nil || serr1 != nil {
++		t.Fatalf("first (full) handshake failed: client=%v server=%v", cerr1, serr1)
++	}
++	if !cc1.ConnectionState().DualAuthenticated {
++		t.Fatal("first connection's own full handshake should have been dual-authenticated")
++	}
++
++	cc2, sc2, cerr2, serr2 := dualHandshakePipe(t, client, server)
++	defer cc2.Close()
++	defer sc2.Close()
++	if cerr2 != nil || serr2 != nil {
++		t.Fatalf("second (resumed) handshake failed: client=%v server=%v", cerr2, serr2)
++	}
++	cs2 := cc2.ConnectionState()
++	if !cs2.DidResume {
++		t.Fatal("second connection did not resume -- this test needs a real resumption to be meaningful")
++	}
++	if cs2.DualAuthenticated {
++		t.Error("DualAuthenticated = true on a RESUMED connection -- resumption never re-runs certificate verification, dual or not, so this must not be carried over from the original session")
++	}
++	if len(cs2.PeerCertificates) == 0 {
++		t.Error("the classical PeerCertificates ARE expected to carry over on resume (Go's own existing, unmodified session-state behavior) -- their absence would indicate something else broke, not the dual guarantee specifically")
++	}
++}
++
++// --- HelloRetryRequest with the project's own hybrid group
++// (SecP384r1MLKEM1024): curvePreferences() (common.go) always sorts
++// whatever groups Config.CurvePreferences allows into one FIXED global
++// order (every hybrid/PQ group before every classical one, per
++// curvePreferenceOrder in defaults.go) regardless of the order they're
++// listed in -- so a client's INITIAL key share is always generated for
++// the single highest group in that fixed order it allows, never
++// whichever one is listed first in Config.CurvePreferences. To force a
++// real retry onto SecP384r1MLKEM1024 specifically, the client must
++// also allow a group that sorts EARLIER in that fixed order
++// (X25519MLKEM768) -- its initial share goes out for that group, the
++// server (which only accepts SecP384r1MLKEM1024) can't use it, and
++// replies with a HelloRetryRequest naming SecP384r1MLKEM1024, which
++// the client already declared support for and now sends a share for.
++// The dual handshake must still complete correctly across that extra
++// round trip.
++func TestDualHandshakeAcrossHelloRetryRequest(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	server.CurvePreferences = []CurveID{SecP384r1MLKEM1024}
++	client.CurvePreferences = []CurveID{X25519MLKEM768, SecP384r1MLKEM1024} // X25519MLKEM768 sorts first and gets the initial share; SecP384r1MLKEM1024 is the forced retry target
++
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, Require: true}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr != nil || serr != nil {
++		t.Fatalf("dual handshake across a HelloRetryRequest failed: client=%v server=%v", cerr, serr)
++	}
++	cs := cc.ConnectionState()
++	if !cs.HelloRetryRequest {
++		t.Fatal("test setup error: no HelloRetryRequest actually happened, so this didn't test what it claims to")
++	}
++	if !cs.DualAuthenticated {
++		t.Error("DualAuthenticated = false after a dual handshake that completed across a HelloRetryRequest")
++	}
++	if cs.CurveID != SecP384r1MLKEM1024 {
++		t.Errorf("negotiated group = %v, want the hybrid group the HelloRetryRequest asked for", cs.CurveID)
++	}
++}
 diff --git a/handshake_client.go b/handshake_client.go
 index 7438945..5c908ec 100644
 --- a/handshake_client.go
@@ -1567,7 +1745,7 @@ index 511e073..a2e2c3a 100644
  	var certList cryptobyte.String
  	if !s.ReadUint24LengthPrefixed(&certList) {
 diff --git a/handshake_server_tls13.go b/handshake_server_tls13.go
-index 2c96e24..64e5b5e 100644
+index 2c96e24..ffe8f52 100644
 --- a/handshake_server_tls13.go
 +++ b/handshake_server_tls13.go
 @@ -52,6 +52,7 @@ type serverHandshakeStateTLS13 struct {
@@ -1662,7 +1840,28 @@ index 2c96e24..64e5b5e 100644
  	sigType, sigHash, err := typeAndHashFromSignatureScheme(hs.sigAlg)
  	if err != nil {
  		return c.sendAlert(alertInternalError)
-@@ -1060,6 +1110,37 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+@@ -943,6 +993,20 @@ func (hs *serverHandshakeStateTLS13) shouldSendSessionTickets() bool {
+ 		return false
+ 	}
+ 
++	// AND, strict mode: resumption skips the Certificate/CertificateVerify
++	// exchange entirely, so a resumed connection would inherit dual
++	// authentication from the original handshake WITHOUT re-verifying
++	// either chain -- undermining the one guarantee Require=true exists
++	// to make absolute. No ticket is ever issued for a strict-dual
++	// connection, so there is nothing to resume into. Non-strict
++	// connections keep issuing tickets as before; DualAuthenticated is
++	// simply never carried over into a resumed connection's own
++	// ConnectionState (see connectionStateLocked), since resumption
++	// never re-runs this fork's own verification code.
++	if hs.c.config.Dual != nil && hs.c.config.Dual.Require {
++		return false
++	}
++
+ 	// QUIC tickets are sent by QUICConn.SendSessionTicket, not automatically.
+ 	if hs.c.quic != nil {
+ 		return false
+@@ -1060,6 +1124,37 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
  		return err
  	}
  
@@ -1700,7 +1899,7 @@ index 2c96e24..64e5b5e 100644
  	if c.config.VerifyConnection != nil {
  		if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
  			c.sendAlert(alertBadCertificate)
-@@ -1082,28 +1163,43 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+@@ -1082,28 +1177,43 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
  			return unexpectedMessageError(certVerify, msg)
  		}
  

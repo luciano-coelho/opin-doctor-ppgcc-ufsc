@@ -6,7 +6,7 @@
 # 2aae1000ea1d4b28923b96db28acf4e3b99d6aff, verificado contra
 # go.googlesource.com/go nesta sessao), aplica patches/and.patch via
 # `git apply` se o arquivo nao estiver vazio, e roda a suite de testes
-# do pacote crypto/tls (original + os 18 testes do AND) contra o
+# do pacote crypto/tls (original + os 23 testes do AND) contra o
 # toolchain resultante.
 #
 # Versao escolhida (decisao desta sessao, ver DECISIONS.md da v9):
@@ -51,9 +51,9 @@ RUN git clone --depth 1 --branch go1.27.3 https://go.googlesource.com/go . \
        fi \
     && echo "${actual_commit}" > /go-src-commit.txt
 
-# patches/and.patch: the real AND mechanism (T3) -- dual.go (304 lines)
-# plus changes to 6 existing files (529 lines total outside dual.go and
-# the 718-line dual_test.go). Was empty in T2, to prove the
+# patches/and.patch: the real AND mechanism (T3) -- dual.go (321 lines)
+# plus changes to 6 existing files (543 lines total outside dual.go and
+# the 879-line dual_test.go, 23 tests). Was empty in T2, to prove the
 # reproducible build+test pipeline against vanilla go1.27.3 first; this
 # same Dockerfile, unchanged below this COPY, applies and tests
 # whichever content this file holds.
@@ -68,9 +68,25 @@ COPY patches/and.patch /tmp/and.patch
 # "Skipping" every single file, applying nothing at all. --directory
 # is git apply's own supported way to prepend a prefix to every path
 # in a patch generated with a different root.
+# Hardened so the exact bug above can never repeat silently: after
+# applying, the number of files `git status` actually finds changed
+# under src/crypto/tls MUST match the number of files the patch itself
+# touches (counted from its own "diff --git" lines, not hardcoded --
+# this check stays correct as and.patch's own content changes). A
+# mismatch here means git apply reported success while not really
+# applying everything, exactly like the original bug, and the build
+# now fails loudly instead of silently testing an unpatched tree.
 RUN if [ -s /tmp/and.patch ]; then \
       echo "applying patches/and.patch" \
+      && expected_files="$(grep -c '^diff --git' /tmp/and.patch)" \
       && git apply --whitespace=nowarn --directory=src/crypto/tls /tmp/and.patch \
+      && changed_files="$(git status --porcelain -- src/crypto/tls | wc -l)" \
+      && echo "and.patch touches ${expected_files} files; git status reports ${changed_files} changed under src/crypto/tls" \
+      && if [ "${changed_files}" -ne "${expected_files}" ]; then \
+           echo "FATAL: git apply reported success, but only ${changed_files} of the patch's own ${expected_files} files actually changed under src/crypto/tls -- the patch did not really apply. This is exactly the bug found and fixed in this session (git apply resolving paths against the repo root instead of the intended directory, reporting success while silently skipping every file) -- do not let it pass silently again." >&2; \
+           exit 1; \
+         fi \
+      && test -f src/crypto/tls/dual.go || { echo "FATAL: dual.go does not exist after applying the patch" >&2; exit 1; } \
       && sha256sum /tmp/and.patch | awk '{print $1}' > /and-patch-sha256.txt; \
     else \
       echo "patches/and.patch is empty -- building vanilla go1.27.3 (T2 baseline, no fork yet)" \

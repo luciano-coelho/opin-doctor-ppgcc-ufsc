@@ -64,37 +64,52 @@ preexistente dessa suite, nao algo introduzido por este build). O
 resultado real desta rodada esta registrado na Decisao de T2 em
 `DECISIONS.md` da v9, junto com a contagem exata de PASS/FAIL/SKIP.
 
-## T3, concluida: patch real aplicado e testado
+## T3, concluida e revisada: patch real aplicado e testado
 
-`patches/and.patch` agora contem o mecanismo AND real: `dual.go` (304
+`patches/and.patch` contem o mecanismo AND real: `dual.go` (321
 linhas) + mudancas em 6 arquivos existentes (`common.go`, `conn.go`,
 `handshake_client.go`, `handshake_client_tls13.go`,
-`handshake_messages.go`, `handshake_server_tls13.go`, mais um registro
-de 5 linhas em `tls_test.go`) + `dual_test.go` (718 linhas, 18 testes).
-SHA-256 do patch: `cc61d6dec9c774b358d48ff528e8d46bd178ccb71d78e01fbd22bef324fffb95`.
+`handshake_messages.go`, `handshake_server_tls13.go`, 543 linhas no
+total fora de `dual.go`/testes, mais um registro de 5 linhas em
+`tls_test.go`) + `dual_test.go` (879 linhas, 23 testes). SHA-256 do
+patch: `093338402cce147920a4f63d2a2b8947f0fc8f275bae36f33a0dd8badeaad572`.
 
 **Bug real encontrado e corrigido no proprio Dockerfile, antes do
-resultado final:** a primeira versao deste passo fazia `cd src &&
+primeiro resultado:** a primeira versao deste passo fazia `cd src &&
 git apply ... && cd ..`, e reportava sucesso (exit 0) enquanto
 "Skipava" (`Skipped patch`) todo arquivo do patch, sem aplicar nada --
 `git apply` resolve os caminhos do patch contra a RAIZ do repositorio
 git, nao contra o diretorio corrente do shell. Corrigido com
-`git apply --directory=src/crypto/tls` (a opcao que prefixa cada
-caminho do patch), rodando a partir da raiz do clone. Confirmado que o
-patch agora aplica de verdade: `dual.go` passa a existir em
-`src/crypto/tls/dual.go` e `common.go` passa a conter o campo `Dual`.
+`git apply --directory=src/crypto/tls`. **Endurecido depois**: o passo
+agora conta quantos arquivos o proprio `and.patch` toca (via
+`grep -c '^diff --git'`) e falha o build explicitamente (`exit 1`) se
+`git status` nao mostrar exatamente esse numero de arquivos alterados
+em `src/crypto/tls` -- confirmado em um container de diagnostico
+isolado que, reintroduzindo deliberadamente o bug antigo, a checagem
+agora detecta a divergencia (9 esperados vs. 0 reais) em vez de deixar
+passar.
 
-**Resultado real, suite completa de `crypto/tls` (original + os 18
-testes novos), contra o toolchain go1.27.3 reconstruido a partir do
-patch real:** `ok crypto/tls 55.306s` -- **232 PASS, 0 FAIL, 0 SKIP**
-(214 da suite original, inalterados, + 18 novos, todos os 17
-obrigatorios do pedido mais um teste de contraste). Medicao de
+**Resultado real, suite completa de `crypto/tls` (original + os 23
+testes do AND), contra o toolchain go1.27.3 reconstruido a partir do
+patch real, via o pipeline completo (clone -> verifica commit ->
+`git apply` endurecido -> `make.bash` -> teste):** `ok crypto/tls
+69.728s` -- **237 PASS, 0 FAIL, 0 SKIP** no nivel dos testes
+nomeados (214 da suite original, inalterados, + 23 do AND). Contando
+tambem as subcelulas internas de `TestBogoSuite` (a suite de
+conformidade da BoringSSL, embutida e offline): 2.991 PASS, 0 FAIL,
+2.278 SKIP -- os skips sao todos internos a essa matriz de
+conformidade (decisoes proprias do BoGo sobre quais casos aplicam a
+esta build), nao relacionados a rede; `TestVerifyHostname`,
+`TestRealResumption` e o proprio `TestBogoSuite` (nivel superior)
+passam, confirmando rede real disponivel no container. Medicao de
 tamanho de fio (`TestDualWireSizeMeasurement`): mensagem Certificate
 classica-so 814 B vs. dual (classica+ML-DSA-65) 6.355 B (+680,7%);
 campo de assinatura do CertificateVerify classico-so 256 B vs. dual
 3.567 B (+1.293,4%); cadeia PQ isolada 5.533 B.
 
-Detalhe completo, incluindo o teste do impostor lado a lado e a
-decisao sobre o tamanho do patch (529 linhas fora de `dual.go`/testes,
-acima do ~400 esperado, seguido como esta por decisao do Luciano):
-Decisao correspondente em `DECISIONS.md` da v9.
+Detalhe completo, incluindo o teste do impostor lado a lado (par
+estrito/nao-estrito), a decisao sobre retomada de sessao e
+HelloRetryRequest, a tabela por arquivo, e a decisao sobre o tamanho
+do patch (543 linhas fora de `dual.go`/testes, acima do ~400 esperado,
+seguido como esta por decisao do Luciano): Decisoes 6 e 7 em
+`DECISIONS.md` da v9.

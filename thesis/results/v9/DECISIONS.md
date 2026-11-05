@@ -444,4 +444,208 @@ Artefatos atualizados: `thesis/results/v9/toolchain/Dockerfile`,
 `README.md`, `build_metadata.json`, `crypto_tls_test_summary.txt`,
 `patches/and.patch` (agora com o conteudo real, nao mais vazio).
 
+## 7. Resposta aos 6 pontos pedidos apos o relatorio da T3: par do impostor completo, SKIPS explicados, contagem exata dos 23 testes, pipeline endurecido contra o bug do git apply, retomada de sessao e HelloRetryRequest testados, documentacao por arquivo
+
+**1. Par do impostor, cadeia classica unica, estrito vs nao-estrito,
+lado a lado.** O relatorio anterior comparou o adversario (so a chave
+RSA) contra um servidor AND estrito e contra um servidor classico
+comum (sem `Dual` nenhum) -- util para a matriz de interoperabilidade,
+mas nao o par exato pedido. Adicionados dois testes novos, com a MESMA
+configuracao de cliente (cadeia classica unica, sem `Dual`) nos dois:
+
+| Teste | Servidor | Resultado |
+|---|---|---|
+| `TestDualImpostorSingleChainVsStrict` | AND estrito (`Dual.Require=true`) | **Rejeitado** |
+| `TestDualImpostorSingleChainVsNonStrict` | AND nao estrito (`Dual.Require=false`) | **Aceito**, `DualAuthenticated=false` confirmado no teste (`cs.DualAuthenticated` verificado explicitamente, nao so a ausencia de erro) |
+
+Os testes `TestDualStrictServerVsLegacyClient` e
+`TestDualNonStrictAllowsDowngrade` (da rodada anterior) ja cobriam
+essas duas mesmas transicoes de resultado, mas sob nomes tematicos
+diferentes, sem ficar explicito que e o MESMO cliente nos dois casos --
+os dois testes novos tornam essa comparacao autossuficiente e nomeada
+para o proprio par pedido.
+
+**2. SKIPS, explicado com precisao.** O numero "0 SKIP" do relatorio
+anterior contava so os testes de NIVEL SUPERIOR (`^--- SKIP`, sem
+indentacao) -- correto para esse nivel, mas incompleto: existem
+2.278 SKIPS reais, todos SUBCELULAS internas de UM teste de nivel
+superior, `TestBogoSuite` (a suite de conformidade embutida da
+BoringSSL, `bogo_shim_test.go`). Confirmado na linha 658-659 desse
+arquivo: cada subcelula pula quando o PROPRIO resultado interno do
+runner BoGo for `"SKIP"` (`result.Actual == "SKIP"` -> `t.SkipNow()`)
+-- uma decisao do proprio BoGo sobre quais casos de teste se aplicam a
+esta build especifica (por exemplo, recursos de protocolo fora do
+escopo desta configuracao), nunca por falta de rede. `TestVerifyHostname`,
+`TestRealResumption` e o `TestBogoSuite` de nivel superior (que agrega
+as subcelulas) todos aparecem como **PASS**, nao SKIP -- confirmando
+que o container TEM acesso real a internet (o proprio `apk add`/`git
+clone` do Dockerfile ja exige rede, e passam). Comando exato rodado,
+sem alteracao nenhuma: `go test -count=1 -v ./...`, a partir de
+`/go-src/src/crypto/tls`, dentro do container construido pelo
+`Dockerfile` desta pasta -- nenhum teste excluido, nenhuma flag `-short`
+ou build tag restringindo o conjunto.
+
+**3. Contagem exata, os 23 testes de `dual_test.go`, nome por nome.**
+Correcao a uma imprecisao do relatorio anterior: eu disse "17
+obrigatorios + 1 de contraste", mas isso estava errado -- reconferindo
+o pedido original ponto a ponto, os 18 testes da T3 TODOS correspondem
+a cenarios pedidos explicitamente (um item do pedido, "o adversario
+quantico... e o mesmo adversario contra RSA cadeia unica", pede os
+DOIS cenarios que resultaram em `TestDualQuantumAdversaryHoldingOnlyRSAKey`
+E em `TestSingleChainRSAAdversaryStillAuthenticates` -- nenhum dos dois
+e "extra", os dois sao literalmente pedidos no mesmo item). Nao ha
+teste de contraste sobrando; a contagem de 18 bate com 15 itens do
+pedido original porque 3 deles (cadeias PQ nao confiaveis do servidor
+E do cliente; o par do adversario quantico; round trip E delimitador
+malformado) pediam 2 cenarios cada, implementados como 2 funcoes
+separadas por clareza, nunca reduzindo nada.
+
+| # | Item do pedido original | Teste(s) |
+|---|---|---|
+| 1 | mTLS estrito completo | `TestDualStrictFullMTLS` |
+| 2 | so servidor | `TestDualServerOnly` |
+| 3 | cliente estrito x servidor legado (falha) | `TestDualStrictClientVsLegacyServer` |
+| 4 | servidor estrito x cliente legado (falha) | `TestDualStrictServerVsLegacyClient` |
+| 5 | cliente sem cadeia PQ (falha) | `TestDualClientMissingPQChain` |
+| 6 | cadeia PQ de CA nao confiavel, do servidor e do cliente | `TestDualServerPQChainUntrustedByClient`, `TestDualClientPQChainUntrustedByServer` |
+| 7 | cadeia classica nao confiavel | `TestDualClassicalChainUntrusted` |
+| 8 | hostname errado na cadeia PQ | `TestDualWrongHostnameInPQChain` |
+| 9 | identidades divergentes do cliente | `TestDualClientDivergentIdentities` |
+| 10 | segunda assinatura adulterada | `TestDualTamperedSecondSignature` |
+| 11 | primeira adulterada | `TestDualTamperedFirstSignature` |
+| 12 | adversario quantico (RSA so) vs. estrito, E o mesmo adversario com cadeia unica vs. classico comum | `TestDualQuantumAdversaryHoldingOnlyRSAKey`, `TestSingleChainRSAAdversaryStillAuthenticates` |
+| 13 | nao estrito aceita fallback (downgrade documentado) | `TestDualNonStrictAllowsDowngrade` |
+| 14 | round trip da mensagem Certificate, E delimitadores malformados | `TestDualCertificateMessageRoundTrip`, `TestDualCertificateMessageMalformedDelimiter` |
+| 15 | medicao de tamanhos | `TestDualWireSizeMeasurement` |
+
+Mais 5 desta rodada (itens 1 e 5 deste pedido):
+
+| Item deste pedido | Teste(s) |
+|---|---|
+| 1: impostor, cadeia unica, estrito vs. nao-estrito | `TestDualImpostorSingleChainVsStrict`, `TestDualImpostorSingleChainVsNonStrict` |
+| 5a: retomada de sessao | `TestDualStrictModeDisablesSessionTickets`, `TestDualResumedSessionDoesNotCarryDualAuthentication` |
+| 5b: HelloRetryRequest com o grupo hibrido | `TestDualHandshakeAcrossHelloRetryRequest` |
+
+**Total: 23 funcoes de teste, todas passando** (confirmado na suite
+completa via o pipeline real, abaixo). Nenhuma e "de contraste" no
+sentido de sobrar do pedido -- a frase do relatorio anterior estava
+imprecisa e fica corrigida aqui.
+
+**4. Pipeline endurecido contra o bug do `git apply`.** O passo de
+aplicar o patch agora conta quantos arquivos o PROPRIO `and.patch` toca
+(`grep -c '^diff --git' /tmp/and.patch`, nao um numero fixo no
+Dockerfile -- continua correto se o patch mudar) e compara contra
+quantos arquivos o `git status --porcelain` encontra de fato alterados
+em `src/crypto/tls` depois do `git apply`. Divergencia = `exit 1`
+explicito, com uma mensagem que cita o bug original por nome. Validado
+em um container de diagnostico isolado, fora do pipeline real:
+reintroduzindo deliberadamente a invocacao antiga (`cd src && git apply
+... && cd ..`, sem `--directory`), a checagem agora relata "and.patch
+touches 9 files; git status reports 0 changed" e identifica a
+divergencia corretamente -- confirmado que esse bug especifico nao
+pode mais passar silenciosamente.
+
+**5. Lacunas do patch: testadas ou registradas.**
+
+a) **Retomada de sessao -- decidido e testado, nao deixado como
+lacuna aberta.** A retomada do TLS 1.3 pula Certificate/
+CertificateVerify inteiramente, entao uma conexao retomada herdaria a
+autenticacao dual da conexao original SEM reverificar nenhuma das duas
+cadeias -- minando exatamente a garantia que `Require=true` existe
+para tornar absoluta. Decisao: conexoes estritas NUNCA emitem ticket de
+sessao (`shouldSendSessionTickets`, `handshake_server_tls13.go`) -- nao
+ha nada para retomar. Testado em `TestDualStrictModeDisablesSessionTickets`
+(duas conexoes seguidas com o mesmo `ClientSessionCache`; a segunda
+nunca retoma). Conexoes nao estritas continuam emitindo tickets como
+antes, mas uma conexao retomada NUNCA reporta `DualAuthenticated=true`
+(esse campo nunca e restaurado do estado de sessao, diferente de
+`PeerCertificates`/`VerifiedChains`, que o proprio Go ja restaura sem
+nenhuma mudanca minha) -- testado diretamente em
+`TestDualResumedSessionDoesNotCarryDualAuthentication` (confirma
+`DidResume=true` E `DualAuthenticated=false` na mesma conexao
+retomada, nao apenas assumido).
+
+b) **HelloRetryRequest com o grupo hibrido -- testado, passa.**
+`TestDualHandshakeAcrossHelloRetryRequest` forca uma retomada de grupo
+real: `curvePreferences()` (`common.go`) sempre ordena os grupos
+permitidos numa ordem fixa global (hibridos antes de classicos,
+`curvePreferenceOrder()` em `defaults.go`), ignorando a ordem dada em
+`Config.CurvePreferences` -- entao so colocar o grupo hibrido primeiro
+na lista do cliente nao forca retomada (ele ja seria o primeiro de
+qualquer jeito). A forma real de forcar: cliente permite
+`X25519MLKEM768` (ordena antes na lista fixa, recebe o key share
+inicial) E `SecP384r1MLKEM1024` (so declarado, sem key share inicial);
+servidor so aceita `SecP384r1MLKEM1024`; o key share inicial do cliente
+nao serve, o servidor responde com HelloRetryRequest pedindo
+`SecP384r1MLKEM1024` especificamente, e o handshake dual completa
+corretamente depois disso -- confirmado (`cs.HelloRetryRequest`,
+`cs.DualAuthenticated`, `cs.CurveID` todos verificados no teste).
+
+c) **Registrado como lacuna ainda aberta, sem mudanca de codigo**
+(no cabecalho de `dual.go`, atualizado): os callbacks
+`VerifyConnection`/`VerifyPeerCertificate` do cliente continuam vendo
+so a cadeia classica (`c.peerCertificates`), exatamente como no Go
+original, e rodam ANTES da validacao da cadeia PQ; sem suporte a
+`CompressedCertificate` (RFC 8879) ou Exported Authenticators (RFC
+9261); sem `RelatedCertificate` (RFC 9440); o mecanismo e TLS 1.3
+apenas, sem rejeicao explicita do codigo dual sob TLS 1.2 (ele
+simplesmente nunca e oferecido ou aceito abaixo de 1.3, com o mesmo
+efeito pratico).
+
+**6. Documentacao: 543 linhas vs. ~400 esperadas, tabela por arquivo,
+as tres correcoes.**
+
+O total subiu de 529 para **543 linhas fora de `dual.go`/testes**
+(o guard de ticket de sessao do item 5a acrescentou 14 linhas a
+`handshake_server_tls13.go`). A decisao do Luciano de seguir como esta
+(Decisao 6) permanece valida -- o acrescimo e pela mesma razao
+(logica de seguranca real, nao codigo solto).
+
+| Arquivo | Linhas | O que faz |
+|---|---:|---|
+| `common.go` | +30 | Campo `Dual *DualConfig` no `Config`; `Dual.clone()` no `Config.Clone()`; 3 campos novos no `ConnectionState` (`DualAuthenticated`, `DualPeerCertificates`, `DualVerifiedChains`) |
+| `conn.go` | +10 | 3 campos internos no `Conn` (espelham os do `ConnectionState`); populacao em `connectionStateLocked` |
+| `handshake_client.go` | +17 | Oferta do codigo dual `0xFE65` no `ClientHello` (so ele em modo estrito); proibicao de `InsecureSkipVerify` com `Dual` configurado |
+| `handshake_client_tls13.go` | +172 | Cliente: valida a cadeia PQ do servidor de forma independente; verifica o `CertificateVerify` dual (as duas assinaturas, sem curto-circuito); ao ser pedido certificado (mTLS), seleciona o certificado classico por uma lista de algoritmos classica (nao a lista so-dual do servidor estrito) e envia os dois certificados + assinatura dual quando o servidor pede |
+| `handshake_messages.go` | +157 | Serializacao/parse da mensagem Certificate com o delimitador de 3 bytes zero; rejeita delimitador primeiro, ultimo ou repetido; comportamento identico ao parser original quando nao ha delimitador |
+| `handshake_server_tls13.go` | +152 | Servidor: escolhe o certificado dual quando o cliente oferece o codigo e ha cadeia PQ configurada; `Require` fecha o handshake se o cliente nao oferecer; `CertificateRequest` tambem oferece o codigo dual para mTLS; verifica o par do cliente (cadeia PQ + identidade por SAN) e o `CertificateVerify` dual; suprime o ticket de sessao em modo estrito |
+| `tls_test.go` | +5 | Registra o campo `Dual` em `TestCloneNonFuncFields` (teste existente, nao modificado por este patch, mas que exige todo campo novo do `Config` ser contemplado) |
+
+**As tres correcoes reais encontradas durante a implementacao,
+resumidas:**
+1. `git apply` resolve caminhos contra a raiz do repositorio git
+clonado, nao contra o diretorio corrente do shell -- reportava sucesso
+enquanto pulava todo arquivo. Corrigido com `--directory=src/crypto/tls`;
+endurecido no item 4 acima para nunca mais passar silenciosamente.
+2. `net.Pipe()` nos testes causa deadlock de transporte sempre que o
+cliente aborta a leitura no meio do primeiro voo do servidor (o caso
+de todo teste negativo) -- trocado por `localPipe(t)` (TCP real em
+loopback, o mesmo mecanismo que a propria suite do `crypto/tls` ja usa
+para handshakes completos).
+3. O proprio `getClientCertificate()` do Go, nao modificado, filtra o
+certificado classico do cliente pela mesma lista de algoritmos de
+assinatura que o servidor anunciou -- em modo estrito essa lista e so
+`0xFE65`, que nao bate com nenhum algoritmo classico real, fazendo o
+cliente nao enviar certificado nenhum mesmo tendo um disponivel.
+Corrigido usando uma lista de algoritmos classica comum apenas para a
+SELECAO do certificado, nao para a escolha do esquema de assinatura
+(que continua sendo o codigo dual).
+
+**Resultado final, suite completa de `crypto/tls` (original + os 23
+testes do AND), pipeline completo e endurecido (clone -> verifica
+commit -> `git apply` com checagem de contagem de arquivos ->
+`make.bash` -> teste):** `ok crypto/tls 69.728s`. No nivel dos testes
+NOMEADOS: **237 PASS, 0 FAIL, 0 SKIP** (214 originais + 23 do AND).
+Contando tambem as subcelulas internas do `TestBogoSuite`: 2.991 PASS,
+0 FAIL, 2.278 SKIP (todos internos aquela matriz de conformidade,
+detalhado no item 2). SHA-256 do patch final:
+`093338402cce147920a4f63d2a2b8947f0fc8f275bae36f33a0dd8badeaad572`.
+
+Artefatos atualizados: `thesis/results/v9/toolchain/Dockerfile`,
+`README.md`, `build_metadata.json`, `crypto_tls_test_summary.txt`,
+`patches/and.patch`, `dual.go` (cabecalho de lacunas conhecidas
+atualizado).
+
+Nenhuma acao em AWS. Nenhuma tag nova.
+
 Nenhuma acao em AWS. Nenhuma tag nova.
