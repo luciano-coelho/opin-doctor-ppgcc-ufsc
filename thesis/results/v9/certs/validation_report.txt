@@ -16,9 +16,34 @@ OK   Hibrido-AND/client (cadeia ML-DSA-65): verified (root trusted, EKU=clientAu
 OK   Hibrido-AND/server: as duas cadeias (RSA e ML-DSA-65) declaram a MESMA identidade SAN
 OK   Hibrido-AND/client: as duas cadeias (RSA e ML-DSA-65) declaram a MESMA identidade SAN
 
-=== PQC (reaproveitado da v8, sem mudanca) ===
-OK   PQC/server (v8, inalterado, EKU real=ClientAuth): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
-OK   PQC/client (v8, inalterado): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+=== PQC (v9, REEMITIDO -- nao reaproveita o .crt da v8) ===
+OK   PQC/server (v9, reemitido): verified (root trusted, EKU=serverAuth, DNSName="mtls"), no InsecureSkipVerify
+OK   PQC/client (v9, reemitido): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+
+=== EKU confirmado, folha por folha, todos os perfis (nenhuma excecao) ===
+Classico       server                 ExtKeyUsage=[serverAuth]
+Classico       client                 ExtKeyUsage=[clientAuth]
+Hibrido-v8     server                 ExtKeyUsage=[serverAuth]
+Hibrido-v8     client                 ExtKeyUsage=[clientAuth]
+Hibrido-AND    server (RSA)           ExtKeyUsage=[serverAuth]
+Hibrido-AND    client (RSA)           ExtKeyUsage=[clientAuth]
+Hibrido-AND    server (ML-DSA-65)     ExtKeyUsage=[serverAuth]
+Hibrido-AND    client (ML-DSA-65)     ExtKeyUsage=[clientAuth]
+PQC (v9)       server                 ExtKeyUsage=[serverAuth]
+PQC (v9)       client                 ExtKeyUsage=[clientAuth]
+
+=== Comparabilidade de tamanho: PQC (v9) vs. cadeia ML-DSA-65 do Hibrido-AND (mesmo template) ===
+PQC (v9)     ca       5468 B   Hibrido-AND  ca_mldsa       5496 B
+PQC (v9)     server   5619 B   Hibrido-AND  server_mldsa   5647 B
+PQC (v9)     client   5506 B   Hibrido-AND  client_mldsa   5534 B
+(mesmo template, generateMLDSACA/generateMLDSALeaf -- qualquer diferenca residual vem so de ASN.1 DER de tamanho variavel: serial number, timestamps, nao de estrutura)
+
+=== Comparacao contra a v8 real (root_ca_pqc/issuer_ca_pqc/mtls_pqc/client_one_pqc), so leitura, nao usada como perfil ===
+v8 real: root 5867 B + issuer 5877 B + server 5867 B + client 5879 B = 23490 B total (cadeia de 2 niveis -- CA raiz -> CA emissora -> folha)
+v9 novo: ca 5468 B + server 5619 B + client 5506 B = 16593 B total (cadeia de 1 nivel -- CA assina a folha direto)
+v8 real server DN (ExtraNames custom: UID/LDAP-UID/organizationID): CN=mtls_pqc,2.5.4.97=749620a7-e842-421e-aa97-8fcb8ce7bb90,0.9.2342.19200300.100.1.1=6edf06c9-ab86-4ac7-a5e9-0d2241e4bda8,2.5.4.45=mtls_pqc
+v9 novo server DN (so CommonName): CN=pqc_server
+Diferenca explicada: a v8 real tem 1 certificado extra na cadeia (a CA emissora intermediaria, root_ca_pqc -> issuer_ca_pqc -> folha, 2 niveis) e 3 campos extras no DN de cada folha (UID/LDAP-UID/organizationID) -- nao e a criptografia ML-DSA-65 em si (chave publica e assinatura ML-DSA-65 tem tamanho FIXO, o mesmo nos dois). A diferenca de ~6,8 KB (23.490 B reais vs. o total v9 abaixo) vem inteira dessa profundidade de cadeia e desses campos de DN, nao de nenhuma mudanca no algoritmo.
 
 === Tamanhos (bytes DER por certificado) ===
 Classico     ca                749 B
@@ -34,12 +59,23 @@ Hibrido-AND  server_rsa        914 B
 Hibrido-AND  client_rsa        801 B
 Hibrido-AND  server_mldsa     5647 B
 Hibrido-AND  client_mldsa     5534 B
-PQC (v8)     root             5867 B
-PQC (v8)     issuer           5877 B
-PQC (v8)     server           5867 B
-PQC (v8)     client           5879 B
+PQC (v9)     ca               5468 B
+PQC (v9)     server           5619 B
+PQC (v9)     client           5506 B
 --- total por perfil (soma das cadeias listadas acima) ---
 Classico       2436 B
 Hibrido-v8    18620 B
 Hibrido-AND   19155 B
-PQC (v8)      23490 B
+PQC (v9)      16593 B
+
+=== O que de fato trafega num handshake real (folha + intermediarias, SEM a raiz -- a raiz nunca e enviada, so precisa estar no pool de confianca local) ===
+Perfil       Cadeia enviada                Bytes
+Classico     servidor (so a folha)           900 B
+Classico     cliente (so a folha)            787 B
+Hibrido-v8   servidor (1 folha, com extensoes)   6242 B
+Hibrido-v8   cliente (1 folha, com extensoes)   6131 B
+Hibrido-AND  servidor (folha RSA + folha ML-DSA-65)   6561 B
+Hibrido-AND  cliente (folha RSA + folha ML-DSA-65)   6335 B
+PQC (v9)     servidor (so a folha)          5619 B
+PQC (v9)     cliente (so a folha)           5506 B
+(Classico/Hibrido-v8/PQC(v9) sao cadeias de 1 nivel nesta rodada -- a folha e tudo que trafega. Hibrido-AND sempre envia as DUAS folhas juntas, por construcao do mecanismo. Nenhum perfil aqui tem intermediaria propria; se um perfil real usar 2 niveis como a v8 fazia, a intermediaria soma aqui tambem.)

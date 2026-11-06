@@ -18,31 +18,64 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"log"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
 
 const validity = 5 * 365 * 24 * time.Hour
 
-// serverSANs/clientSANs: o servidor usa o conjunto de hostnames que o
-// gateway real ja escuta (mesma convencao de mock-service-os/certs/
-// main.go) mais "mtls", o SNI literal que thesis/scripts/tls_kem_proxy
-// disca por padrao -- para que a validacao abaixo (DNSName="mtls")
-// seja uma checagem real, nao arbitraria. O cliente usa uma identidade
-// propria, estavel, igual nas duas cadeias do Hibrido-AND (exigencia
-// do mecanismo: as duas metades do par devem declarar o MESMO
-// conjunto de SANs).
+// serverSANs/clientSANs/serverIPs: configuraveis por flag, nunca
+// fixos no codigo -- para testes locais (o default) usam loopback e
+// os hostnames que o gateway real ja escuta (mesma convencao de
+// mock-service-os/certs/main.go) mais "mtls", o SNI literal que
+// thesis/scripts/tls_kem_proxy disca por padrao. Para o piloto e a
+// campanha real (T5/T8), estes mesmos parametros devem vir dos
+// enderecos REAIS da frota, resolvidos NA HORA DO DEPLOY -- nunca
+// hardcoded neste arquivo nem versionados em lugar nenhum (ver
+// Decisao 10, item 4). O cliente usa uma identidade propria, estavel,
+// igual nas duas cadeias do Hibrido-AND (exigencia do mecanismo: as
+// duas metades do par devem declarar o MESMO conjunto de SANs) --
+// tambem configuravel, mas o default nao depende de rede.
 var (
-	serverSANs = []string{"mtls", "auth.local", "matls-auth.local", "api.local", "matls-api.local", "directory", "directory.local", "keystore"}
-	clientSANs = []string{"opin-client-one"}
-	serverIPs  = []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	serverSANs []string
+	clientSANs []string
+	serverIPs  []net.IP
 )
+
+func parseIPList(raw string) []net.IP {
+	var ips []net.IP
+	for _, s := range strings.Split(raw, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		ip := net.ParseIP(s)
+		if ip == nil {
+			fatalf("invalid IP in SAN list: %q", s)
+		}
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+func parseNameList(raw string) []string {
+	var names []string
+	for _, s := range strings.Split(raw, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			names = append(names, s)
+		}
+	}
+	return names
+}
 
 var serialCounter atomic.Int64
 
@@ -433,7 +466,21 @@ func recordSize(profile, cert string, der []byte) {
 }
 
 func main() {
-	outDir := "./certs"
+	// SANs por parametro, nunca fixos: default = loopback, para uso
+	// local (esta rodada). No piloto e na campanha real (T5/T8), quem
+	// chama este programa passa os enderecos REAIS da frota, resolvidos
+	// na hora do deploy -- nunca hardcoded aqui, nunca versionado.
+	serverDNS := flag.String("server-dns", "mtls,auth.local,matls-auth.local,api.local,matls-api.local,directory,directory.local,keystore", "lista de nomes DNS (SAN) separados por virgula para as folhas de SERVIDOR")
+	serverIPList := flag.String("server-ips", "127.0.0.1,::1", "lista de IPs (SAN) separados por virgula para as folhas de SERVIDOR -- loopback por padrao; na campanha real, os IPs da frota resolvidos no deploy")
+	clientDNS := flag.String("client-dns", "opin-client-one", "lista de nomes (SAN) separados por virgula para as folhas de CLIENTE -- identidade, nao hostname de rede")
+	outDirFlag := flag.String("out", "./certs", "diretorio de saida para os certificados e chaves gerados")
+	flag.Parse()
+
+	serverSANs = parseNameList(*serverDNS)
+	clientSANs = parseNameList(*clientDNS)
+	serverIPs = parseIPList(*serverIPList)
+
+	outDir := *outDirFlag
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatalf("mkdir %s: %v", outDir, err)
 	}
@@ -505,33 +552,60 @@ func main() {
 	recordSize("Hibrido-AND", "server_mldsa", andMLDSAServer.Raw)
 	recordSize("Hibrido-AND", "client_mldsa", andMLDSAClient.Raw)
 
-	fmt.Println("\n=== PQC (reaproveitado da v8, sem mudanca) ===")
-	pqcRoot := loadCertPEM("./v8_pqc/root_ca_pqc.crt")
-	pqcIssuer := loadCertPEM("./v8_pqc/issuer_ca_pqc.crt")
-	pqcServer := loadCertPEM("./v8_pqc/mtls_pqc.crt")
-	pqcClient := loadCertPEM("./v8_pqc/client_one_pqc.crt")
+	fmt.Println("\n=== PQC (v9, REEMITIDO -- nao reaproveita o .crt da v8) ===")
+	// Luciano, apos revisar: nao reaproveitar o certificado da v8 aqui.
+	// O cliente da v9 verifica o servidor em TODOS os perfis (sem
+	// InsecureSkipVerify em nenhum), e o certificado de servidor real
+	// da v8 (mtls_pqc.crt) so tem EKU=ClientAuth -- o Go recusaria.
+	// Reemitido do zero, MESMO TEMPLATE da cadeia ML-DSA-65 do
+	// Hibrido-AND (generateMLDSACA/generateMLDSALeaf, mesmas funcoes,
+	// nao uma copia) -- para que as duas fiquem diretamente
+	// comparaveis por construcao, nao por coincidencia.
+	pqcCA, pqcCAKey := generateMLDSACA("pqc_ca", outDir)
+	pqcServer, _ := generateMLDSALeaf("pqc_server", pqcCA, pqcCAKey, x509.ExtKeyUsageServerAuth, serverSANs, outDir)
+	pqcClient, _ := generateMLDSALeaf("pqc_client", pqcCA, pqcCAKey, x509.ExtKeyUsageClientAuth, clientSANs, outDir)
 	pqcRoots := x509.NewCertPool()
-	pqcRoots.AddCert(pqcRoot)
-	// mtls_pqc.crt/client_one_pqc.crt: estes sao os certificados REAIS
-	// e OFICIAIS da v8 (ja medidos e publicados) -- T4 so os
-	// reconfirma, nunca os regenera, e NAO assume qual EKU eles tem.
-	// Confirmado aqui, pelo proprio verificador estrito do Go (sem
-	// InsecureSkipVerify): validar mtls_pqc.crt com EKU=ServerAuth
-	// FALHA ("certificate specifies an incompatible key usage") --
-	// reconfirmando de forma independente o fato B do reconhecimento
-	// da T1 (todo certificado folha da v8, INCLUSIVE o de servidor,
-	// tem EKU=ClientAuth apenas, nunca ServerAuth). A validacao abaixo
-	// usa ClientAuth para os dois (servidor E cliente), exatamente o
-	// EKU real que o arquivo tem, nao o que "deveria" ter -- e isso
-	// que T4 pede para os certificados NOVOS, nao para o PQC (que
-	// fica "como na v8", intencionalmente, mesmo com essa limitacao
-	// conhecida).
-	validateChain("PQC/server (v8, inalterado, EKU real=ClientAuth)", pqcServer, []*x509.Certificate{pqcIssuer}, pqcRoots, x509.ExtKeyUsageClientAuth, "")
-	validateChain("PQC/client (v8, inalterado)", pqcClient, []*x509.Certificate{pqcIssuer}, pqcRoots, x509.ExtKeyUsageClientAuth, "")
-	recordSize("PQC (v8)", "root", pqcRoot.Raw)
-	recordSize("PQC (v8)", "issuer", pqcIssuer.Raw)
-	recordSize("PQC (v8)", "server", pqcServer.Raw)
-	recordSize("PQC (v8)", "client", pqcClient.Raw)
+	pqcRoots.AddCert(pqcCA)
+	validateChain("PQC/server (v9, reemitido)", pqcServer, nil, pqcRoots, x509.ExtKeyUsageServerAuth, "mtls")
+	validateChain("PQC/client (v9, reemitido)", pqcClient, nil, pqcRoots, x509.ExtKeyUsageClientAuth, "")
+	recordSize("PQC (v9)", "ca", pqcCA.Raw)
+	recordSize("PQC (v9)", "server", pqcServer.Raw)
+	recordSize("PQC (v9)", "client", pqcClient.Raw)
+
+	fmt.Println("\n=== EKU confirmado, folha por folha, todos os perfis (nenhuma excecao) ===")
+	ekuRow := func(profile, role string, cert *x509.Certificate) {
+		fmt.Printf("%-14s %-22s ExtKeyUsage=%v\n", profile, role, cert.ExtKeyUsage)
+	}
+	ekuRow("Classico", "server", classicoServer)
+	ekuRow("Classico", "client", classicoClient)
+	ekuRow("Hibrido-v8", "server", hv8Server)
+	ekuRow("Hibrido-v8", "client", hv8Client)
+	ekuRow("Hibrido-AND", "server (RSA)", andRSAServer)
+	ekuRow("Hibrido-AND", "client (RSA)", andRSAClient)
+	ekuRow("Hibrido-AND", "server (ML-DSA-65)", andMLDSAServer)
+	ekuRow("Hibrido-AND", "client (ML-DSA-65)", andMLDSAClient)
+	ekuRow("PQC (v9)", "server", pqcServer)
+	ekuRow("PQC (v9)", "client", pqcClient)
+
+	fmt.Println("\n=== Comparabilidade de tamanho: PQC (v9) vs. cadeia ML-DSA-65 do Hibrido-AND (mesmo template) ===")
+	fmt.Printf("PQC (v9)     ca     %6d B   Hibrido-AND  ca_mldsa     %6d B\n", len(pqcCA.Raw), len(andMLDSACA.Raw))
+	fmt.Printf("PQC (v9)     server %6d B   Hibrido-AND  server_mldsa %6d B\n", len(pqcServer.Raw), len(andMLDSAServer.Raw))
+	fmt.Printf("PQC (v9)     client %6d B   Hibrido-AND  client_mldsa %6d B\n", len(pqcClient.Raw), len(andMLDSAClient.Raw))
+	fmt.Println("(mesmo template, generateMLDSACA/generateMLDSALeaf -- qualquer diferenca residual vem so de ASN.1 DER de tamanho variavel: serial number, timestamps, nao de estrutura)")
+
+	fmt.Println("\n=== Comparacao contra a v8 real (root_ca_pqc/issuer_ca_pqc/mtls_pqc/client_one_pqc), so leitura, nao usada como perfil ===")
+	v8PqcRoot := loadCertPEM("./v8_pqc/root_ca_pqc.crt")
+	v8PqcIssuer := loadCertPEM("./v8_pqc/issuer_ca_pqc.crt")
+	v8PqcServer := loadCertPEM("./v8_pqc/mtls_pqc.crt")
+	v8PqcClient := loadCertPEM("./v8_pqc/client_one_pqc.crt")
+	fmt.Printf("v8 real: root %d B + issuer %d B + server %d B + client %d B = %d B total (cadeia de 2 niveis -- CA raiz -> CA emissora -> folha)\n",
+		len(v8PqcRoot.Raw), len(v8PqcIssuer.Raw), len(v8PqcServer.Raw), len(v8PqcClient.Raw),
+		len(v8PqcRoot.Raw)+len(v8PqcIssuer.Raw)+len(v8PqcServer.Raw)+len(v8PqcClient.Raw))
+	fmt.Printf("v9 novo: ca %d B + server %d B + client %d B = %d B total (cadeia de 1 nivel -- CA assina a folha direto)\n",
+		len(pqcCA.Raw), len(pqcServer.Raw), len(pqcClient.Raw), len(pqcCA.Raw)+len(pqcServer.Raw)+len(pqcClient.Raw))
+	fmt.Printf("v8 real server DN (ExtraNames custom: UID/LDAP-UID/organizationID): %s\n", v8PqcServer.Subject.String())
+	fmt.Printf("v9 novo server DN (so CommonName): %s\n", pqcServer.Subject.String())
+	fmt.Println("Diferenca explicada: a v8 real tem 1 certificado extra na cadeia (a CA emissora intermediaria, root_ca_pqc -> issuer_ca_pqc -> folha, 2 niveis) e 3 campos extras no DN de cada folha (UID/LDAP-UID/organizationID) -- nao e a criptografia ML-DSA-65 em si (chave publica e assinatura ML-DSA-65 tem tamanho FIXO, o mesmo nos dois). A diferenca de ~6,8 KB (23.490 B reais vs. o total v9 abaixo) vem inteira dessa profundidade de cadeia e desses campos de DN, nao de nenhuma mudanca no algoritmo.")
 
 	fmt.Println("\n=== Tamanhos (bytes DER por certificado) ===")
 	totals := map[string]int{}
@@ -540,7 +614,26 @@ func main() {
 		totals[r.profile] += r.bytes
 	}
 	fmt.Println("--- total por perfil (soma das cadeias listadas acima) ---")
-	for _, profile := range []string{"Classico", "Hibrido-v8", "Hibrido-AND", "PQC (v8)"} {
+	for _, profile := range []string{"Classico", "Hibrido-v8", "Hibrido-AND", "PQC (v9)"} {
 		fmt.Printf("%-12s %6d B\n", profile, totals[profile])
 	}
+
+	fmt.Println("\n=== O que de fato trafega num handshake real (folha + intermediarias, SEM a raiz -- a raiz nunca e enviada, so precisa estar no pool de confianca local) ===")
+	fmt.Printf("%-12s %-28s %6s\n", "Perfil", "Cadeia enviada", "Bytes")
+	wireRow := func(profile, chain string, der ...[]byte) {
+		total := 0
+		for _, d := range der {
+			total += len(d)
+		}
+		fmt.Printf("%-12s %-28s %6d B\n", profile, chain, total)
+	}
+	wireRow("Classico", "servidor (so a folha)", classicoServer.Raw)
+	wireRow("Classico", "cliente (so a folha)", classicoClient.Raw)
+	wireRow("Hibrido-v8", "servidor (1 folha, com extensoes)", hv8Server.Raw)
+	wireRow("Hibrido-v8", "cliente (1 folha, com extensoes)", hv8Client.Raw)
+	wireRow("Hibrido-AND", "servidor (folha RSA + folha ML-DSA-65)", andRSAServer.Raw, andMLDSAServer.Raw)
+	wireRow("Hibrido-AND", "cliente (folha RSA + folha ML-DSA-65)", andRSAClient.Raw, andMLDSAClient.Raw)
+	wireRow("PQC (v9)", "servidor (so a folha)", pqcServer.Raw)
+	wireRow("PQC (v9)", "cliente (so a folha)", pqcClient.Raw)
+	fmt.Println("(Classico/Hibrido-v8/PQC(v9) sao cadeias de 1 nivel nesta rodada -- a folha e tudo que trafega. Hibrido-AND sempre envia as DUAS folhas juntas, por construcao do mecanismo. Nenhum perfil aqui tem intermediaria propria; se um perfil real usar 2 niveis como a v8 fazia, a intermediaria soma aqui tambem.)")
 }
