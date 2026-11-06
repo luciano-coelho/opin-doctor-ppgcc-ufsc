@@ -1,0 +1,45 @@
+=== Classico (RSA-2048) ===
+OK   Classico/server: verified (root trusted, EKU=serverAuth, DNSName="mtls"), no InsecureSkipVerify
+OK   Classico/client: verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+
+=== Hibrido-v8 (RSA-2048 + assinatura dupla X.509 ML-DSA-65) ===
+OK   Hibrido-v8/server (RSA half): verified (root trusted, EKU=serverAuth, DNSName="mtls"), no InsecureSkipVerify
+OK   Hibrido-v8/client (RSA half): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+OK   Hibrido-v8/server: AltSignatureValue (ML-DSA-65 half) independently re-verified
+OK   Hibrido-v8/client: AltSignatureValue (ML-DSA-65 half) independently re-verified
+
+=== Hibrido-AND (duas cadeias independentes: RSA-2048 e ML-DSA-65) ===
+OK   Hibrido-AND/server (cadeia RSA): verified (root trusted, EKU=serverAuth, DNSName="mtls"), no InsecureSkipVerify
+OK   Hibrido-AND/client (cadeia RSA): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+OK   Hibrido-AND/server (cadeia ML-DSA-65): verified (root trusted, EKU=serverAuth, DNSName="mtls"), no InsecureSkipVerify
+OK   Hibrido-AND/client (cadeia ML-DSA-65): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+OK   Hibrido-AND/server: as duas cadeias (RSA e ML-DSA-65) declaram a MESMA identidade SAN
+OK   Hibrido-AND/client: as duas cadeias (RSA e ML-DSA-65) declaram a MESMA identidade SAN
+
+=== PQC (reaproveitado da v8, sem mudanca) ===
+OK   PQC/server (v8, inalterado, EKU real=ClientAuth): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+OK   PQC/client (v8, inalterado): verified (root trusted, EKU=clientAuth, DNSName=""), no InsecureSkipVerify
+
+=== Tamanhos (bytes DER por certificado) ===
+Classico     ca                749 B
+Classico     server            900 B
+Classico     client            787 B
+Hibrido-v8   ca_rsa            753 B
+Hibrido-v8   ca_mldsa_alt     5494 B
+Hibrido-v8   server           6242 B
+Hibrido-v8   client           6131 B
+Hibrido-AND  ca_rsa            763 B
+Hibrido-AND  ca_mldsa         5496 B
+Hibrido-AND  server_rsa        914 B
+Hibrido-AND  client_rsa        801 B
+Hibrido-AND  server_mldsa     5647 B
+Hibrido-AND  client_mldsa     5534 B
+PQC (v8)     root             5867 B
+PQC (v8)     issuer           5877 B
+PQC (v8)     server           5867 B
+PQC (v8)     client           5879 B
+--- total por perfil (soma das cadeias listadas acima) ---
+Classico       2436 B
+Hibrido-v8    18620 B
+Hibrido-AND   19155 B
+PQC (v8)      23490 B

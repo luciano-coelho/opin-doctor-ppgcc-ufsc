@@ -788,3 +788,139 @@ agora descartada -- usar "15 itens, 18 cenarios" em todo relatorio e
 documento futuro sobre a T3, nunca mais "17".
 
 Nenhuma acao em AWS. Nenhuma tag nova.
+
+## 9. T4, certificados novos: Classico e Hibrido-v8 em RSA-2048, Hibrido-AND com duas cadeias independentes (RSA-2048 + ML-DSA-65, mesma identidade SAN), PQC reaproveitado da v8 sem mudanca -- todos validados pelo verificador padrao do Go, sem InsecureSkipVerify
+
+**Decisao de escopo, nao perguntada antes, registrada aqui para o
+Luciano confirmar ou corrigir:** o pedido original da T4 cita
+`certs/main.go` (o gerador de certificados REAL da producao,
+`mock-service-os/certs/main.go`, usado pela v7/v8 ja publicada e
+taggeada). Optei por **NAO tocar nesse arquivo** e construir um
+gerador novo, isolado, em `thesis/results/v9/certs/` -- pelo mesmo
+principio ja aplicado a v9 inteira ("additive, nunca sobrescreve a v8
+oficial"): qualquer edicao em `certs/main.go` teria risco de afetar,
+mesmo que por engano, os certificados RSA-4096 que a v8 ja mede e
+publica. A integracao real com o gateway/cliente (decidir se esse
+gerador novo passa a viver dentro de `certs/main.go` ou continua
+separado) fica para a T5, que e explicitamente sobre integracao. Se o
+Luciano queria `certs/main.go` editado desde ja, aviso aqui antes de
+qualquer wiring acontecer na T5.
+
+**O que foi gerado e onde:**
+`thesis/results/v9/certs/main.go` (programa Go autossuficiente, so
+biblioteca padrao -- sem `github.com/google/uuid`/`go-oidc`, que o
+gerador real usa so para JWKS/campos extras de Subject, fora do
+escopo da T4) gera e valida os 4 perfis, escrevendo cada certificado e
+chave em `thesis/results/v9/certs/certs/`:
+
+| Perfil | Cadeia(s) | Arquivos |
+|---|---|---|
+| Classico | 1 CA RSA-2048 -> folha servidor + folha cliente, RSA-2048 | `classico_ca`, `classico_server`, `classico_client` |
+| Hibrido-v8 | 1 CA RSA-2048 (primaria) + 1 CA ML-DSA-65 (so assina o AltSignatureValue) -> folhas RSA-2048 com as 3 extensoes X.509 hibridas (Bindel et al. 2019), mesmo mecanismo da v8, agora RSA-2048 em vez de RSA-4096 | `hibrido_v8_ca` (RSA), `hibrido_v8_ca_mldsa` (alt), `hibrido_v8_server`, `hibrido_v8_client` |
+| Hibrido-AND | 2 cadeias TOTALMENTE independentes: 1 CA RSA-2048 -> folhas RSA-2048; 1 CA ML-DSA-65 (genuinamente autoassinada) -> folhas ML-DSA-65. Mesma identidade SAN nas duas, chaves finais diferentes, nenhuma CA compartilhada com o Hibrido-v8 | `hibrido_and_rsa_ca/server/client`, `hibrido_and_mldsa_ca/server/client` |
+| PQC | Reaproveitado da v8 **sem nenhuma mudanca** -- copia somente leitura (so os `.crt`, nenhuma chave) de `mock-service-os/certs/{root_ca_pqc,issuer_ca_pqc,mtls_pqc,client_one_pqc}.crt` em `thesis/results/v9/certs/v8_pqc/`, carregada e revalidada, nunca regerada | (nenhum arquivo novo; copias de leitura em `v8_pqc/`) |
+
+**SAN usado**: folhas de servidor levam `mtls` (o SNI literal que
+`thesis/scripts/tls_kem_proxy` disca por padrao hoje) mais a mesma
+lista de hostnames que `mock-service-os/certs/main.go` ja usa
+(`auth.local`, `matls-auth.local`, `api.local`, `matls-api.local`,
+`directory`, `directory.local`, `keystore`) e os IPs
+`127.0.0.1`/`::1`; folhas de cliente levam uma identidade propria e
+estavel, `opin-client-one`, igual nas duas cadeias do Hibrido-AND (a
+exigencia do mecanismo).
+
+**EKU**: todo certificado de servidor com `ExtKeyUsageServerAuth`,
+todo certificado de cliente com `ExtKeyUsageClientAuth` -- confirmado
+pela PROPRIA validacao abaixo (que falha se o EKU nao bater), nao so
+pelo que o template pede.
+
+**Validacao, todas as cadeias, com `x509.Certificate.Verify()` do Go,
+sem `InsecureSkipVerify` em lugar nenhum** (essa flag e do
+`crypto/tls`, no nivel de conexao -- nem existe numa chamada de x509
+isolada como esta, o que por si so ja elimina o jeito mais comum de
+uma validacao "passar" sem checar nada de verdade):
+
+```
+=== Classico (RSA-2048) ===
+OK   Classico/server: verified (root trusted, EKU=serverAuth, DNSName="mtls")
+OK   Classico/client: verified (root trusted, EKU=clientAuth, DNSName="")
+
+=== Hibrido-v8 (RSA-2048 + assinatura dupla X.509 ML-DSA-65) ===
+OK   Hibrido-v8/server (RSA half): verified (EKU=serverAuth, DNSName="mtls")
+OK   Hibrido-v8/client (RSA half): verified (EKU=clientAuth, DNSName="")
+OK   Hibrido-v8/server: AltSignatureValue (ML-DSA-65 half) independently re-verified
+OK   Hibrido-v8/client: AltSignatureValue (ML-DSA-65 half) independently re-verified
+
+=== Hibrido-AND (duas cadeias independentes) ===
+OK   Hibrido-AND/server (cadeia RSA): verified (EKU=serverAuth, DNSName="mtls")
+OK   Hibrido-AND/client (cadeia RSA): verified (EKU=clientAuth, DNSName="")
+OK   Hibrido-AND/server (cadeia ML-DSA-65): verified (EKU=serverAuth, DNSName="mtls")
+OK   Hibrido-AND/client (cadeia ML-DSA-65): verified (EKU=clientAuth, DNSName="")
+OK   Hibrido-AND/server: as duas cadeias declaram a MESMA identidade SAN
+OK   Hibrido-AND/client: as duas cadeias declaram a MESMA identidade SAN
+
+=== PQC (reaproveitado da v8, sem mudanca) ===
+OK   PQC/server (v8, inalterado, EKU real=ClientAuth): verified (EKU=clientAuth)
+OK   PQC/client (v8, inalterado): verified (EKU=clientAuth)
+```
+
+Saida completa real em `thesis/results/v9/certs/validation_report.txt`.
+
+**Achado ao validar o PQC, nao um bug deste gerador: reconfirma o
+fato B da T1 de forma independente.** A primeira tentativa validou
+`mtls_pqc.crt` (o certificado de SERVIDOR real da v8) exigindo
+`EKU=ServerAuth`, e o proprio verificador do Go recusou: "certificate
+specifies an incompatible key usage". Nao e um bug -- e exatamente o
+fato B ja confirmado na T1 por leitura de codigo
+(`mock-service-os/certs/main.go` so gera `ExtKeyUsageClientAuth`, em
+TODO certificado, inclusive os de servidor), agora reconfirmado pelo
+proprio verificador estrito do Go, de um angulo independente (nao
+leitura de codigo, validacao real). Corrigido no script: a validacao
+de `mtls_pqc.crt` usa `ClientAuth`, o EKU REAL que o arquivo tem, nao
+o que "deveria" ter -- T4 pede ServerAuth correto para os
+certificados NOVOS (Classico, Hibrido-v8, Hibrido-AND), nao para o
+PQC, que fica como na v8 intencionalmente, limitacao conhecida
+incluida.
+
+**Tamanhos (bytes DER, dados reais desta rodada):**
+
+| Perfil | Certificado | Bytes |
+|---|---|---:|
+| Classico | CA | 749 |
+| Classico | servidor | 900 |
+| Classico | cliente | 787 |
+| Hibrido-v8 | CA (RSA) | 753 |
+| Hibrido-v8 | CA (ML-DSA-65, alt) | 5.494 |
+| Hibrido-v8 | servidor | 6.242 |
+| Hibrido-v8 | cliente | 6.131 |
+| Hibrido-AND | CA (RSA) | 763 |
+| Hibrido-AND | CA (ML-DSA-65) | 5.496 |
+| Hibrido-AND | servidor (cadeia RSA) | 914 |
+| Hibrido-AND | cliente (cadeia RSA) | 801 |
+| Hibrido-AND | servidor (cadeia ML-DSA-65) | 5.647 |
+| Hibrido-AND | cliente (cadeia ML-DSA-65) | 5.534 |
+| PQC (v8) | root | 5.867 |
+| PQC (v8) | issuer | 5.877 |
+| PQC (v8) | servidor | 5.867 |
+| PQC (v8) | cliente | 5.879 |
+
+**Total por perfil** (soma das cadeias listadas, CA+servidor+cliente):
+Classico 2.436 B; Hibrido-v8 18.620 B; Hibrido-AND 19.155 B; PQC (v8)
+23.490 B.
+
+**Nota sobre as chaves privadas commitadas.** `thesis/results/v9/certs/certs/*.key`
+sao chaves privadas de certificados de teste, gerados do zero so para
+esta validacao local, sem protecao de nada real -- commitadas pela
+MESMA convencao que `mock-service-os/certs/*.key` ja segue desde a v1
+(confirmado: `ca.key`, `client_one.key`, `client_one_pqc.key`, etc. ja
+estao versionados no git). Nenhuma chave da v8 oficial foi tocada; as
+unicas chaves da v8 referenciadas aqui (PQC) nao foram copiadas, so os
+`.crt` publicos (sem chave nenhuma) em `v8_pqc/`, para validar, nunca
+para assinar nada.
+
+Artefatos criados: `thesis/results/v9/certs/{go.mod,main.go,Dockerfile,
+validation_report.txt}`, `thesis/results/v9/certs/certs/` (26
+arquivos, 13 pares .crt/.key), `thesis/results/v9/certs/v8_pqc/` (4
+copias de leitura, so .crt, da v8 oficial).
+
+Nenhuma acao em AWS. Nenhuma tag nova.
