@@ -1067,3 +1067,162 @@ dos outros 3 perfis voltaram ao estado da Decisao 9 (inalterados).
 (so locais, ver acima).
 
 Nenhuma acao em AWS. Nenhuma tag nova.
+
+## 11. Resposta a rodada seguinte (chaves privadas nunca versionadas, geracao em tempo de execucao, nao-comparabilidade de tamanho PQC v9 vs v8): remocao do historico local das 13 chaves da Decisao 9, politica permanente de .gitignore, Makefile de geracao efemera, registro para a T8
+
+**Decisao do Luciano, resumida:** nunca versionar chave privada na v9
+(de teste ou nao), nunca ajustar permissao do Bash para contornar o
+classificador de seguranca; responder antes de agir se o commit da
+Decisao 9 passou pelo scanner e se o branch `v9/fase1-local` foi
+enviado ao remoto; se nao foi enviado, remover as chaves do historico
+LOCAL desse branch (sem tocar em tag nenhuma nem no historico da v8)
+e confirmar com `git log` e `git grep`; se tivesse sido enviado, nao
+reescrever historico, so parar de versionar chave daqui para frente;
+a partir de agora, `.gitignore` para `*.key`/`*.pem` privado na v9,
+so `.crt` publico pode ser versionado (e so se o scanner permitir), e
+testes locais/T5 devem gerar certificado em tempo de execucao via
+gerador (alvo de Makefile ou script), nunca arquivo pre-commitado;
+registrar no DECISIONS.md e na checklist da T8 que a cadeia PQC da v9
+(CA de 1 nivel, DN so com CommonName) difere estruturalmente da PQC
+real da v8 (CA de 2 niveis, 3 campos de DN extras), logo os tamanhos
+de certificado da v9 nao sao comparaveis aos da v8, so entre si.
+
+**1. O commit da Decisao 9 passou pelo scanner antes de ser feito?**
+Sim. O commit `4f179778` (Decisao 9, 13 pares `.crt`/`.key` de teste)
+foi criado depois que o proprio scanner de segredos deste ambiente
+rodou sobre o diff e nao bloqueou -- nao porque o conteudo fosse
+seguro (eram chaves privadas reais, de teste, mas reais), e sim porque
+na epoca da Decisao 9 ainda nao havia sido estabelecida a regra desta
+rodada ("chave privada nunca e versionada"). O classificador que
+bloqueou foi o da tentativa de commit DESTA rodada (Decisao 10, 16
+pares, apos a reemissao do PQC) -- esse sim recusou a acao duas vezes,
+o que foi respeitado sem contorno (ja registrado na Decisao 10, item
+5). Ou seja: a Decisao 9 ja tinha chave commitada antes de qualquer
+bloqueio existir; a regra "nunca versionar chave" e nova a partir
+desta rodada, nao retroativa por si -- por isso a remocao do historico
+abaixo.
+
+**2. O branch `v9/fase1-local` foi enviado ao remoto?** Nao. Confirmado
+por `git rev-parse --abbrev-ref --symbolic-full-name
+v9/fase1-local@{upstream}` (sem upstream configurado) e por `git
+ls-remote --heads origin v9/fase1-local` (saida vazia -- o branch nao
+existe em `origin`). Como nao ha historico compartilhado em risco, a
+remocao do historico LOCAL e segura: nenhum colaborador ou clone
+remoto pode ja ter essas chaves.
+
+**3. Remocao do historico local, procedimento e verificacao.**
+Criado um branch de seguranca local (`backup-v9-before-key-removal`,
+nunca enviado a lugar nenhum) antes de qualquer reescrita, depois
+apagado quando a verificacao abaixo confirmou sucesso. Executado:
+
+```
+git filter-branch --force --index-filter \
+  'git rm --cached --ignore-unmatch <13 caminhos .key da Decisao 9>' \
+  -- 08e3118e..v9/fase1-local
+```
+
+Isso reescreveu exatamente as 2 commits do intervalo que carregavam
+chave (as commits anteriores a `08e3118e`, toda tag e o historico da
+v8/main ficaram fora do intervalo, portanto intocados). Hashes novos
+resultantes: `af144177` (era a Decisao 9) e `c9e071ed` (era a Decisao
+10). `refs/original/refs/heads/v9/fase1-local` (o backup automatico do
+proprio `filter-branch`) foi removido depois da verificacao. Uma
+tentativa de `git reflog expire --all --expire-unreachable=now` + `git
+gc --prune=now` (para purgar os objetos agora inalcancaveis do banco
+de dados local) foi bloqueada pelo classificador de seguranca deste
+ambiente como "destruicao local irreversivel" -- respeitado sem
+contorno, pelo mesmo motivo da Decisao 10, item 5. Os dois criterios de
+verificacao que o Luciano pediu explicitamente nao dependem desse
+passo e foram confirmados limpos mesmo sem ele:
+
+```
+git log --oneline -3 v9/fase1-local
+  -> c9e071ed, af144177, 08e3118e (sem nenhum commit com chave acima destes)
+
+git grep -l "BEGIN.*PRIVATE KEY" v9/fase1-local -- "thesis/results/v9/*"
+  -> (vazio)
+
+git log --all --oneline -- "thesis/results/v9/certs/certs/pqc_*.key"
+  -> (vazio, nenhuma commit em nenhum branch/tag referencia esses caminhos)
+```
+
+Os objetos-blob antigos das chaves podem continuar existindo soltos no
+banco de dados local (nao alcancaveis por nenhuma ref) ate uma rotina
+de `gc` normal do Git eventualmente os coletar -- isso nao expoe nada
+num `git log`/`git grep`/`git show <ref>` normal, que e exatamente o
+que foi pedido como criterio, e nao afeta nada que venha a ser
+enviado ao remoto (um `push` nunca envia objeto inalcancavel). Registro
+transparente, nao escondido: se o Luciano quiser forcar essa limpeza
+final, precisa ser feito fora desta sessao (ajuste de permissao que
+ele mesmo decida tomar, nao eu).
+
+**4. Politica de `.gitignore` e geracao em tempo de execucao.**
+Criados:
+- `thesis/results/v9/.gitignore` (`*.key`, `*.pem` -- vale pra v9
+  inteira, qualquer subpasta futura, nao so `certs/`).
+- `thesis/results/v9/certs/certs/.gitignore` (`*.crt`, `*.key`,
+  `*.pem` -- so afeta arquivo NOVO; os 16 `.crt` publicos ja
+  commitados na Decisao 9/10 continuam rastreados normalmente, como
+  registro historico da validacao da T4).
+- `thesis/results/v9/certs/.gitignore` (`/generated/` -- ver abaixo).
+
+Criado `thesis/results/v9/certs/Makefile` com alvo `certs`: builda a
+imagem Docker do gerador (mesmo `Dockerfile` da T4, agora com
+`ARG SERVER_DNS`/`SERVER_IPS`/`CLIENT_DNS` repassados como flags pro
+`main.go`), cria um container efemero, copia `/app/certs` e
+`/report.txt` pra `./generated/` local, remove o container. Alvo
+`clean` remove `./generated/`. Testado de ponta a ponta duas vezes
+nesta rodada:
+
+- Primeira tentativa usou `OUT := certs` (mesmo nome do diretorio
+  historico `certs/certs/`) -- bug real encontrado: como esse destino
+  ja existia, o `docker cp` aninhou o conteudo novo um nivel a mais
+  (`certs/certs/certs/`) em vez de substituir. As 16 `.crt` historicas
+  NAO foram sobrescritas (sorte da semantica de merge do `docker cp`,
+  nao design), mas o resultado era confuso e fragil.
+- Corrigido: `OUT := generated` (nome proprio, nunca colide com o
+  registro historico) e um `rm -rf $(OUT)` antes de cada `docker
+  create`, garantindo que o destino nunca pre-existe. Testado de novo:
+  estrutura plana, `generated/validation_report.txt` e os 32 arquivos
+  (16 perfis x `.crt`+`.key`) ficam exatamente em `generated/`, sem
+  aninhamento. `git status` confirma `generated/` totalmente ignorado
+  (coberto por `thesis/results/v9/certs/.gitignore`); `git diff
+  --stat -- certs/certs` confirma o registro historico da T4 sem
+  nenhuma alteracao. `make clean` remove `generated/` por completo.
+
+Daqui para frente: testes locais e a T5 usam `make certs` (ou
+`docker build`/`run` equivalente) pra gerar certificado e chave
+descartaveis a cada execucao -- nunca arquivo fixo versionado. Na
+campanha real (T5/T8), o mesmo gerador recebe `-server-dns`/
+`-server-ips` com os enderecos reais da frota, resolvidos no deploy,
+nunca antes -- a chave nunca sai do disco da instancia/sessao que a
+gerou.
+
+**5. Nao-comparabilidade de tamanho: PQC v9 vs PQC real da v8,
+registrado para a T8.** A cadeia PQC da v9 (gerada pelo `main.go`
+desta pasta) usa uma CA de 1 nivel e um DN contendo so `CommonName`.
+A cadeia PQC real da v8 (`mtls_pqc.crt`/`client_one_pqc.crt`, usada na
+campanha oficial) usa uma CA de 2 niveis (raiz + intermediaria) e um
+DN com 3 campos adicionais (Organization, Country, etc., ver Decisao
+10, secao de comparacao de tamanho). A diferenca de tamanho entre as
+duas (ja quantificada na Decisao 10) vem inteiramente dessa diferenca
+estrutural de template -- profundidade de cadeia e campos de DN --, nao
+de qualquer diferenca criptografica no ML-DSA-65 em si, que e
+identico nos dois casos. **Registrado para a checklist de equivalencia
+da T8:** tamanhos de certificado da v9 NAO sao comparaveis aos da v8
+perfil a perfil; sao comparaveis apenas ENTRE os 4 perfis da propria
+v9 (Classico, Hibrido-v8, Hibrido-AND, PQC), que compartilham o mesmo
+template de CA/DN desta geracao. Qualquer comparacao de overhead de
+tamanho PQC-vs-classico que a tese apresente deve usar os 4 perfis da
+v9 entre si, nunca a v9 contra a v8 diretamente.
+
+Artefatos desta rodada: `thesis/results/v9/.gitignore` (novo),
+`thesis/results/v9/certs/.gitignore` (novo), `thesis/results/v9/certs/
+certs/.gitignore` (novo), `thesis/results/v9/certs/Makefile` (novo),
+`thesis/results/v9/certs/Dockerfile` (editado -- `ARG`/flags de SAN),
+DECISIONS.md (esta secao). Nenhuma chave nova em disco ao final desta
+rodada (as 3 chaves do PQC da Decisao 10, que nunca foram commitadas,
+foram removidas do disco; qualquer chave usada em teste local a partir
+de agora e gerada e descartada por `make certs`/`make clean`).
+
+Nenhuma acao em AWS. Nenhuma tag nova.
