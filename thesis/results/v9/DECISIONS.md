@@ -485,20 +485,35 @@ sem alteracao nenhuma: `go test -count=1 -v ./...`, a partir de
 `Dockerfile` desta pasta -- nenhum teste excluido, nenhuma flag `-short`
 ou build tag restringindo o conjunto.
 
-**3. Contagem exata, os 23 testes de `dual_test.go`, nome por nome.**
-Correcao a uma imprecisao do relatorio anterior: eu disse "17
-obrigatorios + 1 de contraste", mas isso estava errado -- reconferindo
-o pedido original ponto a ponto, os 18 testes da T3 TODOS correspondem
-a cenarios pedidos explicitamente (um item do pedido, "o adversario
-quantico... e o mesmo adversario contra RSA cadeia unica", pede os
-DOIS cenarios que resultaram em `TestDualQuantumAdversaryHoldingOnlyRSAKey`
-E em `TestSingleChainRSAAdversaryStillAuthenticates` -- nenhum dos dois
-e "extra", os dois sao literalmente pedidos no mesmo item). Nao ha
-teste de contraste sobrando; a contagem de 18 bate com 15 itens do
-pedido original porque 3 deles (cadeias PQ nao confiaveis do servidor
-E do cliente; o par do adversario quantico; round trip E delimitador
-malformado) pediam 2 cenarios cada, implementados como 2 funcoes
-separadas por clareza, nunca reduzindo nada.
+**3. Contagem exata, os 23 testes de `dual_test.go`, nome por nome,
+reconciliando "15 itens" com "17 obrigatorios".** Correcao a uma
+imprecisao do relatorio anterior: eu disse "17 obrigatorios + 1 de
+contraste", o que estava errado. Reconferindo o pedido original
+ponto a ponto, contando por ponto-e-virgula (que e como o proprio
+pedido foi escrito), ha exatamente **15 itens de nivel superior**, nao
+17. A palavra "17" usada antes (pelo Luciano, ao liberar a T3, e por
+mim, ao aceitar o rotulo sem reconferir) nao bate com uma contagem
+literal dos ponto-e-virgulas -- e essa e a reconciliacao pedida:
+
+De 15 itens, **3 deles nomeiam explicitamente DOIS cenarios cada um**,
+com a palavra "e" conectando os dois dentro do mesmo item (nao dois
+itens separados por ponto-e-virgula):
+- item 6: "cadeia PQ de CA nao confiavel **do servidor e do cliente**"
+- item 12: "ADVERSARIO QUANTICO que tem a chave RSA... **e o mesmo
+  adversario contra RSA cadeia unica**"
+- item 14: "**round trip e delimitadores malformados** da mensagem
+  Certificate"
+
+15 itens + 3 cenarios extras (um por item duplicado) = **18 cenarios
+concretos**, nem 15 nem 17 -- e os 18 testes da T3 cobrem esses 18
+cenarios exatamente, um a um, tabela abaixo. Nenhum teste de contraste
+sobrando: o que o relatorio anterior chamou de "1 de contraste"
+(`TestSingleChainRSAAdversaryStillAuthenticates`) e na verdade a
+SEGUNDA metade explicitamente pedida do item 12, nao um extra. Se "17"
+era para contar so 2 dos 3 itens duplicados como par (e tratar o
+terceiro como um unico teste combinado), a tabela abaixo deixa claro
+qual interpretacao foi efetivamente implementada (os 3 como pares,
+18 no total) para o Luciano confirmar ou corrigir.
 
 | # | Item do pedido original | Teste(s) |
 |---|---|---|
@@ -631,15 +646,18 @@ Corrigido usando uma lista de algoritmos classica comum apenas para a
 SELECAO do certificado, nao para a escolha do esquema de assinatura
 (que continua sendo o codigo dual).
 
-**Resultado final, suite completa de `crypto/tls` (original + os 23
-testes do AND), pipeline completo e endurecido (clone -> verifica
+**Resultado desta rodada, suite completa de `crypto/tls` (original +
+os 23 testes do AND), pipeline completo e endurecido (clone -> verifica
 commit -> `git apply` com checagem de contagem de arquivos ->
 `make.bash` -> teste):** `ok crypto/tls 69.728s`. No nivel dos testes
 NOMEADOS: **237 PASS, 0 FAIL, 0 SKIP** (214 originais + 23 do AND).
 Contando tambem as subcelulas internas do `TestBogoSuite`: 2.991 PASS,
 0 FAIL, 2.278 SKIP (todos internos aquela matriz de conformidade,
-detalhado no item 2). SHA-256 do patch final:
-`093338402cce147920a4f63d2a2b8947f0fc8f275bae36f33a0dd8badeaad572`.
+detalhado no item 2). SHA-256 do patch desta rodada:
+`093338402cce147920a4f63d2a2b8947f0fc8f275bae36f33a0dd8badeaad572`
+-- **superado pela Decisao 8** (o teste de HelloRetryRequest foi
+reforcado e corrigido la, mudando `dual_test.go` e portanto o SHA-256
+do patch; os numeros finais, validos, estao na Decisao 8).
 
 Artefatos atualizados: `thesis/results/v9/toolchain/Dockerfile`,
 `README.md`, `build_metadata.json`, `crypto_tls_test_summary.txt`,
@@ -647,5 +665,119 @@ Artefatos atualizados: `thesis/results/v9/toolchain/Dockerfile`,
 atualizado).
 
 Nenhuma acao em AWS. Nenhuma tag nova.
+
+## 8. Resposta a 3 pontos pedidos apos o relatorio da rodada anterior: reconciliacao 15/17/18 (ver Decisao 7, item 3, ja corrigido acima), HelloRetryRequest com grupo inicial e final explicitos, e registro da restricao de grupo por perfil para a T5/T6
+
+**1. Contagem 15 vs. 17 vs. 18.** Ver a correcao feita diretamente na
+Decisao 7, item 3 (reescrita, nao duplicada aqui): contando por
+ponto-e-virgula, o pedido original tem 15 itens de nivel superior, dos
+quais 3 (itens 6, 12 e 14) nomeiam DOIS cenarios cada um dentro do
+mesmo item, totalizando **18 cenarios concretos** -- nao 15, nem 17.
+Os 18 testes da T3 cobrem esses 18 cenarios um a um (tabela na Decisao
+7). Se "17" pretendia tratar um dos tres itens duplicados como um
+unico teste combinado, preciso que o Luciano diga qual -- como
+implementado, os tres foram tratados como pares, dando 18.
+
+**2. HelloRetryRequest -- grupo inicial e grupo final, explicitos.**
+`TestDualHandshakeAcrossHelloRetryRequest` (`dual_test.go`) ja forcava
+e verificava a retomada corretamente na rodada anterior (o teste
+passou), mas nao deixava os dois grupos visiveis no proprio log do
+teste -- corrigido. Agora o teste declara os dois papeis por nome
+(`initialShareGroup`, `retryTargetGroup`) e registra explicitamente via
+`t.Logf`:
+
+- **Primeiro ClientHello**: key share enviado para `X25519MLKEM768`
+  (esse grupo ordena primeiro em `curvePreferenceOrder()`, entao recebe
+  o key share inicial do cliente, mesmo estando listado depois de
+  `SecP384r1MLKEM1024` em `Config.CurvePreferences`).
+- **HelloRetryRequest**: o servidor (que so aceita `SecP384r1MLKEM1024`)
+  nao pode usar esse key share inicial, e responde pedindo
+  `SecP384r1MLKEM1024` especificamente -- grupo que o cliente ja tinha
+  declarado suportar, so sem key share inicial.
+- **Grupo final negociado**: `SecP384r1MLKEM1024`, confirmado via
+  `ConnectionState.CurveID` dos DOIS lados (cliente e servidor,
+  `cs.CurveID`/`ss.CurveID`), nao so de um lado -- e via
+  `ConnectionState.HelloRetryRequest=true` dos dois lados tambem,
+  confirmando que a retomada de fato aconteceu (nao um negocio direto
+  por coincidencia).
+
+**Achado ao reforcar o teste, nao um bug do patch:** a primeira versao
+reforcada checava `DualAuthenticated` dos DOIS lados, mas o teste
+original so configurava a identidade dual do SERVIDOR (sem mTLS) --
+e `ss.DualAuthenticated` (servidor) corretamente deu `false`, porque o
+servidor nunca pediu nem verificou certificado de cliente nenhum, dual
+ou nao. Nao e um bug: `DualAuthenticated` descreve se ESTE lado
+verificou o PAR do OUTRO lado, nao uma bandeira simetrica da conexao
+inteira. Corrigido elevando o teste para mTLS mutuo completo (como
+`TestDualStrictFullMTLS`), onde as duas pontas de fato se autenticam
+uma a outra -- aí sim os dois lados devem reportar `true`, e reportam.
+
+Resultado real, suite completa apos essa mudanca: `ok crypto/tls`,
+`TestDualHandshakeAcrossHelloRetryRequest` passa (mTLS mutuo, retomada
+de grupo incluida), log real da rodada:
+`first ClientHello key share: X25519MLKEM768; server's only accepted
+group (HelloRetryRequest target): SecP384r1MLKEM1024; negotiated group
+after retry: client=SecP384r1MLKEM1024 server=SecP384r1MLKEM1024`.
+
+**3. Restricao de grupo de KEX por perfil, registrada para a T5/T6
+(nao implementada agora -- e sobre o codigo de campanha real, fora do
+escopo da T3/do fork do `crypto/tls`).** Confirmado em `curvePreferences()`
+(`common.go`, Decisao 7 item 5b): a ordem dada em `Config.CurvePreferences`
+e ignorada; so quais grupos sao PERMITIDOS importa, a prioridade e
+sempre a ordem fixa global de `curvePreferenceOrder()`. Consequencia
+direta para a campanha real (T5/T6, nao para os testes unitarios deste
+patch): **cada perfil precisa restringir `CurvePreferences` a
+EXATAMENTE um grupo**, sem extras, ou o grupo realmente negociado pode
+nao ser o que o perfil pretende medir:
+- Classico: so `CurveP384`.
+- PQC: so `MLKEM1024`.
+- Hibrido e Hibrido-AND: so `SecP384r1MLKEM1024`.
+
+Isso ja e exatamente o que `mock_mtls/main.go` faz hoje na v8
+(confirmado na T1, Decisao 1 desta pasta: `serverCurvePreferences`
+fixo em uma unica entrada por perfil, sem listas multiplas) -- a
+exigencia aqui e NAO regredir isso na T5/T6 ao integrar o AND (nunca
+introduzir `X25519MLKEM768` ou qualquer outro grupo extra nas
+configuracoes REAIS do cliente/gateway, mesmo que um teste unitario
+isolado, como o do HelloRetryRequest acima, precise de um grupo extra
+De proposito so para forcar a retomada em laboratorio).
+
+**Registrado como requisito obrigatorio da T5/T6 (implementacao
+pendente, nao desta Decisao):** toda execucao medida deve ler
+`ConnectionState.CurveID` logo depois do handshake e **falhar a
+execucao explicitamente** (nao so logar um aviso) se o grupo
+negociado nao for exatamente o esperado para aquele perfil -- a mesma
+logica de "falha explicita, nunca passa silenciosamente" ja aplicada
+ao proprio `git apply` do pipeline (Decisao 7, item 4), agora extendida
+ao grupo de KEX de cada conexao real medida.
+
+**Achado ao reforcar o teste de HelloRetryRequest com os dois lados
+checados (nao so o cliente): nao e um bug do patch.** A primeira
+versao do reforco (item 2 acima) checava `DualAuthenticated` dos dois
+lados, mas o teste original so configurava a identidade dual do
+SERVIDOR, sem mTLS -- `ss.DualAuthenticated` (servidor) corretamente
+deu `false`, porque o servidor nunca pediu nem verificou certificado
+de cliente nenhum. `DualAuthenticated` descreve se ESTE lado verificou
+o PAR do OUTRO lado, nao uma bandeira simetrica da conexao inteira --
+comportamento correto, nao um bug. Corrigido elevando o teste para
+mTLS mutuo completo (como `TestDualStrictFullMTLS`), onde as duas
+pontas de fato se autenticam uma a outra; ai sim os dois lados
+reportam `true`, confirmado.
+
+**Resultado final desta rodada de ajustes, suite completa de
+`crypto/tls` (original + os 23 testes do AND), pipeline completo e
+endurecido:** `ok crypto/tls 58.248s`. No nivel dos testes NOMEADOS:
+**237 PASS, 0 FAIL, 0 SKIP** (214 originais + 23 do AND, incluindo o
+`TestDualHandshakeAcrossHelloRetryRequest` agora em mTLS mutuo).
+Contando tambem as subcelulas do `TestBogoSuite`: 2.991 PASS, 0 FAIL,
+2.278 SKIP (mesma explicacao do item 2). SHA-256 final do patch:
+`65f7ef4e50f5fd6025e9ab048cb4dd360a1455b3708702d648a93bd5c510cb2c`
+(`dual.go` 321 linhas, 6 arquivos existentes 543 linhas fora de
+`dual.go`/testes -- inalterado desta vez --, `dual_test.go` 903
+linhas/23 testes, `tls_test.go` +5).
+
+Artefatos atualizados: `thesis/results/v9/toolchain/patches/and.patch`
+(SHA-256 final acima), `build_metadata.json`, `crypto_tls_test_summary.txt`,
+`README.md`.
 
 Nenhuma acao em AWS. Nenhuma tag nova.

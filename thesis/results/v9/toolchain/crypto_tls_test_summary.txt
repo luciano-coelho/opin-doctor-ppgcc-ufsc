@@ -3,39 +3,38 @@ TOP-LEVEL TOTAL:
 0
 0
 
-INCLUDING ALL SUBTESTS (e.g. TestBogoSuite internal matrix):
+INCLUDING ALL SUBTESTS:
 2991
 0
 2278
 
-AND-SPECIFIC (23 tests, included in totals above):
---- PASS: TestDualStrictFullMTLS (2.15s)
---- PASS: TestDualServerOnly (2.11s)
---- PASS: TestDualStrictClientVsLegacyServer (0.08s)
---- PASS: TestDualStrictServerVsLegacyClient (0.08s)
---- PASS: TestDualClientMissingPQChain (0.12s)
+AND-SPECIFIC (23 tests):
+--- PASS: TestDualStrictFullMTLS (2.09s)
+--- PASS: TestDualServerOnly (2.06s)
+--- PASS: TestDualStrictClientVsLegacyServer (0.07s)
+--- PASS: TestDualStrictServerVsLegacyClient (0.11s)
+--- PASS: TestDualClientMissingPQChain (0.13s)
 --- PASS: TestDualServerPQChainUntrustedByClient (0.09s)
---- PASS: TestDualClientPQChainUntrustedByServer (0.20s)
---- PASS: TestDualClassicalChainUntrusted (0.12s)
---- PASS: TestDualWrongHostnameInPQChain (0.19s)
---- PASS: TestDualClientDivergentIdentities (0.12s)
---- PASS: TestDualTamperedSecondSignature (0.03s)
---- PASS: TestDualTamperedFirstSignature (0.03s)
---- PASS: TestDualQuantumAdversaryHoldingOnlyRSAKey (0.09s)
---- PASS: TestSingleChainRSAAdversaryStillAuthenticates (2.17s)
---- PASS: TestDualNonStrictAllowsDowngrade (2.05s)
---- PASS: TestDualCertificateMessageRoundTrip (0.08s)
---- PASS: TestDualCertificateMessageMalformedDelimiter (0.07s)
---- PASS: TestDualWireSizeMeasurement (0.03s)
---- PASS: TestDualImpostorSingleChainVsStrict (0.06s)
+--- PASS: TestDualClientPQChainUntrustedByServer (0.15s)
+--- PASS: TestDualClassicalChainUntrusted (0.05s)
+--- PASS: TestDualWrongHostnameInPQChain (0.06s)
+--- PASS: TestDualClientDivergentIdentities (0.13s)
+--- PASS: TestDualTamperedSecondSignature (0.02s)
+--- PASS: TestDualTamperedFirstSignature (0.11s)
+--- PASS: TestDualQuantumAdversaryHoldingOnlyRSAKey (0.17s)
+--- PASS: TestSingleChainRSAAdversaryStillAuthenticates (2.16s)
+--- PASS: TestDualNonStrictAllowsDowngrade (2.03s)
+--- PASS: TestDualCertificateMessageRoundTrip (0.07s)
+--- PASS: TestDualCertificateMessageMalformedDelimiter (0.04s)
+--- PASS: TestDualWireSizeMeasurement (0.07s)
+--- PASS: TestDualImpostorSingleChainVsStrict (0.09s)
 --- PASS: TestDualImpostorSingleChainVsNonStrict (2.13s)
---- PASS: TestDualStrictModeDisablesSessionTickets (4.07s)
+--- PASS: TestDualStrictModeDisablesSessionTickets (4.05s)
 --- PASS: TestDualResumedSessionDoesNotCarryDualAuthentication (4.07s)
---- PASS: TestDualHandshakeAcrossHelloRetryRequest (2.13s)
+--- PASS: TestDualHandshakeAcrossHelloRetryRequest (2.09s)
 
-Internet-relevant named tests, explicitly checked:
---- PASS: TestVerifyHostname (0.34s)
---- PASS: TestRealResumption (1.07s)
---- PASS: TestBogoSuite (38.69s)
+=== RUN   TestDualHandshakeAcrossHelloRetryRequest
+    dual_test.go:892: first ClientHello key share: X25519MLKEM768; server's only accepted group (HelloRetryRequest target): SecP384r1MLKEM1024; negotiated group after retry: client=SecP384r1MLKEM1024 server=SecP384r1MLKEM1024
+--- PASS: TestDualHandshakeAcrossHelloRetryRequest (2.09s)
 
-ok  	crypto/tls	69.728s
+ok  	crypto/tls	58.248s

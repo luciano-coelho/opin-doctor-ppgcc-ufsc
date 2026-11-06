@@ -71,8 +71,8 @@ linhas) + mudancas em 6 arquivos existentes (`common.go`, `conn.go`,
 `handshake_client.go`, `handshake_client_tls13.go`,
 `handshake_messages.go`, `handshake_server_tls13.go`, 543 linhas no
 total fora de `dual.go`/testes, mais um registro de 5 linhas em
-`tls_test.go`) + `dual_test.go` (879 linhas, 23 testes). SHA-256 do
-patch: `093338402cce147920a4f63d2a2b8947f0fc8f275bae36f33a0dd8badeaad572`.
+`tls_test.go`) + `dual_test.go` (903 linhas, 23 testes). SHA-256 do
+patch: `65f7ef4e50f5fd6025e9ab048cb4dd360a1455b3708702d648a93bd5c510cb2c`.
 
 **Bug real encontrado e corrigido no proprio Dockerfile, antes do
 primeiro resultado:** a primeira versao deste passo fazia `cd src &&
@@ -93,7 +93,7 @@ passar.
 testes do AND), contra o toolchain go1.27.3 reconstruido a partir do
 patch real, via o pipeline completo (clone -> verifica commit ->
 `git apply` endurecido -> `make.bash` -> teste):** `ok crypto/tls
-69.728s` -- **237 PASS, 0 FAIL, 0 SKIP** no nivel dos testes
+58.248s` -- **237 PASS, 0 FAIL, 0 SKIP** no nivel dos testes
 nomeados (214 da suite original, inalterados, + 23 do AND). Contando
 tambem as subcelulas internas de `TestBogoSuite` (a suite de
 conformidade da BoringSSL, embutida e offline): 2.991 PASS, 0 FAIL,
