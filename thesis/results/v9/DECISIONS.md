@@ -341,7 +341,7 @@ classico".
 **Teste do impostor (evidencia de por que o estrito e obrigatorio) --
 resultado na Decisao 6 (T3).**
 
-## 6. T3, patch do AND em contêiner: implementado do zero conforme a especificacao, 18 testes (17 obrigatorios + 1 de contraste), suite completa de crypto/tls (232 PASS, 0 FAIL, 0 SKIP), aplicado de verdade via git apply no pipeline da T2
+## 6. T3, patch do AND em contêiner: implementado do zero conforme a especificacao, 18 testes (15 itens do pedido original, 3 com dois cenarios cada, 18 cenarios no total), suite completa de crypto/tls (232 PASS, 0 FAIL, 0 SKIP), aplicado de verdade via git apply no pipeline da T2
 
 **O que foi implementado**, em `thesis/results/v9/toolchain/patches/and.patch` (SHA-256
 `cc61d6dec9c774b358d48ff528e8d46bd178ccb71d78e01fbd22bef324fffb95`):
@@ -372,10 +372,12 @@ resultado na Decisao 6 (T3).**
   com o codigo dual, verificacao do par do cliente). `tls_test.go` (+5,
   registro do campo `Dual` em `TestCloneNonFuncFields`, exigido pelo
   proprio teste existente).
-- `dual_test.go` (718 linhas, novo): 18 testes -- os 17 obrigatorios do
-  pedido original mais `TestSingleChainRSAAdversaryStillAuthenticates`
-  (o contraste direto do teste do impostor, ver abaixo). Nomes exatos
-  dos 3 pedidos pelo Luciano, usados literalmente:
+- `dual_test.go` (718 linhas, novo): 18 testes -- os 15 itens do
+  pedido original (contando por ponto e virgula), 3 deles com dois
+  cenarios cada, dando os 18 cenarios cobertos (ver Decisao 7, item 3,
+  e a confirmacao do Luciano na Decisao 8: "15 itens, 18 cenarios" e a
+  contagem correta, "17" descartado). Nomes exatos dos 3 pedidos pelo
+  Luciano, usados literalmente:
   `TestDualQuantumAdversaryHoldingOnlyRSAKey`,
   `TestSingleChainRSAAdversaryStillAuthenticates`,
   `TestDualNonStrictAllowsDowngrade`.
@@ -779,5 +781,10 @@ linhas/23 testes, `tls_test.go` +5).
 Artefatos atualizados: `thesis/results/v9/toolchain/patches/and.patch`
 (SHA-256 final acima), `build_metadata.json`, `crypto_tls_test_summary.txt`,
 `README.md`.
+
+**Confirmado pelo Luciano: "15 itens, 18 cenarios" e a contagem
+correta e definitiva.** "17" era uma contagem dele mesmo, imprecisa,
+agora descartada -- usar "15 itens, 18 cenarios" em todo relatorio e
+documento futuro sobre a T3, nunca mais "17".
 
 Nenhuma acao em AWS. Nenhuma tag nova.
