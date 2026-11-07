@@ -2726,8 +2726,10 @@ reais da v8, incluindo `sa-east-1/L325` a mais distante, x N=5,
 ~1-1,5h estimado) SEPARADO da campanha oficial (960 execucoes, 4
 perfis x **8 rotas reais da v8** x N=30 -- "960" confirmado exato,
 "6 rotas" era um erro meu, corrigido); fator de tamanho corrigido
-(1,4x/+11%); 5 criterios de ir/nao-ir com limiar numerico (Decisao
-21, ponto 4) -- execucao em si **PENDENTE**, depende de AWS.
+(1,4x/+11%); **7 criterios** de ir/nao-ir com limiar numerico (5
+originais + instrumentacao completa + sanidade de latencia, Decisao
+21, ponto 4, revisado nesta rodada) e politica de emenda pos-tag
+registrada -- execucao em si **PENDENTE**, depende de AWS.
 
 **(h)** Checklist de equivalencia -- **mantido**, mais as entradas das
 Decisoes 17-19 (opin_flow.py editado aditivamente; nenhum carve-out de
@@ -2754,35 +2756,64 @@ primeiro decidia o resultado), que fazia at[e] estrito-contra-estrito
 fazendo o servidor ESCREVER um byte de confirmacao em vez de ler --
 sem corrida, resultado identico em 3 rodadas repetidas.
 
-| Cliente | Servidor | Resultado | Motivo | Caminho de autenticacao | DualAuthenticated |
-|---|---|---|---|---|---|
-| Classico | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
-| Classico | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
-| Classico | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
-| Classico | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- |
-| Classico | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
-| PQC | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
-| PQC | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
-| PQC | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
-| PQC | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- |
-| PQC | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
-| Hibrido-v8 | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
-| Hibrido-v8 | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
-| Hibrido-v8 | Hibrido-v8 | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
-| Hibrido-v8 | Hibrido-AND estrito | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS, servidor nao ve oferta de Dual | -- | -- |
-| Hibrido-v8 | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
-| Hibrido-AND estrito | Classico | FALHA | `handshake failure` -- servidor sem Dual, cliente estrito exige | -- | -- |
-| Hibrido-AND estrito | PQC | FALHA | `handshake failure` | -- | -- |
-| Hibrido-AND estrito | Hibrido-v8 | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS | -- | -- |
-| Hibrido-AND estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
-| Hibrido-AND estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
-| Hibrido-AND nao-estrito | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
-| Hibrido-AND nao-estrito | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
-| Hibrido-AND nao-estrito | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
-| Hibrido-AND nao-estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
-| Hibrido-AND nao-estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
-| **RSA-unico (impostor)** | **Hibrido-AND estrito** | **FALHA** | `handshake failure` -- servidor exige Dual, impostor nao oferece | -- | -- |
-| **RSA-unico (impostor)** | **Hibrido-AND nao-estrito** | **SUCESSO** | grupo negociado, mas SEM Dual | **RSA (so classica)** | **false -- downgrade confirmado de novo, agora tambem sob trust compartilhado** |
+| Cliente | Servidor | Resultado | Motivo | Auth servidor->cliente | Auth cliente->servidor | DualAuthenticated | Protecao AND efetiva |
+|---|---|---|---|---|---|---|---|
+| Classico | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | RSA | false | nao |
+| Classico | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | RSA | false | nao |
+| Classico | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- | -- | -- |
+| Classico | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- | -- | -- |
+| Classico | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024, Dual nao usado | RSA | RSA | false | nao |
+| PQC | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | ML-DSA | false | nao |
+| PQC | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | ML-DSA | false | nao |
+| PQC | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- | -- | -- |
+| PQC | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- | -- | -- |
+| PQC | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024, Dual nao usado | RSA | ML-DSA | false | nao |
+| Hibrido-v8 | Classico | SUCESSO | grupo=SecP384r1MLKEM1024; gate X.509 presente mas NAO verificado (Classico nao tem VerifyPeerCertificate) | RSA | RSA+altML-DSA (X.509, nao verificado aqui) | false | nao |
+| Hibrido-v8 | PQC | SUCESSO | idem, PQC tambem nao verifica o gate | ML-DSA | RSA+altML-DSA (X.509, nao verificado aqui) | false | nao |
+| Hibrido-v8 | Hibrido-v8 | SUCESSO | gate X.509 VERIFICADO (servidor Hibrido-v8 sempre verifica) | RSA+altML-DSA (X.509, nao verificado pelo cliente -- ver nota) | RSA+altML-DSA (X.509, verificado) | false | nao |
+| Hibrido-v8 | Hibrido-AND estrito | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS, servidor nao ve oferta de Dual | -- | -- | -- | -- |
+| Hibrido-v8 | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024, Dual nao usado, gate X.509 NAO verificado (esse servidor nao tem VerifyPeerCertificate) | RSA | RSA+altML-DSA (X.509, nao verificado aqui) | false | nao |
+| Hibrido-AND estrito | Classico | FALHA | `handshake failure` -- servidor sem Dual, cliente estrito exige | -- | -- | -- | -- |
+| Hibrido-AND estrito | PQC | FALHA | `handshake failure` | -- | -- | -- | -- |
+| Hibrido-AND estrito | Hibrido-v8 | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS | -- | -- | -- | -- |
+| Hibrido-AND estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **dual (RSA+ML-DSA)** | **true** | **SIM** |
+| Hibrido-AND estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **dual (RSA+ML-DSA)** | **true** | **SIM** |
+| Hibrido-AND nao-estrito | Classico | SUCESSO | grupo=SecP384r1MLKEM1024, Dual nao usado (peer sem Dual) | RSA | RSA | false | nao |
+| Hibrido-AND nao-estrito | PQC | SUCESSO | grupo=SecP384r1MLKEM1024, Dual nao usado | ML-DSA | RSA | false | nao |
+| Hibrido-AND nao-estrito | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue (certificado classico puro do AND nao satisfaz o gate X.509 do Hibrido-v8) | -- | -- | -- | -- |
+| Hibrido-AND nao-estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **dual (RSA+ML-DSA)** | **true** | **SIM** |
+| Hibrido-AND nao-estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas (os dois ofereceram, nenhum exigiu) | **dual (RSA+ML-DSA)** | **dual (RSA+ML-DSA)** | **true** | **SIM** |
+| **RSA-unico (impostor)** | **Hibrido-AND estrito** | **FALHA** | `handshake failure` -- servidor exige Dual, impostor nao oferece | -- | -- | -- | -- |
+| **RSA-unico (impostor)** | **Hibrido-AND nao-estrito** | **SUCESSO** | grupo negociado, mas SEM Dual | RSA | **RSA (so classica)** | **false** | **NAO -- downgrade confirmado de novo, sob trust compartilhado** |
+
+**Registros pedidos explicitamente:**
+
+1. **Todos os clientes desta configuracao ofereceram todos os esquemas
+   de assinatura, inclusive ML-DSA-65** -- nenhum config desta matriz
+   (nem antes, nem agora) seta `Config.SignatureSchemes`
+   explicitamente, em nenhum modo; o Go desta toolchain anuncia a
+   lista PADRAO completa no `signature_algorithms` do ClientHello, que
+   ja inclui ML-DSA-65 nativamente (confirmado indiretamente: os
+   perfis PQC/Hibrido-v8/Hibrido-AND so funcionam porque essa
+   assinatura esta no padrao, nunca precisou de um opt-in explicito em
+   nenhum dos dois harnesses). O esquema Dual (`0xFE65`) e o UNICO que
+   SO aparece quando `Config.Dual` esta de fato configurado -- esse
+   sim e um opt-in, nao o padrao.
+2. **O gate X.509 do servidor Hibrido-v8 recusa qualquer cliente sem
+   `AltSignatureValue`, SEMPRE, independente de quem for o cliente** --
+   confirmado nas 2 linhas `Classico -> Hibrido-v8` e `PQC ->
+   Hibrido-v8`, ambas `FALHA`, mesmo erro exato (`bad certificate --
+   falta AltSignatureValue`), apesar de Classico e PQC serem
+   identidades completamente diferentes (RSA vs ML-DSA puro) -- o gate
+   nao distingue QUEM esta faltando a extensao, so que ela falta.
+   **Achado adicional, nao pedido mas relevante:** esse gate e
+   ASSIMETRICO -- so o SERVIDOR Hibrido-v8 verifica (via
+   `VerifyPeerCertificate`); nenhum CLIENTE desta matriz, incluindo o
+   proprio Hibrido-v8 como cliente, verifica a assinatura alternativa
+   do lado servidor. Um servidor Hibrido-v8 "falso" (RSA valido, sem
+   AltSignatureValue) enganaria um cliente Hibrido-v8 sem ser
+   detectado -- registrado aqui, nao corrigido (fora do pedido desta
+   rodada).
 
 **Achado positivo da SAD §3.4 (clientes classicos e migrados SE
 COMUNICAM, quando a configuracao permite):** Classico<->PQC sucede nos
@@ -2831,8 +2862,10 @@ que isso e uma ESCOLHA DE DESIGN, nao uma garantia estrutural: se um
 dia o deploy real passar a usar um `-client-dns` diferente por
 instancia, essa tolerancia precisaria ser revista.
 
-**4. Os 5 criterios de ir/nao-ir do piloto, com limiar numerico
-explicito (sem isso, nenhum e um criterio, so uma intencao):**
+**4. Os 7 criterios de ir/nao-ir do piloto (5 originais + 2 novos
+pedidos nesta rodada), com limiar numerico explicito (sem isso,
+nenhum e um criterio, so uma intencao). QUALQUER falha de QUALQUER um
+dos 7 bloqueia a autorizacao da campanha de 960:**
 
 | # | Criterio | Limiar numerico |
 |---|---|---|
@@ -2840,7 +2873,18 @@ explicito (sem isso, nenhum e um criterio, so uma intencao):**
 | 2 | initcwnd real confirmado | **>= 10 segmentos** (o que a Decisao 14 assumiu sem medir); se menor, a analise de RTT extra precisa ser refeita antes de autorizar a campanha |
 | 3 | Zero erros na rota mais distante | **0 erros em 20/20 execucoes** (4 perfis x N=5) na rota `sa-east-1/L325` especificamente |
 | 4 | Contagens batem exatas sob rede real | **44 chamadas HTTP, 6 conexoes mTLS client-facing, 28 JWTs, 4 /jwks, 4 CA -- exatos (0 de tolerancia) em 60/60 execucoes** |
-| 5 | Zero erros gerais | **0 erros em 60/60 execucoes combinadas** -- qualquer erro bloqueia a autorizacao das 960 execucoes da campanha, exige diagnostico e correcao primeiro |
+| 5 | Zero erros gerais | **0 erros em 60/60 execucoes combinadas** |
+| 6 | Instrumentacao completa, nos 60/60 | **keylog + captura + tamanhos por mensagem extraidos com sucesso em 100% das 60 execucoes** (nao so nas 12 capturas do criterio 1 -- aqui e toda execucao do piloto); **asserções de `ConnectionState.CurveID` (grupo esperado do perfil) e `DualAuthenticated` (Hibrido-AND) passando em 60/60, 0 falhas** |
+| 7 | Sanidade de latencia por rota | **RTT medido de cada uma das 3 rotas do piloto dentro de ±10% do nominal** (ex.: `sa-east-1/L325` nominal 325ms -> aceitavel 292,5-357,5ms); uma rota fora da faixa invalida as medidas DAQUELA rota especificamente, nao as outras |
+
+**Emenda de criterio, depois da tag `v9-prereg`: exige decisao nova,
+datada, com motivo -- nunca edicao do texto original.** Qualquer
+mudanca num dos 7 criterios acima (limiar, metodo, rota, N) DEPOIS que
+a tag existir precisa de uma nova entrada numerada neste mesmo
+arquivo (`DECISIONS.md`), com data e motivo explicitos, deixando o
+texto original dos 7 criterios intacto, visivel, nunca sobrescrito --
+o historico de QUAL criterio valia QUANDO precisa ficar rastreavel,
+mesmo que um criterio seja revisto depois.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
