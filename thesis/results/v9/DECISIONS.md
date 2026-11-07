@@ -5263,3 +5263,75 @@ depois de "agora - 1h").
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 44. REVISAO INDEPENDENTE, SECAO F -- limitacao do carve-out SNI matls-api.local declarada explicitamente (confirmado no codigo: `Dual = nil`); nome do usuario IAM removido do DECISIONS.md (nota datada); nenhum outro identificador de conta encontrado nos arquivos versionados da v9
+
+**1. CARVE-OUT SNI `matls-api.local` -- LIMITACAO declarada
+explicitamente, confirmada DIRETO no codigo, nao por argumento.**
+
+`gateway/business_server.go`, `attachInternalCallerCarveOut` (linha
+146-203): quando o ClientHello chega com SNI `matls-api.local` (a
+chamada reentrante AS->RS que usa certificados REAIS de producao,
+nao os 4 perfis da v9), a config que o gateway usa pra essa conexao
+tem, explicitamente:
+```go
+internalCfg.Dual = nil // the internal caller never presents a dual cert
+```
+**Isso confirma, no proprio codigo, a limitacao que a revisao pediu
+pra declarar: a alegacao "o gateway so aceita pares de certificado
+duplos" (o mecanismo AND, Decisao 6/19) VALE SO PARA O SNI PRINCIPAL
+(`mtls`) -- NUNCA pro SNI interno `matls-api.local`, que usa uma
+config SEM Dual, aceitando um certificado classico unico (o real
+`op.crt`/`op_hybrid.crt` de producao), em QUALQUER perfil, incluindo
+sob Hibrido-AND.** Isso e uma decisao de design deliberada e
+JUSTIFICADA (o chamador interno nunca fez parte do mecanismo AND
+especifico da v9 -- Decisao 17 ja documentou isso no contexto do
+erro "ML-DSA-65 alt signature verification failed"), nao um bug --
+mas e uma condicao que precisa estar EXPLICITA em qualquer lugar que
+descreva o mecanismo AND como universal, pra nao sugerir uma garantia
+de seguranca mais ampla do que a que o codigo de fato oferece.
+**Registrado aqui como a declaracao explicita pedida; nenhum lugar
+anterior deste `DECISIONS.md` foi encontrado afirmando a versao SEM
+essa qualificacao** (buscado por "so aceita"/"pares duplos"/
+"gateway.*AND" -- as 7 conexoes internas por execucao sempre foram
+tratadas, na Decisao 19, como uma categoria PROPRIA e separada das
+client-facing, nunca descritas como cobertas pelo AND) -- mas a
+declaracao fica registrada aqui, explicita e dedicada, pra qualquer
+leitura futura (inclusive da propria tese) nao precisar inferir isso
+so lendo o codigo.
+
+**2. NOME DO USUARIO IAM -- removido do `DECISIONS.md` da v9, nota
+datada, sem reescrever o restante do texto.**
+
+`DECISIONS.md`, bloco de comandos de pre-voo da Decisao 27 (linha
+~3882): a chamada `aws iam list-attached-user-policies --user-name
+<valor literal>` tinha o nome do usuario IAM deste projeto escrito
+por extenso. **Editado agora** pra `<nome do usuario IAM, redigido em
+nota datada -- ver Decisao 44, item F.15>` -- o COMANDO em si (qual
+chamada rodar, pra que) continua documentado identico, so o literal
+do nome foi substituido. Essa e uma edicao pontual de um unico valor,
+nao uma reescrita do raciocinio ou da conclusao daquela decisao.
+
+**Varredura confirmando o escopo -- so essa ocorrencia em todo o
+`thesis/results/v9/`, antes da edicao acima:**
+```
+git grep -n "<nome do usuario IAM>" -- thesis/results/v9
+  -> 1 ocorrencia (a linha editada acima)
+git grep -niE "arn:aws|AKIA[0-9A-Z]{16}|[0-9]{12}" -- thesis/results/v9
+  -> 0 ocorrencias de ARN/chave de acesso/account ID real (a unica
+     linha que casa e prosa descrevendo o PADRAO "arn:aws" buscado
+     por uma varredura anterior, Decisao 27 -- nao um valor real)
+```
+**Nota honesta sobre escopo, nao escondida, sem repetir o valor
+aqui:** o mesmo nome de usuario IAM aparece, extensamente, em tres
+arquivos da v8 (`DECISIONS.md`, `README.md`, dois `variables.tf`) --
+**essa revisao independente foi escopada ao HEAD `23ee2ceb` e aos
+commits da v9** (pedido explicito: "revisão independente do HEAD
+23ee2ceb"), entao esses arquivos da v8 (fechados, de uma sessao
+anterior ja encerrada) **nao foram tocados** -- escrubar esse nome la
+tambem seria reescrever historico de uma
+entrega ja fechada, um escopo bem maior que o pedido aqui, e fica
+como decisao separada do Luciano, nao assumida por conta propria.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
