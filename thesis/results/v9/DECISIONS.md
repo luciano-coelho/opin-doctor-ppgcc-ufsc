@@ -1820,3 +1820,107 @@ conta fechada.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 16. T7, RASCUNHO dos criterios de aceitacao antes do piloto -- para revisao do Luciano, nao executado, nenhuma tag criada
+
+**Status deste rascunho: proposta, nao aprovada.** Nenhum destes
+criterios foi verificado como fechado so por estar listado aqui --
+cada um recebe seu proprio status (FECHADO, com a evidencia que
+fecha; ou PENDENTE, com o que falta). A tag `v9-prereg` so sai depois
+de aprovacao explicita do Luciano sobre este rascunho, e so depois de
+TODOS os criterios abaixo estarem FECHADOS (ou explicitamente
+dispensados por ele).
+
+**(a) Fluxo completo local, com as contagens da v8, zero erros.**
+Criterio: os 4 perfis (Classico, PQC, Hibrido-v8, Hibrido-AND) rodam
+localmente contra o stack real (`mock_as`, `insurance-server-lambdas`,
+`localstack`, `mongo`, sem alteracao), produzindo exatamente 44
+chamadas HTTP, 6 conexoes mTLS, 28 JWTs, 4 buscas de `/jwks`, 4 buscas
+de CA por execucao, confirmado pela instrumentacao da T6 (nao por
+contagem manual), zero erros. **Status: PENDENTE -- e a T6b, liberada
+na mesma rodada deste rascunho, relatada separadamente.**
+
+**(b) As cinco lacunas de validade da v8, uma por uma, com o teste que
+fecha cada uma:**
+
+| # | Lacuna da v8 | Correcao na v9 | Teste que fecha | Status |
+|---|---|---|---|---|
+| 1 | Classico/Hibrido usavam RSA-4096 (atipico; a pratica real e RSA-2048) | Classico/Hibrido-v8 reemitidos em RSA-2048 (T4, Decisao 9/10) | `certs/main.go`'s `validateChain`+tabela de EKU confirma RSA-2048; `bench` (Decisao 14) mede o custo real da nova chave (830us/assinatura) contra o 6,624ms/assinatura RSA-4096 ja documentado na v8 (Decisao 99/`98678` do `v8/DECISIONS.md`) -- ordem de grandeza compativel com a razao de tamanho de chave | **FECHADO** (emissao + custo medido; nenhum teste de regressao formal impedindo reintroducao acidental de RSA-4096) |
+| 2 | Cliente (`tls_kem_proxy`) nunca verificava o servidor (`InsecureSkipVerify: true`) | Proxy da v9 seta `RootCAs` por perfil, sem `InsecureSkipVerify`, nos 4 perfis (Decisao 12) | T5/T6: toda conexao SUCEDEU com o certificado real do gateway -- prova que a verificacao esta presente e nao rejeita o caso correto, mas NAO prova que ela rejeitaria um certificado errado | **PARCIAL -- falta teste negativo** (gateway com certificado nao-confiavel/errado, confirmar que o proxy RECUSA a conexao, nos 4 perfis) |
+| 3 | Servidor (`mock_mtls`) com certificado de cliente OPCIONAL (`tls.VerifyClientCertIfGiven`) | Gateway da v9 usa `tls.RequireAndVerifyClientCert` nos 4 perfis (Decisao 12) | T5/T6: toda conexao com certificado de cliente valido SUCEDEU -- mesma lacuna do item 2, prova o caminho feliz, nao a rejeicao | **PARCIAL -- falta teste negativo** (conexao SEM certificado de cliente, ou com certificado invalido, confirmar que o gateway RECUSA, nos 4 perfis -- o Hibrido-AND ja tem isso coberto pelos 18 cenarios da T3/`dual_test.go`, os outros 3 perfis nao) |
+| 4 | Contador de handshake contaminado pela primeira requisicao HTTP (e, na v8, por tickets -- Decisao 78/79 do `v8/DECISIONS.md`) | Contagem na fronteira exata do `Handshake()`, tickets desligados por padrao (Decisao 13/14) | Validacao cruzada tripla (contador de processo = tshark decifrado = soma bruta do pcap), nos 4 perfis (Decisao 14); overhead de registro consistente (77B/121B) nos 4 perfis (Decisao 15) | **FECHADO** |
+| 5 | Tamanho por mensagem e residuo de tempo nunca medidos/isolados | Tabela por mensagem (Decisao 15) + microbenchmarks de CPU + custo de ticket quantificado (Decisao 14) | Tabela por mensagem cruzada com o total medido, 4 perfis (Decisao 15); custo de ticket e de CPU agora sao numeros, nao incognitas | **PARCIAL -- as pecas existem, a conta do residuo historico da v8 nao foi refeita com elas** (Decisao 15, ultimo paragrafo) |
+
+**(c) CurveID e DualAuthenticated conferidos em toda conexao medida.**
+Criterio: toda execucao da campanha real le `ConnectionState.CurveID`
+e falha explicitamente se nao bater o grupo esperado do perfil; toda
+execucao do Hibrido-AND le `DualAuthenticated` nos dois lados e falha
+explicitamente se `false`. **Status: FECHADO no harness da T5/T6**
+(`gateway/main.go`/`proxy/main.go` fazem isso em toda conexao, ja
+testado nos 4 perfis) -- **PENDENTE de reconfirmar** uma vez que a T6b
+trouxer a camada de negocio de volta (precisa continuar valendo com
+`opin_flow.py`/o proxy em modo relay de verdade, nao so no harness
+isolado).
+
+**(d) Matriz de interoperabilidade executada.** A Decisao 4 desta
+mesma pasta (`DECISIONS.md`) ja registrou a lacuna (divergencia de
+pilha TLS 1.3-only, matriz de interoperabilidade nao coberta) como
+pendente desde o T1/T2. **Status: PENDENTE, nao iniciado nesta
+rodada** -- precisa de definicao de escopo (quais pares
+cliente/servidor externos, se algum, entram na matriz) antes de poder
+ser estimado ou executado.
+
+**(e) Piloto na AWS reproduz os tamanhos por mensagem medidos
+localmente (tolerancia a definir) e o initcwnd real das instancias.**
+Criterio: a primeira coleta real na AWS (fora desta Fase 1) mede os
+mesmos tamanhos por mensagem da Decisao 15 (dentro de uma tolerancia
+que o Luciano define -- sugestao: 0B de tolerancia nos tamanhos de
+mensagem em si, que sao deterministicos pelo algoritmo/certificado,
+nao pela rede; tolerancia so no tempo, nao no tamanho) e confirma via
+`ss --info`/`ip route`/equivalente qual `initcwnd` as instancias reais
+usam, fechando a suposicao da Decisao 14 (initcwnd=10 assumido, nao
+medido). **Status: PENDENTE -- depende de AWS, fora do escopo desta
+Fase 1 por definicao.**
+
+**(f) Fechamento do residuo: pelo menos 90% da diferenca de latencia
+entre perfis atribuida a componentes medidos, o restante explicado ou
+declarado.** Criterio: para cada par de perfis (ex.: PQC-menos-
+Classico), a soma dos componentes ja medidos (KEX, assinatura/
+verificacao, bytes extras x RTT, ticket se ligado) deve cobrir >=90%
+da diferenca de tempo total observada entre os dois perfis; o residuo
+remanescente (<=10%) precisa ser nomeado (mesmo que nao eliminado) ou
+declarado explicitamente como nao explicado. **Status: PENDENTE --
+Decisao 14/15 desta rodada entregam os componentes (KEX, CPU, ticket,
+initcwnd) mas a conta de fechamento em si (os 90%) so pode ser feita
+com dados reais de latencia fim-a-fim por perfil, que exigem a T6b
+(fluxo completo) ou o piloto -- nao existe ainda um numero de "latenca
+por perfil" na v9 pra comparar contra.**
+
+**(g) Pilotos desenhados para estressar as rotas distantes.**
+Criterio: o desenho do piloto (regioes AWS, numero de execucoes,
+ordem) inclui deliberadamente os tiers de latencia mais altos (225ms,
+320ms) com repeticoes suficientes para distinguir o custo do
+Hibrido-AND dos outros 3 perfis com significancia estatistica, nao so
+replicar passivamente os tiers ja usados na v7/v8. **Status: PENDENTE
+-- depende do plano de piloto AWS (fora desta Fase 1), mas a Decisao
+14 ja fornece um numero concreto pra calibrar esse desenho: o
+Hibrido-AND soma ~12.177B (servidor) + ~11.902B (cliente) por
+handshake, quase 2x o Hibrido-v8 -- o desenho do piloto deveria
+garantir N suficiente pra essa diferenca ser detectavel no tier mais
+lento tambem, nao so no mais rapido.**
+
+**(h) Checklist de equivalencia com a v8 -- divergencias deliberadas
+listadas explicitamente, nao escondidas:**
+
+| Divergencia deliberada | Decisao que registra |
+|---|---|
+| Classico/Hibrido-v8 em RSA-2048, nao RSA-4096 | Decisao 9/10 (T4), item (b)#1 acima |
+| Tickets de sessao desligados por padrao nos 4 perfis (v7/v8: sempre ligados) | Decisao 13 |
+| Cadeia PQC da v9 de 1 nivel, DN so com CommonName (v8 real: 2 niveis, 3 campos extras de DN) -- tamanhos NAO comparaveis entre v9 e v8, so entre os 4 perfis da v9 | Decisao 11 |
+| Verificacao mutua completa nos 4 perfis (cliente verifica servidor, servidor exige certificado de cliente) -- v7/v8 tinham as duas lacunas (item (b)#2 e #3 acima) | Decisao 12 |
+| Harness da T5/T6 e um fork em `thesis/results/v9/integration/`, nunca os arquivos de producao `mock-service-os/mock_mtls`/`thesis/scripts/tls_kem_proxy` que a v7/v8 usam | Decisao 12 |
+| Contagem de bytes na fronteira exata do `Handshake()`, nao em `ConnState -> StateActive` (v7/v8 mantiveram o limite antigo deliberadamente, por comparabilidade com a v7 -- Decisao 78/79 do `v8/DECISIONS.md`) | Decisao 14 |
+
+**Nenhuma tag criada. Nenhuma acao em AWS. Pare ao fim deste rascunho,
+conforme pedido -- aguardando aprovacao explicita do Luciano antes de
+qualquer `v9-prereg`.**
