@@ -5335,3 +5335,137 @@ como decisao separada do Luciano, nao assumida por conta propria.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 45. Dois pontos pedidos apos o push da revisao independente -- (1) confirmado, direto no modulo real da v8, que NENHUM caminho de autodesligamento libera o EIP (nem `stop`, nem `terminate`), e corrigido no roteiro: autodesligamento passa a exigir teardown completo depois, sempre; (2) confirmado que o fallback por CommonName so dispara quando AMBAS as folhas sao SAN-less, com um teste direto (`TestSameDualIdentitySANFallback`) que prova isso inclusive no caso assimetrico, mais um guard novo no gerador de certificados que falha alto se algum SAN vier vazio -- binarios e toolchain reconstruidos, suite completa verde
+
+**1. EIP e autodesligamento -- CONFIRMADO: nenhum dos dois caminhos
+libera o Elastic IP, nem antes nem depois da divergencia `stop`/
+`terminate` entre v8 e v9. Corrigido no roteiro, nao no mecanismo.**
+
+Lido direto no modulo real
+(`v8/campaign/terraform/modules/campaign_instance/main.tf`, linhas
+92-99, e `templates/safety_timer.sh.tftpl`) -- a propria v8 ja
+documenta isso no seu codigo, nas palavras dela mesma:
+```
+# Renewable safety timer -- Decision 49. [...] This is a safety net,
+# not a teardown substitute: it does not release the Elastic IP and
+# does not replace campaign_down.sh's own verified teardown
+```
+e o proprio script, ao disparar, loga: `"...shutting down (Decision
+49 -- this does not release the Elastic IP, does not substitute for
+campaign_down.sh)"`. **Confirma por escrito, na fonte, exatamente o
+que a Decisao 43 (item E.12) já tinha concluido por inferencia: a
+liberacao do EIP SEMPRE depende da destruicao do recurso
+`aws_eip` em si (`terraform destroy`, ou `release-address` manual) --
+nunca de qualquer efeito colateral de parar ou terminar a
+instancia.** Isso vale TANTO pro `shutdown -h now` real da v8 (que
+resulta em `stop`, por nao setar `instance_initiated_shutdown_behavior`)
+QUANTO pro `terminate` que a v9 decidiu usar (Decisao 23 item 5,
+Decisao 24 item 4) -- a diferenca entre os dois muda SO o destino da
+instancia (parada vs. destruida), nunca o destino do EIP, que e um
+recurso Terraform SEPARADO (`aws_eip`) em ambos os casos.
+
+**Correcao adotada, procedural (nao de automacao nova -- mesma
+escolha de menor privilegio da Decisao 43):** o roteiro passa a tratar
+"o autodesligamento disparou" como um GATILHO de teardown obrigatorio,
+nunca como um teardown em si. Regra explicita acrescentada: **sempre
+que a verificacao de rotina encontrar uma instancia que devia estar
+rodando mas nao esta mais (`describe-instances` sem ela, ou um estado
+inesperado), a PROXIMA acao obrigatoria antes de considerar a sessao
+encerrada e um `terraform destroy` completo daquela instalacao** --
+mesmo que a instancia ja tenha sumido por conta propria, `terraform
+destroy` de um `aws_eip` nao depende da instancia associada ainda
+existir (a chamada real e `ec2:ReleaseAddress` pelo allocation ID,
+guardado no state, nao pela instancia). A verificacao de 5 chamadas
+(Decisao 43, item 2) e quem detecta isso, nas 3 regioes, depois de
+QUALQUER sessao -- sucesso, abort, ou autodesligamento disparado,
+sem distincao.
+
+**2. Fallback por CommonName -- CONFIRMADO no codigo, PROVADO com um
+teste direto e um mutante, e reforcado com um guard novo no gerador
+de certificados.**
+
+**(a) Confirmado no codigo:** `sameDualIdentity`
+(`toolchain/dual.go`) so cai no fallback por CommonName quando
+`!leafHasAnySAN(classicalLeaf) && !leafHasAnySAN(pqLeaf)` -- as DUAS
+precisam ser SAN-less. Se qualquer uma tiver SAN, cai na comparacao
+normal por conjunto de SAN (DNS/email/IP), que corretamente nunca
+casa um conjunto vazio com um nao-vazio.
+
+**(b) Provado com um teste direto, nao so por leitura de codigo:**
+`TestSameDualIdentitySANFallback`, novo, em `dual_test.go`, chama
+`sameDualIdentity` diretamente (sem handshake) com 4 pares: ambas
+SAN-less + mesmo CommonName (deve casar), ambas SAN-less + CommonName
+diferente (nao deve casar), **o caso assimetrico -- uma folha com SAN
+real, a outra sem, MESMO CommonName nas duas (nao deve casar, nas
+duas ordens de argumento)**, e ambas com o MESMO SAN real (deve
+casar, o formato real dos 4 perfis). **Mutante testado pra provar que
+o teste de verdade pega o bug:** troquei o `&&` por `||` no guard
+(`dual.go`, linha 319) numa copia isolada, roda contra o BINARIO real
+reconstruido (nao um mock) -- o teste **FALHOU exatamente nas duas
+asserções do caso assimetrico** (`got a match` onde devia ser
+`no match`), confirmando que o teste de fato depende do `&&` estar
+certo. Com o `&&` original: **PASS**, suite completa re-executada:
+**`ok crypto/tls 87.619s`, 0 FAIL** (23 testes do AND antigos + os 4 da
+Decisao 39 + este novo + toda a suite upstream do Go).
+
+**(c) Confirmado que os 4 perfis da v9 SEMPRE geram folhas com SAN --
+nao por suposicao, por inspecao real do certificado gerado.**
+`certs/main.go`: todas as 12 chamadas de geracao de folha (4 perfis x
+servidor/cliente, com Hibrido-AND contando suas 2 folhas por papel)
+passam `serverSANs`/`clientSANs`, nunca `nil` nem uma lista vazia
+literal. Rodei o gerador real (`go run .`, toolchain reconstruido) e
+inspecionei o SAN de cada um dos 10 certificados-folha reais
+resultantes (via um inspetor Go minimo, `x509.ParseCertificate` +
+leitura de `DNSNames`/`IPAddresses`):
+```
+classico_server:        DNSNames=[mtls auth.local ... keystore] IPAddresses=[127.0.0.1 ::1]   totalSAN=10
+classico_client:        DNSNames=[opin-client-one]                                             totalSAN=1
+hibrido_v8_server:      (identico ao classico_server)                                          totalSAN=10
+hibrido_v8_client:      (identico ao classico_client)                                          totalSAN=1
+hibrido_and_rsa_server: (identico ao classico_server)                                          totalSAN=10
+hibrido_and_rsa_client: (identico ao classico_client)                                          totalSAN=1
+hibrido_and_mldsa_server: (identico ao classico_server)                                        totalSAN=10
+hibrido_and_mldsa_client: (identico ao classico_client)                                        totalSAN=1
+pqc_server:             (identico ao classico_server)                                          totalSAN=10
+pqc_client:             (identico ao classico_client)                                          totalSAN=1
+```
+**Os 10 certificados-folha reais (os 4 perfis, servidor e cliente)
+tem SAN -- nenhum vazio.** Isso confirma que, na pratica real deste
+projeto, o fallback por CommonName NUNCA e exercitado pelos 4
+perfis -- ele existe so pra cobrir o caso legitimo mas diferente dos
+certificados de CLIENTE do MECANISMO AND puro usado nos testes do
+proprio Go (`dual_test.go`, que deliberadamente usa certificados
+SAN-less pra exercitar esse caminho), nao pros certificados reais
+gerados por este projeto.
+
+**(d) Reforcado com um guard novo, pra essa garantia nunca depender
+so de "ninguem passar uma flag vazia por engano":** `certs/main.go`
+agora falha alto (`fatalf`) se `-server-dns` ou `-client-dns`
+resultar em zero nomes depois do parse -- testado (`-client-dns=`
+vazio -> `fatalf` com mensagem explicita, `exit status 1`, nenhum
+certificado SAN-less gerado silenciosamente) e confirmado que a
+geracao normal continua funcionando identica (os 10 certificados
+acima, gerados DEPOIS do guard estar no lugar).
+
+**Binarios e toolchain:** `and.patch` regenerado (reconstrui
+pristine/fixed do zero, mesmo metodo da Decisao 39 -- reverse-apply,
+edita, novo diff, aplica limpo numa copia pristine fresca, arvore
+resultante byte-a-byte identica a intencao, 9 arquivos, confirmado),
+SHA-256 novo `1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b`,
+`build_metadata.json` atualizado. `gateway`/`proxy` reconstruidos
+`amd64`+`arm64` com o toolchain atualizado, reprodutibilidade
+reconfirmada (rebuild do zero, hash identico nas duas rodadas, cada
+arquitetura):
+```
+gateway amd64: cefddbeef31efacdc9dcb20dcb72b970938c3ab07d3a18b6e6ed40ac89b895c3
+gateway arm64: c6a5f880b628aa87857e9e233d3efd18e439641902b68b02f480bbbe4de20d08
+proxy   amd64: 273169d27148bc1c2b9cdf9d0f3bf259f8e9b9d8935e202feada06b257fc3c08
+proxy   arm64: 455e4a9178fda970c5a3f4d6eedb5ee398e6db52b1c2659c87878da8fc7f8bc5
+```
+**Superam os hashes da Decisao 39** (que por sua vez superaram os da
+Decisao 22) -- os binarios antigos nunca tinham `TestSameDualIdentitySANFallback`
+nem o guard do gerador; nao devem ser usados no piloto.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

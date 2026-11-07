@@ -453,10 +453,10 @@ index 0000000..a7034ef
 +}
 diff --git a/dual_test.go b/dual_test.go
 new file mode 100644
-index 0000000..25d055c
+index 0000000..60858b2
 --- /dev/null
 +++ b/dual_test.go
-@@ -0,0 +1,1034 @@
+@@ -0,0 +1,1092 @@
 +// Copyright 2026 The MockOPIN project. Tests for dual.go (the AND
 +// dual-certificate TLS 1.3 authentication mechanism), not part of the
 +// upstream Go standard library test suite.
@@ -1489,6 +1489,64 @@ index 0000000..25d055c
 +	defer sc.Close()
 +	if serr == nil {
 +		t.Fatalf("server: expected rejection (client's classical and post-quantum certificates are both SAN-less AND have different CommonNames -- an unrelated pair), got success (client error: %v)", cerr)
++	}
++}
++
++// TestSameDualIdentitySANFallback is a direct unit test of
++// sameDualIdentity itself (no handshake involved), proving the exact
++// boundary the independent review of HEAD 23ee2ceb asked to confirm
++// (Decision 45): the CommonName fallback fires ONLY when NEITHER leaf
++// carries any SAN -- never when just one of the two lacks a SAN. If
++// the fallback fired on that asymmetric case too, a certificate with
++// NO SAN could be paired with an unrelated one that DOES have a SAN,
++// as long as the CommonNames happened to match -- defeating the SAN
++// check's own purpose for every certificate that still carries one.
++func TestSameDualIdentitySANFallback(t *testing.T) {
++	pki := newDualTestPKI(t)
++	parse := func(c Certificate) *x509.Certificate {
++		leaf, err := x509.ParseCertificate(c.Certificate[0])
++		if err != nil {
++			t.Fatalf("parse leaf: %v", err)
++		}
++		return leaf
++	}
++
++	bothSANlessSameCN := parse(pki.classicalLeaf("same-cn", x509.ExtKeyUsageClientAuth, nil))
++	bothSANlessSameCNOther := parse(pki.pqLeaf("same-cn", x509.ExtKeyUsageClientAuth, nil))
++	if !sameDualIdentity(bothSANlessSameCN, bothSANlessSameCNOther) {
++		t.Error("both SAN-less, same CommonName: expected match (the fallback case this project's own SAN-less client certs rely on), got no match")
++	}
++
++	bothSANlessDiffCN := parse(pki.classicalLeaf("cn-a", x509.ExtKeyUsageClientAuth, nil))
++	bothSANlessDiffCNOther := parse(pki.pqLeaf("cn-b", x509.ExtKeyUsageClientAuth, nil))
++	if sameDualIdentity(bothSANlessDiffCN, bothSANlessDiffCNOther) {
++		t.Error("both SAN-less, different CommonName: expected no match (unrelated pair), got a match")
++	}
++
++	// The asymmetric case: ONE leaf has a real SAN, the other has
++	// none, but both happen to share the same CommonName. The
++	// fallback's own guard (!leafHasAnySAN(a) && !leafHasAnySAN(b))
++	// must NOT trigger here -- this must fall through to the ordinary
++	// SAN-set comparison, which correctly reports no match (an empty
++	// SAN set is never equal to a non-empty one).
++	oneSANSameCN := parse(pki.classicalLeaf("same-cn-2", x509.ExtKeyUsageClientAuth, []string{"example.test"}))
++	otherSANlessSameCN := parse(pki.pqLeaf("same-cn-2", x509.ExtKeyUsageClientAuth, nil))
++	if sameDualIdentity(oneSANSameCN, otherSANlessSameCN) {
++		t.Error("one leaf has a SAN, the other has none, same CommonName: expected no match (fallback must not apply when only one leaf is SAN-less), got a match")
++	}
++	if sameDualIdentity(otherSANlessSameCN, oneSANSameCN) {
++		t.Error("same asymmetric case, arguments swapped: expected no match, got a match")
++	}
++
++	// Sanity: both leaves WITH the same SAN -- the ordinary path (not
++	// the fallback), which is the real shape of every one of this
++	// project's own 4 profiles' server certificates (classico/pqc/
++	// hibrido-v8/hibrido-and all set a non-empty SAN on every leaf --
++	// confirmed separately against certs/main.go, Decision 45).
++	bothSameSAN := parse(pki.classicalLeaf("irrelevant-cn-1", x509.ExtKeyUsageServerAuth, []string{"mtls"}))
++	bothSameSANOther := parse(pki.pqLeaf("irrelevant-cn-2", x509.ExtKeyUsageServerAuth, []string{"mtls"}))
++	if !sameDualIdentity(bothSameSAN, bothSameSANOther) {
++		t.Error("both leaves share the same real SAN (different CommonNames, matching this project's own server cert convention): expected match, got no match")
 +	}
 +}
 diff --git a/handshake_client.go b/handshake_client.go

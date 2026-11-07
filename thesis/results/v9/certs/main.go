@@ -490,6 +490,20 @@ func main() {
 	clientSANs = parseNameList(*clientDNS)
 	serverIPs = parseIPList(*serverIPList)
 
+	// Decisao 45 (revisao independente): um SAN vazio aqui (flag
+	// passada em branco por engano) geraria folhas SAN-less pros 4
+	// perfis -- sameDualIdentity (toolchain/dual.go) ainda casaria
+	// essas folhas pelo CommonName, entao o mecanismo AND continuaria
+	// "funcionando" sem erro visivel, so que sem a checagem de SAN que
+	// esta pensada para existir nos 4 perfis reais. Falha alto e
+	// visivel em vez de gerar certificados SAN-less silenciosamente.
+	if len(serverSANs) == 0 {
+		fatalf("-server-dns resultou em zero nomes (SAN vazio) -- as folhas de servidor dos 4 perfis sempre devem ter SAN, nunca cair no fallback por CommonName do mecanismo AND")
+	}
+	if len(clientSANs) == 0 {
+		fatalf("-client-dns resultou em zero nomes (SAN vazio) -- as folhas de cliente dos 4 perfis sempre devem ter SAN, nunca cair no fallback por CommonName do mecanismo AND")
+	}
+
 	outDir := *outDirFlag
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fatalf("mkdir %s: %v", outDir, err)
