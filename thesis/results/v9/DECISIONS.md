@@ -5133,3 +5133,133 @@ por Decisao 38, limiar de concordancia do RTT).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 43. REVISAO INDEPENDENTE, SECAO E -- SSH do controle contestado com evidencia real da v8 (nenhuma correcao de regra necessaria, requisito explicito acrescentado ao roteiro pra nao regredir); verificacao final de limpeza estendida pra 5 chamadas por regiao, igual ao teardown real da v8; NotBefore do gerador de certificados retrodatado 1h
+
+**1. SSH DO CONTROLE PRO SERVIDOR/L0 CO-LOCALIZADOS (item E.11) --
+CONTESTADO COM EVIDENCIA: a regra atual (Decisao 26/27, IP elastico
+do controle) ja funciona por construcao, desde que o futuro
+orquestrador da v9 disque CADA alvo SEMPRE pelo IP PUBLICO -- exigencia
+agora adicionada explicitamente ao roteiro, pra nunca regredir.**
+
+A preocupacao da revisao (controle e servidor/L0 compartilham a
+MESMA VPC/regiao -- a origem real de uma conexao TCP ali poderia ser
+o IP PRIVADO do controle, que uma regra `/32` do EIP nunca casaria)
+e uma preocupacao LEGITIMA em abstrato -- mas tem uma resposta
+EMPIRICA concreta, achada no proprio historico real da v8, nao
+suposta: `v8/DECISIONS.md`, Decisao 83, achado #6 (incidente real,
+nao corrigido a tempo, piloto destruido antes de resolver). Esse
+incidente confirma, por teste direto numa instancia real
+(`/dev/tcp` ao IP publico do servidor: timeout RC=124; ao IP
+PRIVADO: sucesso RC=0), a mecanica exata do AWS pra trafego
+MESMA-VPC endereçado ao IP publico/Elastico de outra instancia:
+**"routes out through the Internet Gateway and back -- which
+rewrites the source to the sender's OWN public IP by the time it
+reaches the destination's security group."** Ou seja: quando uma
+instancia disca OUTRA instancia da MESMA VPC pelo IP PUBLICO dela,
+o pacote sai e volta pelo IGW, e a origem que a VPC de destino VE e
+o PROPRIO IP PUBLICO de quem discou -- nunca o IP privado.
+
+**Aplicado ao SSH controle -> servidor/L0:** `v8/campaign/scripts/
+campaign_run.py` (`SSHExecutor._server_ip`/`_client_ip`, linhas
+1476-1474) usa `public_ip` SEMPRE, inclusive pro servidor/cliente
+co-localizados na mesma regiao do controle -- nunca o IP privado,
+mesmo quando disponivel. E a regra de SG real (`terraform/main.tf`,
+linha 285/419, `ssh_ingress_cidrs = {"control" = "${module.control.
+public_ip}/32"}`) exige exatamente esse IP publico como origem. Pelo
+mecanismo confirmado no incidente 83 (mesma VPC + endereçamento por
+IP publico = origem vista = IP publico do remetente), **as duas
+pontas sao CONSISTENTES por construcao**: o controle disca pelo
+publico, a regra espera o publico, batem -- e por isso NENHUM
+incidente de SSH falho entre controle e servidor/L0 co-localizados
+foi registrado em todo o `v8/DECISIONS.md` (so o caminho de dados
+GATEWAY/443, Decisao 83 item 6, teve esse problema -- e exatamente
+porque ALI a regra de SG esperava o IP PRIVADO por design, Decisao
+28/41 da v8, enquanto o codigo discava pelo publico por engano --
+um descompasso INTENCAO-vs-CODIGO, nao uma impossibilidade de
+rede). SSH nunca teve essa ambiguidade de intencao: nem a Decisao
+26/27 da v9 nem o padrao real da v8 jamais propuseram usar o IP
+PRIVADO do controle pra SSH.
+
+**Decisao: a regra de SG da v9 (Decisao 26/27, EIP do controle) fica
+MANTIDA sem mudanca** -- nao e o bug que a revisao suspeitou. **Mas
+um requisito explicito e novo entra no roteiro, pra NUNCA regredir
+pro mesmo descompasso do incidente 83:** quando o orquestrador real
+da v9 for escrito (ele ainda nao existe -- "nada de AWS" continua
+valendo), suas funcoes equivalentes a `_server_ip`/`_client_ip` DEVEM
+usar o IP PUBLICO/Elastico de CADA alvo pra SSH, SEMPRE, inclusive
+pro servidor e pro cliente L0 co-localizados com o controle --
+JAMAIS o IP privado pra essa finalidade especifica (SSH), mesmo que o
+IP privado seja usado corretamente em OUTRO lugar, como o trafego de
+GATEWAY/443 do cliente L0 ja faz, por design, Decisao 27 item 1).
+Essa e exatamente a classe de bug que o incidente 83 documentou --
+nao SSH, mas o MESMO mecanismo de rede -- entao o requisito fica
+registrado aqui ANTES de qualquer codigo real existir, nao depois de
+um incidente igual se repetir.
+
+**2. LIMPEZA FINAL (item E.12) -- verificacao estendida pra 5
+chamadas por regiao, igual ao teardown real e comprovado da v8;
+risco real de EIP orfao identificado na rede de seguranca por
+autodesligamento, mitigado por deteccao em vez de automacao nova.**
+
+**Verificacao estendida, confirmada contra precedente real:** o
+teardown final real da v8 (`v8/DECISIONS.md`, linha 8325-8334) usou
+exatamente `aws ec2 describe-instances`/`describe-addresses`/
+`describe-security-groups`/`describe-key-pairs`/`describe-volumes`,
+uma chamada de cada por regiao, nas 7 regioes -- nao so a API de
+tags. **Adotado o mesmo padrao pro roteiro da v9:** a verificacao
+final (Decisao 26, item 2, hoje so `resourcegroupstaggingapi`) passa
+a rodar as MESMAS 5 chamadas, nas 3 regioes do piloto
+(`sa-east-1`/`eu-north-1`/`ap-southeast-1`), tanto no teardown normal
+quanto no abort de emergencia (Decisao 27, item 3) -- esperado vazio
+nas 5 chamadas x 3 regioes.
+
+**Risco real de EIP orfao -- identificado, nao no caminho que a
+revisao citou.** O procedimento de ABORT explicito (Decisao 27, item
+3) ja usa `terraform destroy`, que destroi o recurso `aws_eip`
+JUNTO com a instancia -- esse caminho NUNCA deixa um EIP orfao. **O
+risco real esta em outro lugar: a rede de seguranca de
+autodesligamento por tempo** (`self_terminate_hours`, Decisao 23 item
+5, "autodesligamento corrigido pra terminate") -- esse mecanismo roda
+DENTRO da propria instancia e so pode terminar A SI MESMA (via
+IMDS/systemd), nunca liberar seu PROPRIO EIP (isso e uma chamada de
+conta, `release-address`, fora do alcance de uma instancia terminando
+sozinha sem um IAM role dedicado pra isso). **Se esse autodesligamento
+disparar sem um `terraform destroy` seguir** (ex.: operador
+indisponivel, instancia terminada pela rede de seguranca mas
+ninguem roda o destroy depois), o EIP correspondente fica alocado e
+cobrando US$0,005/h indefinidamente, por EIP. **Mitigacao escolhida,
+deliberadamente SEM dar ao self-terminate uma permissao nova de
+liberar seu proprio EIP** (contra o principio de menor privilegio
+deste projeto -- adicionar essa permissao so pra esse caso raro nao
+compensa o risco de uma instancia comprometida poder chamar
+`release-address` sozinha): a verificacao de 5 chamadas do item
+acima, rodada OBRIGATORIAMENTE apos QUALQUER sessao do piloto
+(sucesso, abort OU autodesligamento), `describe-addresses` sempre
+pega qualquer EIP sem instancia associada, nas 3 regioes -- achado
+explicito vira liberacao manual (`aws ec2 release-address`), nao
+passa inadvertido.
+
+**3. CERTIFICADOS, NotBefore retrodatado (item E.13) -- feito e
+testado contra o toolchain real.**
+
+`certs/main.go`: nova funcao `certNotBefore()` (`time.Now().Add(-1 *
+time.Hour)`), substituindo as 5 ocorrencias de `NotBefore:
+time.Now()` nos 4 perfis (CA e folha, RSA e ML-DSA-65) -- absorve
+diferenca de relogio entre a maquina que gera os certificados e as
+instancias reais do piloto (se a instancia estiver com o relogio
+alguns minutos ADIANTADO em relacao a esta maquina, um certificado
+sem essa margem pareceria "ainda nao valido" na primeira conexao).
+`NotAfter` mantido ancorado em `time.Now()` real (nao retrodatado) --
+so encurtaria a validade sem necessidade, o problema e so no limite
+INFERIOR da janela. **Testado de verdade, nao so compilado:** build
+dentro do container real (`mockopin-v9-toolchain`) bem-sucedido, e
+`go run .` completo gerando os 4 perfis com a propria validacao
+interna do programa (`x509.Certificate.Verify`, sem
+`InsecureSkipVerify`) passando pra todas as cadeias -- confirma que
+NotBefore 1h no passado nao quebra nenhuma verificacao (o verificador
+so exige `NotBefore <= agora <= NotAfter`, e "agora" continua bem
+depois de "agora - 1h").
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

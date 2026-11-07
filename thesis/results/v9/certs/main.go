@@ -32,6 +32,16 @@ import (
 
 const validity = 5 * 365 * 24 * time.Hour
 
+// Decisao 43 (revisao independente, item E.13): NotBefore retrodatado
+// em 1h pra absorver diferenca de relogio entre esta maquina (onde o
+// certificado e gerado) e as instancias reais do piloto -- sem isso,
+// uma instancia com o relogio poucos minutos ADIANTADO em relacao a
+// esta maquina veria um certificado "ainda nao valido" na primeira
+// conexao apos o deploy.
+func certNotBefore() time.Time {
+	return time.Now().Add(-1 * time.Hour)
+}
+
 // serverSANs/clientSANs/serverIPs: configuraveis por flag, nunca
 // fixos no codigo -- para testes locais (o default) usam loopback e
 // os hostnames que o gateway real ja escuta (mesma convencao de
@@ -124,7 +134,7 @@ func generateRSACA(name, dir string) (*x509.Certificate, *rsa.PrivateKey) {
 	tmpl := &x509.Certificate{
 		SerialNumber:          nextSerial(),
 		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             time.Now(),
+		NotBefore:             certNotBefore(),
 		NotAfter:              time.Now().Add(validity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:                  true,
@@ -156,7 +166,7 @@ func generateRSALeaf(name string, caCert *x509.Certificate, caKey *rsa.PrivateKe
 		SerialNumber: nextSerial(),
 		Subject:      pkix.Name{CommonName: name},
 		DNSNames:     sans,
-		NotBefore:    time.Now(),
+		NotBefore:    certNotBefore(),
 		NotAfter:     time.Now().Add(validity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
@@ -191,7 +201,7 @@ func generateMLDSACA(name, dir string) (*x509.Certificate, *mldsa.PrivateKey) {
 	tmpl := &x509.Certificate{
 		SerialNumber:          nextSerial(),
 		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             time.Now(),
+		NotBefore:             certNotBefore(),
 		NotAfter:              time.Now().Add(validity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:                  true,
@@ -223,7 +233,7 @@ func generateMLDSALeaf(name string, caCert *x509.Certificate, caKey *mldsa.Priva
 		SerialNumber: nextSerial(),
 		Subject:      pkix.Name{CommonName: name},
 		DNSNames:     sans,
-		NotBefore:    time.Now(),
+		NotBefore:    certNotBefore(),
 		NotAfter:     time.Now().Add(validity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
@@ -318,7 +328,7 @@ func generateHybridV8Leaf(name string, caCertRSA *x509.Certificate, caKeyRSA *rs
 	}
 	subjectAltPubKeyExt, altSigAlgExt := hybridExtensions(subjectMLDSAKey.PublicKey())
 
-	notBefore := time.Now()
+	notBefore := certNotBefore()
 	tmpl := &x509.Certificate{
 		SerialNumber:    nextSerial(),
 		Subject:         pkix.Name{CommonName: name},
