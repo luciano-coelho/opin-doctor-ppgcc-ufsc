@@ -3074,3 +3074,212 @@ pra baixo, nao e um numero "completo".
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 23. Seis correcoes ao T8/roteiro/avaliador -- PKI local so apagada no fim do piloto, ordem de execucao por blocos de perfil (replicando a v8 real), MongoDB/Node verificados por digest real (nao por rotulo), criterio 1 confirmado nivel-mensagem + MSS/MTU/snaplen no piloto, autodesligamento corrigido pra terminate, tamanhos HTTP comparados byte a byte numa rodada real
+
+**1. PKI, copia local do operador -- corrigido: so apaga no FIM do
+piloto, nao apos a primeira entrega confirmada.**
+
+A versao anterior (Decisao 22, item 2.3) estava errada pelo mesmo
+motivo que o proprio Luciano apontou: o piloto tem **3 clientes**
+(L0, L219, L325), nao 1 -- e os 3 existem e operam **simultaneamente**
+durante o piloto (ver ponto 2 abaixo: um bloco de perfil precisa das
+3 rotas disponiveis ao mesmo tempo pro round-robin). Apagar a copia
+local apos "confirmacao de entrega" soa seguro, mas nao define
+claramente apos a entrega a QUAL dos 3 clientes -- e se um cliente
+precisar ser substituido no meio do piloto (crash, instancia
+recriada), reemitir a PKI do zero trocaria a CA, invalidando a
+confianca ja estabelecida com o servidor e com os outros 2 clientes
+ainda de pe. **Corrigido:** a copia local do operador (scratch desta
+sessao) fica retida até o encerramento do piloto inteiro -- so e
+apagada depois que o ULTIMO destroy (servidor + 3 clientes) for
+confirmado. A copia em CADA instancia continua sendo apagada no fim
+do uso DAQUELA instancia (igual ao que a Decisao 22 ja dizia -- isso
+nao mudou, so a copia do OPERADOR).
+
+**2. Ordem de execucao -- corrigido pra aleatorizacao por BLOCO de
+perfil, round-robin fixo de rota dentro do bloco, replicando a v8
+real.**
+
+A proposta da Decisao 22 ("perfil aleatorizado por execucao") estava
+errada: cada troca de perfil exige reiniciar o `gateway`/`proxy`
+(nova config de TLS -- grupo de curva, CA, Dual), e a sondagem de
+prontidao desse restart (a mesma que causou a "7a conexao",
+Decisao 18) cairia DENTRO da janela medida se o perfil mudasse a
+cada execucao. Conferido como a v8 real ordenava (`switch_crypto_profile.py`
+e o orquestrador real da campanha, pesquisado direto, nao de
+memoria): **perfil sorteado uma vez POR JANELA** (a v8 real tem 3
+janelas/dia, cada uma com sua propria ordem sorteada); **dentro de
+uma janela, a ROTA nunca e sorteada** -- round-robin fixo (`L0, L14,
+L30, ...`, sempre a mesma ordem literal), repetido run a run.
+Ou seja: a v8 troca de perfil (reinicia o gateway) UMA VEZ, faz o
+aquecimento (5 descartes, `SETTLING_WARMUP_RUNS`), e so DEPOIS
+percorre as rotas em round-robin fixo, varias vezes, antes de trocar
+pro proximo perfil sorteado.
+
+**Adotado pro piloto v9, na mesma logica:** como o piloto
+provavelmente cabe numa unica janela (Decisao 20), a ordem dos 4
+perfis e sorteada **uma vez, pro piloto inteiro**; dentro de cada
+bloco de perfil, o round-robin percorre as 3 rotas do piloto (`L0,
+L219, L325`, ordem fixa) **N=5 vezes cada** = 15 execucoes por
+perfil, 60 no total. O `gateway`/`proxy` so reinicia na TROCA de
+bloco (4 vezes no total, nao 60) -- a sondagem de prontidao de cada
+restart fica fora da janela medida, exatamente como pretendido.
+**Consequencia direta pro ponto 1:** como o round-robin precisa das
+3 rotas (3 instancias-cliente) disponiveis ao mesmo tempo durante
+TODO bloco de perfil, os 3 clientes precisam estar de pe e com a PKI
+já entregue ANTES do primeiro bloco comecar -- reforcando por que a
+copia do operador nao pode ser apagada so depois da "primeira"
+entrega.
+
+**3. MongoDB e Node.js -- corrigido: verificado por digest real, nao
+por rotulo igual nas duas pontas.**
+
+A Decisao 22 marcou "IGUAL, confirmado" so porque o rotulo
+`mongo:latest`/`node:24-alpine` aparecia nas duas pontas -- exatamente
+o erro que o Luciano apontou. Reverifiquei direto na fonte, por
+digest:
+
+| Imagem | Onde esta fixada | Digest real | Versao real confirmada (`--version` dentro do container) |
+|---|---|---|---|
+| MongoDB (insurance-server-lambdas) | `insurance-server-lambdas/docker-compose.yml:324` | `sha256:dc28ed5a9d0fc616903c3f463bb1e53b92b49f441721b91926e87d90bf957ce8` (nota: uma transcricao minha anterior, so em texto de trabalho, tinha um erro de 1 digito nesse hash -- `f469bb` em vez do `f463bb` real; nunca chegou a ser escrito neste arquivo, mas registro aqui pra nao se repetir) | `db version v9.0.4`, `gitVersion 64ade602b836c9adeffba7fa038c887ffab56196`, `openSSLVersion OpenSSL 3.5.5` |
+| Node (mock_as) | `mock-service-os/mock_as/Dockerfile:1` | `sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f` | `v24.22.0` |
+
+Ambos os arquivos (`insurance-server-lambdas/docker-compose.yml` e
+`mock-service-os/mock_as/Dockerfile`) **nunca foram tocados por
+nenhum commit da v9** (confirmado via `git log -- <arquivo>`, ultimo
+commit em cada um e de antes da v9 existir) -- o T6b reusa os dois
+SEM ALTERACAO, entao v8 (campanha real) e v9 (T6b local, e o piloto
+depois) literalmente sobem o MESMO arquivo, MESMO digest. Por isso
+aqui **"IGUAL" e correto** -- mas agora confirmado por digest +
+versao real rodada, nao suposto pelo rotulo.
+
+**Ilustracao do motivo pelo qual rotulo sozinho e inseguro** (achado
+no caminho, registrado como contexto, nao como divergencia v8-vs-v9):
+existe uma TERCEIRA imagem `node:24-alpine` no repo,
+`thesis/scripts/pqc-signer/Dockerfile:12`, fixada por um digest
+DIFERENTE (`sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43`),
+que resolve pra uma versao REAL diferente (`v24.19.0`, nao `v24.22.0`)
+-- o mesmo rotulo literal `node:24-alpine`, fixado em momentos
+diferentes, aponta pra builds genuinamente diferentes do Node. Esse
+arquivo tambem nunca foi tocado pela v9 (ultimo commit
+`055ffa81`/`388e874c`, ambos pre-v9) -- entao tambem e "igual" v8 x v9
+por construcao, so serve de prova concreta de que a checagem por
+digest era necessaria, nao perfeccionismo.
+
+**4. Criterio 1 e MTU -- confirmado nivel-mensagem (nao pacote);
+MSS/path MTU real e a verificacao initcwnd x MSS adicionados ao
+piloto; snaplen do piloto nao pode reusar o 256 da v8 real.**
+
+Confirmado lendo `measure/measure.sh` direto (linhas 52-55): a secao
+que o `evaluate_criteria.py` usa pro criterio 1 vem de `tshark -r
+"$PCAP" -o "tls.keylog_file: $KEYLOG" -Y tls.handshake -T fields -e
+tls.handshake.type -e tls.handshake.length` -- `tls.handshake.length`
+e o campo de comprimento DECLARADO DENTRO da propria mensagem TLS
+(apos decifragem e reassemblagem TCP feitas pelo tshark via o
+keylog), nao o tamanho de um pacote/frame. O tamanho de pacote
+(`tcp.len`) so aparece numa secao SEPARADA, explicitamente rotulada
+"cross-check" (linha 57-58), nunca usada pelo criterio 1. Confirma o
+que a Decisao 20 ja tinha assumido, agora lido na fonte, nao
+lembrado.
+
+A captura local (`measure.sh` linha 19) já usa `tcpdump -i lo -s 0`
+(snaplen total, sem truncamento) -- mas a campanha REAL da v8 usa
+`TCPDUMP_SNAPLEN_BYTES` = **256**, confirmado em
+`v8/campaign/scripts/campaign_run.py` (linhas 1686/2464) e no proprio
+`v8/campaign/README.md` ("Pcap capture: snaplen 256, handshake
+measured two ways", Decisao 79 da v8) -- suficiente la porque o unico
+uso do pcap na v8 era confirmar visibilidade/tolerancia do SNI no
+ClientHello (perto do inicio do registro). **Isso NAO e suficiente
+pro piloto da v9:** as mensagens `Certificate` dos perfis
+PQC/Hibrido-AND medem 5.632B/6.582B (Decisao 15/20) -- um snaplen de
+256 truncaria o conteudo da mensagem de forma irrecuperavel (bytes
+perdidos, nao so adiados), quebrando a reassemblagem do tshark bem
+antes do fim do registro. **Registrado no roteiro do piloto: a
+captura usa `tcpdump -s 0` (ou um snaplen explicitamente maior que a
+maior mensagem esperada, com margem), nunca o convencional 256 da
+campanha real da v8.**
+
+**Novos itens do piloto, adicionados a lista de verificacao:**
+- Registrar o MSS real e o path MTU real em cada uma das 3 rotas do
+  piloto (ex.: `tracepath <destino>` de cada instancia-cliente ate o
+  servidor, ou `ip route get`/`ss --info` apos uma conexao real para
+  o MSS negociado).
+- Verificar que o PRIMEIRO voo do servidor (ServerHello +
+  EncryptedExtensions + CertificateRequest + Certificate +
+  CertificateVerify + Finished, Decisao 15) cabe dentro de
+  `initcwnd x MSS` -- se nao caber, o criterio 2 (initcwnd real) e a
+  propria suposicao de "sem RTT extra no handshake" (Decisao 14/22)
+  precisam ser revistos antes de aceitar os numeros do piloto.
+
+**5. Autodesligamento -- confirmado/corrigido: `terminate`, nao so
+`stop`.**
+
+Confirmado direto no modulo real
+(`v8/campaign/terraform/modules/campaign_instance/main.tf`): o
+`resource "aws_instance" "this"` NUNCA define
+`instance_initiated_shutdown_behavior` -- fica no default da AWS, que
+e `"stop"` (confirmado por ausencia: nenhum hit pra
+`shutdown_behavior` nesse arquivo). Isso significa que o
+`safety_timer.sh.tftpl` real da v8, ao disparar um `shutdown` dentro
+do guest depois do prazo, so PARA a instancia -- ela continua
+existindo (e podendo ser cobrada em EBS/IP elastico) até alguem
+destruir de verdade. **Para o piloto da v9, divergencia deliberada,
+registrada: o modulo Terraform (quando escrito, reaproveitando
+`campaign_instance` como base) define explicitamente
+`instance_initiated_shutdown_behavior = "terminate"`** -- o
+autodesligamento de seguranca (Decisao 22, N=4h) TERMINA a instancia
+de verdade, nao so para, reduzindo a janela de custo residual caso a
+sessao caia sem teardown manual.
+
+**6. Tamanhos de corpo/cabecalho HTTP -- comparados byte a byte numa
+rodada real, nao mais "por construcao" sem medir.**
+
+A Decisao 22 (item "Tamanhos de corpo e cabecalhos HTTP") tinha
+registrado honestamente a lacuna: nunca tinha rodado a comparacao.
+Rodei agora: usei os dados reais da v8 já coletados em
+`thesis/results/v8/janela1/experiment1 - Classic/sa-east-1/L0/runs/
+w01_run01.calls.jsonl` (44 chamadas, perfil Classico, rota L0) como
+referencia, e subi uma rodada T6b fresca da v9 (os containers
+`gateway`/`proxy` desta sessao, perfil `classico`, contra o MESMO
+backend real `auth`/`mockapi`/`mongodb`/`localstack` que já estava de
+pe, sem alteracao) via um driver minimo que chama
+`run_insurance_flow`/`run_person_flow` do proprio `opin_flow.py`
+direto (mesmo codigo de producao, sem flag nova) e despeja as 44
+chamadas resultantes. Comparei par a par, na mesma ordem (mesma
+sequencia de endpoints nas duas rodadas, confirmando contagem e
+ordem identicas de novo):
+
+- **`request_bytes` (corpo + cabecalhos de cada REQUISICAO): 44/44
+  identicos, byte a byte, sem exceção.**
+- **`response_bytes`: 14/44 identicos byte a byte** (endpoints com
+  conteudo deterministico -- JWKS inicial, CA, emissao de token,
+  `/auth`, `/request`, confirmacoes de login/consent-redirect).
+- **30/44 diferem por exatamente 1 byte**, sempre no mesmo padrao:
+  confinados aos endpoints cujo corpo de resposta embute (a) a
+  propria JWKS do `mock_as`, derivada de uma chave RSA-2048
+  EFEMERA gerada em tempo de execucao (a serializacao big-integer
+  do modulo `n` pode legitimamente variar ±1 byte entre duas geracoes
+  de chave distintas, dependendo dos bits altos do modulo sorteado --
+  isso e ruido esperado de chave-por-execucao, nao um bug), ou (b)
+  dados de negocio gerados aleatoriamente pelo proprio
+  `insurance-server-lambdas` (valores de sinistro/premio) a cada
+  execucao -- gerador que nunca foi alterado pela v9 (confirmado via
+  `git log`). Essa mesma fonte de ruido (±1 byte, as vezes mais em
+  valores monetarios) existe rodando a v8 duas vezes seguidas contra
+  si mesma, nao e uma divergencia v8-vs-v9. **Ressalva honesta:** nao
+  abri o corpo bruto de cada resposta byte a byte pra apontar o
+  caractere exato que difere em cada um dos 30 casos -- o padrao
+  (diferenca de exatamente 1 byte, confinada aos endpoints com
+  conteudo conhecidamente aleatorio por execucao, zero diferenca em
+  todo o resto) e evidencia forte, nao prova byte a byte caso a caso.
+
+**Resultado registrado na checklist (corrige a linha "Tamanhos de
+corpo e cabecalhos HTTP" da Decisao 22):** de "IGUAL por construcao,
+NAO comparado" para **"IGUAL, agora medido: requisicoes 44/44 exatas;
+respostas 14/44 exatas e 30/44 com ±1 byte de ruido aleatorio
+conhecido (chave efemera/dados mock), mesmo padrao esperado dentro da
+propria v8 run-a-run"**.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
