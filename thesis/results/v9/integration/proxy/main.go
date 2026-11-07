@@ -54,7 +54,16 @@ func main() {
 	target := flag.String("target", "mtls:443", "gateway address, host:port")
 	ticketsDisabled := flag.Bool("tickets-disabled", true, "set Config.SessionTicketsDisabled (T6 diagnostic: pass -tickets-disabled=false to measure ticket overhead)")
 	keylogPath := flag.String("keylog-path", "", "optional SSLKEYLOGFILE-style path for TLS secrets (T6 pcap cross-validation)")
+	listen := flag.String("listen", "", "T6b: run in persistent relay mode, listening here (e.g. :8443) instead of making one T5/T6 one-shot test request")
 	flag.Parse()
+
+	if *listen != "" {
+		if _, ok := expectedCurve[*profile]; !ok {
+			log.Fatalf("proxy relay: unknown -profile %q (want classico, pqc, hibrido-v8, hibrido-and)", *profile)
+		}
+		runRelay(*listen, *target, *profile, *certDir)
+		return
+	}
 
 	want, ok := expectedCurve[*profile]
 	if !ok {

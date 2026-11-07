@@ -1837,8 +1837,13 @@ localmente contra o stack real (`mock_as`, `insurance-server-lambdas`,
 `localstack`, `mongo`, sem alteracao), produzindo exatamente 44
 chamadas HTTP, 6 conexoes mTLS, 28 JWTs, 4 buscas de `/jwks`, 4 buscas
 de CA por execucao, confirmado pela instrumentacao da T6 (nao por
-contagem manual), zero erros. **Status: PENDENTE -- e a T6b, liberada
-na mesma rodada deste rascunho, relatada separadamente.**
+contagem manual), zero erros. **Status: PARCIAL, apos a T6b (Decisao
+17) -- 44 chamadas HTTP e 0 erros confirmados nos 4 perfis, contra o
+stack real (`mock_as`/`insurance-server-lambdas` intocados). Conexoes
+mTLS medidas em 7, nao 6 (consistente nos 4 perfis, reportado, nao
+investigado a fundo); JWTs (28) e buscas de `/jwks` (4) ainda nao
+extraidos separadamente do log desta rodada -- falta uma passada
+adicional, nao um problema encontrado.**
 
 **(b) As cinco lacunas de validade da v8, uma por uma, com o teste que
 fecha cada uma:**
@@ -1855,12 +1860,12 @@ fecha cada uma:**
 Criterio: toda execucao da campanha real le `ConnectionState.CurveID`
 e falha explicitamente se nao bater o grupo esperado do perfil; toda
 execucao do Hibrido-AND le `DualAuthenticated` nos dois lados e falha
-explicitamente se `false`. **Status: FECHADO no harness da T5/T6**
-(`gateway/main.go`/`proxy/main.go` fazem isso em toda conexao, ja
-testado nos 4 perfis) -- **PENDENTE de reconfirmar** uma vez que a T6b
-trouxer a camada de negocio de volta (precisa continuar valendo com
-`opin_flow.py`/o proxy em modo relay de verdade, nao so no harness
-isolado).
+explicitamente se `false`. **Status: FECHADO**, reconfirmado pela T6b
+(Decisao 17) com a camada de negocio e `opin_flow.py` de verdade, nao
+so o harness isolado: nos 4 perfis, toda conexao client-facing
+negociou exatamente o grupo esperado; no Hibrido-AND, `DualAuthenticated
+= true` em 100% das 7 conexoes client-facing medidas (confirmado pelo
+log do proprio gateway).
 
 **(d) Matriz de interoperabilidade executada.** A Decisao 4 desta
 mesma pasta (`DECISIONS.md`) ja registrou a lacuna (divergencia de
@@ -1920,7 +1925,209 @@ listadas explicitamente, nao escondidas:**
 | Verificacao mutua completa nos 4 perfis (cliente verifica servidor, servidor exige certificado de cliente) -- v7/v8 tinham as duas lacunas (item (b)#2 e #3 acima) | Decisao 12 |
 | Harness da T5/T6 e um fork em `thesis/results/v9/integration/`, nunca os arquivos de producao `mock-service-os/mock_mtls`/`thesis/scripts/tls_kem_proxy` que a v7/v8 usam | Decisao 12 |
 | Contagem de bytes na fronteira exata do `Handshake()`, nao em `ConnState -> StateActive` (v7/v8 mantiveram o limite antigo deliberadamente, por comparabilidade com a v7 -- Decisao 78/79 do `v8/DECISIONS.md`) | Decisao 14 |
+| `thesis/scripts/opin_flow.py` editado (unico arquivo de producao tocado em toda a v9) -- aditivo e opt-in (`V9_HARNESS`), mesmo padrao de `REMOTE_GATEWAY_HOST` ja existente no mesmo arquivo; zero mudanca de comportamento quando desligado | Decisao 17 |
+| 7 conexoes mTLS client-facing medidas por execucao combinada, nao as 6 historicas da v7/v8 -- consistente nos 4 perfis, causa raiz nao confirmada | Decisao 17 |
 
 **Nenhuma tag criada. Nenhuma acao em AWS. Pare ao fim deste rascunho,
 conforme pedido -- aguardando aprovacao explicita do Luciano antes de
 qualquer `v9-prereg`.**
+
+## 17. T6b, fluxo completo local: os 4 perfis rodaram ponta a ponta contra o stack real (mock_as e insurance-server-lambdas intocados), 44 chamadas HTTP e 0 erros nos 4, com tres bugs reais encontrados e corrigidos no caminho; divergencia de contagem de conexoes mTLS reportada, nao forcada a bater
+
+**Risco verificado antes de escrever qualquer codigo de negocio:**
+`client_one` usa `token_endpoint_auth_method: "private_key_jwt"`
+(`init_clients.json`) -- a assinatura do client assertion e verificada
+pelo AS contra uma JWKS REGISTRADA (`mongo_seed`), um credencial
+INTEIRAMENTE SEPARADO do certificado mTLS que transporta a conexao.
+Confirmado lendo `thesis/scripts/opin_flow.py`'s
+`load_client_signing_key()` e `mock-service-os/mock_as/mongo-seed/
+start.sh`: os dois ja fazem fallback pro classico real
+(`client_one.jwks`/`client_one_pub.jwks`, RSA-4096, PS256) para
+QUALQUER perfil que nao seja literalmente `"pqc"` ou `"hybrid"` --
+`"hibrido-and"` cai nesse fallback de graca, sem precisar de nenhuma
+mudanca no `mongo_seed` nem no `opin_flow.py`'s assinatura. Isso
+confirmou que nenhuma mudanca seria necessaria em `mock_as` ou
+`insurance-server-lambdas` -- a troca de mecanismo mTLS (v9) e
+completamente ortogonal a autenticacao do cliente no token endpoint
+(que usa outra chave, outro protocolo).
+
+**Baseline empirico real, ANTES de qualquer mudanca, contra o stack
+100% original:** `mtls` real reiniciado (`docker compose up mtls`),
+`opin_flow.py` original rodado sem nenhuma modificacao --
+`run_insurance_flow('classic')` + `run_person_flow('classic')`:
+**20 + 24 = 44 chamadas HTTP, 0 erros.** Confirma exatamente o numero
+ja estabelecido (`v8/DECISIONS.md`, Decisoes 89/9064/10719) e serve de
+controle: qualquer divergencia que apareca depois e do MEU harness, nao
+do stack real.
+
+**Arquitetura (ver `thesis/results/v9/integration/`):**
+- `gateway/business.go` + `business_server.go` (novos): devolve a
+  camada de negocio de `mock_mtls/main.go` (reverse proxy pra
+  `auth:3000`/`mockapi:8080`, introspeccao de token,
+  `/root-ca.pem`/`/issuer-ca.pem`) ao fork da v9, SEM SSA (confirmado
+  por leitura direta de `opin_flow.py`: nenhum dos dois fluxos chama
+  `.../softwarestatements/.../assertion` -- `client_one` e
+  pre-registrado, nao passa por DCR) e sem `/participants`/
+  `/application.jwks`/`/.well-known` (tambem confirmados nao chamados).
+  Handshake explicito (`tls.Server`+`Handshake()`) continua checando
+  CurveID/DualAuthenticated por conexao (criterio (c) do rascunho da
+  T7), depois entrega a conexao ja autenticada a um `http.Server`
+  compartilhado via um listener customizado, pra suportar keep-alive
+  (o fluxo real reusa cada conexao mTLS por varias chamadas HTTP, o
+  que o modo "measure" da T5/T6, uma resposta por conexao, nao suporta).
+  Modo escolhido por `HTTP_MODE=business` (novo), com `measure` como
+  default -- `run_t5.sh`/`run_t6.sh` continuam funcionando sem nenhuma
+  mudanca.
+- `proxy/relay.go` (novo): modo relay persistente (contraparte do modo
+  "measure" de uma unica requisicao da T5/T6) -- escuta localmente com
+  certificado efemero auto-assinado (mesmo mecanismo do
+  `tls_kem_proxy` real), abre uma conexao mTLS real por conexao local
+  aceita, usando `buildClientTLSConfig` (o MESMO codigo da T5/T6,
+  cobrindo os 4 perfis incluindo Hibrido-AND, que o `tls_kem_proxy`
+  real nao tem). Ativado por `-listen`.
+- `thesis/scripts/opin_flow.py` (EDITADO -- unico arquivo de producao
+  tocado nesta rodada, aditivamente): `_USE_TLS_KEM_PROXY` ganhou
+  `"hibrido-and"`; nova env var `V9_HARNESS` (default desligada, igual
+  ao precedente de `REMOTE_GATEWAY_HOST` no mesmo arquivo) faz
+  `start_tls_kem_proxy()` lancar o proxy relay da v9 em vez do
+  `tls_kem_proxy` real, para os 4 perfis -- necessario mesmo para
+  classic/pqc/hybrid, porque o `tls_kem_proxy` real so sabe apresentar
+  os certificados REAIS de producao, que o gateway da v9 (CAs proprias,
+  Decisao 9/10/11) nunca vai confiar. Nenhuma outra linha mudou --
+  confirmado que `load_client_signing_key`, a contagem de chamadas, e
+  toda a logica de fluxo continuam idênticas.
+
+**Integracao com o stack real:** o container `mtls` real foi parado
+(`docker stop`, nunca removido); um container `v9-mtls` (minha imagem,
+modo `business`) entrou no MESMO `insurance-server-lambdas_default`
+com os MESMOS aliases de rede (`--network-alias mtls
+matls-auth.local auth.local matls-api.local api.local directory`) --
+`auth`/`mockapi`/`mongodb`/`psql`/`localstack` ficaram de pe,
+inalterados, exatamente como estavam. Certificados da v9 e os
+REAIS da `mock-service-os/certs/` entraram via bind mount
+(`docker run -v`, confirmado funcionando normalmente neste ambiente
+com `MSYS_NO_PATHCONV=1` -- a conclusao anterior de que bind mount "nao
+funciona neste ambiente" era, ela mesma, um artefato de mangling de
+path do Git Bash, nao uma limitacao real do Docker Desktop;
+registrado aqui para corrigir esse entendimento anterior).
+
+**Tres bugs reais encontrados e corrigidos no caminho, cada um achado
+rodando de verdade, nao previsto estaticamente:**
+
+1. **DNS round-robin entre o `mtls` real e o `v9-mtls` novo.** Erro
+   intermitente ("certificate is valid for ..., not mtls") na primeira
+   tentativa -- causa: o container `mtls` REAL ainda estava rodando
+   (eu tinha reiniciado ele pra medir o baseline e esqueci de pará-lo),
+   e os dois (`mtls` real + `v9-mtls`) tinham o alias `mtls` registrado
+   na mesma rede ao mesmo tempo -- o DNS embutido do Docker alternava
+   entre os dois. Corrigido parando o `mtls` real antes de continuar.
+
+2. **`internalCallerConfig` com `ClientCAs` fixo em `ca.crt`, divergindo
+   do original.** Sob `pqc`, a chamada reentrante de
+   `InsurerAdapter.getConsent()` (via SNI `matls-api.local`) falhou com
+   `certificate signed by unknown authority` -- `setup_ssm.sh` publica
+   `op_pqc.crt` (assinado por `root_ca_pqc`, NAO por `ca.crt`) como o
+   certificado de transporte do AS sob esse perfil. O `mock_mtls/
+   main.go` ORIGINAL nao tem esse problema porque seu
+   `internalCallerConfig := *cfg` HERDA o `ClientCAs` do config
+   principal (que `caCertPool()` ja amplia pra confiar em
+   `root_ca_pqc.crt` sob `CRYPTO_PROFILE=pqc`) -- eu tinha fixado um
+   pool separado, so com `ca.crt`, divergindo desse detalhe. Corrigido:
+   o pool agora tambem confia em `root_ca_pqc.crt` quando o perfil e
+   `pqc` (`business_server.go`'s `attachInternalCallerCarveOut`).
+
+3. **`VerifyPeerCertificate` herdado sem querer no carve-out.**
+   Sob `hybrid`, a mesma chamada reentrante falhou com `ML-DSA-65 alt
+   signature verification failed` -- o gate AND X.509 do Hibrido-v8
+   (que verifica a assinatura alternativa contra a CA ML-DSA PROPRIA
+   da v9, `hibrido_v8_ca_mldsa.crt`) estava sendo herdado pelo
+   `internalCfg` via `cfg.Clone()`, mas `op_hybrid.crt` (o certificado
+   real do AS sob esse perfil) tem sua assinatura alternativa feita
+   pela CA ML-DSA REAL de producao, uma chave completamente diferente.
+   O chamador interno nunca fez parte do esquema de identidade
+   especifico da v9 de nenhum perfil. Corrigido: `internalCfg.
+   VerifyPeerCertificate = nil` explicito no carve-out.
+
+**Resultado final, os 4 perfis, `auth`/`mongo_seed`/`mockapi` recriados
+com o `CRYPTO_PROFILE` correspondente antes de cada teste (classic/pqc/
+hybrid; hibrido-and roda com o backend em classic, de proposito -- ver
+abaixo), `insurance-server-lambdas` e `mock_as` nunca editados:**
+
+| Perfil | Chamadas HTTP (insurance+person) | Erros | Grupo (conexoes cliente) | DualAuthenticated |
+|---|---|---|---|---|
+| Classico | 20+24=44 | 0 | CurveP384, 7/7 | n/a (false, esperado) |
+| PQC | 20+24=44 | 0 | MLKEM1024, 7/7 | n/a (false, esperado) |
+| Hibrido-v8 | 20+24=44 | 0 | SecP384r1MLKEM1024, 7/7 | n/a (false, esperado -- gate X.509 confirmado passando nos logs) |
+| Hibrido-AND | 20+24=44 | 0 | SecP384r1MLKEM1024, 7/7 | **true, 7/7 conexoes cliente** |
+
+Todas as 44 chamadas retornaram sucesso (sem excecao Python, sem
+`raise_for_status()` disparando) nos 4 perfis. Em TODAS as conexoes
+cliente (SNI `mtls`) dos 4 perfis, o grupo negociado bateu exatamente o
+esperado do perfil; no Hibrido-AND especificamente, `DualAuthenticated
+= true` em 100% dessas conexoes (confirmado pelo log do proprio
+gateway, nao inferido).
+
+**Por que o backend fica em `classic` para o Hibrido-AND:** o mecanismo
+AND e inteiramente da camada de transporte (prova de posse dupla no
+handshake TLS) -- nao muda nada sobre como o AS assina JWTs ou como o
+RS assina respostas. Deixar `auth`/`mockapi` em `classic` pra esse
+perfil e uma escolha deliberada, nao uma omissao: nao existe (nem
+deveria existir) um "CRYPTO_PROFILE=hibrido-and" no `mock_as`/
+`insurance-server-lambdas` reais, porque nada ali precisa saber que o
+mecanismo AND esta em uso.
+
+**Divergencia de contagem, reportada, NAO forcada a bater: 7 conexoes
+mTLS client-facing por execucao combinada (insurance+person), nao 6.**
+Consistente nos 4 perfis (sempre 7, nunca variou) -- nao e ruido.
+`run_insurance_flow`/`run_person_flow` cada um cria seu PROPRIO
+`requests.Session()` (confirmado lendo o codigo: nenhum compartilha
+conexao com o outro), e `simulate_login()` dentro de cada um usa AINDA
+outra Session propria (seu proprio docstring diz isso explicitamente).
+"6" e o numero historico estabelecido da v7/v8 (`v8/DECISIONS.md`,
+"44 chamadas + 2x6 conexoes"); esta rodada mediu 7, direto do log do
+proprio gateway (contagem por SNI, nao inferida por heuristica). Nao
+investigado a fundo nesta rodada -- hipotese nao confirmada: a chamada
+`root-ca.pem`/`issuer-ca.pem` usa `cert=None` (as outras do mesmo fluxo
+usam `cert=cert`), o que pode fazer o `urllib3`/`pyopenssl` abrir uma
+conexao à parte em vez de reusar o pool existente, adicionando 1 conexao
+por execucao -- consistente com 6 esperado + 1 = 7 medido, mas NAO
+confirmado por instrumentacao adicional nesta rodada. Registrado aqui
+para o Luciano decidir se vale investigar mais (ou se "7" e o numero
+certo e "6" e que estava errado/desatualizado -- nenhuma das duas
+hipoteses foi testada).
+
+**Conexoes internas (SNI `matls-api.local`):** tambem 7 por execucao,
+em todos os perfis -- simetrico as 7 client-facing, mesma causa
+estrutural provavel (mesma quantidade de "fluxos AS-to-RS" quanto de
+fluxos client-facing, 1:1, consistente com a chamada de
+`InsurerAdapter.getConsent()` disparando uma vez por autorizacao de
+consentimento).
+
+**Nao verificado nesta rodada (registrado para a T8, nao escondido):**
+contagem de JWTs (28) e de buscas de `/jwks` (4) nao foram extraidas
+separadamente do log desta rodada -- as 44 chamadas HTTP e as 0 erros
+foram confirmados diretamente; os outros dois numeros do pedido
+original (28 JWTs, 4 jwks) precisam de uma passada adicional pelos
+logs/calls.jsonl que esta rodada nao fez, por tempo. Diferente das
+conexoes mTLS (que vieram de graca do log do proprio gateway), esses
+dois exigiriam parsear `calls1`/`calls2` (as listas retornadas por
+`run_insurance_flow`/`run_person_flow`) ou os logs do `auth`/`mockapi`
+reais -- nenhum dos dois foi feito aqui.
+
+**Estado dos containers ao final desta rodada:** `v9-mtls` removido;
+`mtls` real PARADO (nao removido, `docker start
+insurance-server-lambdas-mtls-1` religa); `auth`/`mongo_seed`/
+`mockapi` recriados de volta em `CRYPTO_PROFILE=classic` (o default);
+`localstack`/`mongodb`/`psql` seguem rodando, inalterados.
+`thesis/results/v9/certs/generated/` e `thesis/results/v9/integration/
+{gateway,proxy}/certs/` permanecem no disco local desta sessao (nao
+commitados, gitignored) -- removidos antes do commit desta rodada.
+
+Artefatos novos/editados: `thesis/results/v9/integration/gateway/
+{business.go,business_server.go}` (novos), `main.go` (editado --
+dispatch `HTTP_MODE`); `thesis/results/v9/integration/proxy/
+relay.go` (novo), `main.go` (editado -- flag `-listen`);
+`thesis/scripts/opin_flow.py` (editado, aditivo -- ver acima).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

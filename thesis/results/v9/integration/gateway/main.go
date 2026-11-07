@@ -61,6 +61,17 @@ func main() {
 	profile := os.Getenv("CRYPTO_PROFILE")
 	certDir := envOr("CERT_DIR", "/certs")
 	listen := envOr("LISTEN", ":443")
+
+	// T6b: full HTTP business layer (reverse proxy to auth/mockapi,
+	// introspection, directory CA endpoints), keep-alive, real flow --
+	// see business.go/business_server.go. Default ("measure") keeps
+	// T5/T6's byte-boundary-precise, single-response behavior
+	// unchanged, so run_t5.sh/run_t6.sh keep working exactly as before.
+	if envOr("HTTP_MODE", "measure") == "business" {
+		runBusinessMode(profile, certDir, listen)
+		return
+	}
+
 	ticketsDisabled := envOr("TICKETS_DISABLED", "true") == "true"
 	keylogPath := os.Getenv("KEYLOG_PATH")
 

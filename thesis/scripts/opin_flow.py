@@ -235,8 +235,34 @@ DIRECTORY_HOST = "directory"
 # added now, since the default Host-header-from-URL behavior requests()
 # falls back to would otherwise leak the proxy's own address.
 _CRYPTO_PROFILE_FOR_ROUTING = os.environ.get("CRYPTO_PROFILE", "classic")
-_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid")
+# "hibrido-and" (thesis/results/v9): a 4th profile with no real-stack
+# counterpart -- added here, additively, so routing treats it like the
+# other three (through the proxy, never a direct connection this
+# script's own Python/OpenSSL stack couldn't negotiate anyway).
+_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid", "hibrido-and")
 TLS_KEM_PROXY_PORT = int(os.environ.get("TLS_KEM_PROXY_PORT", "8443"))
+
+# V9_HARNESS (thesis/results/v9, T6b): opt-in, unset by default -- when
+# "1", start_tls_kem_proxy() below launches the v9 integration harness's
+# OWN proxy (thesis/results/v9/integration/proxy, relay mode) instead of
+# the real tls_kem_proxy, for ALL FOUR profiles, not just hibrido-and.
+# Required even for classic/pqc/hybrid: the real tls_kem_proxy is
+# hardcoded to present the REAL production client certs
+# (mock-service-os/certs/client_one*.*), but the v9 gateway it would be
+# talking to (substituted for the real "mtls" service, see
+# thesis/results/v9/integration/DECISIONS.md, Decisao 17) only trusts
+# v9's own freshly-generated CAs (Decisao 9/10/11) -- a real cert
+# presented there would simply fail verification. Nothing else in this
+# file changes when this is set: JWT signing (load_client_signing_key),
+# mongo_seed's client registration, and every byte of flow/counting
+# logic are completely independent of which mTLS certificate transports
+# the connection (confirmed by reading both before relying on it --
+# client_one's token_endpoint_auth_method is private_key_jwt, a
+# separate credential from the mTLS channel's own certificate).
+V9_HARNESS = os.environ.get("V9_HARNESS") == "1"
+V9_PROFILE_NAME = {"classic": "classico", "pqc": "pqc", "hybrid": "hibrido-v8", "hibrido-and": "hibrido-and"}
+V9_CERTS_DIR = BASE_DIR / "thesis" / "results" / "v9" / "certs" / "generated"
+V9_PROXY_IMAGE = "mockopin-v9-proxy"
 
 # Decision 45/51 (v8): set to run this flow against a real remote MockOPIN
 # installation (a real AWS server) instead of the local docker-compose lab.
@@ -1046,16 +1072,13 @@ def start_tls_kem_proxy(crypto_profile: str, detached: bool = False,
     itself" -- mirroring how the Go-clássico handshake_bytes baseline
     already isolates the same variable for size.
     """
-    if crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE:
+    if crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE and crypto_profile != "hibrido-and":
         return None
 
     subprocess.run(
         ["docker", "rm", "-f", TLS_KEM_PROXY_CONTAINER_NAME],
         capture_output=True, text=True,
     )  # clean up a stale container from a prior crashed run, if any
-
-    crt_path, key_path = get_client_cert_paths(crypto_profile)
-    curve = os.environ.get("TLS_KEM_PROXY_CURVE_OVERRIDE") or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
 
     # Decision 45/51: "mtls" is the local lab's compose-network alias for
     # the gateway container; REMOTE_GATEWAY_HOST overrides this to a real
@@ -1066,6 +1089,33 @@ def start_tls_kem_proxy(crypto_profile: str, detached: bool = False,
     # reaches "mtls" today.
     proxy_target = f"{REMOTE_GATEWAY_HOST}:443" if REMOTE_GATEWAY_HOST else "mtls:443"
     run_mode_flags = ["-d"] if detached else ["--rm", "-i"]
+
+    if V9_HARNESS:
+        network_argv = [] if REMOTE_GATEWAY_HOST else ["--network", "insurance-server-lambdas_default"]
+        argv = [
+            "docker", "run", *run_mode_flags,
+            "--name", TLS_KEM_PROXY_CONTAINER_NAME,
+            *network_argv,
+            "-p", f"127.0.0.1:{TLS_KEM_PROXY_PORT}:{TLS_KEM_PROXY_PORT}",
+            "-v", f"{V9_CERTS_DIR}:/certs:ro",
+            V9_PROXY_IMAGE,
+            "-profile", V9_PROFILE_NAME[crypto_profile],
+            "-target", proxy_target,
+            "-cert-dir", "/certs",
+            "-listen", f":{TLS_KEM_PROXY_PORT}",
+        ]
+        if detached:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                raise RuntimeError(f"v9 proxy (detached): docker run -d failed:\n{r.stdout}\n{r.stderr}")
+            _wait_for_tls_kem_proxy_ready_detached()
+            return TLS_KEM_PROXY_CONTAINER_NAME
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        _wait_for_tls_kem_proxy_ready(proc)
+        return proc
+
+    crt_path, key_path = get_client_cert_paths(crypto_profile)
+    curve = os.environ.get("TLS_KEM_PROXY_CURVE_OVERRIDE") or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
 
     # C.15: `go run .` (mounting source, compiling on every start) stays
     # the default -- nothing below changes unless the flag is explicitly
