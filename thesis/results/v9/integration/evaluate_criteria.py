@@ -55,7 +55,31 @@ EXPECTED_CURVE = {
 # MEDIDOS (Decisao 29), nao os aritmeticos (Decisao 28, superados).
 CERTIFICATE_BASELINE = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
 CERTIFICATE_TOLERANCE_B = 50
-CLIENTHELLO_TOLERANCE_B = 15
+
+# Decisao 30 (Emenda 3 ao criterio 1): a Decisao 20/21 original supunha
+# que o SNI do ClientHello no piloto seria um hostname de deploy real
+# (~40-49 chars), com +36B esperados e +-15B de tolerancia em torno
+# disso -- NUNCA verificado contra o codigo. Lendo `proxy/main.go`
+# (singleChainClientConfig/dualClientConfig) e `proxy/relay.go` (o
+# modo usado no piloto de verdade, nao o one-shot): `ServerName:
+# "mtls"` e FIXO, hardcoded, nos dois construtores de tls.Config, e
+# nunca depende do endereco de `-target` (que so afeta o `tls.Dial`,
+# nunca o SNI). A verificacao do certificado do servidor e por
+# `cert.VerifyHostname("mtls")` -- como "mtls" nao e um IP valido, o
+# Go compara contra `DNSNames`, NUNCA contra `IPAddresses` (confirma
+# que os IPs do SAN, Decisao 28/29, nunca entram na verificacao desta
+# arquitetura especifica -- so os IPs reais que a AWS atribuir, a
+# verificacao sempre casa com a string fixa "mtls"). Conclusao: o SNI
+# do piloto e BYTE A BYTE igual ao do loopback -- confirmado medindo
+# (nao so lendo o codigo): measure.sh de hoje (Decisao 29, as mesmas
+# duas rodadas de medicao, loopback e SAN doc-range) deu o MESMO
+# tamanho de ClientHello nas duas, pros 4 perfis -- esperado, ja que
+# o ClientHello e inteiramente gerado pelo CLIENTE antes do servidor
+# mandar qualquer coisa, nunca depende do certificado do servidor.
+# Tolerancia corrigida de +-15B pra **0B** -- nao ha NENHUMA fonte de
+# variabilidade entre loopback e piloto nesta mensagem especifica.
+CLIENTHELLO_BASELINE = {"classico": 336, "pqc": 1779, "hibrido-v8": 1876, "hibrido-and": 1858}
+CLIENTHELLO_TOLERANCE_B = 0
 ZERO_TOLERANCE_MESSAGES = {"ServerHello", "EncryptedExtensions", "CertificateRequest", "CertificateVerify", "Finished"}
 
 
@@ -79,6 +103,7 @@ def criterion_1_message_sizes(log_text: str) -> dict:
         if not msg_section:
             continue
         total_cert_bytes = None
+        clienthello_bytes = None
         for line in msg_section.group(1).splitlines():
             cols = line.split("\t")
             if len(cols) < 3:
@@ -94,14 +119,24 @@ def criterion_1_message_sizes(log_text: str) -> dict:
             # contains ServerHello (type 2) is the server's own flight --
             # that frame's "11" is the one the Decisao 20 tolerance is
             # actually about.
-            if "2" not in types or "11" not in types:
-                continue
-            total_cert_bytes = int(lengths[types.index("11")]) + 4
-        baseline = CERTIFICATE_BASELINE.get(profile)
-        ok = baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - baseline) <= CERTIFICATE_TOLERANCE_B
+            if "2" in types and "11" in types:
+                total_cert_bytes = int(lengths[types.index("11")]) + 4
+            # ClientHello (type 1) is always alone in the client's own
+            # first frame -- confirmed never sharing a frame with any
+            # other handshake type in any of this project's captures.
+            if types == ["1"]:
+                clienthello_bytes = int(lengths[0]) + 4
+        cert_baseline = CERTIFICATE_BASELINE.get(profile)
+        cert_ok = cert_baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - cert_baseline) <= CERTIFICATE_TOLERANCE_B
+        ch_baseline = CLIENTHELLO_BASELINE.get(profile)
+        ch_ok = ch_baseline is not None and clienthello_bytes is not None and abs(clienthello_bytes - ch_baseline) <= CLIENTHELLO_TOLERANCE_B
         results.append({
-            "profile": profile, "certificate_bytes": total_cert_bytes,
-            "baseline": baseline, "tolerance": CERTIFICATE_TOLERANCE_B, "ok": ok,
+            "profile": profile,
+            "certificate_bytes": total_cert_bytes, "certificate_baseline": cert_baseline,
+            "certificate_tolerance": CERTIFICATE_TOLERANCE_B, "certificate_ok": cert_ok,
+            "clienthello_bytes": clienthello_bytes, "clienthello_baseline": ch_baseline,
+            "clienthello_tolerance": CLIENTHELLO_TOLERANCE_B, "clienthello_ok": ch_ok,
+            "ok": cert_ok and ch_ok,
         })
     return {"criterion": 1, "name": "tamanhos por mensagem", "rows": results,
             "pass": all(r["ok"] for r in results) if results else None,

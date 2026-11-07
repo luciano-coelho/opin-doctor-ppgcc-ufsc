@@ -4200,3 +4200,86 @@ avaliador usa os numeros desta emenda.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 30. EMENDA 3 AO CRITERIO 1 (T7, pos-tag `v9-prereg`) -- SNI do ClientHello e FIXO ("mtls", hardcoded no proxy, nunca depende do endereco real de `-target`); verificacao do servidor e por nome DNS do SAN, nunca por IP; tolerancia corrigida de ±15B pra 0B, confirmada por medicao local; avaliador atualizado e testado
+
+**Rotulo formal de emenda:**
+- **O que mudou:** `CLIENTHELLO_TOLERANCE_B` (Decisao 20/21, item e)
+  de **±15B** pra **0B**; `CLIENTHELLO_BASELINE` passa a existir e a
+  ser conferido de verdade no avaliador (antes, a constante existia
+  mas nunca era usada no codigo).
+- **Motivo:** o pressuposto original ("SNI ~+36B esperado com DNS
+  privado") nunca foi verificado contra o codigo real do proxy -- a
+  leitura direta mostra que o SNI e uma string FIXA, nao o hostname
+  de deploy.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1 e 2).
+- **A tag `v9-prereg` permanece intacta**, mesma razao das emendas
+  anteriores -- o texto original da Decisao 20/21 (que supunha o
+  +36B) nao foi reescrito, so superado por esta entrada nova.
+
+**1. Lido o codigo do proxy e do cliente -- o SNI e FIXO, nunca
+depende do endereco de `-target`.** `proxy/main.go`,
+`singleChainClientConfig` (linha 269) e `dualClientConfig` (linha
+299): **`ServerName: "mtls"`, hardcoded nos dois construtores de
+`tls.Config`** -- usados tanto no modo de teste unico quanto no modo
+`-listen` (relay persistente, `proxy/relay.go` linha 33, o MESMO
+`buildClientTLSConfig` chamado de la, confirmado lendo o codigo). O
+`-target` (endereco de discagem, `tls.Dial("tcp", target, cfg)`,
+`relay.go` linha 63) e usado SO pro TCP dial -- nunca read de volta
+pro campo `ServerName`. **No piloto, o proxy disca o servidor por IP
+(EIP ou IP privado), mas manda `ServerName: "mtls"` como SNI mesmo
+assim -- exatamente a mesma string que o loopback local ja usa.**
+
+**2. Verificacao do certificado do servidor e por NOME DNS do SAN,
+nunca por IP.** Comportamento padrao e documentado do
+`crypto/tls`/`crypto/x509` do Go: a verificacao do hostname chama
+`cert.VerifyHostname(c.config.ServerName)`; dentro dela, se o
+argumento NAO analisa como um IP valido (`net.ParseIP` falha), a
+comparacao e feita contra `Certificate.DNSNames`, NUNCA contra
+`Certificate.IPAddresses`. Como `"mtls"` nao e um IP valido, a
+verificacao SEMPRE casa contra a entrada DNS `mtls` do SAN (presente
+desde o default `SERVER_DNS`, Decisao 22/27) -- **os IPs que a
+Decisao 28/29 adicionou ao SAN (IP privado + EIP) nunca entram
+nessa verificacao especifica, nesta arquitetura** (eles continuariam
+corretos de se ter -- um certificado com mais SANs nao e um
+problema -- so nao sao o que o proxy de fato confere pra validar o
+servidor).
+
+**3. Tamanho esperado do ClientHello no piloto = EXATAMENTE o do
+loopback -- confirmado por medicao, nao so por leitura de codigo.**
+Reusei as DUAS rodadas reais de medicao da Decisao 29 (mesmo
+pipeline `measure.sh`, mesmo dia) -- uma com certs de SAN loopback,
+outra com SAN de documentacao (`203.0.113.10`/`10.0.0.10`) -- e
+comparei o frame do ClientHello (tipo `1`, sempre sozinho no seu
+proprio frame, nunca compartilhado com outro tipo de mensagem, nos 4
+perfis): **tamanho IDENTICO nas duas rodadas, byte a byte, nos 4
+perfis** -- esperado, porque o ClientHello e inteiramente gerado
+pelo CLIENTE antes do servidor mandar qualquer coisa, nunca depende
+do certificado do servidor (SAN ou qualquer outro campo). Isso
+confirma diretamente, por medicao e nao so por leitura de codigo, que
+NAO HA fonte de variabilidade nessa mensagem entre loopback e piloto.
+
+| Perfil | ClientHello medido (loopback, hoje) | ClientHello medido (SAN doc-range, hoje) | Diferenca |
+|---|---|---|---|
+| Classico | 336B | 336B | 0B |
+| PQC | 1.779B | 1.779B | 0B |
+| Hibrido-v8 | 1.876B | 1.876B | 0B |
+| Hibrido-AND | 1.858B | 1.858B | 0B |
+
+**4. Tolerancia corrigida pra 0B; avaliador atualizado e TESTADO
+contra dados reais, nao so editado.** `evaluate_criteria.py`:
+`CLIENTHELLO_BASELINE = {"classico": 336, "pqc": 1779, "hibrido-v8":
+1876, "hibrido-and": 1858}`, `CLIENTHELLO_TOLERANCE_B = 0`. A
+extracao do ClientHello (frame com `types == ["1"]`, `+4B` de
+cabecalho, mesma convencao da Certificate) foi CONECTADA de verdade
+em `criterion_1_message_sizes()` -- antes, a constante
+`CLIENTHELLO_TOLERANCE_B` existia mas nunca era checada no codigo,
+so documentada. Testado rodando o script contra um log sintetico
+construido a partir dos dados REAIS desta mesma sessao (as medicoes
+de loopback da Decisao 29): **PASS nos 4 perfis, Certificate e
+ClientHello juntos**, saida completa reproduzida (nao resumida):
+`classico`/`pqc`/`hibrido-v8`/`hibrido-and` todos com
+`certificate_ok: true` e `clienthello_ok: true`.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
