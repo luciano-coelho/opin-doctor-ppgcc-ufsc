@@ -4021,3 +4021,67 @@ valendo ao pe da letra.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 28. SAN do servidor corrigido -- L0 alcanca por IP PRIVADO, L219/L325 por EIP (confirmado na v8 real, Decisao 52/53); escolhida a opcao (a), dois IPs no SAN; tolerancia do Certificate recalculada com delta exato (-12B) e evaluate_criteria.py atualizado
+
+**Como a v8 real fazia L0 alcancar o servidor -- pesquisado direto,
+nao assumido.** `v8/DECISIONS.md`, Decisao 52 (titulo: "L0's
+private-vs-public-IP asymmetry registered as a limitation"), linha
+2644-2656: **confirmado explicitamente** -- "the lowest-latency
+scenario's client (L0) reaches its server over the server's PRIVATE
+IP (co-located, same AZ ID)... every OTHER scenario's client reaches
+its server over the server's PUBLIC IP, the only path available
+cross-region." Registrado pela propria v8 como uma limitacao
+estrutural (nao so uma diferenca de magnitude): "no NAT, no
+public-internet routing, potentially different MTU/offload
+behavior." Confirmado tambem em `campaign_run.py:456`:
+`ip_field = "private_ip" if client["colocated"] else "public_ip"`
+-- L0 e o unico `colocated=True`.
+
+**Escolha: opcao (a) -- fixar o IP privado do servidor e incluir os
+DOIS IPs no SAN, nao mover L0 pro EIP.** Mover L0 pro EIP (opcao b)
+destruiria exatamente a propriedade que faz do L0 um cenario util
+(zero NAT, zero roteamento de internet publica, caminho realmente
+co-localizado) -- v8 NUNCA fez isso, e a v9 nao tem motivo pra
+divergir aqui. **Como a v9 exige verificacao estrita do servidor
+pelo cliente (T5, Decisao 12 -- sem `InsecureSkipVerify`, divergencia
+deliberada da v8 real, que usa `InsecureSkipVerify:true` no
+`tls_kem_proxy`), o certificado do servidor PRECISA responder aos
+dois enderecos**, ao contrario da v8 (que podia ignorar essa
+exigencia por nunca verificar o servidor de verdade). `-server-ips`
+(Decisao 22/27) passa a listar os DOIS: IP privado do servidor (pro
+L0) + EIP do servidor (pro L219 e L325).
+
+**Tolerancia do Certificate recalculada, delta exato, nao
+aproximado.** O SAN de IP sai do default de desenvolvimento local
+(`127.0.0.1,::1` -- 1x IPv4 + 1x IPv6) pra 2x IPv4 real. IPs em SAN
+sao `OCTET STRING`s de largura FIXA (Decisao 20): IPv4 = 2B de
+tag+tamanho + 4B de conteudo = 6B por entrada; IPv6 = 2B+16B = 18B
+por entrada.
+- Antes (loopback): 1x IPv4 (6B) + 1x IPv6 (18B) = **24B**
+- Depois (piloto): 2x IPv4 (6B+6B) = **12B**
+- **Delta: -12B**, exato -- depende so da CONTAGEM e TIPO dos
+  enderecos (2 IPv4), nunca do VALOR exato que a AWS atribuir (mesma
+  logica que ja vale pra qualquer IP SAN, Decisao 20) -- entao pode
+  ser calculado e fixado AGORA, antes do deploy, sem esperar o IP
+  real existir.
+
+**Baseline do Certificate, atualizado (era o default de loopback, -12B):**
+| Perfil | Antes (loopback) | Depois (piloto, SAN final) |
+|---|---|---|
+| Classico | 913B | **901B** |
+| PQC | 5.632B | **5.620B** |
+| Hibrido-v8 | 6.255B | **6.243B** |
+| Hibrido-AND | 6.582B | **6.570B** |
+
+Tolerancia (±50B, Decisao 20) mantida sem mudanca -- continua
+cobrindo incerteza genuina (nao esse delta, que agora e conhecido e
+já embutido no proprio baseline). `evaluate_criteria.py`'s
+`CERTIFICATE_BASELINE` atualizado pros 4 valores acima, com
+comentario explicando a origem do -12B -- a mesma logica vale pra
+QUALQUER deploy real futuro, nao so este piloto especifico (o delta
+e deployment-independente, so depende da CONTAGEM de enderecos no
+SAN, fixada em 2 por decisao de arquitetura, nao por sorte de IP).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
