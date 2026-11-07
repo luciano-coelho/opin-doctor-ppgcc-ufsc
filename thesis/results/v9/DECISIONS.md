@@ -1226,3 +1226,112 @@ foram removidas do disco; qualquer chave usada em teste local a partir
 de agora e gerada e descartada por `make certs`/`make clean`).
 
 Nenhuma acao em AWS. Nenhuma tag nova.
+
+## 12. T5, integracao: fork do gateway/proxy dentro da v9 (sem tocar mock_mtls/tls_kem_proxy de producao), 4 perfis rodados ponta a ponta em conteineres, grupo unico e DualAuthenticated confirmados nos dois lados
+
+**Limpeza pedida antes da T5 (refs/original):** `git for-each-ref
+refs/original` retornou vazio -- a unica ref de backup que o
+`filter-branch` da Decisao 11 criou
+(`refs/original/refs/heads/v9/fase1-local`) ja tinha sido apagada na
+propria rodada anterior, logo antes da verificacao final. Nada a
+remover nesta rodada; nenhum classificador envolvido.
+
+**Decisao de escopo da T5 (perguntada ao Luciano antes de escrever
+qualquer codigo):** mock-service-os/mock_mtls/main.go e
+thesis/scripts/tls_kem_proxy/main.go sao os arquivos de PRODUCAO de
+que os dados ja congelados da v7/v8 dependem. Editar esses arquivos
+direto (removendo InsecureSkipVerify, trocando ClientAuth para
+RequireAndVerifyClientCert em todos os perfis) alteraria
+comportamento de codigo compartilhado por tras de resultados
+congelados. Luciano escolheu: **fork dentro de thesis/results/v9/,
+reusando a mesma arquitetura, sem tocar nos arquivos de producao** --
+e pediu, para cada arquivo copiado, o commit de origem na v8 e um
+diff legivel, para a checklist de equivalencia da T8.
+
+**Arquivos criados, com commit de origem:**
+
+- `thesis/results/v9/integration/gateway/main.go` + `hybridVerification.go`
+  -- fork de `mock-service-os/mock_mtls/main.go` (commit
+  `478bda51815d8bf60ebd23fb83f592270aa04377`) e
+  `mock-service-os/mock_mtls/hybridVerification.go` (commit
+  `7c722f6347b48a8d6a100b9197b7dc99f9146be5`).
+- `thesis/results/v9/integration/proxy/main.go` -- fork de
+  `thesis/scripts/tls_kem_proxy/main.go` (commit
+  `a304d6980422e6a264d990302fd319b4862693ee`).
+
+**Diff legivel contra a origem, gateway (mock_mtls):**
+
+| O que | Original | Fork (v9/integration/gateway) | Por que |
+|---|---|---|---|
+| `ClientAuth` | `tls.VerifyClientCertIfGiven` (opcional) em todos os perfis | `tls.RequireAndVerifyClientCert` em todos os perfis | Requisito explicito da T5 |
+| `InsecureSkipVerify` | `true` no proprio `tlsConfiguration()` (lado servidor nao verifica nada alem do handshake basico) | removido | Nao se aplica a este campo do lado servidor da mesma forma que no cliente, mas o campo foi removido porque este fork nunca liga TLS-sobre-TLS internamente como o original fazia para a chamada matls-api.local |
+| Perfis | 3: classic, pqc, hybrid | 4: classico, pqc, hibrido-v8 (equivalente ao "hybrid" original), hibrido-and (novo) | Escopo da v9 |
+| `GetConfigForClient`/`internalCallerConfig` (carve-out SNI matls-api.local p/ chamada reentrante do Node) | presente | removido | Este harness nao tem auth/mockapi real fazendo essa chamada; nada para o carve-out se aplicar |
+| Roteamento HTTP (reverse proxy p/ auth/api, SSA, introspeccao de token, participants.json) | presente, dependente do stack Node real | removido, substituido por um unico handler `/` que devolve `{profile, curve, dualAuthenticated, tlsVersion, peerCertCount}` | Fora do escopo da T5 (TLS, nao logica de negocio OPIN); o fluxo completo de 44 chamadas fica para a T8 |
+| Carregamento de cert/chave | PEM decode manual + `x509.ParsePKCS8PrivateKey` | `tls.LoadX509KeyPair` | Simplificacao -- mesmo padrao que o proprio tls_kem_proxy ja usa do lado cliente, inclusive para chave ML-DSA-65 |
+| Pool de CA | loop manual decodificando blocos PEM | `x509.CertPool.AppendCertsFromPEM` | Simplificacao, sem mudanca de comportamento |
+| Metricas por conexao (`handshakeInfo`, `countingConn`, `connStateHandshakeLogger`) | presente | removido | T6 mede; T5 so prova que a conexao fecha com sucesso |
+| `hybridVerifyPeerCertificateFunc` | sem parametro, le `CRYPTO_PROFILE` e uma const de pacote (`issuerCaPqcFilePath`) | recebe o caminho do CA ML-DSA-65 como argumento | O harness ja decide o perfil em `main.go`; a logica criptografica (`verifyHybridClientCert`, `reconstructPreTBS`) e identica, byte a byte |
+| Mecanismo AND (Dual) | nao existe (predata o mecanismo) | novo perfil hibrido-and: `tls.Config.Dual` com as duas cadeias independentes, `Require: true`, `SessionTicketsDisabled: true` | Objeto do v9 |
+
+**Diff legivel contra a origem, proxy (tls_kem_proxy):**
+
+| O que | Original | Fork (v9/integration/proxy) | Por que |
+|---|---|---|---|
+| `InsecureSkipVerify` | `true` | removido, `RootCAs` setado por perfil | Requisito explicito da T5: cliente verifica o servidor em todos os perfis |
+| `ServerName` | fixado em `"mtls"` | mantido, mesma logica/comentario | Sem mudanca |
+| Modo relay (tunel TLS-sobre-TLS para o `opin_flow.py` em Python) | presente (`-listen`, `-stub`) | removido -- este harness nao tem componente Python para relayar | A T5 testa so o lado Go; reintegrar o listener local com o `opin_flow.py` real fica para T6/T8 |
+| Requisicao | tunel bidirecional bruto (`io.Copy`) | uma chamada HTTP real (`http.Client` com `TLSClientConfig`) por execucao, contra `/` do gateway | Prova handshake + requisicao/resposta completa, nao so o tunel |
+| Perfis/curvas | 4 nomes antigos (secp384r1/mlkem1024/secp384r1mlkem1024/classic/classical/x25519mlkem768) | 4 nomes da v9 (classico/pqc/hibrido-v8/hibrido-and), cada um com exatamente 1 grupo | Alinhado a nomenclatura da v9; `classical`/`x25519mlkem768` (carve-outs historicos da v6/v7) nao se aplicam aqui |
+| Checagem de grupo negociado | nenhuma (so loga) | compara `ConnectionState.CurveID` contra o grupo esperado do perfil e falha explicitamente (`log.Fatalf`) se nao bater | Requisito explicito da T5 |
+| Checagem de `DualAuthenticated` | nao existe | para hibrido-and, falha explicitamente se `false` | Requisito explicito da T5 |
+| Mecanismo AND (Dual) | nao existe | novo perfil hibrido-and: `tls.Config.Dual` com as duas cadeias independentes, `Require: true` | Objeto do v9 |
+
+**Execucao, 4 perfis, ponta a ponta em conteineres (sem AWS, sem bind
+mount -- certificados entram nas imagens via `COPY`, copiados antes do
+build por `run_t5.sh` a partir de `../certs/generated/`, nunca
+montados):**
+
+```
+classico:    curve=CurveP384            status=200  dualAuthenticated=false (nao aplicavel)
+pqc:         curve=MLKEM1024            status=200  dualAuthenticated=false (nao aplicavel)
+hibrido-v8:  curve=SecP384r1MLKEM1024   status=200  dualAuthenticated=false (nao aplicavel; AND gate X.509 do client cert passou, log do gateway confirma)
+hibrido-and: curve=SecP384r1MLKEM1024   status=200  dualAuthenticated=true  (confirmado nos DOIS lados: log do proxy E do gateway)
+```
+
+Os 4 perfis negociaram exatamente o grupo configurado (checado e
+reforcado por `ConnectionState.CurveID` nos dois lados, nao so
+configurado como preferencia); nenhum fallback, nenhum downgrade
+silencioso. O Hibrido-AND confirmou `DualAuthenticated=true` tanto no
+cliente quanto no servidor, na mesma conexao -- a prova de posse dupla
+(RSA-PSS-SHA256 E ML-DSA-65, nenhuma opcional) que o v8 nao tinha. O
+Hibrido-v8 continuou usando so o gate X.509 (extensoes
+`AltSignatureValue`), sem o TLS Dual -- como decidido, nao alterado.
+Tickets de sessao desabilitados explicitamente (`SessionTicketsDisabled:
+true`) nos dois lados do hibrido-and, alem da supressao automatica que
+o patch AND ja faz server-side quando `Dual.Require` e verdadeiro
+(ver Decisao 6).
+
+Uma linha de log recorrente, inofensiva e esperada: `http: TLS
+handshake error from ...: EOF`, uma vez por perfil -- vem da propria
+sondagem de prontidao do `run_t5.sh` (`nc -z mtls 443`, que abre e
+fecha a conexao TCP sem fazer handshake TLS nenhum), nao da conexao
+real medida que vem imediatamente depois e que sempre teve sucesso.
+
+**Fora do escopo desta rodada, registrado para a T8:** o fluxo
+completo de 44 chamadas HTTP / 6 conexoes mTLS / 28 JWTs / 4 /jwks / 4
+buscas de CA (igual ao da v8) nao foi reproduzido aqui -- este harness
+prova a camada TLS (handshake, verificacao mutua, grupo unico, gate
+AND), nao a logica de negocio OPIN (que depende do stack Node real:
+auth, mockapi, oidc-provider). A checklist de equivalencia da T8 deve
+confirmar separadamente que o fluxo de negocio completo roda sobre
+este mesmo mecanismo TLS antes de qualquer medicao oficial (T6).
+
+Artefatos novos: `thesis/results/v9/integration/{gateway,proxy}/*.go`,
+`go.mod`, `Dockerfile`; `run_t5.sh`, `Makefile`, `.gitignore`.
+Nenhuma chave, nenhum certificado commitado (gerados e descartados a
+cada execucao via `make certs`/`make clean`, copiados para o contexto
+de build e removidos ao final de `run_t5.sh`). `mock-service-os/
+mock_mtls` e `thesis/scripts/tls_kem_proxy` permanecem intocados.
+
+Nenhuma acao em AWS. Nenhuma tag nova.
