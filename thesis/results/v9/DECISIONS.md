@@ -2897,7 +2897,7 @@ o erro das "6 rotas" da rodada anterior foi exatamente isso).
 
 | Item | v8 (real) | v9 (Fase 1 / planejado) | Status |
 |---|---|---|---|
-| Tipos de instancia | `t4g.micro` (controle, arm64); `m7i-flex.large` (servidor e clientes, x86_64, 2 vCPU/8GiB) | mesmos tipos, planejado | **NAO VERIFICAVEL SEM AWS** (nunca deployado na v9 ainda) |
+| Tipos de instancia | `t4g.micro` (controle, arm64); `m7i-flex.large` (servidor e clientes, x86_64, 2 vCPU/8GiB) -- confirmado direto no `terraform.tfstate.backup` real da v8 (`server_client_instance_type`=`m7i-flex.large` em 11 instancias, `control_instance_type`=`t4g.micro` em 1), nao so em prosa do DECISIONS.md | os MESMOS tipos (literais de configuracao, nao dependem de AWS pra serem especificados) | **IGUAL, por decisao -- verificavel e verificado AGORA** (o tipo e uma string de config; so o ID exato da AMI resolvida permanece NAO VERIFICAVEL SEM AWS, linha propria abaixo) |
 | Regioes e rotas | 8 rotas reais: `sa-east-1` L0/L123/L219/L325, `us-east-1` L0/L14, `ap-northeast-1` L0/L30 -- latencia REAL por distancia geografica, nao simulada | as MESMAS 8 rotas (Decisao 21) | **IGUAL**, por decisao |
 | Como L0/L219/L325 sao produzidos | L0 = cliente colocado na MESMA regiao/AZ do servidor (latencia de rede real minima, nao zero); os demais = cliente numa instancia realmente deployada em OUTRA regiao/distancia, latencia real do caminho IP, nunca `tc`/`netem` | identico, mesma logica (reaproveita a infra da v8) | **IGUAL**, por decisao -- **NAO VERIFICAVEL SEM AWS** que o RTT realmente saia nos valores nominais (isso e o criterio 7 do piloto) |
 | AMI | Amazon Linux 2023 (AL2023), AMI especifica resolvida via `data "aws_ami"` (`al2023-ami-*-kernel-*`, `most_recent=true`) -- IDs reais ja ficaram obsoletos (AMI muda com o tempo) | mesma fonte (`data "aws_ami"`, mesmo filtro) | **IGUAL por construcao** (mesmo mecanismo de resolucao); o ID exato sera outro, por design (`most_recent`) -- **NAO VERIFICAVEL SEM AWS** qual ID exato sai no piloto |
@@ -3471,6 +3471,202 @@ piloto cabe com folga grande (item acima); se for o teto pretendido
 pra CAMPANHA OFICIAL inteira, a estimativa aqui indica que nao cabe,
 e a decisao (reduzir N, reduzir rotas, aumentar o teto, ou aceitar o
 estouro) e do Luciano -- nao assumida aqui.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 25. Tipos de instancia reconciliados (m7i-flex.large/t4g.micro confirmados no tfstate real, nao t3.xlarge/t3.medium do plano antigo); build Go cross-arch amd64+arm64 com hash reprodutivel por arquitetura; papel da instancia de controle explicado e mantido; artefato do Date registrado como limitacao com tratamento de fronteira de dia; sensibilidade de preco regional e fonte dos precos explicitada
+
+**1. TIPOS E ARQUITETURA -- reconciliado contra o tfstate real da v8,
+nao contra o plano antigo.**
+
+O "t3.xlarge"/"t3.medium" que o Luciano leu vem do **rascunho de
+plano anterior a qualquer pesquisa real da v8** (o plano de fase
+registrado no inicio desta sessao, antes da Decisao 22 ter pesquisado
+a v8 de verdade) -- nunca foi escrito no `DECISIONS.md` da v9; o
+`DECISIONS.md` da v9 (Decisao 22 em diante) sempre usou
+`m7i-flex.large`/`t4g.micro`. Reconfirmei agora direto no artefato
+mais concreto possivel, nao em prosa: `thesis/results/v8/campaign/
+terraform/terraform.tfstate.backup` (o ESTADO REAL, pos-apply, nao o
+plano) -- `grep instance_type` mostra **11 instancias com
+`"instance_type": "m7i-flex.large"`** (servidores e clientes, todas
+x86_64) e **1 com `"instance_type": "t4g.micro"`** (controle,
+arm64), batendo exatamente com `variables.tf`
+(`server_client_instance_type`, sem default -- exige escolha
+explicita; `control_instance_type`, default `"t4g.micro"`,
+comentado como "free-tier-eligible, small -- the control instance
+never runs the real workload"). **Corrigida a linha "Tipos de
+instancia" da T8 (Decisao 22):** de "NAO VERIFICAVEL SEM AWS" para
+**"IGUAL, por decisao -- verificavel e verificado AGORA"**, porque o
+TIPO e uma string de configuracao, nao depende de AWS pra ser
+especificado; so o ID exato da AMI resolvida (linha propria,
+`most_recent=true`) continua dependendo de uma resolucao real.
+
+**Build cross-arquitetura, cada um com hash reprodutivel, testado
+agora:** buildei `gateway` pro toolchain corrigido (go1.27.3, mesma
+imagem `mockopin-v9-toolchain`) com `GOARCH=amd64` e com
+`GOARCH=arm64` separadamente, e REBUILDEI os dois do zero (container
+novo, mesmo fonte, mesma toolchain) pra confirmar reprodutibilidade:
+
+```
+amd64: 94bd9cadf87cc665b6fda5114b10cc3ddc771432436d0973b1cacc1630ee6537  (idêntico nas duas builds)
+arm64: 458009d2a77544f7919989ce70368b6e583b997e6b74df3e12326d93c342d78a  (idêntico nas duas builds)
+```
+
+Dois hashes DIFERENTES entre si (esperado -- codigo de maquina
+diferente), cada um estavel/reprodutivel na sua propria arquitetura
+(esperado -- confirma que a reprodutibilidade de build (Decisao 22,
+item 5) vale pras duas arquiteturas, nao so pra amd64). **Uso real:**
+o `gateway`/`proxy` roda no SERVIDOR e nos 3 CLIENTES, todos
+`m7i-flex.large` (amd64) -- esse e o par fonte-hash que precisa ser
+conferido (`sha256sum -c`) em CADA uma dessas 4 instancias antes de
+usar o binario. **A instancia de CONTROLE (arm64) nao roda
+`gateway`/`proxy` no desenho atual** (ela so orquestra via SSH,
+Secao 2 abaixo) -- o build arm64 e preparado mesmo assim, por pedido
+explicito e por precaucao (permite ao controle rodar um
+autoteste de conectividade com o MESMO binario, independente do
+caminho x86 real, se o Luciano quiser esse diagnostico extra antes de
+cada bloco) -- mas, honestamente, nao e usado pelo fluxo medido hoje.
+**Conferencia de hash e sempre arquitetura-consciente**: cada
+instancia confere contra o hash DA SUA PROPRIA arquitetura (amd64 nas
+4 `m7i-flex.large`, arm64 no controle se ele vier a rodar o binario),
+nunca cruzado -- comparar um hash amd64 contra um binario arm64
+falharia sempre, por design (sao arquivos diferentes).
+
+**Risco de CPU burstable (`t4g.micro`) -- avaliado, baixo impacto no
+caminho medido/capturado, mas monitoramento proposto por precaucao.**
+`t4g.micro` e da familia T (Graviton2, burstable): performance base
+baixa, com credito de CPU que se acumula ocioso e se esgota sob carga
+sustentada -- sob exaustao, a instancia e throttled pra baixo da
+baseline. `m7i-flex.large` (servidor e os 3 clientes -- onde o fluxo
+HTTP cronometrado e o `tcpdump -s 0`/keylog REALMENTE rodam) e da
+familia M "Flex": baseline mais alto, SEM o mecanismo de credito que
+se esgota -- nao sofre o mesmo risco. **Conclusao: a instancia que
+corre risco de throttling por credito e EXATAMENTE a que nao executa
+nem o fluxo cronometrado nem a captura** (controle so faz SSH/
+orquestracao) -- o risco nao contamina os dados medidos diretamente.
+**Mas pode atrasar a cadencia do round-robin** (Decisao 23, item 2)
+se o controle ficar lento sob exaustao de credito, criando lacunas de
+tempo entre execucoes (nao viés nos numeros, que sao autocontidos
+client-side, so possivel atraso/janela maior que o planejado).
+**Monitoramento proposto, adicionado ao roteiro:** antes e depois de
+CADA bloco de perfil (4 vezes no piloto), rodar `ethtool -S` nao se
+aplica aqui -- o mecanismo real e `aws cloudwatch get-metric-
+statistics --metric-name CPUCreditBalance` (fora de alcance desta
+sessao, "nada de AWS") OU, dentro da propria instancia, conferir
+`/proc/stat`/carga percebida antes/depois como proxy barato; o item
+formal fica como parte do roteiro do piloto (nao executavel sem AWS
+agora), com o criterio: saldo de credito do controle nao pode chegar
+a zero durante o piloto -- se chegar, documentar o atraso observado
+na cadencia, nao descartar os dados (que continuam validos, so
+potencialmente mais espacados no tempo).
+
+**2. CONTROLE -- papel explicado (mesmo da v8 real), mantido no
+roteiro.**
+
+Pesquisei o papel exato direto em `v8/DECISIONS.md`, Decisao 49
+("Campaign control-plane infrastructure"), em vez de assumir.
+**O que o controle FAZ na v8 real, e vai fazer identico na v9:** e o
+ORQUESTRADOR -- roda o script de campanha (equivalente ao
+`campaign_run.py` real) sob `systemd`, guarda a chave SSH exclusiva
+da campanha (gerada pelo Terraform, nunca escrita no repositorio) e
+usa ESSA chave pra se conectar ao servidor e aos clientes, nunca o
+contrario; e quem decide a ORDEM (perfil sorteado, round-robin de
+rota -- exatamente o mecanismo que a Decisao 23, item 2, depende de
+algo orquestrando) e dispara cada execucao via SSH. **O que o
+controle NAO FAZ, confirmado na mesma decisao:** nao tem credencial
+nem role AWS proprios (`iam_instance_profile` nunca setado -- nao
+consegue fazer `terraform destroy` nem nenhuma chamada AWS sozinho);
+nao roda o fluxo HTTP medido nem a captura (isso e no servidor/
+clientes). SSH de entrada no servidor/clientes so aceita a partir do
+IP elastico do PROPRIO controle (nunca do operador direto) -- o
+operador fala só com o controle, e o controle fala com o resto.
+**Decisao: mantido no roteiro da v9, identico no papel** -- sem ele,
+nao ha quem dispare o round-robin entre os 3 clientes na ordem certa
+nem quem guarde/retransmita a chave de campanha; e tambem onde a
+copia operacional da PKI pode ficar espelhada (alem da copia do
+operador, Decisao 23 item 1) se o Luciano quiser uma segunda copia
+dentro da rede da campanha.
+
+**3. DATE -- registrado como limitacao conhecida na checklist, com
+tratamento de fronteira de dia proposto.**
+
+Adicionado a checklist T8 (Decisao 22) e as limitacoes do piloto:
+**as respostas do RS (`mockapi`/Java/Micronaut) tem exatamente 1 byte
+a menos no cabecalho `Date` em qualquer execucao que caia nos dias 1
+a 9 de qualquer mes** (sem zero a esquerda no dia -- Decisao 24).
+Isso e **puramente de calendario**, nao de v8-vs-v9, nao de execucao
+pra execucao -- confirmado nas duas direcoes (Decisao 24). **Tratamento
+adotado:** (a) a data real de cada execucao ja fica registrada
+(`start_utc`/`end_utc`, por chamada, sempre gravados -- nenhuma
+mudanca necessaria) -- qualquer discrepancia de 1 byte e
+retroativamente explicavel so consultando essa data, nunca misteriosa;
+(b) a tolerancia do criterio 1 (Decisao 20, ±50B na Certificate) ja
+absorve folgadamente esse ±1B nas mensagens TLS -- nao e um risco pro
+criterio 1 em si (que mede TLS, nao o corpo HTTP do RS); o risco e so
+pra uma comparacao futura de TAMANHO DE CORPO HTTP entre execucoes de
+dias com contagem de digitos diferente, que precisa saber dessa
+ressalva pra nao confundir com uma regressao real.
+
+**A campanha oficial PODE cruzar essa fronteira?** Sim, realistamente
+-- a estimativa de frota (Decisao 24, item 5) e ~29,9h continuas, mas
+a v8 real rodou em MULTIPLAS janelas ao longo de >1 dia corrido
+(boot 2026-10-30T21:08, destroy 2026-10-31T19:36 -- quase 23h de
+relogio, nao so de frota ativa) -- um padrao semelhante na v9 pode
+facilmente atravessar a virada de um dia de 2 digitos pra um de 1
+digito (ex.: dia 30/31 pro dia 1) ou vice-versa. **Como tratar:**
+nao e preciso IMPEDIR a travessia (o item (a) acima ja torna isso
+rastreavel) -- mas, como precaucao simples e de custo zero, **registrado
+como recomendacao de agendamento**: evitar iniciar a campanha oficial
+a menos de ~2 dias de uma virada 9->10 ou 30/31->1, quando a duracao
+estimada for proxima de 24h+, simplesmente pra manter TODAS as 960
+execucoes do mesmo lado da fronteira e eliminar essa variavel por
+completo em vez de so explica-la depois. Se a travessia acontecer
+mesmo assim (ex.: duracao real maior que estimada), o item (a) garante
+que nada fica inexplicado.
+
+**4. CUSTO -- sensibilidade regional adicionada; fonte dos precos
+(agregador terceiro, nao a tabela oficial da AWS) explicitada; a
+estimativa da campanha (ancorada no gasto real da v8) ja reflete a
+mistura regional real, a do piloto (bottom-up) precisava do ajuste.**
+
+**Fonte, explicita:** todos os precos unitarios usados na Decisao 24
+vem de **agregadores de terceiros** (`calculator.holori.com`,
+`instances.vantage.sh`, ambos citados e linkados dentro do proprio
+`v8/DECISIONS.md`) -- **nenhum vem da tabela oficial de precos da
+AWS** (o IAM deste projeto nao tem permissao pra ler `pricing:*`,
+Decisao 44 da v8, nem authoriza nenhuma chamada AWS nesta sessao).
+**Precisa ser reconferido manualmente (AWS Pricing Calculator ou
+Billing Console) antes de qualquer `apply` real da campanha** -- nao
+e uma garantia de preco, e uma estimativa de ordem de grandeza.
+
+**Sensibilidade regional, adicionada:** o proprio `v8/DECISIONS.md`
+(linha ~1502) ja registra a ressalva "assume ate ~1,5x em regioes
+mais caras (`sa-east-1`, `ap-northeast-*`), nao confirmado
+independentemente" sobre a taxa de `m7i-flex.large` citada
+(US$0,0958/h e a taxa de `us-east-1`). **Isso importa mais pro
+PILOTO do que pra campanha:** pela estrutura real de rotas (Decisao
+21 -- `sa-east-1` hospeda L0/L123/L219/L325, as 4 rotas do perfil
+"distancia" dentro da MESMA regiao), **os 3 clientes do piloto
+(L0/L219/L325) MAIS o servidor MAIS o controle estao TODOS em
+`sa-east-1`** -- nenhum na regiao-base (`us-east-1`) usada pra
+sourcing do preco. Recalculando o piloto com o multiplicador 1,5x
+(conservador, o teto da faixa que a v8 ja registrou) sobre o compute:
+- Compute: (4 x 0,0958x1,5 + 1 x 0,0084x1,5) x 2h ≈ US$1,17 (antes:
+  US$0,78 sem ajuste regional)
+- Subtotal ajustado: ≈ US$1,27. **Com margem de 30%: ≈ US$1,65.**
+  Ainda **cabe em US$27,72 com folga grande** (~6% do teto).
+
+**Pra campanha oficial, o ajuste regional NAO e necessario do mesmo
+jeito:** a estimativa da Decisao 24 (≈US$39,12 antes de margem, 4
+perfis x 8 rotas) foi ancorada no **gasto REAL ja registrado da v8**
+(US$29,34/22,45h, Decisao 117 da v8) -- esse numero vem de cobranca
+real da AWS, nas 7 regioes reais que a v8 de fato usou, entao a
+mistura de preco regional real JA esta embutida nele por construcao,
+sem precisar de um multiplicador sintetico por cima. **Mantem-se:
+≈US$39,12 antes de margem, ≈US$50,86 com 30%, NAO cabe em US$27,72**
+-- nenhuma mudanca nessa conclusao por este item, so a origem do
+numero fica mais explicita (ancora real vs estimativa bottom-up).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
