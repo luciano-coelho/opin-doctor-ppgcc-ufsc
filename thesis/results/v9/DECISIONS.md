@@ -3670,3 +3670,157 @@ numero fica mais explicita (ancora real vs estimativa bottom-up).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 26. ERRO REAL corrigido -- topologia do piloto tinha os 3 clientes na mesma regiao do servidor, o que nao produziria L219/L325 de verdade; 8 rotas da v8 tabeladas com fonte; topologia/custo/cotas de vCPU refeitos pras 3 regioes reais; verificacao de tags estendida a todas as regioes do piloto; caminho operador-controle-instancias para PKI/binario/coleta descrito
+
+**1. ROTAS E REGIOES -- erro real admitido: a rodada anterior pos
+L0/L219/L325 todos em `sa-east-1`, o que contradiz a propria
+checklist T8 (que diz que essas rotas vem de distancia geografica
+REAL, nao de `tc`/`netem`) -- 3 instancias na MESMA regiao nunca
+produziriam ~219ms/~325ms de verdade. Corrigido, pesquisando direto
+`v8/DECISIONS.md` (linhas 1996-2001 e 1801-1805, Decisao 53/linhas
+8553-8554 e 9973 pros valores medidos reais), nao de memoria:**
+
+| Regiao do servidor | Cenario | Regiao do cliente | RTT nominal | RTT real medido (v8) | Como e produzido |
+|---|---|---|---|---|---|
+| `sa-east-1` | L0 | `sa-east-1` (mesma AZ, IP privado) | 0ms | ~0,14-0,18ms | co-localizacao real |
+| `sa-east-1` | L123 | `ca-central-1` (instancia A) | 123ms | ~122,9ms | distancia geografica real |
+| `sa-east-1` | **L219** | **`eu-north-1`** | 219ms | ~219,9ms | distancia geografica real |
+| `sa-east-1` | **L325** | **`ap-southeast-1`** | 325ms | ~330,3ms | distancia geografica real |
+| `us-east-1` | L0 | `us-east-1` (mesma AZ) | 0ms | ~0,14-0,18ms | co-localizacao real |
+| `us-east-1` | L14 | `ca-central-1` (instancia B, SEPARADA da A) | 14ms | ~15,4ms | distancia geografica real |
+| `ap-northeast-1` | L0 | `ap-northeast-1` (mesma AZ) | 0ms | ~0,14-0,18ms | co-localizacao real |
+| `ap-northeast-1` | L30 | `ap-northeast-2` | 30ms | ~32,3ms | distancia geografica real |
+
+8 rotas, 3 servidores (`sa-east-1`/`us-east-1`/`ap-northeast-1`), 3
+perfis x 30 = 720 execucoes (Decisao 53 da v8, linha 2663). **As 3
+rotas do piloto (L0/L219/L325, Decisao 20/21) sao as 3 primeiras
+linhas marcadas acima, TODAS sob o mesmo servidor `sa-east-1`** --
+`L0` co-localizado, `L219` com cliente real em `eu-north-1`, `L325`
+com cliente real em `ap-southeast-1`. **Topologia do piloto
+corrigida: servidor em `sa-east-1`; cliente L0 em `sa-east-1`
+(mesma AZ); cliente L219 em `eu-north-1`; cliente L325 em
+`ap-southeast-1`; controle em `sa-east-1`** (junto do servidor,
+mesmo padrao da v8 real) -- **4 regioes AWS envolvidas no piloto,
+nao 1.**
+
+**Topologia, custo e cotas de vCPU refeitos:**
+
+| Regiao | Instancias | vCPU (m7i-flex.large=2, t4g.micro=2) |
+|---|---|---|
+| `sa-east-1` | 1 servidor + 1 cliente L0 + 1 controle | 6 vCPU |
+| `eu-north-1` | 1 cliente L219 | 2 vCPU |
+| `ap-southeast-1` | 1 cliente L325 | 2 vCPU |
+
+**Cota de vCPU por regiao -- NAO VERIFICADO (exige AWS), mas a
+demanda e pequena.** A v8 real so checou cota de EIP (Decisao 49),
+nunca cota de vCPU explicitamente -- nenhum precedente direto pra
+citar aqui. Proposto como item de pre-voo do piloto (antes do
+apply): `aws service-quotas get-service-quota --service-code ec2
+--quota-code L-1216C47A` (Running On-Demand Standard (A,C,D,H,I,M,R,
+T,Z) instances) nas 3 regioes -- a demanda do piloto (6/2/2 vCPU) e
+pequena o bastante pra provavelmente caber no default de uma conta
+nova (tipicamente 5-32), mas isso e uma expectativa, nao uma
+verificacao.
+
+**Custo do piloto, recalculado com as regioes reais (nao mais
+"tudo em sa-east-1"):** nao existe uma tarifa `m7i-flex.large`
+sourced por regiao no `v8/DECISIONS.md` -- a unica tabela regional
+real la e pra `c5.2xlarge` (linha 1196-1201: `sa-east-1` ~$0,49/h,
+`ca-central-1`/`eu-north-1` ~$0,37/h, `ap-southeast-1` ~$0,43/h),
+familia de instancia DIFERENTE. Uso essa tabela so como PROXY de
+razao regional (nao como tarifa direta) sobre a base
+`m7i-flex.large` us-east-1 ($0,0958/h, Decisao 24): `sa-east-1`
+≈1,32x ≈US$0,1265/h; `eu-north-1` ≈1,0x ≈US$0,0958/h (fica proximo
+da base); `ap-southeast-1` ≈1,16x ≈US$0,1111/h -- **explicitamente
+nao confirmado pra `m7i-flex.large` especificamente, so uma razao
+emprestada de outra familia, mesma limitacao que a Decisao 25 ja
+registrou.** `t4g.micro` mantido na tarifa base (sem ajuste regional
+separado, impacto desprezivel no total de qualquer forma). 2h de
+frota:
+- `sa-east-1` (1 servidor + 1 L0 + 1 controle): (2x0,1265 + 1x0,0084)
+  x2h ≈ US$0,523
+- `eu-north-1` (1 cliente L219): 0,0958x2h ≈ US$0,192
+- `ap-southeast-1` (1 cliente L325): 0,1111x2h ≈ US$0,222
+- IP publico: 5x US$0,005x2h = US$0,05
+- EBS (5x30GB gp3, pro-rata 2h): ≈US$0,033
+- Transferencia entre regioes (2 pernas reais, `sa-east-1<->eu-north-1`
+  e `sa-east-1<->ap-southeast-1`, escala pequena do piloto):
+  desprezivel, ≈US$0,02 (a v8 real mediu so ~US$0,14 pra TODA a
+  campanha de 720 execucoes)
+- **Subtotal: ≈ US$1,04. Com margem de 30%: ≈ US$1,35.** Ainda
+  **cabe em US$27,72 com folga grande** (~5% do teto) -- a correcao
+  de topologia muda o numero (de ≈US$1,27/1,65 pra ≈US$1,04/1,35),
+  mas nao muda a conclusao.
+
+A estimativa da CAMPANHA OFICIAL (Decisao 24/25, ≈US$39,12/US$50,86,
+NAO cabe em US$27,72) nao muda por este item -- continua ancorada no
+gasto REAL da v8 nas regioes REAIS, nao numa topologia sintetica.
+
+**2. TAGS EM TODAS AS REGIOES -- corrigido, `resourcegroupstaggingapi`
+e regional por natureza.**
+
+Correto -- essa API nao agrega entre regioes, cada chamada so ve a
+regiao do endpoint usado. **Corrigido no roteiro: a verificacao
+antes E depois de cada destroy roda nas 3 regioes do piloto
+(`sa-east-1`, `eu-north-1`, `ap-southeast-1`), uma chamada por
+regiao, esperando vazio nas 3** -- nao so na regiao do controle.
+**Adicional, uma unica vez ao final do piloto inteiro (nao por
+bloco):** roda a mesma verificacao em TODAS as regioes habilitadas
+na conta (`aws account list-regions` ou a lista fixa de regioes que
+a v8 ja usou, 7-8 regioes conhecidas), como rede de seguranca contra
+qualquer recurso criado por engano numa regiao nao planejada --
+mesma logica do teardown final real da v8 (Decisao 117, "confirmado
+pela API real da AWS nas 7 regioes").
+
+**3. SSH E PKI -- caminho completo operador-controle-instancias
+descrito, chave privada nunca sai do controle sem ser apagada,
+controle destruido ao final.**
+
+Pesquisado direto na Decisao 49 da v8 (arquitetura real de duas
+chaves) e aplicado ao fluxo da PKI/binario/coleta da v9:
+
+- **Caminho de entrada:** operador conecta DIRETO no controle (IP
+  elastico do controle so aceita SSH do /32 do operador, Decisao 49).
+  Operador NAO alcança servidor/clientes diretamente -- cada um deles
+  so aceita SSH do IP elastico do PROPRIO controle (nunca do
+  operador). O controle e o unico salto intermediario pros dois
+  lados.
+- **Entrega da PKI:** operador `scp` o certificado/chave de CADA
+  cliente (L0/L219/L325) + a CA publica + o certificado/chave do
+  servidor, da maquina do operador pro controle, usando a chave do
+  OPERADOR (a mesma conexao de entrada). O controle, usando a chave
+  EXCLUSIVA da campanha (gerada pelo Terraform, nunca commitada --
+  mesmo mecanismo da Decisao 49), `scp` cada pedaco pro destino certo
+  (servidor recebe seu proprio material + CAs publicas; cada cliente
+  recebe SEU proprio certificado/chave + as mesmas CAs publicas).
+- **Entrega do binario:** mesmo caminho -- operador `scp` o
+  `gateway`/`proxy` (mais o `.sha256`) pro controle, controle `scp`
+  pra cada instancia de destino (amd64 pro servidor+3 clientes); cada
+  instancia roda `sha256sum -c` antes de usar.
+- **Coleta de artefatos por bloco:** direcao invertida -- cada
+  instancia (servidor/clientes) `scp` seus proprios artefatos do
+  bloco pro controle (chave da campanha), controle `scp` pro
+  operador (chave do operador); SHA-256 conferido em cada perna antes
+  de apagar o original remoto, exatamente como a Decisao 24, item 2,
+  ja propos (agora com o caminho de 2 saltos explicito, nao implicito).
+- **Nenhuma chave privada e logada ou persistida fora do necessario
+  no controle:** a chave privada de CADA cliente/servidor so existe
+  no disco do controle entre o `scp` de entrada e o `scp` de saida
+  pro destino final -- apagada (`shred`) imediatamente apos a
+  confirmacao de entrega bem-sucedida naquele destino (mesmo padrao
+  `trap ... EXIT` que a Decisao 49 ja usa pra chave SSH da campanha,
+  aplicado aqui tambem as chaves de cliente/servidor mTLS). Nenhum
+  comando de `scp`/`cat`/`cp` envolvendo material de chave e
+  impresso com a chave em texto claro em nenhum log de shell -- so o
+  nome do arquivo, nunca o conteudo.
+- **O controle E destruido ao final do piloto**, junto com servidor e
+  os 3 clientes -- confirmado na lista de destruicao (item 1 acima,
+  verificacao de tags cobre a regiao do controle tambem). **A copia
+  do OPERADOR (fora de qualquer instancia AWS) e a UNICA que persiste
+  até o fim do piloto inteiro** (Decisao 23, item 1) -- a copia
+  dentro do controle e sempre efemera (apagada apos cada relay bem-
+  sucedido), nunca a copia "longa" que esse item 1 descreve.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
