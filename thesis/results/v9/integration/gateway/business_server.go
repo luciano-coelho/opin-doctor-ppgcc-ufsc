@@ -69,7 +69,8 @@ func runBusinessMode(profile, certDir, listen string) {
 }
 
 func acceptBusinessConn(raw net.Conn, cfg *tls.Config, profile string, want tls.CurveID, pl *preHandshakenListener) {
-	tlsConn := tls.Server(raw, cfg)
+	cc := &countingConn{Conn: raw}
+	tlsConn := tls.Server(cc, cfg)
 	if err := tlsConn.Handshake(); err != nil {
 		log.Printf("gateway: %s: handshake failed: %v", profile, err)
 		_ = raw.Close()
@@ -90,7 +91,17 @@ func acceptBusinessConn(raw net.Conn, cfg *tls.Config, profile string, want tls.
 		_ = tlsConn.Close()
 		return
 	}
-	log.Printf("gateway: %s connection OK sni=%q curve=%s dualAuthenticated=%v", profile, cs.ServerName, cs.CurveID, cs.DualAuthenticated)
+	// handshakeBytesIn/Out: measured the same way T6 does (Decisao 14),
+	// via the countingConn wrapped around raw above -- added here so
+	// Decisao 18's per-connection table has a real number, not just
+	// "yes/no" per connection.
+	hsIn, hsOut := cc.snapshot()
+	clientCertCN := "none"
+	if len(cs.PeerCertificates) > 0 {
+		clientCertCN = cs.PeerCertificates[0].Subject.CommonName
+	}
+	log.Printf("gateway: %s connection OK remoteAddr=%s sni=%q curve=%s dualAuthenticated=%v clientCert=%q handshakeBytesIn=%d handshakeBytesOut=%d",
+		profile, raw.RemoteAddr(), cs.ServerName, cs.CurveID, cs.DualAuthenticated, clientCertCN, hsIn, hsOut)
 	pl.ch <- tlsConn
 }
 

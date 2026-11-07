@@ -1837,13 +1837,12 @@ localmente contra o stack real (`mock_as`, `insurance-server-lambdas`,
 `localstack`, `mongo`, sem alteracao), produzindo exatamente 44
 chamadas HTTP, 6 conexoes mTLS, 28 JWTs, 4 buscas de `/jwks`, 4 buscas
 de CA por execucao, confirmado pela instrumentacao da T6 (nao por
-contagem manual), zero erros. **Status: PARCIAL, apos a T6b (Decisao
-17) -- 44 chamadas HTTP e 0 erros confirmados nos 4 perfis, contra o
-stack real (`mock_as`/`insurance-server-lambdas` intocados). Conexoes
-mTLS medidas em 7, nao 6 (consistente nos 4 perfis, reportado, nao
-investigado a fundo); JWTs (28) e buscas de `/jwks` (4) ainda nao
-extraidos separadamente do log desta rodada -- falta uma passada
-adicional, nao um problema encontrado.**
+contagem manual), zero erros. **Status: FECHADO, apos a T6b (Decisao
+17) e a reconciliacao pedida (Decisao 18) -- os 5 numeros confirmados
+exatos nos 4 perfis: 44 chamadas HTTP, 6 conexoes mTLS client-facing
+(apos excluir a sondagem de prontidao do proxy, que nunca fez parte do
+fluxo medido), 28 JWTs, 4 `/jwks`, 4 buscas de CA, 0 erros -- contra o
+stack real (`mock_as`/`insurance-server-lambdas` intocados).**
 
 **(b) As cinco lacunas de validade da v8, uma por uma, com o teste que
 fecha cada uma:**
@@ -1926,7 +1925,7 @@ listadas explicitamente, nao escondidas:**
 | Harness da T5/T6 e um fork em `thesis/results/v9/integration/`, nunca os arquivos de producao `mock-service-os/mock_mtls`/`thesis/scripts/tls_kem_proxy` que a v7/v8 usam | Decisao 12 |
 | Contagem de bytes na fronteira exata do `Handshake()`, nao em `ConnState -> StateActive` (v7/v8 mantiveram o limite antigo deliberadamente, por comparabilidade com a v7 -- Decisao 78/79 do `v8/DECISIONS.md`) | Decisao 14 |
 | `thesis/scripts/opin_flow.py` editado (unico arquivo de producao tocado em toda a v9) -- aditivo e opt-in (`V9_HARNESS`), mesmo padrao de `REMOTE_GATEWAY_HOST` ja existente no mesmo arquivo; zero mudanca de comportamento quando desligado | Decisao 17 |
-| 7 conexoes mTLS client-facing medidas por execucao combinada, nao as 6 historicas da v7/v8 -- consistente nos 4 perfis, causa raiz nao confirmada | Decisao 17 |
+| Nenhum endpoint dispensa certificado de cliente na v9 (RequireAndVerifyClientCert uniforme, nos 4 perfis) -- v8 real usa VerifyClientCertIfGiven globalmente, mas nenhuma chamada do opin_flow.py historico foi servida sem certificado (confirmado medindo), entao essa divergencia de policy nunca foi exercitada na pratica | Decisao 18 |
 
 **Nenhuma tag criada. Nenhuma acao em AWS. Pare ao fim deste rascunho,
 conforme pedido -- aguardando aprovacao explicita do Luciano antes de
@@ -2076,25 +2075,18 @@ deveria existir) um "CRYPTO_PROFILE=hibrido-and" no `mock_as`/
 `insurance-server-lambdas` reais, porque nada ali precisa saber que o
 mecanismo AND esta em uso.
 
-**Divergencia de contagem, reportada, NAO forcada a bater: 7 conexoes
-mTLS client-facing por execucao combinada (insurance+person), nao 6.**
-Consistente nos 4 perfis (sempre 7, nunca variou) -- nao e ruido.
-`run_insurance_flow`/`run_person_flow` cada um cria seu PROPRIO
-`requests.Session()` (confirmado lendo o codigo: nenhum compartilha
-conexao com o outro), e `simulate_login()` dentro de cada um usa AINDA
-outra Session propria (seu proprio docstring diz isso explicitamente).
-"6" e o numero historico estabelecido da v7/v8 (`v8/DECISIONS.md`,
-"44 chamadas + 2x6 conexoes"); esta rodada mediu 7, direto do log do
-proprio gateway (contagem por SNI, nao inferida por heuristica). Nao
-investigado a fundo nesta rodada -- hipotese nao confirmada: a chamada
-`root-ca.pem`/`issuer-ca.pem` usa `cert=None` (as outras do mesmo fluxo
-usam `cert=cert`), o que pode fazer o `urllib3`/`pyopenssl` abrir uma
-conexao à parte em vez de reusar o pool existente, adicionando 1 conexao
-por execucao -- consistente com 6 esperado + 1 = 7 medido, mas NAO
-confirmado por instrumentacao adicional nesta rodada. Registrado aqui
-para o Luciano decidir se vale investigar mais (ou se "7" e o numero
-certo e "6" e que estava errado/desatualizado -- nenhuma das duas
-hipoteses foi testada).
+**Divergencia de contagem relatada aqui (7 conexoes mTLS client-facing,
+nao 6) -- RECONCILIADA na Decisao 18, apos instrumentacao adicional
+pedida pelo Luciano: nao e uma divergencia real.** A setima conexao e
+a propria sondagem de prontidao do proxy
+(`_wait_for_tls_kem_proxy_ready()`), que roda uma vez por chamada a
+`start_tls_kem_proxy()` e nunca serve nenhuma requisicao HTTP real --
+excluindo ela, restam exatamente 6 conexoes client-facing, batendo
+exato com o numero historico da v7/v8. A hipotese do `cert=None`
+registrada abaixo (ja testada, ver Decisao 18) estava ERRADA: essa
+conexao especifica tambem apresenta certificado de cliente normalmente
+(`requests`'s `merge_setting()` nao desliga o certificado da sessao
+quando `cert=None` e passado explicitamente).
 
 **Conexoes internas (SNI `matls-api.local`):** tambem 7 por execucao,
 em todos os perfis -- simetrico as 7 client-facing, mesma causa
@@ -2103,16 +2095,8 @@ fluxos client-facing, 1:1, consistente com a chamada de
 `InsurerAdapter.getConsent()` disparando uma vez por autorizacao de
 consentimento).
 
-**Nao verificado nesta rodada (registrado para a T8, nao escondido):**
-contagem de JWTs (28) e de buscas de `/jwks` (4) nao foram extraidas
-separadamente do log desta rodada -- as 44 chamadas HTTP e as 0 erros
-foram confirmados diretamente; os outros dois numeros do pedido
-original (28 JWTs, 4 jwks) precisam de uma passada adicional pelos
-logs/calls.jsonl que esta rodada nao fez, por tempo. Diferente das
-conexoes mTLS (que vieram de graca do log do proprio gateway), esses
-dois exigiriam parsear `calls1`/`calls2` (as listas retornadas por
-`run_insurance_flow`/`run_person_flow`) ou os logs do `auth`/`mockapi`
-reais -- nenhum dos dois foi feito aqui.
+**JWTs (28) e /jwks (4): extraidos e confirmados na Decisao 18**, nos
+4 perfis, sem divergencia nenhuma.
 
 **Estado dos containers ao final desta rodada:** `v9-mtls` removido;
 `mtls` real PARADO (nao removido, `docker start
@@ -2128,6 +2112,204 @@ Artefatos novos/editados: `thesis/results/v9/integration/gateway/
 dispatch `HTTP_MODE`); `thesis/results/v9/integration/proxy/
 relay.go` (novo), `main.go` (editado -- flag `-listen`);
 `thesis/scripts/opin_flow.py` (editado, aditivo -- ver acima).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 18. Fechamento dos pontos pedidos sobre a T6b: a setima conexao identificada (e nao e o que a hipotese do cert=None sugeria -- premissa corrigida), 28 JWTs/4 jwks/4 CA confirmados nos 4 perfis sem divergencia, diff exato do opin_flow.py com prova empirica de equivalencia quando V9_HARNESS esta desligado
+
+**1. A setima conexao mTLS, identificada com precisao.** Instrumentei
+`gateway/business.go`/`business_server.go` para logar, por conexao,
+`remoteAddr` (a porta efemera do cliente -- identifica unicamente QUAL
+conexao TCP serviu cada requisicao) junto com `clientCert` (o
+CommonName do certificado apresentado, ou `"none"`) e
+`handshakeBytesIn/Out`; e cruzei isso com o log de acesso HTTP, que
+agora tambem carrega o mesmo `remoteAddr`. Rodada completa, perfil
+Classico, lista integral abaixo (a mesma estrutura se repete nos outros
+3 perfis, confirmado por amostragem).
+
+**Lista completa de conexoes TLS de uma execucao (insurance+person
+combinados), tipo e bytes de handshake:**
+
+| # | remoteAddr | SNI | Tipo | ClientCert | handshakeBytesIn/Out | O que serviu |
+|---|---|---|---|---|---|---|
+| 1 | :39996 | mtls | mTLS (cert exigido e apresentado) | classico_client | 1513/1640 | **nada** -- ver achado abaixo |
+| 2 | :40006 | mtls | mTLS | classico_client | 1513/1640 | /jwks(AS), /token, /jwks(RS), POST consents, GET consents x2, /request |
+| 3 | :40020 | mtls | mTLS | classico_client | 1513/1640 | /root-ca.pem, /issuer-ca.pem |
+| 4 | :56390 | mtls | mTLS | classico_client | 1513/1640 | /auth, /interaction x3, /auth/{id} |
+| 5 | :56394 | mtls | mTLS | classico_client | 1513/1640 | /jwks(AS), /token, /jwks(RS), POST consents, GET consents, /request, /token(ac), 8x insurance-person |
+| 6 | :56402 | mtls | mTLS | classico_client | 1513/1640 | /root-ca.pem, /issuer-ca.pem |
+| 7 | :56414 | mtls | mTLS | classico_client | 1513/1640 | /auth, /interaction x4, /auth/{id} |
+| -- | 7x :43xxx | matls-api.local | mTLS (interno, AS->RS) | op | 4307/2530 | `InsurerAdapter.getConsent()`, 3x insurance + 4x person |
+
+**Achado: a conexao #1 (`:39996`) nao serve NENHUMA requisicao HTTP --
+e a propria sondagem de prontidao do proxy
+(`_wait_for_tls_kem_proxy_ready()`, `opin_flow.py` linha ~1179), que
+faz um `GET /` liso, sem Host header reconhecivel por nenhum padrao do
+`ServeMux`, recebendo um 404 do handler padrao do Go -- que no meu
+codigo nunca passa pelo `loggingMiddleware` (so os padroes
+registrados, "auth.local/" etc., passam por ele), por isso essa
+conexao abre (e aparece no log de CONEXAO) mas nunca aparece no log de
+ACESSO.** Essa funcao e CHAMADA POR MIM TAMBEM dentro do branch
+`V9_HARNESS` (mesma funcao compartilhada, `opin_flow.py` linha 1114) --
+nao e um bug introduzido pela v9, e o MESMO mecanismo que o
+`tls_kem_proxy` real sempre teve, exercitado uma vez por chamada a
+`start_tls_kem_proxy()`, que tanto o meu script de teste quanto
+`switch_crypto_profile.py` chamam uma vez por execucao combinada (as
+duas chamadas de fluxo compartilham o mesmo proxy, iniciado uma vez
+antes dos dois).
+
+**Excluindo essa sondagem, restam exatamente 6 conexoes client-facing
+(#2 a #7) -- o numero historico da v7/v8, batendo exato.** E as 7
+conexoes internas (`matls-api.local`) tambem batem exato contra o que
+a Decisao 77 do `v8/DECISIONS.md` ja tinha achado de forma independente
+("7 internal AS-to-RS requests", mesmo numero, mesma categoria).
+**Conclusao: nao ha divergencia real de contagem. O "7" que relatei
+antes somava a sondagem de prontidao (que nao faz parte do fluxo
+medido) as 6 conexoes reais -- um artefato do MEU script de teste (que
+chama `start_tls_kem_proxy()` sem o cuidado que uma coleta oficial
+teria de excluir essa conexao da janela de medicao), nao do mecanismo
+em si.** Registrado para a T7/T8: uma coleta oficial precisa comecar a
+contar handshakes DEPOIS que `_wait_for_tls_kem_proxy_ready()` retorna,
+nao antes -- isso provavelmente ja e como `switch_crypto_profile.py`
+opera na pratica (a sondagem acontece durante o SETUP do perfil, fora
+da janela de qualquer execucao medida), mas nao confirmado aqui.
+
+**A hipotese do `cert=None` estava errada -- premissa corrigida, nao
+confirmada.** A conexao #3 (`:40020`), que serve especificamente
+`/root-ca.pem`/`/issuer-ca.pem` (a chamada que usa `cert=None`), **tem
+`clientCert=classico_client`** -- um certificado de cliente REAL foi
+apresentado e verificado, exatamente como todas as outras. Motivo:
+`requests.Session.request(..., cert=None)` nao desliga o certificado
+da sessao -- a propria biblioteca (`merge_setting()`) trata um
+argumento explicitamente `None` como "sem override", caindo de volta
+pro `session.cert` (que `run_insurance_flow`/`run_person_flow` ja
+setam uma vez, no inicio, pra todas as chamadas daquela sessao).
+`cert=None` nessas chamadas especificas nunca teve o efeito de
+desligar o certificado -- e so documentacao/intencao no codigo-fonte,
+nao comportamento real em tempo de execucao.
+
+**Carve-out: NAO EXISTE nenhum endpoint que dispense certificado de
+cliente na v9, hoje -- correcao da premissa da pergunta, nao uma
+descricao de algo ja implementado.** Confirmado pela tabela acima:
+as 7 conexoes client-facing (incluindo as que servem `/root-ca.pem`/
+`/issuer-ca.pem`) tem `ClientAuth: tls.RequireAndVerifyClientCert`
+SEM EXCECAO, a mesma config principal do perfil, nos 4 perfis, sem
+diferenca -- essa e precisamente a decisao ja tomada e registrada na
+Decisao 12 (fechar a lacuna de validade #3 da v8, `VerifyClientCertIfGiven`,
+pra TODOS os endpoints, nao so alguns). Se a v8 real realmente aceitava
+uma conexao sem certificado de cliente nalgum caso (possivel, dado que
+ela usa `VerifyClientCertIfGiven` globalmente), isso nunca foi
+exercitado por este fluxo especifico (`opin_flow.py` sempre manda um
+certificado, por causa do `session.cert` + o comportamento do
+`merge_setting()` explicado acima) -- entao nao ha, nos dados reais
+desta investigacao, nenhuma chamada historica da v7/v8 que tenha
+sido servida sem certificado de cliente. **Nao criei nenhum carve-out
+novo**, porque os dados nao mostraram necessidade de um -- se o
+Luciano quiser que a v9 reproduza deliberadamente um comportamento
+"servidor com certificado opcional" pra algum endpoint especifico
+(reabrindo a lacuna #3 so ali), isso e uma decisao de escopo nova, nao
+uma correcao de bug.
+
+**Classificacao final para as metricas:** nos 4 perfis, 100% das 6
+conexoes client-facing reais (excluindo a sondagem) SAO mTLS com
+certificado de cliente -- zero conexoes so-servidor. **"6 conexoes
+mTLS" da v8 corresponde 1:1 a "6 conexoes com certificado de cliente"
+da v9** -- nao ha uma segunda categoria pra dividir, porque nao existe
+nenhuma conexao so-servidor nos dados medidos.
+
+**2. Contagens restantes: 28 JWTs, 4 /jwks, 4 buscas de CA -- extraidos
+e confirmados nos 4 perfis, ZERO divergencia.** Extraidos diretamente
+dos `calls1`/`calls2` que `run_insurance_flow`/`run_person_flow`
+retornam (campos `jwts` e `endpoint`, nao inferidos por heuristica):
+
+| Perfil | Chamadas HTTP | JWTs | /jwks | CA (root+issuer) | Erros |
+|---|---|---|---|---|---|
+| Classico | 44 | 28 | 4 | 4 | 0 |
+| PQC | 44 | 28 | 4 | 4 | 0 |
+| Hibrido-v8 | 44 | 28 | 4 | 4 | 0 |
+| Hibrido-AND | 44 | 28 | 4 | 4 | 0 |
+
+Os 4 perfis produzem exatamente os mesmos numeros porque a sequencia
+de chamadas e inteiramente definida pela logica de fluxo
+(`opin_flow.py`), que nao varia por perfil -- so o mecanismo TLS
+(certificado/grupo/AND) varia, nunca a sequencia HTTP. Isso bate
+exatamente com os 5 numeros originais do Luciano (44/6/28/4/4 --
+sendo 6 o numero de conexoes client-facing, ja reconciliado no ponto
+1). **Nenhuma divergencia de contagem sobrou.**
+
+**3. `opin_flow.py`: diff exato (ja commitado em `1763a64e`, reproduzido
+aqui por completo) e prova de equivalencia com `V9_HARNESS` desligado.**
+
+```diff
+--- a/thesis/scripts/opin_flow.py
++++ b/thesis/scripts/opin_flow.py
+@@ -235,9 +235,35 @@ DIRECTORY_HOST = "directory"
+ _CRYPTO_PROFILE_FOR_ROUTING = os.environ.get("CRYPTO_PROFILE", "classic")
+-_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid")
++_USE_TLS_KEM_PROXY = _CRYPTO_PROFILE_FOR_ROUTING in ("classic", "pqc", "hybrid", "hibrido-and")
+ TLS_KEM_PROXY_PORT = int(os.environ.get("TLS_KEM_PROXY_PORT", "8443"))
+
++V9_HARNESS = os.environ.get("V9_HARNESS") == "1"
++V9_PROFILE_NAME = {"classic": "classico", "pqc": "pqc", "hybrid": "hibrido-v8", "hibrido-and": "hibrido-and"}
++V9_CERTS_DIR = BASE_DIR / "thesis" / "results" / "v9" / "certs" / "generated"
++V9_PROXY_IMAGE = "mockopin-v9-proxy"
++
+ # (comentarios omitidos aqui por espaco -- integrais no commit 1763a64e)
+@@ -1046,7 +1072,7 @@ def start_tls_kem_proxy(...):
+-    if crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE:
++    if crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE and crypto_profile != "hibrido-and":
+         return None
+     subprocess.run(["docker", "rm", "-f", TLS_KEM_PROXY_CONTAINER_NAME], ...)
+-    crt_path, key_path = get_client_cert_paths(crypto_profile)
+-    curve = os.environ.get(...) or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
+     proxy_target = f"{REMOTE_GATEWAY_HOST}:443" if REMOTE_GATEWAY_HOST else "mtls:443"
+     run_mode_flags = ["-d"] if detached else ["--rm", "-i"]
++    if V9_HARNESS:
++        # ... lanca o proxy da v9 em vez do tls_kem_proxy real (bloco
++        # completo no commit) ...
++        return proc_ou_nome
++    crt_path, key_path = get_client_cert_paths(crypto_profile)
++    curve = os.environ.get(...) or TLS_KEM_PROXY_CURVE_BY_PROFILE[crypto_profile]
+     # resto da funcao ORIGINAL, inalterado, a partir daqui
+```
+
+**Por que a prova por hash do arquivo nao se aplica (o arquivo mudou de
+verdade), e qual prova usei em vez disso:** o `opin_flow.py` MUDOU --
+tem linhas novas. A pergunta real e se o COMPORTAMENTO, com
+`V9_HARNESS` desligado (o estado padrao), e idantico ao de antes da
+edicao. Prova por ARGUMENTO sobre o diff: (a) a condicao
+`crypto_profile not in TLS_KEM_PROXY_CURVE_BY_PROFILE` e idantica pros
+3 perfis que ja existiam (`classic`/`pqc`/`hybrid` ja estavam no dict,
+entao o `and crypto_profile != "hibrido-and"` nunca muda o resultado
+pra eles); (b) o bloco `if V9_HARNESS:` e pulado inteiro quando a env
+var nao e `"1"` (o padrao), caindo direto nas MESMAS duas linhas
+(`crt_path, key_path = ...` / `curve = ...`) que existiam antes, byte a
+byte, so deslocadas de posicao; (c) nenhuma outra funcao do arquivo foi
+tocada.
+
+**Prova por EXECUCAO REAL, mais forte que um hash de texto -- roda o
+codigo, nao so le ele:** reiniciei o `mtls` REAL (`docker compose up
+mtls`), confirmei pelo log do proprio container
+(`clientCertBytes=1494`, `mtlsHandshakeBytes=5173` -- os numeros REAIS
+do certificado de producao RSA-4096, nao de nenhum certificado da v9)
+que era o gateway real respondendo, e rodei `run_insurance_flow`/
+`run_person_flow('classic')` com `V9_HARNESS` explicitamente
+NAO definido (`unset V9_HARNESS`, confirmado `of.V9_HARNESS == False`
+no proprio processo Python). Resultado: **44 chamadas, 28 JWTs, 4
+jwks, 4 CA, 0 erros** -- identico ao baseline medido ANTES de qualquer
+edicao nesta sessao (Decisao 17) e identico ao numero historico da
+v7/v8. Nenhum container `tls_kem_proxy_run` com a imagem da v9 existiu
+durante essa execucao (confirmado por `docker ps` durante o teste).
+
+**Decisao: a alteracao fica onde esta** (`thesis/scripts/opin_flow.py`,
+commit `1763a64e`) -- a prova acima (logica do diff + execucao real
+identica) estabelece equivalencia quando desligado; mover pra uma copia
+em `v9/integration/` exigiria duplicar ~1.900 linhas de logica de fluxo
+só pra isolar 4 linhas realmente novas, o que o proprio Luciano
+descartou implicitamente ao aceitar a edicao aditiva como abordagem
+(rodada anterior) -- mas a decisao final e dele; se ainda preferir
+reverter e mover, aviso e eu desfaco.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.

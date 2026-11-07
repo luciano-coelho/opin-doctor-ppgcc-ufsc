@@ -157,9 +157,19 @@ func loggingMiddleware(h http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		h.ServeHTTP(rec, r)
+		clientCert := "none"
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			clientCert = r.TLS.PeerCertificates[0].Subject.CommonName
+		}
+		// remoteAddr (the client's ephemeral TCP port) uniquely
+		// identifies WHICH TLS connection served this request --
+		// requests sharing a remoteAddr shared one connection
+		// (keep-alive reuse); a request with a new remoteAddr opened a
+		// fresh one. This is what Decisao 18's connection/request
+		// cross-reference is built from.
 		slog.Info("access log",
-			"host", r.Host, "request", r.RequestURI, "method", r.Method,
-			"status", rec.status, "durationMs", time.Since(start).Milliseconds())
+			"remoteAddr", r.RemoteAddr, "host", r.Host, "request", r.RequestURI, "method", r.Method,
+			"status", rec.status, "clientCert", clientCert, "durationMs", time.Since(start).Milliseconds())
 	})
 }
 
