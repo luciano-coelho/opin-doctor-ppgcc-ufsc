@@ -3283,3 +3283,194 @@ propria v8 run-a-run"**.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 24. Correcao da explicacao do item 6 da Decisao 23 (a hipotese de "ruido aleatorio" estava ERRADA -- causa real identificada e provada: artefato de calendario no cabecalho Date do RS); captura separada da medicao cronometrada, com esquema pro piloto e pra campanha; coleta por bloco com hash; terminate confirmado; custo estimado do piloto e da campanha oficial com margem
+
+**1. TAMANHOS HTTP -- a explicacao da Decisao 23 estava errada. Prova
+by replay, nao aceita por hipotese.**
+
+O Luciano pediu exatamente a prova que faltava: comparar `w01_run01`
+com `w01_run02` da PROPRIA v8 (mesma janela de execucao, mesma bota
+de containers). Resultado: **0/44 chamadas diferem entre as duas
+execucoes reais da v8.** Isso refuta diretamente a hipotese de "ruido
+aleatorio por execucao" da Decisao 23 (chave efemera regenerada a
+cada run, dados mock aleatorios) -- se fosse ruido genuino por
+execucao, apareceria TAMBEM dentro da propria v8, run a run, e nao
+aparece.
+
+Investigacao adicional, isolando a variavel real:
+1. Subi o `mtls` REAL (nao alterado) + o `tls_kem_proxy` REAL (imagem
+   precompilada) desta sessao, e rodei o MESMO `opin_flow.py` (codigo
+   de producao, sem flag nova) contra eles, hoje -- 44 chamadas
+   capturadas (`v8real`).
+2. Comparei `v8real` (hoje) contra a v9 (hoje, containers desta
+   sessao): **0/44 diferem.** v8 e v9 sao byte-idênticos HOJE, em
+   todas as 44 chamadas.
+3. Comparei `v8real` (hoje) contra o arquivo arquivado `w01_run01`
+   (2026-10-30): **18/44 diferem, cada uma por exatamente 1 byte** --
+   todas e SOMENTE as chamadas atendidas pelo Resource Server
+   (`mockapi`/`insurance-server-lambdas`, Java/Micronaut): `/jwks` do
+   RS, `/consents` (POST e GET), `/insurance-person/*`. Nenhuma
+   chamada do AS (`mock_as`/oidc-provider, Node) aparece nessa lista.
+
+**Causa raiz, identificada e confirmada, nao suposta:** capturei o
+corpo bruto da resposta do `/jwks` do RS (chamada com Authorization
+Bearer, index 4) -- 455 bytes, EXATOS, batendo com a chave estatica
+real (`insurance-server-lambdas/src/main/resources/crypto-profiles/
+classic.json`, committada, nunca regenerada, `kid` identico ao
+arquivado: `041486ea-f7b8-4b36-9dfb-fadf2966d0e8`). Corpo fixo, 100%
+determinstico -- a diferenca de 1 byte so pode estar no cabecalho. O
+cabecalho `Date` capturado hoje (dia 7 de novembro): `"Sat, 7 Nov 2026
+13:15:02 GMT"` -- **sem zero a esquerda no dia** (15 caracteres antes
+do ano). O formatador de `Date` HTTP do RS (Java/Micronaut) NAO
+zero-preenche dias de um digito (1-9), ao contrario do AS (Node/
+oidc-provider), que sempre zero-preenche (`"Sat, 07 Nov 2026..."`,
+confirmado na chamada idx0, que E do AS e NUNCA aparece na lista de
+diferencas). O arquivo arquivado foi gravado em 2026-10-30 -- **dia
+30, dois digitos, sem essa ambiguidade.** Hoje e dia 7 -- um digito,
+1 byte mais curto no cabecalho `Date`, exatamente a cada chamada que
+passa pelo RS.
+
+**Isso NAO e ruido: e um artefato DETERMINISTICO, explicado e ligado
+ao CALENDARIO do dia em que a comparacao e feita**, nao a v8 vs v9
+(confirmado: v8real-hoje vs v9-hoje = 0/44 diferencas) e nao a
+variacao run-a-run (confirmado: v8 run01 vs run02 = 0/44). Reaparece
+sempre que um lado da comparacao foi capturado num dia de 1 digito
+(1-9 de qualquer mes) e o outro lado num dia de 2 digitos -- e
+desaparece (fica 0/44) quando os dois lados tem a mesma contagem de
+digitos no dia, como aconteceu nos dois testes "hoje vs hoje" acima.
+**Corrige a Decisao 23: a explicacao de "chave efemera"/"dados mock
+aleatorios" estava ERRADA (nenhuma chave e efemera aqui -- ambas as
+pontas, AS e RS, carregam chaves estaticas committadas) -- a causa
+real e a formatacao do cabecalho `Date` do RS.** Resultado da
+checklist T8 corrigido outra vez: tamanhos de corpo e cabecalho HTTP
+**IGUAL entre v8 e v9, confirmado por medicao dupla (hoje-vs-hoje,
+0/44 diferencas); a unica fonte de diferenca encontrada e um artefato
+de calendario do proprio RS (sem relacao com v8-vs-v9), que se
+autocorrige fora da janela de dias 1-9 do mes.**
+
+**2. TERMINATE E ARTEFATOS -- coleta por bloco adicionada ao roteiro,
+com verificacao de integridade antes de seguir.**
+
+Correto: com `instance_initiated_shutdown_behavior = "terminate"`
+(Decisao 23, item 5), o volume EBS raiz e apagado junto no destroy --
+qualquer artefato que so existisse no disco da instancia e perdido se
+o teardown disparar antes da coleta. Adicionado ao roteiro: ao FIM de
+CADA um dos 4 blocos de perfil (nao so no fim do piloto inteiro), o
+operador copia os artefatos daquele bloco (logs do gateway/proxy,
+pcap+keylog das capturas daquele bloco, `calls.jsonl` das 15
+execucoes) para a maquina do operador via `scp`, calcula SHA-256 de
+cada arquivo recebido e confere contra o hash calculado NA instancia
+antes de apagar o original remoto -- so avanca pro bloco seguinte
+(ou pro destroy, no ultimo bloco) depois da confirmacao de integridade.
+**O autodesligamento (N=4h, Decisao 23) continua sendo so a rede de
+seguranca contra sessao caida -- a coleta por bloco e o mecanismo
+primario, nao depende dele.**
+
+**3. CAPTURA x LATENCIA -- esquema definido: captura separada das
+execucoes cronometradas, tanto no piloto quanto na campanha oficial.**
+
+**Quais execucoes levam captura:** as 12 do criterio 1 (4 perfis x 3
+rotas, Decisao 20/21) -- UMA captura completa (`tcpdump -s 0` +
+keylog) por celula perfil x rota, nao as 15 execucoes inteiras
+daquele bloco. As 60 execucoes do piloto continuam sendo TODAS
+cronometradas (criterio 5/6/7 pedem isso); a captura roda numa
+execucao DEDICADA, adicional, fora da contagem estatistica das 15 por
+bloco -- replicando exatamente o padrao que a v7 ja usava (Decisao 15
+da v7: pacote capturado por um observador `--rm`, FORA do lote
+estatistico, "a size batch e a latency batch sao conjuntos de
+execucoes diferentes").
+
+**Perturbacao medida localmente (N=5 com vs sem captura, perfil
+Classico, mesma maquina):** rodei o `gateway`+`proxy` da v9 dentro do
+MESMO container (sem travessia de rede local, igual ao `measure.sh`)
+5 vezes COM `tcpdump -s 0`+keylog (como o `measure.sh` real faz) e 5
+vezes SEM nenhuma captura, extraindo o `handshakeDurationUs` que o
+proprio `proxy` reporta. **Sem captura:** 7436, 6326, 12795, 10719,
+6089 µs (media 8673). **Com captura:** 4320, 4744, 6183, 7064, 4636 µs
+(media 5389). **Resultado honesto: a amostra COM captura saiu MENOR,
+nao maior** -- ao contrario do que uma perturbacao real causaria.
+Concluo que, nesta escala (microssegundos, loopback local, N=5), a
+variancia de fundo do ambiente (agendamento do Docker, boot do
+container) domina completamente qualquer custo real da captura --
+**este teste local e inconclusivo, nao prova que a captura e
+inofensiva, so que o efeito (se existir) esta abaixo do ruido de
+fundo medido aqui.** Registrado honestamente: o teste real precisa
+ser refeito no piloto, numa rota com latencia de rede REAL (onde o
+handshake dura dezenas a centenas de ms, nao 5-13), N=5 com vs sem
+captura, mesma rota e perfil -- só ali o resultado e conclusivo.
+
+**Esquema proposto pra campanha oficial (960 execucoes):** captura
+roda SOMENTE nas 12 execucoes dedicadas (4 perfis x 8 rotas... nao,
+3 das 8 rotas sao suficientes pro criterio -- mas se o Luciano
+quiser as 8 rotas capturadas, sao 32 capturas dedicadas, 4 perfis x 8
+rotas), cada uma FORA das 30 execucoes estatisticas daquela
+celula -- nunca a mesma execucao contada duas vezes. As 30 execucoes
+estatisticas por celula (960 no total) NUNCA levam `tcpdump`/keylog
+ligado, exatamente como a v7 separou a "size batch" da "latency
+batch". Isso garante que o numero oficial de latencia nunca inclui o
+custo (medido ou nao) de rodar a captura.
+
+**4. AUTODESLIGAMENTO -- reconfirmado.** `terminate`, nao `stop`
+(Decisao 23, item 5, sem mudanca -- reconfirmado aqui por causa do
+item 2 acima, que depende dessa semantica).
+
+**5. CUSTO -- estimado por conta aritmetica, com fontes e datas
+declaradas, sem nenhuma chamada AWS.**
+
+**Fontes e data de cada preco unitario** (todas ja citadas em
+`v8/DECISIONS.md`, nunca re-obtidas via API -- esse projeto nao tem
+permissao de billing, Decisao 44 da v8):
+| Item | Preco | Fonte | Data citada em v8/DECISIONS.md |
+|---|---|---|---|
+| `m7i-flex.large` (servidor e clientes) | US$0,0958/h | calculator.holori.com (agregador, us-east-1) | 2026-10-?? (Decisao ~98 da v8, linha 4774) |
+| `t4g.micro` (controle) | US$0,0084/h | fonte publica comumente citada | mesma decisao |
+| IP publico (cada) | US$0,005/h, cobrado mesmo ocioso | anuncio oficial AWS (Public IP Insights) | citado na Decisao 44 da v8 |
+| EBS gp3 (30GB) | US$0,08/GB-mes | aws.amazon.com/ebs/pricing | citado na Decisao ~98 da v8 |
+| Transferencia entre regioes | ~US$0,02/GB | fonte secundaria, nao API oficial | Decisao 32/44 da v8 |
+
+**Ancora real, nao estimada: quanto custou a v8.** Registrado
+diretamente em `v8/DECISIONS.md`, Decisao 117 (2026-10-31): frota
+no ar desde 2026-10-30T21:08:56Z, **22,45 horas totais de frota**,
+**custo estimado total ≈ US$29,34**, confirmado no destroy final (65
+recursos destruidos, 7 regioes, verificado pela API real da AWS). Essa
+e a campanha REAL completa da v8: 3 perfis x 8 rotas x 30 = 720
+execucoes.
+
+**Piloto da v9 (60 execucoes, 1 servidor + 3 clientes + 1 controle,
+~5 instancias no ar durante todo o piloto):** usando a ordem de
+execucao corrigida (Decisao 23, item 2 -- so 4 trocas de perfil, nao
+12), o tempo total estimado cai de ~1-1,5h (Decisao 20) pra algo como
+**30-60 minutos de janela medida**, mais margem de setup
+(distribuicao de PKI, settling) e teardown -- **~1,5-2h de frota no
+ar**, numero redondo e conservador. Custo: 4x `m7i-flex.large`
+(servidor+3 clientes) + 1x `t4g.micro` (controle) + 5x IP publico, 2h:
+- Compute: (4 x 0,0958 + 1 x 0,0084) x 2h ≈ US$0,783
+- IP publico: 5 x 0,005 x 2h ≈ US$0,05
+- EBS (5 x 30GB, gp3, pro-rata de 2h): ≈ US$0,033
+- Transferencia entre regioes: desprezivel nessa escala (a v8 real
+  mediu ~US$0,14 pra TODA a campanha de 720 execucoes) ≈ US$0,02
+- **Subtotal: ≈ US$0,89. Com margem de 30%: ≈ US$1,15.**
+
+Isso bate com precedente real ja registrado em `v8/DECISIONS.md`
+(varias tentativas de piloto de escala/duracao parecida custaram
+US$0,93, US$1,10 e US$1,80 de verdade) -- a estimativa nao e
+fantasiosa, reproduz a mesma ordem de grandeza que a v8 real ja
+mediu. **Cabe em US$27,72 com folga grande (usa ~4-7% do teto).**
+
+**Campanha oficial da v9 (960 execucoes, 4 perfis x 8 rotas x 30 --
+33% mais execucoes que a v8 real, mesmas 8 rotas/regioes, mesmos tipos
+de instancia):** escalando a ancora real da v8 (US$29,34 / 22,45h
+pra 720 execucoes = 3 perfis) linearmente por perfil (US$9,78 e
+7,48h de frota por perfil, pela v8 real): **4 perfis -> ≈ 29,9h de
+frota, ≈ US$39,12 antes de margem.** **Com margem de 30%: ≈ US$50,86.**
+**NAO cabe em US$27,72** -- a campanha oficial completa, nessa
+estimativa, fica entre 1,4x (sem margem) e 1,8x (com margem) acima
+desse valor. Se US$27,72 for o teto pretendido so pro PILOTO, o
+piloto cabe com folga grande (item acima); se for o teto pretendido
+pra CAMPANHA OFICIAL inteira, a estimativa aqui indica que nao cabe,
+e a decisao (reduzir N, reduzir rotas, aumentar o teto, ou aceitar o
+estouro) e do Luciano -- nao assumida aqui.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
