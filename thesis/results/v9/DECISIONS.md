@@ -4947,3 +4947,46 @@ passaram.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 41. REVISAO INDEPENDENTE, SECAO C -- os 3 produtores de dados dos criterios 2, 3 e 7 (ate agora so descritos) escritos de verdade e testados localmente, fim a fim com o avaliador
+
+`thesis/results/v9/integration/producers/` (novo):
+
+**1. `criterio2_probe.py`.** Ordem dos eventos exatamente como pedida
+(item C.9): `tcpdump -s 0` sobe primeiro; aceita a conexao de teste;
+tira o snapshot de `ss -ti` IMEDIATAMENTE, ANTES de mandar qualquer
+byte (depois disso o cwnd ja cresceria por slow-start); manda 70KB
+(>64KB exigido); para a captura; extrai MSS (das opcoes do SYN-ACK
+do servidor) e bytes antes do primeiro ACK do cliente via `tshark`;
+registra `ethtool -k` (tso/gso/gro) sempre. **Testado fim a fim, de
+verdade, num container com `tcpdump`/`tshark`/`ss`/`ethtool`
+instalados:** rodou contra uma conexao de teste em loopback,
+produziu JSON valido com `ss_ti_cwnd=10` (lido de um `ss -ti` real,
+nao simulado) e `offloads={"tso":"on","gso":"on","gro":"on"}`
+(confirmado: TSO/GSO vem LIGADO por padrao mesmo num container
+generico -- corrobora empiricamente o motivo da Emenda 9 de nao
+reprovar por isso). `bytes_sent_before_first_client_ack` saiu `null`
+nesse teste -- **confirma empiricamente, nao so por teoria, o limite
+ja registrado**: em loopback (e com GSO ligado) o payload inteiro
+aparece como um unico segmento na captura antes de qualquer ACK
+real, exatamente o efeito de visibilidade que motiva precisar de uma
+rota real do piloto pra esse numero significar algo.
+
+**2. `criterio3_collector.py`.** So agrega -- le um diretorio de
+JSONs por execucao (`{"profile","route","ok"}`, o mesmo formato que
+o orquestrador ja produz) e filtra pra `route=="L325"`. **Testado
+fim a fim:** 20 arquivos L325 + 3 arquivos L219 (ruido, pra confirmar
+o filtro) -> `criterio3_collector.py` -> `criterion_3_distant_route()`
+real -> **PASS, 20 execucoes** (os 3 de L219 corretamente ignorados).
+
+**3. `criterio7_rtt.py`.** Dois subcomandos pros dois canais: `probe`
+(conexao TCP real, N amostras, mediana -- **testado de verdade**:
+20 conexoes reais contra um listener de teste, mediana 0,819ms,
+`n_samples=20`) e `pcap` (SYN->SYN-ACK via `tshark` numa captura
+existente); `combine` junta os dois por rota no formato final.
+**Testado fim a fim, as 3 rotas:** `combine` x3 (L0/L219/L325, com
+os valores reais da v8 como entrada sintetica) ->
+`criterion_7_latency_sanity()` real -> **PASS**.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
