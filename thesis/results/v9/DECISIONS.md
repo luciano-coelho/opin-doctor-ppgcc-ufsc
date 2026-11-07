@@ -3824,3 +3824,200 @@ chaves) e aplicado ao fluxo da PKI/binario/coleta da v9:
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 27. Endereco do servidor (EIP alocado antes da instancia, usado no SAN) e grupo de seguranca definidos; pre-voo somente-leitura com comandos exatos; procedimento de abortar descrito; verificacao de pre-registro para push/tag -- achado real (falso-positivo do proprio comando, corrigido) de que nao ha chave privada no historico do branch v9
+
+**1. ENDERECO DO SERVIDOR -- IP elastico, alocado ANTES da
+instancia; usado diretamente no SAN; grupos de seguranca definidos.**
+
+**Elastico (EIP), nao DNS.** O proprio gerador de certificados da v9
+(`certs/main.go`, flag `-server-ips`) ja foi desenhado pra isso: "na
+campanha real, os IPs da frota resolvidos no deploy" (comentario da
+flag, linha 474). Um Elastic IP pode ser ALOCADO (`aws_eip`, sem o
+atributo `instance`) antes mesmo da instancia existir -- resolve o
+problema de ordem (preciso do endereco do servidor pra gerar o cert
+do servidor, mas a instancia so sobe depois) sem precisar de DNS
+(zona hospedada, propagacao, TTL -- infraestrutura extra que este
+projeto nunca usou em lugar nenhum). **Sequencia:** 1) Terraform
+aloca o EIP do servidor (sem associar ainda) -- o endereco resultante
+e um output; 2) essa saida alimenta a chamada UNICA do gerador de
+PKI (Decisao 22/23, `-server-ips=<EIP do servidor>`), produzindo o
+certificado do servidor com esse IP exato como SAN; 3) a instancia do
+servidor sobe; 4) o EIP e associado a ela. **O SAN do servidor usa o
+IP, nao um nome DNS** -- IPs em SAN sao OCTET STRINGs de largura fixa
+(Decisao 20, 4B IPv4), entao nao adicionam variabilidade de tamanho
+dependendo do IP real, ao contrario de um nome DNS.
+
+**Grupo de seguranca do servidor, definido:**
+- Porta 443: 3 regras de entrada, uma por cliente -- L0 pelo seu IP
+  PRIVADO (co-localizado na mesma regiao/AZ, mesmo padrao da v8 real,
+  Decisao 49), L219 e L325 pelo seu respectivo IP ELASTICO publico
+  (regioes diferentes, sem peering/VPN entre regioes nesta
+  infraestrutura -- so o publico alcanca). Mesmo padrao da v8 real:
+  "one ingress rule per client, created once by Terraform."
+- Porta 22: UMA regra, só o IP elastico do CONTROLE -- nunca o
+  operador direto (Decisao 26, item 3).
+- **Nenhum IP e versionado em arquivo algum.** Os enderecos (EIP do
+  servidor, EIPs dos 3 clientes, EIP do controle) so existem como
+  valores RESOLVIDOS no `terraform.tfstate` (local, gitignored --
+  mesma politica que a v8 real ja usa, Decisao 49) e como variaveis
+  computadas dentro do proprio Terraform (`aws_eip.*.public_ip`,
+  referenciado por outro recurso, nunca copiado pra um literal em
+  `.tf` versionado). As regras de SG referenciam esses valores
+  computados diretamente -- a ordem de dependencia do proprio
+  Terraform resolve (EIP alocado -> SG rule referencia o IP
+  resultante -> ambos no mesmo apply, sem round-trip manual).
+
+**2. PRE-VOO -- somente leitura, comandos exatos, ponto de ir/nao ir
+do Luciano antes do primeiro apply.**
+
+Nenhum destes foi executado nesta sessao ("nada de AWS" continua
+valendo) -- sao os comandos EXATOS que rodariam, com um ponto de
+decisao explicito depois de ver o resultado de cada um:
+
+```
+# 1. Identidade e permissoes das credenciais (NUNCA imprimir o
+#    resultado literal no chat -- account ID/ARN, regra permanente)
+aws sts get-caller-identity
+aws iam list-attached-user-policies --user-name mockopin-pqc-experiment
+
+# 2. Cota de vCPU (Running On-Demand Standard (A,C,D,H,I,M,R,T,Z)),
+#    uma chamada por regiao do piloto
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-1216C47A --region sa-east-1
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-1216C47A --region eu-north-1
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-1216C47A --region ap-southeast-1
+
+# 3. Disponibilidade dos tipos de instancia, por regiao
+aws ec2 describe-instance-type-offerings --location-type region \
+  --filters Name=instance-type,Values=m7i-flex.large,t4g.micro \
+  --region sa-east-1
+aws ec2 describe-instance-type-offerings --location-type region \
+  --filters Name=instance-type,Values=m7i-flex.large \
+  --region eu-north-1
+aws ec2 describe-instance-type-offerings --location-type region \
+  --filters Name=instance-type,Values=m7i-flex.large \
+  --region ap-southeast-1
+
+# 4. AMI mais recente por regiao (x86_64 nas 3; arm64 so em
+#    sa-east-1, onde o controle roda)
+aws ec2 describe-images --owners amazon \
+  --filters "Name=name,Values=al2023-ami-*-kernel-*-x86_64" \
+             "Name=state,Values=available" \
+  --query 'Images | sort_by(@,&CreationDate)[-1].[ImageId,Name]' \
+  --region sa-east-1
+# (repetir pra eu-north-1 e ap-southeast-1, troca so --region;
+#  repetir com -arm64 em vez de -x86_64, so pra sa-east-1)
+
+# 5. Alerta de orcamento ja existente
+aws budgets describe-budgets --account-id "$(aws sts get-caller-identity --query Account --output text)"
+```
+
+**Ponto de ir/nao ir: o Luciano revisa a saida de cada comando e
+autoriza (ou nao) o primeiro `apply` -- nenhum deles e executado
+sem essa autorizacao, e nenhum resultado com account ID/ARN/IP e
+colado no chat (mesma regra de sempre, so o veredito ir/nao-ir por
+item).**
+
+**3. ABORTAR -- procedimento se um criterio de seguranca falhar no
+meio do piloto.**
+
+**Gatilhos:** erro de criacao (`apply` falha parcialmente), instancia
+que nao sobe (healthcheck/SSH nunca fica pronto), perda de conexao
+com o controle.
+
+**Ordem de destruicao, do mais externo pro mais central:** 1) os 3
+clientes (L0/L219/L325) primeiro -- menor raio, nenhum depende deles;
+2) o servidor depois; 3) **o controle por ULTIMO** -- precisa dele
+funcionando pra relayar qualquer coleta de emergencia e pra confirmar
+o estado dos outros antes de ele proprio ser destruido. **Excecao
+explicita: se o GATILHO for justamente "perda de conexao com o
+controle"** (controle inalcançavel), a ordem acima nao e executavel
+do jeito normal (nenhum SSH, nem pro controle nem atraves dele) --
+mas isso NAO bloqueia a destruicao: `terraform destroy` opera pela
+API da AWS, nunca por SSH nas instancias, entao destruir TODAS (os 3
+clientes + servidor + controle, na mesma chamada) continua possivel
+mesmo com o controle inacessivel.
+
+**Verificacao de tags:** rodada nas 3 regioes do piloto
+(`sa-east-1`/`eu-north-1`/`ap-southeast-1`) depois do destroy de
+emergencia, igual ao teardown normal (Decisao 26, item 2) -- esperado
+vazio nas 3, independente do motivo do abort.
+
+**Artefatos ja coletados:** mantidos, nunca descartados -- ja estao
+seguros na maquina do operador (relay de 2 saltos, Decisao 26, item
+3). **Apenas os dados do BLOCO em andamento no momento da falha**
+(a execucao incompleta, ou qualquer coisa que só existisse na
+instancia que falhou e nunca chegou a ser relayada) sao marcados
+explicitamente como "execucao abortada, nao integra" e excluidos da
+analise estatistica -- registrados, nao apagados silenciosamente
+(mesma politica de "reportar divergencia, nao so descartar" que este
+projeto usa desde a v1).
+
+**4. PRE-REGISTRO -- preparado, NAO enviado. Um achado real no
+caminho: falso-positivo do meu proprio comando, corrigido e
+reverificado.**
+
+**Achado e correcao, registrado honestamente.** Minha primeira
+tentativa de varrer "todo o historico alcancavel do branch" usou
+`git log --all -p main..v9/fase1-local` -- a flag `--all` SOBRESCREVE
+o intervalo pretendido (faz o git atravessar TODAS as refs do
+repositorio, incluindo `remotes/upstream/*`, que nada tem a ver com
+o branch v9), e encontrou blocos `-----BEGIN PRIVATE KEY-----` reais.
+Investigando MAIS a fundo em vez de aceitar o resultado: localizei o
+commit exato (`74487e99`), confirmei que e um commit de 2025-08-21,
+autor `luiky-raidiam` (equipe Raidiam, upstream), alcancavel so via
+`remotes/upstream/feat/update-mockopin-4` -- NUNCA ancestral de
+`main` nem de `v9/fase1-local` de verdade. **Refiz a varredura sem
+o `--all`, com o intervalo correto:**
+
+```
+git log -p main..v9/fase1-local -- .
+  -> 24 commits (confere com `git log --oneline main..v9/fase1-local`)
+  -> 0 ocorrencias de qualquer cabecalho PEM de chave privada
+     (RSA/EC/DSA/OPENSSH/ENCRYPTED/PGP, todas testadas)
+  -> 0 arquivos .key/.pem/.p12/.pfx tocados por qualquer um dos 24 commits
+  -> unico "BEGIN...PRIVATE KEY" encontrado e texto de PROSA (uma
+     mensagem de commit anterior deste mesmo projeto, citando o
+     comando `git grep` usado numa verificacao passada -- nao uma
+     chave real)
+  -> unico IP encontrado: 127.0.0.1 (loopback, 18 ocorrencias, uso
+     local do harness, nunca um IP publico real)
+  -> 0 ocorrencias de arn:aws, AKIA[chave de acesso], ou numero de
+     12 digitos no formato de account ID
+```
+
+**Nota honesta sobre `mock-service-os/certs/*.key`:** esses arquivos
+(certificados mTLS de teste, localhost-only) SAO versionados no
+repositorio -- mas isso e uma convencao pre-existente, documentada no
+proprio `README.md` raiz (`--key ./mock-service-os/certs/client_one.key`,
+linha 233+), presente em TODO o repositorio incluindo `main`, nao
+introduzida por nenhum commit da v9 (confirmado: nenhum dos 24
+commits da v9 toca nenhum arquivo `.key`). Nao sao credenciais reais,
+nao tem relacao com a PKI do piloto real (essa e gerada em tempo de
+execucao, nunca commitada -- regra separada, ja validada a cada
+rodada deste projeto). Mencionado aqui por transparencia, nao como um
+bloqueio -- o criterio que o Luciano pediu ("chave privada no
+historico ALCANCAVEL DO BRANCH v9") e sobre o que os 24 commits da
+v9 introduzem, e esses commits confirmadamente NAO tocam esse tipo de
+arquivo.
+
+**Scanner nos 24 commits:** cada um dos 24 commits desta sessao foi
+precedido de revisao manual do diff antes do `git commit` (pratica
+seguida em toda rodada, registrada no relatorio do chat de cada
+rodada) -- reconfirmado agora, retroativamente, pela varredura acima
+sobre o range completo, nao so commit a commit.
+
+**Preparado pro push, NAO enviado:**
+```
+git push origin v9/fase1-local
+git push origin v9-prereg
+```
+**Nenhum dos dois foi executado.** Aguardando confirmacao explicita
+do Luciano -- "nao envie nada sem minha confirmacao explicita" segue
+valendo ao pe da letra.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
