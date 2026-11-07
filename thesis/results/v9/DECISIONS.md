@@ -1335,3 +1335,355 @@ de build e removidos ao final de `run_t5.sh`). `mock-service-os/
 mock_mtls` e `thesis/scripts/tls_kem_proxy` permanecem intocados.
 
 Nenhuma acao em AWS. Nenhuma tag nova.
+
+## 13. Dois ajustes pedidos antes da T6: tickets de sessao desligados nos QUATRO perfis (nao so Hibrido-AND), e explicacao de por que o fluxo completo (44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA) nao rodou na T5
+
+**1. TICKETS, nos quatro perfis.** `gateway/main.go` e `proxy/main.go`
+ganharam um parametro `ticketsDisabled` explicito (`TICKETS_DISABLED`
+no gateway, `-tickets-disabled` no proxy, default `true` nos dois) que
+seta `tls.Config.SessionTicketsDisabled` -- antes so setado no
+`Dual` do Hibrido-AND, agora em TODOS os `tls.Config` que
+`buildServerTLSConfig`/`buildClientTLSConfig` produzem.
+
+**O que a v8 (e a v7, mesmo codigo) realmente fazia -- confirmado,
+nao assumido:** `grep -rn SessionTicket mock-service-os/mock_mtls/*.go
+thesis/scripts/tls_kem_proxy/*.go` nao retorna nenhuma ocorrencia --
+nenhum `tls.Config` da v7/v8 jamais seta `SessionTicketsDisabled`,
+logo tickets ficam LIGADOS (default zero-value do Go) em TODOS os tres
+perfis da v8, sempre. E os bytes do ticket ENTRAVAM no contador do
+gateway: `thesis/results/v8/DECISIONS.md`, Decisao 78, ja tinha
+rastreado isso byte a byte via captura real (tcpdump) de uma conexao
+Hibrido real -- `mtlsHandshakeBytes` continha o `ClientHello` + o
+flight completo do servidor + **2.162 B consistentes com um
+`NewSessionTicket`** + o flight do cliente + o inicio da primeira
+requisicao HTTP, tudo somado porque `connStateHandshakeLogger` le o
+contador cumulativo em `ConnState -> StateActive`, que so dispara
+depois que TODO esse trafico ja passou pela conexao. A Decisao 79
+(mesmo arquivo) registra que Luciano decidiu **NAO corrigir** esse
+limite de medicao na v8, para manter comparabilidade com a v7 (que
+carrega o mesmo artefato desde sempre, mesmo codigo). Ou seja: os
+numeros historicos de `mtlsHandshakeBytes` da v7/v8 incluem ticket(s)
+mais um pedaco da primeira requisicao -- um numero deliberadamente
+"sujo" por motivo de comparabilidade histórica, nao um bug desconhecido.
+
+**Por que a v9 diverge disso, deliberadamente, registrado aqui para o
+checklist de equivalencia da T8:** a v9 nao esta tentando reproduzir os
+numeros historicos da v7/v8 byte a byte -- esta comparando o
+Hibrido-AND contra os outros 3 perfis da propria v9. Se tickets
+ficassem ligados em 3 perfis e nunca no Hibrido-AND (o unico perfil
+cuja propria logica de protocolo os impede estruturalmente, ver T6
+abaixo), a comparacao ficaria enviesada a favor do Hibrido-AND por um
+motivo que nao tem nada a ver com o mecanismo AND em si. Desligar nos
+quatro iguala o terreno. **Divergencia explicita da v9 em relacao a
+v7/v8:** v9 mede handshake SEM tickets por padrao; v7/v8 sempre
+mediram COM tickets (e com o ticket parcialmente contaminando o
+contador). Os dois numeros nao sao diretamente comparaveis um ao
+outro por essa razao adicional (some-se a nao comparabilidade de
+certificado ja registrada na Decisao 11) -- so entre os 4 perfis da
+v9, entre si.
+
+**Quantificacao do efeito, pedida para a T6 (modo diagnostico,
+tickets religados so para medir):** feita, ver Decisao 14 abaixo --
+inclui um achado estrutural novo, nao previsto: o Hibrido-AND NUNCA
+emite ticket, independente deste parametro, por um motivo diferente
+(decisao de design da propria T3, nao deste ajuste).
+
+**2. FLUXO COMPLETO LOCAL -- por que nao rodou na T5, o que falta, como
+a v8 roda, viabilidade.**
+
+**Por que a T5 nao rodou o fluxo completo:** a T5 foi desenhada e
+aprovada (Decisao 12) com um escopo deliberadamente restrito -- provar
+que o MECANISMO TLS (handshake, verificacao mutua, grupo unico, o gate
+AND) funciona nos 4 perfis, sem reconstruir a logica de negocio OPIN.
+O harness da T5/T6 (`thesis/results/v9/integration/{gateway,proxy}`) e
+um fork deliberadamente reduzido: o handler HTTP do gateway e um unico
+endpoint fixo que devolve `{profile, curve, dualAuthenticated,
+tlsVersion}` -- nao ha reverse proxy para auth/api, nao ha assinatura
+de SSA, nao ha introspeccao de token, nao ha `/jwks`/`/root-ca.pem`/
+`/issuer-ca.pem` servindo conteudo real, e o proxy faz UMA chamada
+HTTP manual por execucao, nao um tunel persistente que o
+`opin_flow.py` real possa usar.
+
+**Como a v8 roda o fluxo completo de verdade (`mock-service-os/
+docker-compose.yml` + `insurance-server-lambdas/docker-compose.yml`),
+servico por servico:**
+- `mtls` (o gateway real, `mock_mtls`) -- reverse proxy para auth/api,
+  serve `/root-ca.pem`/`/issuer-ca.pem`/`/jwks`, assina a SSA. Expõe
+  `matls-auth.local`/`auth.local`/`api.local`/`matls-api.local`/
+  `directory` como aliases de rede.
+- `auth` (`mock_as`, Node.js, oidc-provider) -- emite os JWTs, faz a
+  chamada reentrante `InsurerAdapter.getConsent()` de volta ao
+  gateway via SNI `matls-api.local`.
+- `mongo1`/`mongo_seed` -- estado do oidc-provider (sessoes,
+  clients, grants).
+- `localstack` -- emula SSM Parameter Store e S3 LOCALMENTE (container
+  Docker local, nunca toca a AWS real -- sem violar a regra "sem
+  AWS"), serve a chave privada da SSA (`SSA_JWK_URL`) e os parametros
+  de config que `auth`/`mtls` leem no boot.
+- `insurance-server-lambdas` (stack separada, `API_GATEWAY_URI`) -- a
+  API do lado RS/seguradora que o gateway faz proxy via
+  `api.local`/`matls-api.local`.
+- `thesis/scripts/opin_flow.py` + `thesis/scripts/tls_kem_proxy` (modo
+  relay, nao stub) -- o cliente real: `tls_kem_proxy` termina um TLS
+  local (throwaway, auto-assinado) de um lado e abre UMA conexao mTLS
+  real por conexao do outro, repassando bytes crus -- e isso que faz
+  o Python conseguir falar com um gateway que exige grupos ML-KEM que
+  o OpenSSL do Python nao negocia.
+
+**O que falta, concretamente, para rodar os 4 perfis da v9 (incluindo
+Hibrido-AND) ponta a ponta localmente, com as mesmas contagens (44/6/
+28/4/4):**
+1. Devolver ao fork do gateway (`thesis/results/v9/integration/
+   gateway`) a camada de negocio que a T5 removeu por escopo: reverse
+   proxy para auth/api, assinatura de SSA (precisa da dependencia
+   `jwx` de volta), `/jwks`/`/root-ca.pem`/`/issuer-ca.pem`,
+   introspeccao de token -- OU apontar esses handlers para o `mock_as`/
+   `insurance-server-lambdas` reais (nenhum dos dois precisa de
+   mudanca, sao agnosticos a perfil TLS).
+2. Estender o fork do proxy com um MODO RELAY persistente (como o
+   `tls_kem_proxy` real tem, que a T5 removeu por escopo -- ver
+   Decisao 12), incluindo o 4° perfil (hibrido-and) que o `tls_kem_
+   proxy` real nao tem.
+3. Subir `auth`/`mongo1`/`mongo_seed`/`localstack`/
+   `insurance-server-lambdas` junto (nenhuma mudanca neles -- sao
+   agnosticos ao mecanismo TLS, so falam HTTP puro com o gateway).
+4. Apontar `opin_flow.py` para esse gateway/proxy em vez dos reais
+   (existe precedente: a flag `REMOTE_GATEWAY_HOST` desenhada no plano
+   de experimento AWS da v8 resolve exatamente esse tipo de
+   redirecionamento, reaproveitavel aqui).
+5. Confirmar as contagens (44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA)
+   via a MESMA instrumentacao que a T6 ja construiu (Decisao 14),
+   agora medindo o fluxo completo, nao uma conexao isolada.
+
+**Viabilidade: SIM, nenhum obstáculo técnico fundamental encontrado.**
+Nenhum dos componentes faltantes depende de rede externa, AWS real ou
+qualquer coisa que nao exista hoje neste repositorio -- e engenharia
+de integracao (itens 1-4 acima), nao pesquisa nem design novo. Fora do
+escopo ja aprovado da T5 (Decisao 12) e desta rodada de instrumentacao
+(T6); registrado aqui como **criterio obrigatorio da T7**, conforme
+pedido, antes de qualquer piloto na AWS.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 14. T6, instrumentacao: keylog+pcap decifrado cruzado com contagem dentro do processo na fronteira exata do Handshake(), microbenchmarks de CPU, tickets quantificados (achado estrutural: Hibrido-AND nunca emite ticket), analise de initcwnd/RTT para rotas distantes
+
+**Arquitetura, para evitar bind mount (nao funciona neste ambiente --
+Decisao 11):** `thesis/results/v9/integration/measure/` builda UM
+conteiner que contem gateway, proxy, tcpdump E tshark juntos; gateway
+e proxy conversam por loopback (127.0.0.1) DENTRO desse mesmo
+conteiner, escrevendo o keylog TLS no mesmo filesystem local que o
+tshark le depois -- nenhum arquivo cruza a fronteira de conteiner,
+nenhum bind mount em lugar nenhum. `measure.sh` orquestra: tcpdump em
+background -> gateway em background -> proxy em primeiro plano (uma
+conexao) -> para a captura -> decifra com tshark usando o keylog ->
+imprime tudo. `thesis/results/v9/integration/bench/` e um conteiner
+separado, sem rede, so CPU.
+
+**Contagem de bytes na fronteira exata do `Handshake()`:** `gateway/
+main.go` e `proxy/main.go` abandonaram o `http.Server`/`http.Client`
+da T5 (que escondem a chamada a `Handshake()` dentro do proprio
+`net/http`) por um loop `Accept()`/`tls.Server()`/`tls.Client()`
+explicito: um wrapper `countingConn` embaixo do `tls.Conn` tira uma
+foto dos contadores imediatamente antes e depois da chamada a
+`Handshake()`, e uma segunda janela ("pos-handshake") cobre exatamente
+o que e escrito/lido entre o retorno de `Handshake()` e a resposta
+HTTP manual que este harness escreve a mao (nunca `net/http` -- ver o
+comentario de `serveOneResponse`). Isso substitui, para a v9, a
+estimativa heuristica 4.945/22.373/18.783 que Luciano identificou como
+nao reproduzivel pelo codigo do repositorio -- os numeros abaixo SAO
+reproduziveis, rodando `bash thesis/results/v9/integration/run_t6.sh`.
+
+**Validacao cruzada, confirmada nos 4 perfis:** o numero que o
+processo conta (`handshakeBytesIn`/`handshakeBytesOut`) bate, byte a
+byte, com a soma dos registros TLS que o tshark decifra via keylog
+(por exemplo, Classico: ClientHello 341B + flight do servidor
+(ServerHello+EncryptedExtensions+CertificateRequest+Certificate+
+CertificateVerify+Finished) 1.640B + flight do cliente
+(Certificate+CertificateVerify+Finished) 1.172B = exatamente os
+`handshakeBytesOut=1640`/`handshakeBytesIn=1513` -- `341+1172=1513` --
+que o gateway registrou). A soma bruta de bytes do pcap inteiro
+(independente de decifragem) tambem bate com handshake + janela
+pos-handshake somadas, nos 4 perfis. Tres fontes independentes
+(contador dentro do processo, tshark decifrado, soma bruta do pcap)
+concordam exatamente -- nenhuma estimativa, tres medicoes.
+
+**Resultado por perfil, modo normal (tickets desligados, N=1 execucao
+cada -- prova de instrumentacao, nao ainda uma campanha estatistica;
+repeticao com N maior e trabalho de piloto/T7):**
+
+| Perfil | Grupo negociado | DualAuthenticated | Flight servidor (B) | Flight cliente (B) | Pos-handshake in/out (B) |
+|---|---|---|---|---|---|
+| Classico | CurveP384 | false (n/a) | 1.640 | 1.513 | 71 / 203 |
+| PQC | MLKEM1024 | false (n/a) | 10.878 | 10.728 | 71 / 198 |
+| Hibrido-v8 | SecP384r1MLKEM1024 | false (n/a; gate X.509 do client cert passou) | 8.552 | 8.397 | 71 / 215 |
+| Hibrido-AND | SecP384r1MLKEM1024 | **true**, confirmado nos dois lados | 12.177 | 11.902 | 71 / 215 |
+
+Todos os 4: grupo negociado bate exatamente o esperado, `status=200`
+na unica requisicao HTTP, nenhuma falha.
+
+**Tickets, modo diagnostico (religados so para medir; achado tecnico
+no caminho -- registrado porque mudou o design do teste):** a primeira
+tentativa, com `SessionTicketsDisabled=false` nos dois lados, mediu
+delta ZERO em todos os perfis -- bug da PROPRIA instrumentacao, nao do
+mecanismo: `handshake_client.go` desta toolchain (linha ~376) so faz o
+cliente anunciar `psk_key_exchange_modes` (o sinal que
+`shouldSendSessionTickets()` do servidor exige, RFC 8446 4.2.9) quando
+`Config.ClientSessionCache` NAO e nil -- o harness nunca setava isso.
+Corrigido (`proxy/main.go`, `buildClientTLSConfig`): quando
+`ticketsDisabled=false`, seta `ClientSessionCache =
+tls.NewLRUClientSessionCache(4)`. Depois da correcao:
+
+| Perfil | Flight servidor SEM ticket (B) | Flight servidor COM ticket (B) | Overhead do ticket (B) |
+|---|---|---|---|
+| Classico | 1.640 | 3.331 | **1.691** |
+| PQC | 10.878 | 22.007 | **11.129** |
+| Hibrido-v8 | 8.552 | 15.591 | **7.039** |
+| Hibrido-AND | 12.177 | 12.177 | **0** |
+
+Confirmado simetricamente do lado do cliente: a MESMA quantidade de
+bytes aparece na janela pos-handshake do proxy (ex.: Classico
+203->1.894, delta 1.691) em vez da janela de handshake -- porque o
+`Handshake()` do CLIENTE retorna antes de ler, de forma oportunista, o
+`NewSessionTicket` que o servidor ja escreveu (confirmado lendo
+`handshake_server_tls13.go`: o servidor envia o ticket de forma
+SINCRONA, dentro do seu proprio `Handshake()`, logo depois de
+processar o `Certificate`/`CertificateVerify` do cliente -- mas o
+cliente nao precisa terminar de LER esse ticket para considerar seu
+proprio handshake completo). Ou seja: o mesmo ticket pode cair de um
+lado ou outro da fronteira dependendo de QUEM mede e QUANDO -- exatamente
+por isso o pedido original (medir as duas janelas, nos dois lados) nao
+era redundante.
+
+**Achado estrutural, nao previsto, com implicacao direta para a
+tese:** o Hibrido-AND **nunca emite ticket, em nenhum modo** -- nao
+por causa deste ajuste (`SessionTicketsDisabled`), e sim por uma
+decisao de design ja tomada na T3 (`dual.go`'s
+`shouldSendSessionTickets()`: `if hs.c.config.Dual != nil &&
+hs.c.config.Dual.Require { return false }`), porque retomar uma sessao
+por PSK pularia TODA a troca de Certificate/CertificateVerify que
+prova posse das duas chaves -- um ticket emitido herdaria
+`DualAuthenticated=true` numa conexao futura sem jamais reverificar
+nada, o que anularia a garantia central do mecanismo. **Isso significa
+que o Hibrido-AND e estruturalmente IMUNE ao artefato de inflacao que
+contaminou os numeros historicos da v7/v8 (Decisao 78/79 da v8) -- os
+outros 3 perfis da v9 (e os 3 da v7/v8) continuam vulneraveis a ele se
+um operador religar tickets.** Tambem explica por que o tamanho do
+ticket escala com o perfil (1.691B Classico -> 7.039B Hibrido-v8 ->
+11.129B PQC): o ticket do Go embute a cadeia de certificados do PEER
+verificada, para que uma sessao retomada ainda tenha
+`ConnectionState.PeerCertificates` preenchido sem precisar re-enviar
+os certificados -- logo um cliente com certificado grande (PQC,
+Hibrido-v8) produz um ticket grande, na mesma proporcao.
+
+**Tempos no gateway por etapa, achado adicional sobre o limite da
+fronteira de medicao (transparencia, nao invalida a tabela acima):**
+`gateway/main.go` ganhou `requestDurationUs` (tempo so da etapa de
+servir a resposta HTTP, separado de `handshakeDurationUs`). Ao medir
+isso, apareceu uma segunda forma do MESMO tipo de artefato que a
+Decisao 78 da v8 ja tinha documentado (bytes de uma etapa seguinte
+entrando na contagem da etapa anterior) -- so que numa camada
+diferente: com o cliente enviando sua requisicao HTTP SEM nenhum
+atraso logo depois do seu proprio `Handshake()` retornar, o `Read()`
+do servidor que consome a ultima mensagem do handshake (o `Finished`
+do cliente) ocasionalmente ja encontra, no buffer do socket, os bytes
+da requisicao HTTP que chegaram colados em cima (loopback, latencia
+quase zero) -- e os conta como "handshake" (`handshakeBytesIn` subiu
+de 1.513 para 1.584 nessa rodada, exatamente os 71 B da requisicao que
+"vazaram" para o lado de dentro da fronteira; `postHandshakeBytesIn`
+correspondentemente caiu para 0). **Isso NAO invalida a tabela
+publicada acima** -- aquela rodada foi obtida com uma pausa de 100ms
+antes do envio (introduzida originalmente para o diagnostico de
+tickets, ainda ativa quando essa tabela foi gerada) e confirmada
+TRIPLAMENTE (contador do processo = tshark decifrado = soma bruta do
+pcap, os tres concordando exatamente) -- mas confirma que a fronteira
+de medicao, mesmo no nivel de `Handshake()`, nao e imune a esse efeito
+quando o par envia dados imediatamente, sem pausa alguma. **Registrado
+para a T7:** a campanha real deve continuar cruzando o contador de
+processo contra pcap/tshark por execucao (ja parte deste pipeline),
+nao confiar so no contador quando a latencia real entre handshake e
+primeira requisicao for muito baixa (ex.: cenario 0ms).
+
+Tempos medidos, mesma rodada (modo normal, sem a pausa de
+diagnostico, portanto sem o viés de ticket): `requestDurationUs` --
+Classico 30us, PQC 63us, Hibrido-v8 43us, Hibrido-AND 115us (etapa de
+servir UMA resposta HTTP minima, nao comparavel ainda a
+`opin_processing_ms` real da v7/v8, que serve payloads JSON maiores --
+esperado que o Hibrido-AND tenda a ser o mais lento aqui tambem na
+campanha real, por ter duas cadeias para considerar nas verificacoes
+de ConnState, nao por este numero especifico).
+
+**Microbenchmarks de CPU por operacao (4 primitivas, N=2000 cada,
+exceto keygen RSA/ML-DSA-65 N=100 por serem muito mais lentas;
+`thesis/results/v9/integration/bench`, chaves geradas na hora, mesmo
+tipo/parametro dos perfis reais -- a chave especifica nao afeta custo
+de CPU):**
+
+| Operacao | ns/op | ops/s |
+|---|---|---|
+| RSA-2048 keygen | 61.518.062 | 16 |
+| RSA-2048 sign (PSS-SHA256) | 830.087 | 1.205 |
+| RSA-2048 verify (PSS-SHA256) | 27.887 | 35.859 |
+| ML-DSA-65 keygen | 270.874 | 3.692 |
+| ML-DSA-65 sign | 537.322 | 1.861 |
+| ML-DSA-65 verify | 152.369 | 6.563 |
+| ECDH P-384 keygen | 112.387 | 8.898 |
+| ECDH P-384 compute (KEX) | 550.225 | 1.817 |
+| ML-KEM-1024 keygen | 112.890 | 8.858 |
+| ML-KEM-1024 encapsulate | 77.896 | 12.838 |
+| ML-KEM-1024 decapsulate | 126.740 | 7.890 |
+
+Custo de KEX por perfil, somando as operacoes que o handshake de fato
+executa: Classico = 1x keygen + 1x compute ECDH P-384 (~663 us);
+PQC = 1x keygen + 1x encapsulate + 1x decapsulate ML-KEM-1024 (~317
+us); Hibrido/Hibrido-AND = soma das duas linhas acima, ja que o
+combinador do grupo hibrido concatena os dois segredos (~980 us).
+Custo de assinatura/verificacao por perfil: Classico usa RSA-2048 (1
+sign + 1 verify no par de certificados = ~858 us); PQC/Hibrido-AND
+(cadeia ML-DSA-65) usam ML-DSA-65 (1 sign + 1 verify = ~690 us, MAIS
+RAPIDO que RSA-2048 apesar do certificado maior); Hibrido-v8 soma RSA
+(assinatura principal) + ML-DSA-65 (assinatura alt X.509, verificada
+so na validacao de cadeia, nao por operacao de rede). Hibrido-AND paga
+RSA completo E ML-DSA-65 completo, EM PARALELO estruturalmente (duas
+cadeias independentes) -- custo de CPU e a soma das duas, nao hibrido.
+
+**Analise de initcwnd / RTTs extras para rotas distantes (calculo de
+mesa, Fase 1 local -- nao ha rota real da AWS ainda para medir; usa os
+tamanhos REAIS medidos acima, nao a tabela de certificado da T4):**
+formula: `RTTs extras = max(0, ceil(bytes_do_flight / cwnd_bytes) - 1)`,
+`cwnd_bytes = initcwnd_segmentos x MSS`, MSS=1460B (Ethernet padrao).
+
+| Perfil | Flight servidor (B) | initcwnd=10 (14.600B, padrao Linux atual) | initcwnd=3 (4.380B, legado pre-2011) |
+|---|---|---|---|
+| Classico | 1.640 | 0 RTT extra | 0 RTT extra |
+| PQC | 10.878 | 0 RTT extra | **2 RTTs extras** |
+| Hibrido-v8 | 8.552 | 0 RTT extra | **1 RTT extra** |
+| Hibrido-AND | 12.177 | 0 RTT extra | **2 RTTs extras** |
+
+**Conclusao:** com o `initcwnd=10` que e o padrao de qualquer kernel
+Linux razoavelmente atual (desde 2011, RFC 6928) -- o que se espera de
+qualquer instancia EC2 moderna --, NENHUM dos 4 perfis precisa de RTT
+extra por limite de janela de congestionamento inicial, em NENHUM dos
+tiers de latencia ja usados nesta tese (14/30/140/225/320ms) -- o
+custo extra do Hibrido-AND (quase 2x o Hibrido-v8, por carregar duas
+cadeias completas) ainda fica dentro do primeiro flight em qualquer
+RTT. So sob um `initcwnd` legado (3 segmentos, pre-2011) o PQC e o
+Hibrido-AND pagariam RTTs extras -- **registrado para a T7: confirmar
+empiricamente o `initcwnd` real das instancias EC2 do piloto antes de
+assumir 0 RTTs extras**, nao decidido aqui por falta de uma rota real
+para medir. Esta analise nao cobre perda de pacote/retransmissao
+(fenomeno dependente de rota real, nao reproduzivel em loopback local).
+
+**Artefatos:** `thesis/results/v9/integration/gateway/main.go` e
+`proxy/main.go` reescritos (contagem na fronteira do `Handshake()`,
+keylog, tickets parametrizados); `measure/{Dockerfile,measure.sh,
+.gitignore-covered certs}`; `bench/{main.go,go.mod,Dockerfile}`;
+`run_t6.sh` (substitui `run_t5.sh` como o script de referencia -- 
+`run_t5.sh` continua funcionando, mantido por compatibilidade, mas
+`run_t6.sh` e o que agora prova tanto a integracao quanto a
+instrumentacao). Nenhuma chave, nenhum certificado, nenhum pcap ou
+keylog commitado -- tudo gerado e descartado a cada execucao
+(`t6_out/` e `measure/certs/` gitignored).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

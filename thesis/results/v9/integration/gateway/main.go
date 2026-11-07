@@ -1,38 +1,35 @@
-// gateway is the v9, T5, Fase 1 integration harness's server side -- a
-// fork of mock-service-os/mock_mtls/main.go (origin commit
-// 478bda51815d8bf60ebd23fb83f592270aa04377), built against the patched
-// go1.27.3 toolchain from thesis/results/v9/toolchain (the AND dual-
-// certificate mechanism) instead of mock_mtls's own golang:1.27-rc base.
+// gateway is the v9, T5/T6, Fase 1 integration harness's server side --
+// a fork of mock-service-os/mock_mtls/main.go (origin commit
+// 478bda51815d8bf60ebd23fb83f592270aa04377). See DECISIONS.md, Decisao
+// 12 (T5 scope/diff) and Decisao 13/14 (T6 instrumentation) for the
+// full rationale.
 //
-// SCOPE, decided with Luciano before writing this file (see
-// DECISIONS.md, Decisao 12): fork lives entirely under thesis/results/v9,
-// never touches mock-service-os/mock_mtls or thesis/scripts/tls_kem_proxy
-// -- the files the already-frozen v7/v8 official data depend on. This
-// harness proves the TLS-layer mechanism (per-profile cert/curve
-// selection, mutual verification, the dual AND gate) integrates and
-// negotiates correctly; it does NOT reimplement mock_mtls's OPIN business
-// routing (reverse-proxy to auth/mockapi, SSA signing, token
-// introspection) -- that depends on the live Node stack and is out of
-// T5's scope (the full 44-HTTP-call flow is registered for the T8
-// equivalence checklist, not re-proven here). See DECISIONS.md, Decisao
-// 12, for the full diff against the origin commit.
+// T6 reworked the connection handling from T5's http.Server-based
+// version to an explicit Accept()/Handshake() loop: T6 requires byte
+// counts measured EXACTLY at the Handshake() call boundary (so the
+// first HTTP request's own bytes never leak into the handshake figure
+// -- the measurement-boundary artifact Decision 78/79 of v8's
+// DECISIONS.md documents and deliberately left unfixed there, for
+// v7-comparability). That precision is not reachable through
+// http.Server's own automatic TLS wrapping, which hides the Handshake()
+// call inside net/http's internals.
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
+	"time"
 )
 
-// expectedCurve: the single KEX group each profile must negotiate, per
-// Luciano's explicit T5 requirement -- read back from
-// ConnectionState.CurveID on every request and failed loudly on mismatch,
-// not just configured as a preference and trusted blindly.
 var expectedCurve = map[string]tls.CurveID{
 	"classico":    tls.CurveP384,
 	"pqc":         tls.MLKEM1024,
@@ -40,57 +37,165 @@ var expectedCurve = map[string]tls.CurveID{
 	"hibrido-and": tls.SecP384r1MLKEM1024,
 }
 
+// result is the one structured line this process prints per connection,
+// consumed by run_t6.sh. Mirrors proxy's own result struct field for
+// field so the two sides' JSON lines diff cleanly in the report.
+type result struct {
+	Side                  string `json:"side"`
+	Profile               string `json:"profile"`
+	OK                     bool   `json:"ok"`
+	Error                 string `json:"error,omitempty"`
+	CurveID               string `json:"curveID"`
+	DualAuthenticated     bool   `json:"dualAuthenticated"`
+	TLSVersion            string `json:"tlsVersion"`
+	TicketsDisabled       bool   `json:"ticketsDisabled"`
+	HandshakeBytesIn      int64  `json:"handshakeBytesIn"`
+	HandshakeBytesOut     int64  `json:"handshakeBytesOut"`
+	HandshakeDurationUs   int64  `json:"handshakeDurationUs"`
+	PostHandshakeBytesIn  int64  `json:"postHandshakeBytesIn"`
+	PostHandshakeBytesOut int64  `json:"postHandshakeBytesOut"`
+	RequestDurationUs     int64  `json:"requestDurationUs"`
+}
+
 func main() {
 	profile := os.Getenv("CRYPTO_PROFILE")
 	certDir := envOr("CERT_DIR", "/certs")
 	listen := envOr("LISTEN", ":443")
+	ticketsDisabled := envOr("TICKETS_DISABLED", "true") == "true"
+	keylogPath := os.Getenv("KEYLOG_PATH")
 
-	if _, ok := expectedCurve[profile]; !ok {
+	want, ok := expectedCurve[profile]
+	if !ok {
 		log.Fatalf("gateway: unknown CRYPTO_PROFILE %q (want classico, pqc, hibrido-v8, hibrido-and)", profile)
 	}
 
-	cfg, err := buildServerTLSConfig(profile, certDir)
+	var keylog *os.File
+	if keylogPath != "" {
+		var err error
+		keylog, err = os.Create(keylogPath)
+		if err != nil {
+			log.Fatalf("gateway: create keylog %s: %v", keylogPath, err)
+		}
+		defer keylog.Close()
+	}
+
+	cfg, err := buildServerTLSConfig(profile, certDir, ticketsDisabled, keylog)
 	if err != nil {
 		log.Fatalf("gateway: %s: building TLS config: %v", profile, err)
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		cs := r.TLS
-		if cs == nil {
-			http.Error(w, "no TLS state on request", http.StatusInternalServerError)
-			return
-		}
-
-		if want := expectedCurve[profile]; cs.CurveID != want {
-			msg := fmt.Sprintf("FATAL: negotiated group %s, expected exactly %s for profile %s", cs.CurveID, want, profile)
-			log.Println("gateway:", msg)
-			http.Error(w, msg, http.StatusInternalServerError)
-			return
-		}
-
-		if profile == "hibrido-and" && !cs.DualAuthenticated {
-			msg := "FATAL: DualAuthenticated=false on the server side for hibrido-and"
-			log.Println("gateway:", msg)
-			http.Error(w, msg, http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"profile":%q,"curve":%q,"dualAuthenticated":%t,"tlsVersion":%q,"peerCertCount":%d}`,
-			profile, cs.CurveID.String(), cs.DualAuthenticated, tls.VersionName(cs.Version), len(cs.PeerCertificates))
-		log.Printf("gateway: %s OK curve=%s dualAuthenticated=%v tlsVersion=%s peerCerts=%d",
-			profile, cs.CurveID, cs.DualAuthenticated, tls.VersionName(cs.Version), len(cs.PeerCertificates))
-	})
 
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		log.Fatalf("gateway: listen %s: %v", listen, err)
 	}
-	log.Printf("gateway: profile=%s listening on %s (expected group %s)", profile, listen, expectedCurve[profile])
+	log.Printf("gateway: profile=%s listening on %s (expected group %s, ticketsDisabled=%v)", profile, listen, want, ticketsDisabled)
 
-	server := &http.Server{Handler: mux, TLSConfig: cfg}
-	log.Fatal(server.Serve(tls.NewListener(ln, cfg)))
+	for {
+		raw, err := ln.Accept()
+		if err != nil {
+			log.Printf("gateway: accept: %v", err)
+			continue
+		}
+		go handleConn(raw, cfg, profile, want, ticketsDisabled)
+	}
+}
+
+func handleConn(raw net.Conn, cfg *tls.Config, profile string, want tls.CurveID, ticketsDisabled bool) {
+	defer raw.Close()
+	cc := &countingConn{Conn: raw}
+	tlsConn := tls.Server(cc, cfg)
+
+	t0 := time.Now()
+	in0, out0 := cc.snapshot()
+	err := tlsConn.Handshake()
+	t1 := time.Now()
+	in1, out1 := cc.snapshot()
+
+	r := result{
+		Side:                  "gateway",
+		Profile:               profile,
+		TicketsDisabled:       ticketsDisabled,
+		HandshakeBytesIn:      in1 - in0,
+		HandshakeBytesOut:     out1 - out0,
+		HandshakeDurationUs:   t1.Sub(t0).Microseconds(),
+	}
+
+	if err != nil {
+		r.Error = err.Error()
+		emit(r)
+		return
+	}
+
+	cs := tlsConn.ConnectionState()
+	r.CurveID = cs.CurveID.String()
+	r.DualAuthenticated = cs.DualAuthenticated
+	r.TLSVersion = tls.VersionName(cs.Version)
+
+	if cs.CurveID != want {
+		r.Error = fmt.Sprintf("negotiated group %s, expected exactly %s", cs.CurveID, want)
+		emit(r)
+		return
+	}
+	if profile == "hibrido-and" && !cs.DualAuthenticated {
+		r.Error = "DualAuthenticated=false on the server side for hibrido-and"
+		emit(r)
+		return
+	}
+
+	// Post-handshake window: whatever the server itself writes (session
+	// tickets, if enabled) between Handshake() returning and this
+	// process's own first deliberate write (the HTTP response below) --
+	// isolates ticket bytes from the handshake figure above, rather than
+	// hoping they land inside one window or the other. With
+	// ticketsDisabled=true this should read ~0; the T6 diagnostic run
+	// (ticketsDisabled=false) quantifies the difference.
+	postIn0, postOut0 := in1, out1
+
+	tReq0 := time.Now()
+	if err := serveOneResponse(tlsConn, profile, cs); err != nil {
+		r.Error = err.Error()
+		emit(r)
+		return
+	}
+	r.RequestDurationUs = time.Since(tReq0).Microseconds()
+
+	postIn1, postOut1 := cc.snapshot()
+	r.PostHandshakeBytesIn = postIn1 - postIn0
+	r.PostHandshakeBytesOut = postOut1 - postOut0
+	r.OK = true
+	emit(r)
+}
+
+// serveOneResponse hand-writes a single HTTP/1.1 response -- deliberately
+// not net/http, so nothing above this file's own counting wrapper can
+// call Handshake() a second time or otherwise blur the byte-counting
+// boundary T6 requires. Reads and discards the request (don't care about
+// its content, this harness tests TLS, not HTTP routing -- see Decisao
+// 12's scope note) up to the blank line ending the headers.
+func serveOneResponse(conn net.Conn, profile string, cs tls.ConnectionState) error {
+	r := bufio.NewReader(conn)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read request: %w", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	body := fmt.Sprintf(`{"profile":%q,"curve":%q,"dualAuthenticated":%t,"tlsVersion":%q}`,
+		profile, cs.CurveID.String(), cs.DualAuthenticated, tls.VersionName(cs.Version))
+	resp := "HTTP/1.1 200 OK\r\n" +
+		"Content-Type: application/json\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Connection: close\r\n\r\n" + body
+	_, err := conn.Write([]byte(resp))
+	return err
+}
+
+func emit(r result) {
+	b, _ := json.Marshal(r)
+	fmt.Println(string(b))
 }
 
 func envOr(key, fallback string) string {
@@ -100,45 +205,66 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// buildServerTLSConfig dispatches on profile name and builds the matching
-// tls.Config. DIFF vs. the origin (mock_mtls's tlsConfiguration()):
-//   - ClientAuth is tls.RequireAndVerifyClientCert in every profile here
-//     (origin: tls.VerifyClientCertIfGiven, optional) -- explicit T5
-//     requirement ("servidor usa RequireAndVerifyClientCert em todos os
-//     perfis").
-//   - the internalCallerConfig/GetConfigForClient carve-out for
-//     matls-api.local (origin's Node-client reentrant-call workaround) is
-//     removed -- this harness has no live auth/mockapi backend making
-//     that call, so there is nothing for the carve-out to apply to.
-//   - cert/key loading uses tls.LoadX509KeyPair (already the pattern
-//     thesis/scripts/tls_kem_proxy's own client side uses, proven against
-//     ML-DSA-65 keys there) instead of the origin's manual PEM-decode +
-//     x509.ParsePKCS8PrivateKey -- simplification, not a behavior change.
-//   - CA pool loading uses x509.CertPool.AppendCertsFromPEM (stdlib
-//     built-in) instead of the origin's hand-rolled PEM-block loop --
-//     same simplification.
-//   - adds the 4th profile, hibrido-and, which the origin does not have
-//     (it predates the AND mechanism): Config.Dual, both chains
-//     independently verified, SessionTicketsDisabled explicit (the AND
-//     patch's shouldSendSessionTickets already suppresses tickets
-//     whenever Dual.Require is true, server-side -- this sets the field
-//     too, belt-and-suspenders, matching the literal requirement text).
-func buildServerTLSConfig(profile, certDir string) (*tls.Config, error) {
+// countingConn tallies bytes crossing the wire in each direction, below
+// crypto/tls -- every byte the TLS handshake (or anything after it)
+// reads or writes is counted, with no awareness of TLS record
+// boundaries needed. atomic counters: handleConn's goroutine is the only
+// reader/writer per connection, but snapshot() may be called concurrently
+// with ongoing I/O (right at the Handshake() boundary).
+type countingConn struct {
+	net.Conn
+	in  atomic.Int64
+	out atomic.Int64
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.in.Add(int64(n))
+	return n, err
+}
+
+func (c *countingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	c.out.Add(int64(n))
+	return n, err
+}
+
+func (c *countingConn) snapshot() (int64, int64) {
+	return c.in.Load(), c.out.Load()
+}
+
+// buildServerTLSConfig dispatches on profile name. See Decisao 12's diff
+// table for the full rationale; T6 additions on top of that: ticketsDisabled
+// (point 1 of Luciano's T5-follow-up message -- tickets off in ALL 4
+// profiles by default, overridable for the T6 diagnostic run that
+// quantifies their cost) and an optional KeyLogWriter (T6's keylog +
+// pcap cross-validation requirement).
+func buildServerTLSConfig(profile, certDir string, ticketsDisabled bool, keylog *os.File) (*tls.Config, error) {
 	p := func(name string) string { return filepath.Join(certDir, name) }
 
+	var cfg *tls.Config
+	var err error
 	switch profile {
 	case "classico":
-		return singleChainServerConfig(p("classico_server.crt"), p("classico_server.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS12, nil)
+		cfg, err = singleChainServerConfig(p("classico_server.crt"), p("classico_server.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS12, nil)
 	case "pqc":
-		return singleChainServerConfig(p("pqc_server.crt"), p("pqc_server.key"), p("pqc_ca.crt"), tls.MLKEM1024, tls.VersionTLS13, nil)
+		cfg, err = singleChainServerConfig(p("pqc_server.crt"), p("pqc_server.key"), p("pqc_ca.crt"), tls.MLKEM1024, tls.VersionTLS13, nil)
 	case "hibrido-v8":
 		verify := hybridVerifyPeerCertificateFunc(p("hibrido_v8_ca_mldsa.crt"))
-		return singleChainServerConfig(p("hibrido_v8_server.crt"), p("hibrido_v8_server.key"), p("hibrido_v8_ca.crt"), tls.SecP384r1MLKEM1024, tls.VersionTLS13, verify)
+		cfg, err = singleChainServerConfig(p("hibrido_v8_server.crt"), p("hibrido_v8_server.key"), p("hibrido_v8_ca.crt"), tls.SecP384r1MLKEM1024, tls.VersionTLS13, verify)
 	case "hibrido-and":
-		return dualServerConfig(certDir)
+		cfg, err = dualServerConfig(certDir)
 	default:
 		return nil, fmt.Errorf("unknown profile %q", profile)
 	}
+	if err != nil {
+		return nil, err
+	}
+	cfg.SessionTicketsDisabled = ticketsDisabled
+	if keylog != nil {
+		cfg.KeyLogWriter = keylog
+	}
+	return cfg, nil
 }
 
 func singleChainServerConfig(certPath, keyPath, caPath string, curve tls.CurveID, minVersion uint16, verifyPeer func([][]byte, [][]*x509.Certificate) error) (*tls.Config, error) {
@@ -182,13 +308,12 @@ func dualServerConfig(certDir string) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		Certificates:           []tls.Certificate{rsaCert},
-		ClientCAs:               rsaClientCAs,
-		ClientAuth:              tls.RequireAndVerifyClientCert,
-		MinVersion:              tls.VersionTLS13,
-		MaxVersion:              tls.VersionTLS13,
-		CurvePreferences:        []tls.CurveID{tls.SecP384r1MLKEM1024},
-		SessionTicketsDisabled:  true,
+		Certificates:     []tls.Certificate{rsaCert},
+		ClientCAs:        rsaClientCAs,
+		ClientAuth:       tls.RequireAndVerifyClientCert,
+		MinVersion:       tls.VersionTLS13,
+		MaxVersion:       tls.VersionTLS13,
+		CurvePreferences: []tls.CurveID{tls.SecP384r1MLKEM1024},
 		Dual: &tls.DualConfig{
 			Certificates: []tls.Certificate{mldsaCert},
 			ClientCAs:    mldsaClientCAs,
