@@ -2610,26 +2610,22 @@ Hibrido-AND = 12.177+11.902 = **24.079 B**. Hibrido-AND / Hibrido-v8 =
 batem exatos com os que o Luciano ja tinha calculado de forma
 independente.
 
-**Campanha oficial** (dados do artigo, N grande, poder estatistico):
-4 perfis x 6 rotas (0/14/30/140/225/320ms, mesmas regioes da v7/v8) x
-N=30 (ancorado no precedente "Criterion 6/N=30" da v8, Decisao 89 --
-nao um calculo de poder novo, ver nota abaixo) = **720 execucoes
-combinadas** (o "960" do Luciano deve incluir um fator que nao
-reconstrui so com perfis x rotas x N -- possivelmente contando os 2
-sub-fluxos, insurance e person, como execucoes separadas em algum
-ponto da contagem oficial; nao resolvido aqui, registrado como
-pendente de reconciliar antes da campanha em si, nao bloqueia o
-PILOTO, que e o que este item pede agora).
+**Campanha oficial, CORRIGIDA na Decisao 21 -- "6 rotas" estava
+errado.** A v8 real usa **8 rotas** (nao 6: `sa-east-1` L0/L123/L219/
+L325, `us-east-1` L0/L14, `ap-northeast-1` L0/L30 -- ver Decisao 21,
+ponto 2, para a reconciliacao completa). 4 perfis x **8 rotas** x
+N=30 = **960 execucoes combinadas -- exatamente o numero do Luciano**,
+nao os 720 que eu tinha calculado com a lista errada de rotas.
 
 **Piloto, MENOR, com objetivo de validacao/calibracao, nao de poder
-estatistico:**
+estatistico, rotas corrigidas pra usar os nomes REAIS da v8:**
 
 | Item | Piloto | Campanha oficial |
 |---|---|---|
 | Perfis | 4 (Classico, PQC, Hibrido-v8, Hibrido-AND **estrito**) | os mesmos 4 |
-| Rotas | **3**: 0ms (controle), 140ms (meio), 320ms (extremo -- a rota que mais estressa) | as 6 completas |
+| Rotas | **3**: `sa-east-1/L0` (controle), `sa-east-1/L219` (meio), `sa-east-1/L325` (a mais distante de toda a v8) | as **8** completas |
 | N por perfil/rota | **5** | 30 |
-| Execucoes combinadas | 4 x 3 x 5 = **60** | 4 x 6 x 30 = 720 (ver nota do "960" acima) |
+| Execucoes combinadas | 4 x 3 x 5 = **60** | 4 x 8 x 30 = **960** |
 
 **O que o piloto precisa provar, explicitamente, antes de autorizar a
 campanha (cada um e um criterio de ir/nao-ir, nao so uma coleta):**
@@ -2641,17 +2637,18 @@ campanha (cada um e um criterio de ir/nao-ir, nao so uma coleta):**
    equivalente) -- uma vez por TIPO de instancia usado (servidor,
    cliente), nao por execucao.
 3. **Rotas distantes funcionam sem erro** -- 0 erros nas 5 execucoes
-   de cada perfil na rota de 320ms especificamente (a mais exigente).
+   de cada perfil na rota `sa-east-1/L325` especificamente (325ms, a
+   mais exigente de toda a v8).
 4. **Contagens (44/6/28/4/4) reproduzem fora do localhost**, sob rede
    real, nao so sob `tc`/`netem` local.
 5. **Zero erros nas 60 execucoes** -- criterio de ir/nao-ir pra
    campanha oficial; qualquer erro precisa ser diagnosticado e
-   corrigido antes de autorizar as 720 execucoes completas.
+   corrigido antes de autorizar as 960 execucoes completas.
 
 **Tempo estimado do piloto (estimativa, nao medido -- range largo de
 proposito):** cada execucao combinada (insurance+person, 44 chamadas
 HTTP) localmente, sem latencia de rede real, leva uns poucos segundos;
-a 320ms de RTT real, uma estimativa grosseira (44 chamadas x ~1 RTT
+a 325ms de RTT real (`sa-east-1/L325`), uma estimativa grosseira (44 chamadas x ~1 RTT
 cada de latencia pura, mais 6 handshakes x ~2 RTT cada) soma algo como
 +15-20s so de latencia de rede por execucao naquela rota -- **10-30s
 por execucao**, dependendo da rota, variancia nao medida. 60 execucoes
@@ -2673,7 +2670,7 @@ v7/v8 por rota e um passo adicional nao feito aqui, se o Luciano
 quiser antes de fechar o N=30 para o Hibrido-AND especificamente.
 
 **Desenho para estressar as rotas distantes, campanha oficial:**
-repetir os 4 perfis em TODAS as 6 rotas (nao so a mais lenta) com
+repetir os 4 perfis em TODAS as 8 rotas (nao so a mais lenta) com
 N=30, pra que o residuo (item f, com a guarda do IC95) possa ser
 calculado rota a rota -- um residuo que cresce com a rota seria o
 sinal de que falta um componente dependente de RTT na lista do item
@@ -2702,8 +2699,14 @@ criada:**
 
 **(c)** CurveID/DualAuthenticated -- **FECHADO**.
 
-**(d)** Matriz de interoperabilidade -- **FECHADO** (Decisao 19, 5x5 +
-a linha critica do atacante RSA-unico contra o modo nao-estrito).
+**(d)** Matriz de interoperabilidade -- **FECHADO**, duas matrizes
+distintas e nao confundidas: "configuracao de medicao" (Decisao 19,
+5x5 + a linha critica do atacante RSA-unico, grupo/CA restritos por
+perfil como a T5 sempre usou) e "configuracao de interoperabilidade"
+(Decisao 21, CA compartilhada + todos os grupos, responde a metrica
+do SAD §3.4 -- confirma que classico e migrado SE COMUNICAM quando a
+configuracao permite, e que o downgrade do atacante RSA-unico
+persiste tambem sob confianca compartilhada).
 
 **(e)** Piloto reproduz tamanhos locais + initcwnd real -- tolerancia
 POR MENSAGEM agora definida e calculada (nao suposta): ±15B no
@@ -2717,12 +2720,14 @@ Finished/Certificate-do-cliente, ±50B na Certificate do servidor (SAN)
 pre-registrada acima -- **PENDENTE de execucao**, depende de latencia
 real/fluxo completo com RTT real.
 
-**(g)** Pilotos desenhados pra rotas distantes -- piloto (60 execucoes,
-4 perfis x 3 rotas x N=5, ~1-1,5h estimado) SEPARADO da campanha
-oficial (720 execucoes, 4 perfis x 6 rotas x N=30 -- o "960" do
-Luciano ainda precisa ser reconciliado, registrado como pendente, nao
-bloqueia o piloto); fator de tamanho corrigido (1,4x/+11%) --
-**PENDENTE de execucao**, depende de AWS.
+**(g)** Pilotos desenhados pra rotas distantes -- **FECHADO** (rotas
+reconciliadas, Decisao 21): piloto (60 execucoes, 4 perfis x 3 rotas
+reais da v8, incluindo `sa-east-1/L325` a mais distante, x N=5,
+~1-1,5h estimado) SEPARADO da campanha oficial (960 execucoes, 4
+perfis x **8 rotas reais da v8** x N=30 -- "960" confirmado exato,
+"6 rotas" era um erro meu, corrigido); fator de tamanho corrigido
+(1,4x/+11%); 5 criterios de ir/nao-ir com limiar numerico (Decisao
+21, ponto 4) -- execucao em si **PENDENTE**, depende de AWS.
 
 **(h)** Checklist de equivalencia -- **mantido**, mais as entradas das
 Decisoes 17-19 (opin_flow.py editado aditivamente; nenhum carve-out de
@@ -2730,6 +2735,112 @@ certificado opcional na v9; carve-out interno documentado).
 
 **Nenhuma tag `v9-prereg` criada. Aguardando aprovacao explicita do
 Luciano.**
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 21. Matriz de interoperabilidade v2 (configuracao separada da medicao), 8 rotas reais da v8 reconciliadas (960 confirmado, 6 estava errado), SAN do cliente confirmado fixo, 5 criterios do piloto com limiar numerico
+
+**1. Matriz v2, "configuracao de interoperabilidade" -- CA compartilhada
+(RSA-2048 e ML-DSA-65, uma de cada, usadas por TODOS os 6 modos),
+todos os 3 grupos de KEX oferecidos nos dois lados, nunca usada para
+medicao (so para este teste).** Construida do zero em
+`thesis/results/v9/integration/interop/` (novo, processo unico,
+certificados gerados em memoria, nada em disco). Achado metodologico
+no caminho: a primeira versao fazia servidor E cliente lerem com o
+MESMO prazo de 2s apos o handshake -- uma corrida (quem fechasse
+primeiro decidia o resultado), que fazia at[e] estrito-contra-estrito
+(que tem que suceder) falhar por sorte na metade das vezes. Corrigido
+fazendo o servidor ESCREVER um byte de confirmacao em vez de ler --
+sem corrida, resultado identico em 3 rodadas repetidas.
+
+| Cliente | Servidor | Resultado | Motivo | Caminho de autenticacao | DualAuthenticated |
+|---|---|---|---|---|---|
+| Classico | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
+| Classico | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
+| Classico | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
+| Classico | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- |
+| Classico | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
+| PQC | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
+| PQC | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
+| PQC | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
+| PQC | Hibrido-AND estrito | FALHA | `handshake failure` -- sem Dual | -- | -- |
+| PQC | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | ML-DSA | false |
+| Hibrido-v8 | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
+| Hibrido-v8 | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
+| Hibrido-v8 | Hibrido-v8 | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
+| Hibrido-v8 | Hibrido-AND estrito | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS, servidor nao ve oferta de Dual | -- | -- |
+| Hibrido-v8 | Hibrido-AND nao-estrito | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA+ML-DSA (gate X.509) | false |
+| Hibrido-AND estrito | Classico | FALHA | `handshake failure` -- servidor sem Dual, cliente estrito exige | -- | -- |
+| Hibrido-AND estrito | PQC | FALHA | `handshake failure` | -- | -- |
+| Hibrido-AND estrito | Hibrido-v8 | FALHA | `handshake failure` -- gate X.509 nao e o Dual TLS | -- | -- |
+| Hibrido-AND estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
+| Hibrido-AND estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
+| Hibrido-AND nao-estrito | Classico | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
+| Hibrido-AND nao-estrito | PQC | SUCESSO | grupo=SecP384r1MLKEM1024 | RSA | false |
+| Hibrido-AND nao-estrito | Hibrido-v8 | FALHA | `bad certificate` -- falta AltSignatureValue | -- | -- |
+| Hibrido-AND nao-estrito | Hibrido-AND estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
+| Hibrido-AND nao-estrito | Hibrido-AND nao-estrito | **SUCESSO** | ambas cadeias validas | **dual (RSA+ML-DSA)** | **true** |
+| **RSA-unico (impostor)** | **Hibrido-AND estrito** | **FALHA** | `handshake failure` -- servidor exige Dual, impostor nao oferece | -- | -- |
+| **RSA-unico (impostor)** | **Hibrido-AND nao-estrito** | **SUCESSO** | grupo negociado, mas SEM Dual | **RSA (so classica)** | **false -- downgrade confirmado de novo, agora tambem sob trust compartilhado** |
+
+**Achado positivo da SAD §3.4 (clientes classicos e migrados SE
+COMUNICAM, quando a configuracao permite):** Classico<->PQC sucede nos
+dois sentidos -- cada lado apresenta seu proprio tipo de certificado
+(RSA ou ML-DSA), verificado pelo pool de confianca COMPARTILHADO do
+outro lado. Hibrido-v8 interopera com TODOS os outros 4 modos exceto
+Hibrido-AND estrito (seu gate X.509 proprio e uma protecao
+INDEPENDENTE do Dual TLS -- rejeita Classico/PQC puros do mesmo jeito
+que o Dual rejeitaria, mas por um mecanismo diferente, nao
+interoperavel com o Dual).
+
+**2. Rotas da v8, reconciliadas -- "6" estava errado, era a v7
+simulada (`tc`/`netem`), nao a v8 real.** A v8 real usa **8 rotas**
+(nao 6), confirmado direto em `v8/DECISIONS.md`: `sa-east-1` -> L0,
+L123, L219, L325 (4 niveis); `us-east-1` -> L0, L14 (2); `ap-
+northeast-1` -> L0, L30 (2). **8 rotas x 3 perfis x 30 N = 720
+execucoes (a v8 real).** A v9, com o 4° perfil: **8 rotas x 4 perfis x
+30 N = 960 -- exatamente o numero do Luciano, agora reconciliado.**
+Corrigido: a campanha oficial da v9 usa as MESMAS 8 rotas da v8, nao 6
+genericas.
+
+**Piloto, rotas ajustadas para incluir a mais distante da v8:**
+`sa-east-1/L0` (controle, colocado), `sa-east-1/L219` (meio), **`sa-
+east-1/L325`** (a mais distante de toda a v8, 325ms -- a que o pedido
+exigiu explicitamente). Mantido dentro da MESMA regiao-cliente
+(`sa-east-1`) pra isolar so a variavel distancia, nao tambem a
+variavel regiao -- a campanha oficial e que cobre as 3 regioes.
+Piloto: **4 perfis x 3 rotas x N=5 = 60 execucoes** (inalterado no
+numero, so as rotas mudaram de genericas pra reais).
+
+**3. SAN do certificado de cliente -- confirmado fixo, nao
+parametrizado por deploy, por convencao (nao por impossibilidade
+tecnica).** `certs/main.go` TEM uma flag `-client-dns` (default
+`"opin-client-one"`) -- TECNICAMENTE parametrizavel, igual
+`-server-dns`. Mas o proprio comentario do gerador documenta a
+intencao: `"identidade, nao hostname de rede"` -- ou seja, por design,
+o SAN do cliente representa uma IDENTIDADE LOGICA estavel (o
+participante OPIN "client one"), nao um endereco fisico de rede, e
+NAO deveria variar conforme qual instancia EC2 roda o cliente em cada
+rota/regiao do piloto ou da campanha. Confirmado tambem que o
+certificado de cliente nunca recebe `IPAddresses` (esse campo so e
+setado para `ExtKeyUsageServerAuth`, nunca para `ClientAuth`, nas
+funcoes geradoras). **Tolerancia de 0B no Certificate do cliente
+permanece correta**, sob a convencao atual -- registrado explicitamente
+que isso e uma ESCOLHA DE DESIGN, nao uma garantia estrutural: se um
+dia o deploy real passar a usar um `-client-dns` diferente por
+instancia, essa tolerancia precisaria ser revista.
+
+**4. Os 5 criterios de ir/nao-ir do piloto, com limiar numerico
+explicito (sem isso, nenhum e um criterio, so uma intencao):**
+
+| # | Criterio | Limiar numerico |
+|---|---|---|
+| 1 | Tamanhos por mensagem dentro da tolerancia (Decisao 20, item e) | **100%** das capturas (4 perfis x 3 rotas = 12 capturas) dentro de ±15B no ClientHello e ±50B na Certificate do servidor; 0B nas demais mensagens |
+| 2 | initcwnd real confirmado | **>= 10 segmentos** (o que a Decisao 14 assumiu sem medir); se menor, a analise de RTT extra precisa ser refeita antes de autorizar a campanha |
+| 3 | Zero erros na rota mais distante | **0 erros em 20/20 execucoes** (4 perfis x N=5) na rota `sa-east-1/L325` especificamente |
+| 4 | Contagens batem exatas sob rede real | **44 chamadas HTTP, 6 conexoes mTLS client-facing, 28 JWTs, 4 /jwks, 4 CA -- exatos (0 de tolerancia) em 60/60 execucoes** |
+| 5 | Zero erros gerais | **0 erros em 60/60 execucoes combinadas** -- qualquer erro bloqueia a autorizacao das 960 execucoes da campanha, exige diagnostico e correcao primeiro |
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
