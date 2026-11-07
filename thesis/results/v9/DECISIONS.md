@@ -4864,3 +4864,86 @@ piloto.** `toolchain/build_metadata.json` atualizado
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 40. REVISAO INDEPENDENTE, SECAO B -- avaliador reescrito: critério 4 isola a janela de CADA execucao (sondagem de prontidao nao mais poluindo a contagem), criterios 1/6 exigem a cardinalidade real do piloto (12 capturas / 60 execucoes) em modo piloto, critério 3 corrige bug de tipo (`"false"` string contava como sucesso), critério 7 valida numerico/nao-negativo/amostras minimas, critério 2 exige rota/instancia/perfil, `ZERO_TOLERANCE_MESSAGES` removida, decorator fail-closed em todas as 7 funcoes
+
+**1. Critério 4 (item B.6) -- a sondagem de prontidao poluia a
+contagem, CONFIRMADO e corrigido.** A sondagem de prontidao (uma por
+TROCA DE BLOCO de perfil, Decisao 23) completa um handshake mTLS de
+verdade (o proxy sempre disca a montante com seu certificado real,
+Decisao 18) -- contar "connection OK" no log INTEIRO (como a Decisao
+36 fazia) soma a sondagem junto com as 15 execucoes do bloco, nunca
+batendo exatamente 6 por execucao. **Corrigido:** o avaliador agora
+exige marcadores explicitos por execucao no log combinado do piloto
+-- `== EXECUCAO INICIO perfil=X rota=Y run=N ==` ... `== EXECUCAO
+FIM ... ==` -- e conta "connection OK" SO dentro da janela daquela
+execucao especifica (`_execucao_window`). A sondagem, que roda ANTES
+do primeiro marcador INICIO de cada bloco, fica estruturalmente fora
+de qualquer janela -- **excluida por construcao, confirmado por
+teste** (log sintetico com sondagem + 2 execucoes de 6 conexoes
+cada: as duas execucoes leram `mtls=6` exatas, a sondagem nunca
+entrou na contagem).
+
+`criterion_4_counts` mudou de assinatura: recebe uma LISTA de
+execucoes (`[{"profile","route","run","insurance":[...],
+"person":[...]}, ...]`), avalia as **60/60**, nao um unico
+`calls_json`. `--calls-json` no CLI agora espera essa lista.
+
+**2. Critérios 1 e 6 (item B.7) -- cardinalidade real exigida em
+modo piloto.** O criterio 1 exige as 12 capturas (4 perfis x 3
+rotas) -- com `--aws-dir`, le `<aws_dir>/criterio1_capturas/
+<perfil>_<rota>.log` pras 12 combinacoes e FALHA se qualquer uma
+faltar (testado: 11/12 presentes -> FAIL, com a captura faltante
+nomeada explicitamente). O criterio 6 reconcilia com o TEXTO da
+Decisao 24 ("CurveID e DualAuthenticated em 60/60 execucoes, 0
+falhas") -- com `--aws-dir`, le `<aws_dir>/criterio6_execucoes.json`
+(lista de 60) e exige as 60, cada uma com `keylog_evidence=true`
+tambem. Sem `--aws-dir`, os dois mantem o comportamento local
+anterior (uso de desenvolvimento, nota explicita de que nao basta
+pro criterio real sozinho).
+
+**3. Critério 3 -- bug de tipo real, CONFIRMADO e corrigido.**
+`not e.get("ok")` e `False` pra QUALQUER string nao-vazia, incluindo
+a string de texto `"false"` -- um JSON malformado com `"ok":
+"false"` (em vez do booleano `false`) passaria como "sem erro"
+silenciosamente. **Corrigido:** `e.get("ok") is not True` agora
+conta como erro -- testado (uma entrada com `"ok": "false"` literal
+agora e FAIL, detectado corretamente; o booleano real `true`
+continua passando).
+
+**4. Critério 7 -- validacao de tipo/sinal/amostras adicionada.**
+RTT precisa ser NUMERICO, NAO-NEGATIVO (bool excluido explicitamente
+-- `bool` e subclasse de `int` em Python, `isinstance(True, int)` e
+`True`), e o numero de amostras do probe (`n_samples_probe`) precisa
+ser >= `RTT_MIN_SAMPLES = 20` (mesmo N que a "Pre-flight TCP/443"
+real da v8 usou). **4 mutacoes testadas:** RTT negativo -> FAIL; RTT
+nao-numerico (string) -> FAIL; N=19 (1 abaixo) -> FAIL; N=20 (limite
+exato) -> PASS.
+
+**5. Critério 2 -- identificacao de rota/instancia/perfil exigida
+(item B.8).** O JSON agora precisa de `route`, `instance_type`,
+`profile` (validados contra `PILOT_ROUTES`/`PROFILES_ALL`) -- sem
+isso, um resultado isolado de initcwnd nao e rastreavel de volta a
+onde foi medido. Testado: com os 3 campos -> PASS; sem `route` ->
+FAIL.
+
+**6. `ZERO_TOLERANCE_MESSAGES` removida** (nao editada, REMOVIDA --
+pedido explicito "remova se nao e usado"), confirmado nao controlar
+mais nada desde a Emenda 4.
+
+**7. Fail-closed estendido a TODAS as 7 funcoes via decorator.**
+`_safe_criterion(N, nome)` envolve cada funcao -- qualquer excecao
+nao prevista (tipo errado nao coberto por uma checagem explicita,
+indice fora de faixa) agora vira `pass: False` com a excecao
+registrada na nota, NUNCA um traceback subindo pro chamador.
+**Testado com 4 entradas deliberadamente malformadas** (log_text
+como inteiro, lista virando string, JSON de objeto virando lista,
+execucao sem campos esperados) -- as 4 deram FAIL, nenhuma estourou.
+
+**Suite de testes desta rodada: todas as mutacoes rodaram contra o
+MODULO real** (`evaluate_criteria.py` importado, nao
+reimplementado), cobrindo os 7 itens acima -- 20 asserções, todas
+passaram.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

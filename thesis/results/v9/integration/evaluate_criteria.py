@@ -126,10 +126,46 @@ HANDSHAKE_MESSAGE_BASELINE = {
     },
 }
 HANDSHAKE_MESSAGE_TOLERANCE_B = 0
-# Mantida so por retrocompatibilidade de nome -- nao e mais usada pra
-# controlar nenhum comportamento (ver HANDSHAKE_MESSAGE_BASELINE acima,
-# que e o que o codigo realmente confere agora).
-ZERO_TOLERANCE_MESSAGES = {"ServerHello", "EncryptedExtensions", "CertificateRequest", "CertificateVerify", "Finished"}
+# Decisao 40 (revisao independente, item B.7): `ZERO_TOLERANCE_MESSAGES`
+# nunca controlava nada depois da Emenda 4 (so documentava o nome) --
+# removida, nao so comentada, por pedido explicito ("remova se nao e
+# usado").
+
+PROFILES_ALL = ("classico", "pqc", "hibrido-v8", "hibrido-and")
+PILOT_ROUTES = ("L0", "L219", "L325")
+
+
+def _as_fail(criterion: int, name: str, note: str, **extra) -> dict:
+    """Decisao 40 (revisao independente, item B.7, "entrada malformada
+    sempre FAIL"): construtor comum pro caminho de erro de TODO
+    criterio -- garante o mesmo formato (`pass: False` sempre, nunca
+    None, nunca uma excecao sobe pro chamador) em qualquer lugar que
+    precise devolver FAIL por dado ausente/malformado."""
+    return {"criterion": criterion, "name": name, "pass": False, "note": note, **extra}
+
+
+def _safe_criterion(criterion_number: int, criterion_name: str):
+    """Decisao 40: decorator que envolve CADA funcao de criterio -- se
+    qualquer coisa inesperada (tipo errado, campo faltando de um jeito
+    que o proprio corpo da funcao nao previu, indice fora de faixa)
+    chegar a estourar uma excecao, o resultado e FAIL com a excecao
+    registrada na nota, nunca um traceback subindo pro chamador. Isso
+    e deliberadamente uma rede de seguranca POR CIMA das checagens
+    explicitas que cada funcao ja faz -- as checagens explicitas dao
+    a nota especifica e util; este decorator so garante que uma
+    checagem ESQUECIDA nunca se torna um crash em vez de um FAIL."""
+    import functools
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001 -- intencional, ver docstring
+                return _as_fail(criterion_number, criterion_name,
+                                 f"entrada malformada, excecao inesperada capturada: {type(e).__name__}: {e}")
+        return wrapper
+    return decorator
 
 # Decisao 32 (Emenda 5 ao criterio 7): o nominal de L0 e 0ms -- +-10%
 # de 0 e 0, uma faixa vazia/indefinida, nunca satisfazivel por
@@ -154,28 +190,17 @@ def _rtt_ok(route: str, measured_ms: float) -> bool:
     return lo <= measured_ms <= hi
 
 
-def criterion_1_message_sizes(log_text: str) -> dict:
-    """Extrai os tamanhos por mensagem do log do measure.sh (secao
-    'tamanho POR MENSAGEM de handshake') e confere contra a tolerancia.
-    So pode confirmar o criterio completo (100% das 12 capturas) quando
-    rodado contra os artefatos REAIS do piloto (4 perfis x 3 rotas); aqui,
-    local, confere o que os dados fornecidos tiverem."""
-    results = []
-    # Cada bloco comeca em "== Perfil: X, modo normal" e tem uma secao
-    # "tshark: tamanho POR MENSAGEM..." com linhas "frame tipo(s) tamanho(s)"
-    for profile_block in re.finditer(
-        r"== Perfil: (\S+), modo normal.*?(?=== Perfil:|\Z)", log_text, re.S
-    ):
-        profile = profile_block.group(1)
-        block = profile_block.group(0)
-        msg_section = re.search(
-            r"tamanho POR MENSAGEM.*?\n(.*?)(?:\n==|\Z)", block, re.S
-        )
-        if not msg_section:
-            continue
-        total_cert_bytes = None
-        clienthello_bytes = None
-        other = {}  # key (ver _HANDSHAKE_TYPE_NAMES/sufixo) -> bytes medidos
+def _message_sizes_for_profile(block: str, profile: str) -> dict:
+    """Extrai e confere os tamanhos por mensagem de UM bloco de log (um
+    perfil, uma captura) -- fatorado pra ser chamado tanto no modo
+    local (um log so, varios blocos '== Perfil:') quanto no modo
+    piloto (Decisao 40, item B.7 -- 12 arquivos de captura separados,
+    um por perfil x rota, cada um com exatamente este formato)."""
+    msg_section = re.search(r"tamanho POR MENSAGEM.*?\n(.*?)(?:\n==|\Z)", block, re.S)
+    total_cert_bytes = None
+    clienthello_bytes = None
+    other = {}
+    if msg_section:
         for line in msg_section.group(1).splitlines():
             cols = line.split("\t")
             if len(cols) < 3:
@@ -192,10 +217,6 @@ def criterion_1_message_sizes(log_text: str) -> dict:
             # contains ServerHello (type 2) is the server's own flight.
             if "2" in types and "11" in types:
                 total_cert_bytes = per_type["11"]
-                # Decisao 31 (Emenda 4): o resto do flight do SERVIDOR
-                # tambem precisa ser conferido, nao so a Certificate --
-                # ServerHello/EncryptedExtensions/CertificateRequest nunca
-                # tinham sido extraidos antes desta emenda.
                 if "2" in per_type:
                     other["ServerHello"] = per_type["2"]
                 if "8" in per_type:
@@ -206,10 +227,6 @@ def criterion_1_message_sizes(log_text: str) -> dict:
                     other["CertificateVerify_servidor"] = per_type["15"]
                 if "20" in per_type:
                     other["Finished_servidor"] = per_type["20"]
-            # O flight do CLIENTE (Certificate/CertificateVerify/Finished
-            # dele) tem "11" mas NUNCA "2" (ServerHello e so do servidor)
-            # -- nunca era extraido antes desta emenda, nem a Certificate
-            # do cliente nem o resto do flight dele.
             elif "11" in types:
                 if "11" in per_type:
                     other["Certificate_cliente"] = per_type["11"]
@@ -217,32 +234,68 @@ def criterion_1_message_sizes(log_text: str) -> dict:
                     other["CertificateVerify_cliente"] = per_type["15"]
                 if "20" in per_type:
                     other["Finished_cliente"] = per_type["20"]
-            # ClientHello (type 1) is always alone in the client's own
-            # first frame -- confirmed never sharing a frame with any
-            # other handshake type in any of this project's captures.
             if types == ["1"]:
                 clienthello_bytes = per_type["1"]
-        cert_baseline = CERTIFICATE_BASELINE.get(profile)
-        cert_ok = cert_baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - cert_baseline) <= CERTIFICATE_TOLERANCE_B
-        ch_baseline = CLIENTHELLO_BASELINE.get(profile)
-        ch_ok = ch_baseline is not None and clienthello_bytes is not None and abs(clienthello_bytes - ch_baseline) <= CLIENTHELLO_TOLERANCE_B
-        other_baseline = HANDSHAKE_MESSAGE_BASELINE.get(profile, {})
-        other_rows = {}
-        other_all_ok = True
-        for key, baseline in other_baseline.items():
-            measured = other.get(key)
-            ok = measured is not None and abs(measured - baseline) <= HANDSHAKE_MESSAGE_TOLERANCE_B
-            other_all_ok = other_all_ok and ok
-            other_rows[key] = {"bytes": measured, "baseline": baseline, "ok": ok}
-        results.append({
-            "profile": profile,
-            "certificate_bytes": total_cert_bytes, "certificate_baseline": cert_baseline,
-            "certificate_tolerance": CERTIFICATE_TOLERANCE_B, "certificate_ok": cert_ok,
-            "clienthello_bytes": clienthello_bytes, "clienthello_baseline": ch_baseline,
-            "clienthello_tolerance": CLIENTHELLO_TOLERANCE_B, "clienthello_ok": ch_ok,
-            "other_messages": other_rows,
-            "ok": cert_ok and ch_ok and other_all_ok,
-        })
+    cert_baseline = CERTIFICATE_BASELINE.get(profile)
+    cert_ok = cert_baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - cert_baseline) <= CERTIFICATE_TOLERANCE_B
+    ch_baseline = CLIENTHELLO_BASELINE.get(profile)
+    ch_ok = ch_baseline is not None and clienthello_bytes is not None and abs(clienthello_bytes - ch_baseline) <= CLIENTHELLO_TOLERANCE_B
+    other_baseline = HANDSHAKE_MESSAGE_BASELINE.get(profile, {})
+    other_rows = {}
+    other_all_ok = True
+    for key, baseline in other_baseline.items():
+        measured = other.get(key)
+        ok = measured is not None and abs(measured - baseline) <= HANDSHAKE_MESSAGE_TOLERANCE_B
+        other_all_ok = other_all_ok and ok
+        other_rows[key] = {"bytes": measured, "baseline": baseline, "ok": ok}
+    return {
+        "profile": profile,
+        "certificate_bytes": total_cert_bytes, "certificate_baseline": cert_baseline,
+        "certificate_tolerance": CERTIFICATE_TOLERANCE_B, "certificate_ok": cert_ok,
+        "clienthello_bytes": clienthello_bytes, "clienthello_baseline": ch_baseline,
+        "clienthello_tolerance": CLIENTHELLO_TOLERANCE_B, "clienthello_ok": ch_ok,
+        "other_messages": other_rows,
+        "ok": cert_ok and ch_ok and other_all_ok,
+    }
+
+
+@_safe_criterion(1, "tamanhos por mensagem")
+def criterion_1_message_sizes(log_text: str, aws_dir=None) -> dict:
+    """Decisao 40 (revisao independente, item B.7): o criterio REAL
+    exige as 12 capturas do piloto (4 perfis x 3 rotas) -- nao so "o
+    que tiver no log local". Com `aws_dir`, le
+    `<aws_dir>/criterio1_capturas/<perfil>_<rota>.log` pras 12
+    combinacoes e EXIGE as 12 presentes, cada uma passando; sem
+    `aws_dir` (modo local, Fase 1), mantem o comportamento anterior
+    de ler os blocos '== Perfil:' do `log_text` dado, mas o resultado
+    fica marcado explicitamente como parcial (nunca basta pra PASS
+    sozinho fora do contexto do piloto real)."""
+    if aws_dir:
+        capturas_dir = os.path.join(aws_dir, "criterio1_capturas")
+        results = []
+        missing = []
+        for profile in PROFILES_ALL:
+            for route in PILOT_ROUTES:
+                path = os.path.join(capturas_dir, f"{profile}_{route}.log")
+                if not os.path.isfile(path):
+                    missing.append(f"{profile}_{route}")
+                    continue
+                block = open(path, encoding="utf-8", errors="replace").read()
+                row = _message_sizes_for_profile(block, profile)
+                row["route"] = route
+                results.append(row)
+        ok = len(missing) == 0 and len(results) == 12 and all(r["ok"] for r in results)
+        return {"criterion": 1, "name": "tamanhos por mensagem", "rows": results,
+                "missing_captures": missing, "expected_captures": 12,
+                "pass": ok,
+                "note": "modo piloto -- exige as 12 capturas (4 perfis x 3 rotas)"}
+
+    results = []
+    for profile_block in re.finditer(
+        r"== Perfil: (\S+), modo normal.*?(?=== Perfil:|\Z)", log_text, re.S
+    ):
+        profile = profile_block.group(1)
+        results.append(_message_sizes_for_profile(profile_block.group(0), profile))
     # Decisao 33 (avaliador fail-closed): sem nenhum bloco de perfil no
     # log (arquivo vazio, caminho errado, execucao que nunca rodou),
     # o criterio tem que FALHAR -- nao "sem dados" (None), que o
@@ -276,29 +329,83 @@ def criterion_1_message_sizes(log_text: str) -> dict:
 _MTLS_CONNECTION_OK_RE = re.compile(r'gateway: \S+ connection OK remoteAddr=\S+ sni="([^"]*)"')
 _INTERNAL_CALLER_SNI = "matls-api.local"
 EXPECTED_MTLS_CONNECTIONS = 6
+EXPECTED_EXECUCOES_PILOTO = 60
 
 
-def criterion_4_counts(calls_json: dict | None, log_text: str = "") -> dict:
-    # Decisao 33 (avaliador fail-closed): "nenhum dado fornecido" e
-    # FAIL, nao None -- um criterio de ir/nao-ir sem evidencia nunca
-    # autoriza a campanha por omissao.
-    if calls_json is None:
+def _execucao_window(log_text: str, profile: str, route: str, run) -> str | None:
+    """Decisao 40 (revisao independente, item B.6): a sondagem de
+    prontidao (disparada uma vez por TROCA DE BLOCO DE PERFIL,
+    Decisao 23) tambem completa um handshake mTLS de verdade (o proxy
+    sempre disca a montante com seu certificado de cliente real,
+    Decisao 18) -- contar "connection OK" no log INTEIRO, como a
+    Decisao 36 fazia, soma a sondagem E as outras execucoes do mesmo
+    bloco junto, nunca batendo com 6 por execucao. Corrigido: cada
+    execucao e isolada por marcadores proprios no log combinado do
+    piloto (emitidos pelo orquestrador, nao por esta funcao) --
+    "== EXECUCAO INICIO perfil=X rota=Y run=N ==" ... "== EXECUCAO FIM
+    ...==". A sondagem roda ANTES do primeiro marcador INICIO de cada
+    bloco (na troca de perfil, Decisao 23), nunca entre um INICIO e um
+    FIM -- estruturalmente fora de qualquer janela, sem filtro
+    especial precisar reconhece-la."""
+    pattern = re.compile(
+        rf"== EXECUCAO INICIO perfil={re.escape(profile)} rota={re.escape(route)} run={re.escape(str(run))} ==(.*?)"
+        rf"== EXECUCAO FIM perfil={re.escape(profile)} rota={re.escape(route)} run={re.escape(str(run))} ==",
+        re.S,
+    )
+    m = pattern.search(log_text)
+    return m.group(1) if m else None
+
+
+def _http_counts_for_calls(calls_entry: dict) -> dict:
+    calls1 = calls_entry.get("insurance", [])
+    calls2 = calls_entry.get("person", [])
+    all_calls = calls1 + calls2
+    return {
+        "http": len(all_calls),
+        "jwts": sum(len(c.get("jwts") or []) for c in all_calls),
+        "jwks": sum(1 for c in all_calls if c.get("endpoint") == "/jwks"),
+        "ca": sum(1 for c in all_calls if c.get("endpoint") in ("/root-ca.pem", "/issuer-ca.pem")),
+    }
+
+
+@_safe_criterion(4, "contagens do fluxo")
+def criterion_4_counts(execucoes: list | None, log_text: str = "") -> dict:
+    """Decisao 40 (revisao independente, item B.6): avalia as 60/60
+    execucoes do piloto (4 perfis x 3 rotas x N=5), nao um arquivo
+    unico -- `execucoes` e uma LISTA de
+    `{"profile", "route", "run", "insurance": [...], "person": [...]}`,
+    uma por execucao real. Pra cada uma: as contagens HTTP vem do seu
+    proprio `insurance`/`person`; a contagem mTLS (6, client-facing)
+    vem SO da janela daquela execucao especifica no log combinado
+    (`_execucao_window`), nunca do log inteiro."""
+    if not execucoes:
         return {"criterion": 4, "name": "contagens do fluxo", "pass": False,
-                "note": "nenhum --calls-json fornecido -- precisa de uma rodada T6b (opin_flow.py) real"}
-    calls1 = calls_json.get("insurance", [])
-    calls2 = calls_json.get("person", [])
-    total_calls = len(calls1) + len(calls2)
-    total_jwts = sum(len(c.get("jwts") or []) for c in calls1 + calls2)
-    total_jwks = sum(1 for c in calls1 + calls2 if c.get("endpoint") == "/jwks")
-    total_ca = sum(1 for c in calls1 + calls2 if c.get("endpoint") in ("/root-ca.pem", "/issuer-ca.pem"))
-    total_mtls = sum(1 for sni in _MTLS_CONNECTION_OK_RE.findall(log_text) if sni != _INTERNAL_CALLER_SNI)
-    expected = {"http": 44, "mtls": EXPECTED_MTLS_CONNECTIONS, "jwts": 28, "jwks": 4, "ca": 4}
-    actual = {"http": total_calls, "mtls": total_mtls, "jwts": total_jwts, "jwks": total_jwks, "ca": total_ca}
-    ok = actual == expected
-    return {"criterion": 4, "name": "contagens do fluxo", "expected": expected,
-            "actual": actual, "pass": ok}
+                "note": "nenhuma lista de execucoes fornecida -- precisa das 60 execucoes reais do piloto (T6b)"}
+    expected_http = {"http": 44, "jwts": 28, "jwks": 4, "ca": 4}
+    rows = []
+    for entry in execucoes:
+        profile, route, run = entry.get("profile"), entry.get("route"), entry.get("run")
+        http_counts = _http_counts_for_calls(entry)
+        window = _execucao_window(log_text, profile, route, run)
+        if window is None:
+            rows.append({"profile": profile, "route": route, "run": run,
+                         "actual": http_counts, "expected": expected_http,
+                         "mtls": None, "ok": False,
+                         "note": "marcador de inicio/fim nao encontrado no log para esta execucao"})
+            continue
+        mtls = sum(1 for sni in _MTLS_CONNECTION_OK_RE.findall(window) if sni != _INTERNAL_CALLER_SNI)
+        actual = {**http_counts, "mtls": mtls}
+        expected = {**expected_http, "mtls": EXPECTED_MTLS_CONNECTIONS}
+        rows.append({"profile": profile, "route": route, "run": run,
+                     "actual": actual, "expected": expected, "ok": actual == expected})
+    count_ok = len(execucoes) == EXPECTED_EXECUCOES_PILOTO
+    all_ok = all(r["ok"] for r in rows)
+    return {"criterion": 4, "name": "contagens do fluxo",
+            "total_execucoes": len(execucoes), "expected_total": EXPECTED_EXECUCOES_PILOTO,
+            "rows": rows, "pass": count_ok and all_ok}
 
 
+@_safe_criterion(5, "zero erros")
 def criterion_5_zero_errors(log_text: str) -> dict:
     # Decisao 33 (avaliador fail-closed): "nenhum erro encontrado" so
     # significa algo se o log realmente tem execucoes reais dentro --
@@ -326,10 +433,55 @@ def criterion_5_zero_errors(log_text: str) -> dict:
             "pass": len(errors) == 0}
 
 
-def criterion_6_instrumentation(log_text: str) -> dict:
+@_safe_criterion(6, "instrumentacao completa + asserções")
+def criterion_6_instrumentation(log_text: str, aws_dir=None) -> dict:
     """CurveID e DualAuthenticated por conexao, conferidos contra o
     esperado do perfil -- igual ao que a Decisao 14 ja fazia, so
-    reempacotado como um criterio formal, automatico."""
+    reempacotado como um criterio formal, automatico.
+
+    Decisao 40 (revisao independente, item B.7, reconciliando com a
+    Decisao 24): o TEXTO do criterio 6 pede "CurveID e
+    DualAuthenticated em 60/60 execucoes, 0 falhas" -- nao "o que
+    tiver no log local". Com `aws_dir`, le
+    `<aws_dir>/criterio6_execucoes.json` (lista de 60
+    `{"profile","route","run","curveID","dualAuthenticated",
+    "keylog_evidence": bool}`) e EXIGE as 60 presentes, cada uma
+    passando; sem `aws_dir` (modo local), mantem o comportamento
+    anterior de contar as linhas "side":"gateway"/"proxy" do log
+    dado, sem cardinalidade de 60 exigida (uso de desenvolvimento,
+    nunca suficiente pro criterio real sozinho)."""
+    if aws_dir:
+        path = os.path.join(aws_dir, "criterio6_execucoes.json")
+        if not os.path.isfile(path):
+            return {"criterion": 6, "name": "instrumentacao completa + asserções", "pass": False,
+                    "note": f"arquivo nao encontrado: {path}"}
+        try:
+            execucoes = json.load(open(path, encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            return {"criterion": 6, "name": "instrumentacao completa + asserções", "pass": False,
+                    "note": f"arquivo malformado ({e})"}
+        if not isinstance(execucoes, list):
+            return {"criterion": 6, "name": "instrumentacao completa + asserções", "pass": False,
+                    "note": f"esperada uma lista, recebido {type(execucoes).__name__}"}
+        rows = []
+        for entry in execucoes:
+            profile = entry.get("profile")
+            curve, dual = entry.get("curveID"), entry.get("dualAuthenticated")
+            keylog_ok = entry.get("keylog_evidence") is True
+            want = EXPECTED_CURVE.get(profile)
+            curve_ok = curve == want
+            dual_ok = True
+            if profile == "hibrido-and":
+                dual_ok = dual is True
+            ok = curve_ok and dual_ok and keylog_ok
+            rows.append({**entry, "curve_expected": want, "curve_ok": curve_ok,
+                         "dual_ok": dual_ok, "keylog_ok": keylog_ok, "ok": ok})
+        count_ok = len(execucoes) == EXPECTED_EXECUCOES_PILOTO
+        all_ok = all(r["ok"] for r in rows)
+        return {"criterion": 6, "name": "instrumentacao completa + asserções",
+                "total_execucoes": len(execucoes), "expected_total": EXPECTED_EXECUCOES_PILOTO,
+                "rows": rows, "pass": count_ok and all_ok}
+
     rows = []
     for m in re.finditer(r'\{"side":"(gateway|proxy)","profile":"([^"]+)".*?"curveID":"([^"]+)".*?"dualAuthenticated":(true|false)', log_text):
         side, profile, curve, dual = m.groups()
@@ -345,7 +497,8 @@ def criterion_6_instrumentation(log_text: str) -> dict:
     return {"criterion": 6, "name": "instrumentacao completa + asserções",
             "connections_checked": len(rows), "rows": rows,
             "keylog_decryption_evidence": has_keylog_evidence,
-            "pass": all_ok and has_keylog_evidence and len(rows) > 0}
+            "pass": all_ok and has_keylog_evidence and len(rows) > 0,
+            "note": "modo local (sem --aws-dir) -- nao exige cardinalidade de 60, uso de desenvolvimento apenas"}
 
 
 INITCWND_MIN_SEGMENTS = 10
@@ -362,6 +515,7 @@ L325_PROFILES = ("classico", "pqc", "hibrido-v8", "hibrido-and")
 L325_N_PER_PROFILE = 5
 
 
+@_safe_criterion(2, "initcwnd real")
 def criterion_2_initcwnd(aws_dir) -> dict:
     """Decisao 34 (correcao de metodo -- a versao da Decisao 32/33
     estava errada por construcao): contar segmentos dentro do
@@ -421,9 +575,20 @@ def criterion_2_initcwnd(aws_dir) -> dict:
         mss = data["mss_bytes"]
         ss_cwnd = data["ss_ti_cwnd"]
         offloads = data["offloads"]
+        # Decisao 40 (revisao independente, item B.8): o JSON precisa
+        # identificar QUAL rota/instancia/perfil o teste dedicado
+        # rodou em -- sem isso, um resultado isolado nao e
+        # rastreavel de volta a onde (e em que contexto de perfil,
+        # que afeta o tamanho do primeiro voo) ele foi medido.
+        route = data["route"]
+        instance_type = data["instance_type"]
+        profile = data["profile"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": f"arquivo malformado ou campo ausente ({e})"}
+    if route not in PILOT_ROUTES or profile not in PROFILES_ALL:
+        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+                "note": f"route={route!r}/profile={profile!r} nao reconhecidos"}
     # Pre-condicao: o proprio teste precisa ter mandado dado suficiente,
     # senao o resultado nao prova nada (mesmo problema que motivou a
     # correcao -- um teste pequeno de novo so mediria "quanto dado
@@ -441,6 +606,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
              and abs(segments_computed - ss_cwnd) <= INITCWND_MAX_DIFF_SEGMENTS)
     ok = test_valid and segments_ok and ss_ok and agree
     return {"criterion": 2, "name": "initcwnd real",
+            "route": route, "instance_type": instance_type, "profile": profile,
             "bytes_sent_total": total, "min_bytes_required": INITCWND_MIN_BYTES_SENT, "test_valid": test_valid,
             "segments_computed": segments_computed, "ss_ti_cwnd": ss_cwnd, "threshold": INITCWND_MIN_SEGMENTS,
             "max_diff_segments": INITCWND_MAX_DIFF_SEGMENTS, "agree": agree,
@@ -448,13 +614,21 @@ def criterion_2_initcwnd(aws_dir) -> dict:
             "pass": ok}
 
 
+@_safe_criterion(3, "zero erros na rota mais distante")
 def criterion_3_distant_route(aws_dir) -> dict:
     """Decisao 24, criterio 3: 0 erros em 20/20 execucoes (4 perfis x
     N=5) especificamente na rota `sa-east-1/L325`. Formato esperado
     em `<aws_dir>/criterio3_l325_execucoes.json`:
     `{"execucoes": [{"profile": ..., "route": "L325", "ok": true}, ...]}`
     -- exatamente 20 entradas, todas route=="L325", 4 perfis distintos
-    x 5 cada, todas ok=true."""
+    x 5 cada, todas ok=true.
+
+    Decisao 40 (revisao independente, item B.7): `ok` precisa ser o
+    BOOLEANO `True`, estritamente -- `not e.get("ok")` (a versao
+    anterior) e FALSO pra QUALQUER string nao-vazia, incluindo a
+    string de texto `"false"` (um erro real de confusao de tipo: um
+    JSON malformado com `"ok": "false"` em vez de `"ok": false`
+    passaria como "sem erro" silenciosamente)."""
     if not aws_dir:
         return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
                 "note": "nenhum --aws-dir fornecido -- sem log de execucoes, nao ha evidencia"}
@@ -467,11 +641,14 @@ def criterion_3_distant_route(aws_dir) -> dict:
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
                 "note": f"arquivo malformado ou campo ausente ({e})"}
+    if not isinstance(execs, list):
+        return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
+                "note": f"'execucoes' nao e uma lista ({type(execs).__name__})"}
     all_l325 = all(e.get("route") == "L325" for e in execs)
     count_ok = len(execs) == len(L325_PROFILES) * L325_N_PER_PROFILE
     per_profile = Counter(e.get("profile") for e in execs)
     profiles_ok = all(per_profile.get(p) == L325_N_PER_PROFILE for p in L325_PROFILES)
-    errors = [e for e in execs if not e.get("ok")]
+    errors = [e for e in execs if e.get("ok") is not True]
     ok = all_l325 and count_ok and profiles_ok and len(errors) == 0
     return {"criterion": 3, "name": "zero erros na rota mais distante",
             "total_execucoes": len(execs), "expected_total": len(L325_PROFILES) * L325_N_PER_PROFILE,
@@ -495,6 +672,10 @@ def criterion_3_distant_route(aws_dir) -> dict:
 # nenhum sobre o criterio individual.
 RTT_CONSISTENCY_ABS_MS = {"L0": 0.5}
 RTT_CONSISTENCY_FRACTION = 0.05
+# Decisao 40 (revisao independente, item B.7): numero MINIMO de
+# amostras do probe TCP/443 -- mesmo N=20 que a "Pre-flight TCP/443"
+# real da v8 usou (v8/DECISIONS.md, linha 8546).
+RTT_MIN_SAMPLES = 20
 
 
 def _rtt_consistent(route: str, a: float, b: float) -> bool:
@@ -509,6 +690,7 @@ def _rtt_consistent(route: str, a: float, b: float) -> bool:
     return abs(a - b) <= RTT_CONSISTENCY_FRACTION * nominal
 
 
+@_safe_criterion(7, "sanidade de latencia por rota")
 def criterion_7_latency_sanity(aws_dir) -> dict:
     """Decisao 24/32 (Emenda 5) + Decisao 35 (metodo corrigido): o
     desenho de seguranca do piloto (Decisao 27) so abre as portas 443
@@ -545,7 +727,10 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
     servidor) -- nao incluida no roteiro por nao ser necessaria.
 
     Formato esperado em `<aws_dir>/criterio7_rtt_por_rota.json`:
-    `{"L0": {"rtt_ms_probe": ..., "rtt_ms_pcap": ...}, "L219": {...}, "L325": {...}}`.
+    `{"L0": {"rtt_ms_probe": ..., "n_samples_probe": ..., "rtt_ms_pcap": ...}, "L219": {...}, "L325": {...}}`
+    -- `n_samples_probe` e exigido (Decisao 40, item B.7): o numero de
+    amostras do probe TCP/443 -- `RTT_MIN_SAMPLES` abaixo, o mesmo N=20
+    que a "Pre-flight TCP/443" real da v8 usou.
     """
     if not aws_dir:
         return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
@@ -559,22 +744,41 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
     except json.JSONDecodeError as e:
         return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
                 "note": f"arquivo malformado ({e})"}
+    if not isinstance(data, dict):
+        return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
+                "note": f"esperado um objeto JSON, recebido {type(data).__name__}"}
     rows = {}
     all_ok = True
     for route in NOMINAL_RTT_MS:
         entry = data.get(route)
-        if not entry or "rtt_ms_probe" not in entry or "rtt_ms_pcap" not in entry:
-            rows[route] = {"rtt_ms_probe": None, "rtt_ms_pcap": None, "ok": False}
+        if not isinstance(entry, dict) or "rtt_ms_probe" not in entry or "rtt_ms_pcap" not in entry or "n_samples_probe" not in entry:
+            rows[route] = {"rtt_ms_probe": None, "rtt_ms_pcap": None, "ok": False,
+                           "note": "campos ausentes (rtt_ms_probe/rtt_ms_pcap/n_samples_probe)"}
             all_ok = False
             continue
-        probe, pcap = entry["rtt_ms_probe"], entry["rtt_ms_pcap"]
+        probe, pcap, n_samples = entry["rtt_ms_probe"], entry["rtt_ms_pcap"], entry["n_samples_probe"]
+        # Decisao 40 (revisao independente, item B.7): RTT precisa ser
+        # NUMERICO e NAO-NEGATIVO antes de qualquer outra checagem --
+        # um bool `True` passaria `isinstance(x, (int,float))` em
+        # Python (bool e subclasse de int), entao e explicitamente
+        # excluido tambem.
+        numeric_ok = (
+            isinstance(probe, (int, float)) and not isinstance(probe, bool) and probe >= 0
+            and isinstance(pcap, (int, float)) and not isinstance(pcap, bool) and pcap >= 0
+        )
+        samples_ok = isinstance(n_samples, int) and not isinstance(n_samples, bool) and n_samples >= RTT_MIN_SAMPLES
+        if not (numeric_ok and samples_ok):
+            rows[route] = {"rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "n_samples_probe": n_samples,
+                           "numeric_ok": numeric_ok, "samples_ok": samples_ok, "ok": False}
+            all_ok = False
+            continue
         probe_ok = _rtt_ok(route, probe)
         pcap_ok = _rtt_ok(route, pcap)
         consistent = _rtt_consistent(route, probe, pcap)
         ok = probe_ok and pcap_ok and consistent
         all_ok = all_ok and ok
         rows[route] = {
-            "rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "nominal_ms": NOMINAL_RTT_MS[route],
+            "rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "n_samples_probe": n_samples, "nominal_ms": NOMINAL_RTT_MS[route],
             "probe_ok": probe_ok, "pcap_ok": pcap_ok, "consistent": consistent, "ok": ok,
         }
     return {"criterion": 7, "name": "sanidade de latencia por rota", "rows": rows, "pass": all_ok}
@@ -583,20 +787,22 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-t6-log", required=True)
-    ap.add_argument("--calls-json")
+    ap.add_argument("--calls-json",
+                     help="JSON com uma LISTA de execucoes (Decisao 40): "
+                          '[{"profile","route","run","insurance":[...],"person":[...]}, ...]')
     ap.add_argument("--aws-dir")
     args = ap.parse_args()
 
     log_text = open(args.run_t6_log, encoding="utf-8", errors="replace").read()
-    calls_json = json.load(open(args.calls_json)) if args.calls_json else None
+    execucoes = json.load(open(args.calls_json)) if args.calls_json else None
 
     results = [
-        criterion_1_message_sizes(log_text),
+        criterion_1_message_sizes(log_text, args.aws_dir),
         criterion_2_initcwnd(args.aws_dir),
         criterion_3_distant_route(args.aws_dir),
-        criterion_4_counts(calls_json, log_text),
+        criterion_4_counts(execucoes, log_text),
         criterion_5_zero_errors(log_text),
-        criterion_6_instrumentation(log_text),
+        criterion_6_instrumentation(log_text, args.aws_dir),
         criterion_7_latency_sanity(args.aws_dir),
     ]
 
