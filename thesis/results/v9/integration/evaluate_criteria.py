@@ -324,56 +324,83 @@ def criterion_6_instrumentation(log_text: str) -> dict:
 
 
 INITCWND_MIN_SEGMENTS = 10
+INITCWND_MIN_BYTES_SENT = 64 * 1024  # 64KB -- o teste dedicado precisa mandar isso ou mais
 L325_PROFILES = ("classico", "pqc", "hibrido-v8", "hibrido-and")
 L325_N_PER_PROFILE = 5
 
 
 def criterion_2_initcwnd(aws_dir) -> dict:
-    """Decisao 32/34: initcwnd real das instancias do piloto.
+    """Decisao 34 (correcao de metodo -- a versao da Decisao 32/33
+    estava errada por construcao): contar segmentos dentro do
+    handshake TLS normal NUNCA prova initcwnd, porque o primeiro
+    voo do servidor (1,6-12KB entre os 4 perfis, Decisao 31) e MENOR
+    que 10xMSS (~14,5KB a MSS~1448B num path de MTU 1500) -- o
+    servidor fica limitado por FALTA DE DADOS, nunca pelo cwnd, e
+    contar segmentos ali so mediria "quantos segmentos cabem no
+    handshake", nao o initcwnd real.
 
-    Metodo (descrito aqui, nao reimplementado dentro desta funcao --
-    ela confere um RESULTADO ja computado, mesmo padrao de confianca
-    que o criterio 4 ja tem com --calls-json): `ip route show` SO
-    mostra initcwnd quando ha um override explicito de rota -- o
-    valor efetivo do kernel (`TCP_INIT_CWND`, hoje tipicamente 10)
-    nao aparece ali quando ninguem configurou nada. Em vez de
-    confiar nisso, o metodo primario e a CAPTURA dedicada (Decisao
-    24, criterio 1): contar quantos SEGMENTOS TCP o SERVIDOR manda,
-    na origem (porta 443), ANTES do primeiro ACK do CLIENTE que
-    reconhece esses bytes -- esse numero de segmentos e o que o
-    initcwnd real da instancia permite enviar sem esperar um ACK.
-    `sysctl net.ipv4.tcp_...`/a configuracao do sistema e lida como
-    REFERENCIA cruzada, nunca como fonte primaria (pode nao refletir
-    o que o kernel realmente aplica numa conexao especifica).
-
-    Limites do metodo: precisa de uma captura `tcpdump -s 0` real
-    (nao fragmentada) com numeros de sequencia/ACK TCP preservados;
-    em loopback local o MSS e grande o bastante pra nunca segmentar
-    de verdade, entao esse criterio estruturalmente NAO pode ser
-    exercitado contra dados locais -- so contra a captura real do
-    piloto, numa rota com RTT > 0 (initcwnd so importa quando ha
-    espera de rede entre o envio e o ACK).
+    Metodo redesenhado -- teste DEDICADO, separado das 60 execucoes
+    estatisticas (mesma logica de separar captura de medicao
+    cronometrada, Decisao 24): numa conexao NOVA, o servidor manda
+    >=64KB (bem mais que qualquer cwnd inicial razoavel cobriria) --
+    `bytes_sent_before_first_client_ack / mss_bytes` (MSS lido das
+    OPCOES do SYN dessa mesma conexao, nao suposto) da o numero de
+    segmentos que o cwnd inicial permitiu enviar sem esperar ACK.
+    Confirmado por DOIS canais independentes, nao um so: (1) `ss -ti`
+    logo depois da conexao, campo `cwnd` reportado pelo proprio
+    kernel; (2) o estado dos offloads (`ethtool -k`: tso/gso/gro) --
+    **limite registrado explicitamente**: TSO/GSO no lado que ENVIA
+    pode agregar multiplos segmentos num unico "superpacote" antes de
+    chegar na NIC real: se a captura observar o trafego ANTES da
+    segmentacao de hardware, a contagem de segmentos fica
+    inteiramente errada (superestimada se TSO juntou o que seriam 10
+    segmentos reais em 1-2 "superpacotes" vistos pela captura). Por
+    isso o estado do offload e um dado OBRIGATORIO, nao so
+    informativo -- se TSO/GSO estiver ligado e a contagem de bytes
+    nao vier de um ponto de captura confiavelmente pos-segmentacao,
+    o resultado nao pode ser aceito como prova.
 
     Formato esperado em `<aws_dir>/criterio2_initcwnd.json`:
-    `{"server_segments_before_client_ack": <int>, "sysctl_reference": {...}}`.
+    `{"bytes_sent_total": int, "bytes_sent_before_first_client_ack": int,
+    "mss_bytes": int, "ss_ti_cwnd": int, "offloads": {"tso": "on"|"off",
+    "gso": "on"|"off", "gro": "on"|"off"}}`.
     """
     if not aws_dir:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
-                "note": "nenhum --aws-dir fornecido -- sem captura real, nao ha evidencia de initcwnd"}
+                "note": "nenhum --aws-dir fornecido -- sem teste dedicado, nao ha evidencia de initcwnd"}
     path = os.path.join(aws_dir, "criterio2_initcwnd.json")
     if not os.path.isfile(path):
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": f"arquivo nao encontrado: {path}"}
     try:
         data = json.load(open(path, encoding="utf-8"))
-        segments = data["server_segments_before_client_ack"]
+        total = data["bytes_sent_total"]
+        before_ack = data["bytes_sent_before_first_client_ack"]
+        mss = data["mss_bytes"]
+        ss_cwnd = data["ss_ti_cwnd"]
+        offloads = data["offloads"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": f"arquivo malformado ou campo ausente ({e})"}
-    ok = isinstance(segments, int) and segments >= INITCWND_MIN_SEGMENTS
+    # Pre-condicao: o proprio teste precisa ter mandado dado suficiente,
+    # senao o resultado nao prova nada (mesmo problema que motivou a
+    # correcao -- um teste pequeno de novo so mediria "quanto dado
+    # havia", nao o cwnd).
+    test_valid = isinstance(total, (int, float)) and total >= INITCWND_MIN_BYTES_SENT
+    segments_computed = (before_ack / mss) if (isinstance(before_ack, (int, float)) and isinstance(mss, (int, float)) and mss > 0) else None
+    segments_ok = segments_computed is not None and segments_computed >= INITCWND_MIN_SEGMENTS
+    ss_ok = isinstance(ss_cwnd, (int, float)) and ss_cwnd >= INITCWND_MIN_SEGMENTS
+    # Offload ligado SEM confirmacao de que a captura e pos-segmentacao
+    # invalida a contagem por segmentos (ver docstring) -- o cross-check
+    # do `ss -ti` (que le o cwnd do proprio kernel, nunca afetado por
+    # TSO/GSO de captura) continua valendo como evidencia independente
+    # mesmo nesse caso, mas a contagem por bytes/MSS fica suspeita.
+    offload_risk = bool(offloads.get("tso") == "on" or offloads.get("gso") == "on") if isinstance(offloads, dict) else True
+    ok = test_valid and segments_ok and ss_ok and not offload_risk
     return {"criterion": 2, "name": "initcwnd real",
-            "segments_measured": segments, "threshold": INITCWND_MIN_SEGMENTS,
-            "sysctl_reference": data.get("sysctl_reference"),
+            "bytes_sent_total": total, "min_bytes_required": INITCWND_MIN_BYTES_SENT, "test_valid": test_valid,
+            "segments_computed": segments_computed, "ss_ti_cwnd": ss_cwnd, "threshold": INITCWND_MIN_SEGMENTS,
+            "offloads": offloads, "offload_risk": offload_risk,
             "pass": ok}
 
 
@@ -408,13 +435,53 @@ def criterion_3_distant_route(aws_dir) -> dict:
             "errors_found": len(errors), "pass": ok}
 
 
+def _rtt_consistent(a: float, b: float) -> bool:
+    """Decisao 35: os dois canais de RTT (probe TCP e pcap SYN/SYN-ACK)
+    devem concordar dentro de uma margem -- nao e so cada um passar
+    sozinho, e os dois baterem um com o outro (confirmacao cruzada de
+    verdade, nao dois numeros soltos que por acaso passam cada um na
+    sua faixa)."""
+    return abs(a - b) <= max(1.0, 0.10 * max(a, b))
+
+
 def criterion_7_latency_sanity(aws_dir) -> dict:
-    """Decisao 24, criterio 7 + Decisao 32 (Emenda 5): RTT medido por
-    rota, via `ping -c 20 <endereco>` (media), contra a tabela
-    nominal -- L0 com piso absoluto (<1ms), L219/L325 com +-10% do
-    nominal (ver NOMINAL_RTT_MS/_rtt_ok). Formato esperado em
-    `<aws_dir>/criterio7_rtt_por_rota.json`:
-    `{"L0": {"rtt_ms": ...}, "L219": {"rtt_ms": ...}, "L325": {"rtt_ms": ...}}`."""
+    """Decisao 24/32 (Emenda 5) + Decisao 35 (metodo corrigido): o
+    desenho de seguranca do piloto (Decisao 27) so abre as portas 443
+    e 22 -- ICMP (ping) NUNCA passaria pelo grupo de seguranca sem
+    uma regra nova. Pesquisado direto `v8/DECISIONS.md` (linha 8546-
+    8554) pra ver como a v8 real mediu RTT dentro de uma campanha
+    TAMBEM restrita: **"Pre-flight TCP/443 (8 clientes, 20 amostras,
+    3 perfis)"** -- um probe de CONEXAO TCP na porta 443 (nao ICMP),
+    cujas medianas (L0 0,14-0,18ms, L123 122,9ms, L14 15,4ms, L219
+    219,9ms, L30 32,3ms, L325 330,3ms) sao exatamente os numeros que
+    este projeto ja vinha citando como "o que a v8 mediu". A v8 real
+    TAMBEM tem um segundo metodo, usado na analise pos-campanha
+    (linha 9970-9971): RTT = mediana do SYN->SYN-ACK das proprias
+    conexoes TLS medidas, direto do pcap -- sem nenhuma conexao ou
+    porta extra.
+
+    **Metodo adotado pra v9, os dois juntos (confirmacao cruzada
+    real, nao decorativa) -- nenhum dos dois precisa de ICMP:**
+    1. `rtt_ms_probe`: probe de CONEXAO TCP na porta 443 (mesmo
+       metodo da v8 real, "Pre-flight TCP/443") -- N amostras,
+       mediana.
+    2. `rtt_ms_pcap`: SYN->SYN-ACK extraido direto da captura
+       dedicada (criterio 1/2) das conexoes TLS reais -- zero custo
+       extra, os dados ja existem.
+    Os dois precisam (a) passar `_rtt_ok` individualmente e (b)
+    CONCORDAR entre si (`_rtt_consistent`) -- se um canal disser
+    "dentro da faixa" e o outro disser algo muito diferente, isso e
+    sinal de erro de metodo, nao uma rota aprovada.
+
+    **Nao precisa de regra de ICMP no grupo de seguranca** -- nenhum
+    dos dois metodos usa ping. Se o Luciano quiser ping como um
+    TERCEIRO canal (nao exigido por este criterio), precisa de uma
+    regra nova explicita (echo request/reply, cada cliente <-> o
+    servidor) -- nao incluida no roteiro por nao ser necessaria.
+
+    Formato esperado em `<aws_dir>/criterio7_rtt_por_rota.json`:
+    `{"L0": {"rtt_ms_probe": ..., "rtt_ms_pcap": ...}, "L219": {...}, "L325": {...}}`.
+    """
     if not aws_dir:
         return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
                 "note": "nenhum --aws-dir fornecido -- sem medicao de RTT, nao ha evidencia"}
@@ -431,14 +498,20 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
     all_ok = True
     for route in NOMINAL_RTT_MS:
         entry = data.get(route)
-        if not entry or "rtt_ms" not in entry:
-            rows[route] = {"rtt_ms": None, "ok": False}
+        if not entry or "rtt_ms_probe" not in entry or "rtt_ms_pcap" not in entry:
+            rows[route] = {"rtt_ms_probe": None, "rtt_ms_pcap": None, "ok": False}
             all_ok = False
             continue
-        rtt = entry["rtt_ms"]
-        ok = _rtt_ok(route, rtt)
+        probe, pcap = entry["rtt_ms_probe"], entry["rtt_ms_pcap"]
+        probe_ok = _rtt_ok(route, probe)
+        pcap_ok = _rtt_ok(route, pcap)
+        consistent = _rtt_consistent(probe, pcap)
+        ok = probe_ok and pcap_ok and consistent
         all_ok = all_ok and ok
-        rows[route] = {"rtt_ms": rtt, "nominal_ms": NOMINAL_RTT_MS[route], "ok": ok}
+        rows[route] = {
+            "rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "nominal_ms": NOMINAL_RTT_MS[route],
+            "probe_ok": probe_ok, "pcap_ok": pcap_ok, "consistent": consistent, "ok": ok,
+        }
     return {"criterion": 7, "name": "sanidade de latencia por rota", "rows": rows, "pass": all_ok}
 
 

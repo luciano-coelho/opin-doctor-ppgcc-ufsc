@@ -4518,3 +4518,118 @@ funcionavam.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 34. EMENDA 6 AO CRITERIO 2 (T7, pos-tag `v9-prereg`) -- o metodo da Decisao 33 estava errado por construcao (handshake TLS nunca satura o cwnd); teste dedicado (>=64KB numa conexao nova, bytes/MSS, cross-check ss -ti, offloads ethtool -k registrados) adotado; avaliador, mutacoes e dados sinteticos atualizados
+
+**Rotulo formal de emenda:**
+- **O que mudou:** o METODO do criterio 2 (nao o limiar, que
+  continua >=10 segmentos) -- de "contar segmentos no handshake TLS
+  normal" pra um teste DEDICADO (>=64KB numa conexao nova,
+  `bytes_antes_do_ACK / MSS`, com `ss -ti` e `ethtool -k` como
+  evidencia cruzada obrigatoria).
+- **Motivo:** o metodo anterior media o tamanho errado -- o primeiro
+  voo do servidor (1,6-12KB entre os 4 perfis) e MENOR que 10xMSS
+  (~14,5KB a MSS~1448B), entao o servidor SEMPRE fica limitado por
+  falta de dado, nunca pelo cwnd -- contar segmentos ali nunca
+  provaria initcwnd, provaria so "quantos segmentos cabem no
+  handshake". Alem disso, TSO/GSO no lado que envia podem agregar
+  multiplos segmentos reais num unico "superpacote" visto pela
+  captura, inflando ou confundindo a contagem.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-5).
+- **A tag `v9-prereg` permanece intacta** -- o limiar original
+  (Decisao 14/24, >=10 segmentos) nao mudou e nao foi reescrito; so
+  o METODO de medir foi corrigido.
+
+**Metodo adotado:** conexao NOVA (fora das 60 execucoes
+estatisticas, mesma logica de separar captura de medicao
+cronometrada, Decisao 24), servidor manda **>=64KB** (bem mais que
+qualquer initcwnd razoavel cobriria) -- `bytes enviados ANTES do
+primeiro ACK do cliente / MSS` (MSS lido das OPCOES do SYN da MESMA
+conexao, nunca suposto) da o numero de segmentos que o cwnd inicial
+permitiu. **Dois canais de confirmacao, ambos obrigatorios:** (1)
+`ss -ti` logo depois da conexao, campo `cwnd` reportado pelo proprio
+kernel; (2) `ethtool -k` (estado de `tso`/`gso`/`gro`) -- se TSO ou
+GSO estiver ligado, o resultado da contagem por bytes/MSS fica
+suspeito (a captura pode estar vendo superpacotes agregados, nao
+segmentos de fio reais) e o criterio FALHA por essa razao
+especificamente, mesmo que os numeros brutos parecessem bater.
+
+`evaluate_criteria.py`: `criterion_2_initcwnd(aws_dir)` reescrita,
+le `<aws_dir>/criterio2_initcwnd.json` (`bytes_sent_total`,
+`bytes_sent_before_first_client_ack`, `mss_bytes`, `ss_ti_cwnd`,
+`offloads`). `INITCWND_MIN_BYTES_SENT = 64*1024` (pre-condicao: o
+proprio teste precisa ter mandado dado suficiente, senao o resultado
+nao prova nada -- mesma classe de erro que motivou a correcao).
+
+**7 mutacoes testadas, todas com o resultado esperado:**
+| Mutacao | Esperado | Resultado |
+|---|---|---|
+| baseline (65536B, 14480B antes do ACK = 10,0 segmentos exatos a MSS 1448, ss confirma 10, offloads off) | PASS | **PASS** |
+| segmentos computados = 9,99 (1 passo abaixo) | FAIL | **FAIL** |
+| `ss -ti` diz cwnd=9 (cross-check falha mesmo com segmentos=10) | FAIL | **FAIL** |
+| total enviado = 32KB (< 64KB, teste invalido) | FAIL | **FAIL** |
+| TSO ligado | FAIL | **FAIL** |
+| GSO ligado | FAIL | **FAIL** |
+| sem `--aws-dir` | FAIL | **FAIL** |
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 35. EMENDA 7 AO CRITERIO 7 (T7, pos-tag `v9-prereg`) -- ping (ICMP) NUNCA passaria pelo grupo de seguranca do piloto (so 443/22 abertos); pesquisado como a v8 real mediu RTT numa campanha IGUALMENTE restrita -- probe TCP/443, nao ICMP; adotados DOIS canais TCP (probe dedicado + SYN/SYN-ACK do pcap real) com confirmacao cruzada; nenhuma regra de SG nova necessaria
+
+**Rotulo formal de emenda:**
+- **O que mudou:** o METODO do criterio 7 -- de "RTT medido" (sem
+  metodo explicito) pra DOIS canais TCP especificos, com exigencia
+  de concordarem entre si, nao so cada um bater sozinho na faixa.
+- **Motivo:** o grupo de seguranca do piloto (Decisao 27) so abre
+  443 e 22 -- ping (ICMP) falharia sempre, sem uma regra nova. Em vez
+  de abrir uma porta so pra isso, pesquisei como a v8 real resolveu
+  o MESMO problema (a campanha real dela tambem restringia SG a
+  443/22 por cliente, Decisao 49 da v8).
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-6).
+- **A tag `v9-prereg` permanece intacta** -- a faixa de aceitacao
+  (nominal ±10%, com o piso de L0 da Emenda 5) nao mudou, so o
+  METODO de obter o numero mudou.
+
+**Pesquisado direto em `v8/DECISIONS.md`, nao assumido:** linha
+8546-8554, **"Pre-flight TCP/443 (8 clientes, 20 amostras, 3
+perfis)"** -- um probe de CONEXAO TCP na porta 443 (nao ICMP), cujas
+medianas (L0 0,14-0,18ms, L123 122,9ms, L14 15,4ms, L219 219,9ms,
+L30 32,3ms, L325 330,3ms) sao exatamente os numeros que este
+projeto ja citava como "o que a v8 mediu" -- agora com a fonte do
+metodo confirmada, nao so o numero. A v8 real tambem tem um SEGUNDO
+metodo, usado na analise pos-campanha (linha 9970-9971): RTT =
+mediana do SYN->SYN-ACK das proprias conexoes TLS medidas, direto do
+pcap -- zero porta ou conexao extra.
+
+**Metodo adotado pra v9, os DOIS juntos:**
+1. `rtt_ms_probe`: probe de conexao TCP na porta 443 (mesmo metodo
+   "Pre-flight TCP/443" da v8 real), N amostras, mediana.
+2. `rtt_ms_pcap`: SYN->SYN-ACK extraido direto da captura dedicada
+   (criterio 1/2) das conexoes TLS reais -- custo zero, os dados ja
+   existem.
+Os dois precisam passar a faixa de aceitacao (Emenda 5) **E**
+concordar entre si (`_rtt_consistent`, Δ <= max(1ms, 10% do maior) --
+confirmacao cruzada de verdade, nao dois numeros soltos que por
+acaso passam cada um na sua faixa).
+
+**Roteiro do piloto: NENHUMA regra de grupo de seguranca nova e
+necessaria** -- os dois metodos usam portas/conexoes ja abertas
+(443). Registrado explicitamente: se o Luciano quiser ping como um
+TERCEIRO canal (nao exigido por este criterio), precisaria de uma
+regra de ICMP echo request/reply nova, cliente por cliente, contra o
+servidor -- NAO incluida no roteiro, por nao ser necessaria.
+
+**6 mutacoes testadas, todas com o resultado esperado** (incluindo
+os proprios valores reais da v8 como baseline):
+| Mutacao | Esperado | Resultado |
+|---|---|---|
+| baseline (valores reais da v8, probe+pcap consistentes) | PASS | **PASS** |
+| L0 ambos bem abaixo do piso de 1ms | PASS | **PASS** |
+| L0: probe ok, pcap no limiar/acima (1,2ms) | FAIL | **FAIL** |
+| L219: probe=200 pcap=238 (ambos na faixa individual, mas divergem >10% entre si) | FAIL (inconsistencia) | **FAIL** |
+| L325 ausente do arquivo | FAIL | **FAIL** |
+| sem `--aws-dir` | FAIL | **FAIL** |
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
