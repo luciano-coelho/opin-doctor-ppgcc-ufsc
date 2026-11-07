@@ -2398,16 +2398,39 @@ autentica), so o texto do alerta nao distingue "sem certificado" de
 "certificado de CA errada" nestes casos -- comportamento do proprio
 `crypto/tls`, nao um bug desta implementacao.
 
-**4. Matriz de interoperabilidade, 5x5, executada agora, localmente:**
+**4. Matriz de interoperabilidade, 5x5 (+1 linha critica), executada
+agora, localmente -- formato longo, com a coluna "protecao AND
+efetiva" pedida:**
 
-| Cliente \\ Servidor | Classico | PQC | Hibrido-v8 | Hibrido-AND estrito | Hibrido-AND nao-estrito |
+| Cliente | Servidor | Sucesso/Falha | Motivo | Downgrade (DualAuthenticated) | Protecao AND efetiva |
 |---|---|---|---|---|---|
-| **Classico** | SUCESSO (CurveP384) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) |
-| **PQC** | FALHA (handshake failure) | SUCESSO (MLKEM1024) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) |
-| **Hibrido-v8** | FALHA (handshake failure) | FALHA (handshake failure) | SUCESSO (SecP384r1MLKEM1024) | FALHA (handshake failure) | FALHA (`CA nao confiavel`) |
-| **Hibrido-AND estrito** | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) | SUCESSO, `DualAuthenticated=true` | SUCESSO, `DualAuthenticated=true` |
-| **Hibrido-AND nao-estrito** | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (`CA nao confiavel`) | SUCESSO, `DualAuthenticated=true` | SUCESSO, `DualAuthenticated=true` |
-| **RSA-unico (atacante), sem Dual** | -- | -- | -- | FALHA (handshake failure) | **ver achado critico abaixo** |
+| Classico | Classico | SUCESSO | grupo/cert corretos (CurveP384) | n/a | n/a (nao envolve AND) |
+| Classico | PQC | FALHA | grupo incompativel (handshake failure) | nao (nunca autenticou) | n/a |
+| Classico | Hibrido-v8 | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Classico | Hibrido-AND estrito | FALHA | sem Dual, servidor exige (handshake failure) | nao | **SIM -- bloqueou um cliente sem material PQ** |
+| Classico | Hibrido-AND nao-estrito | FALHA | grupo incompativel, nem chega a testar o Dual (handshake failure) | nao | nao aplicavel (falhou por outro motivo antes) |
+| PQC | Classico | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| PQC | PQC | SUCESSO | grupo/cert corretos (MLKEM1024) | n/a | n/a |
+| PQC | Hibrido-v8 | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| PQC | Hibrido-AND estrito | FALHA | sem Dual, servidor exige (handshake failure) | nao | **SIM** |
+| PQC | Hibrido-AND nao-estrito | FALHA | grupo incompativel (handshake failure) | nao | nao aplicavel |
+| Hibrido-v8 | Classico | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-v8 | PQC | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-v8 | Hibrido-v8 | SUCESSO | grupo/cert corretos (SecP384r1MLKEM1024) | n/a | n/a (gate X.509 proprio, nao o Dual TLS) |
+| Hibrido-v8 | Hibrido-AND estrito | FALHA | sem Dual, servidor exige (handshake failure) | nao | **SIM** |
+| Hibrido-v8 | Hibrido-AND nao-estrito | FALHA | grupo bate, mas CA classica do Hibrido-v8 nao e confiavel pro Hibrido-AND (`signed by unknown authority`) | nao | **SIM, mas por verificacao de cadeia classica, nao pelo Dual especificamente** (ver nota) |
+| Hibrido-AND estrito | Classico | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-AND estrito | PQC | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-AND estrito | Hibrido-v8 | FALHA | grupo bate, mas CA ML-DSA do Hibrido-AND nao existe no Hibrido-v8 (handshake failure) | nao | n/a (nao e um teste do AND, e incompatibilidade de cadeia) |
+| Hibrido-AND estrito | Hibrido-AND estrito | SUCESSO | ambas as cadeias validas | **nao -- `DualAuthenticated=true`, sem downgrade** | **SIM -- prova de posse dupla real** |
+| Hibrido-AND estrito | Hibrido-AND nao-estrito | SUCESSO | ambas as cadeias validas (cliente ofereceu Dual, servidor aceitou mesmo nao exigindo) | **nao -- `DualAuthenticated=true`** | **SIM -- nao-estrito nao PIOROU nada aqui, so nao teria IMPEDIDO um cliente mais fraco** |
+| Hibrido-AND nao-estrito | Classico | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-AND nao-estrito | PQC | FALHA | grupo incompativel (handshake failure) | nao | n/a |
+| Hibrido-AND nao-estrito | Hibrido-v8 | FALHA | CA classica incompativel (`signed by unknown authority`) | nao | n/a |
+| Hibrido-AND nao-estrito | Hibrido-AND estrito | SUCESSO | ambas as cadeias validas | **nao -- `DualAuthenticated=true`** | **SIM** |
+| Hibrido-AND nao-estrito | Hibrido-AND nao-estrito | SUCESSO | ambas as cadeias validas | **nao -- `DualAuthenticated=true`** | **SIM, mas por coincidencia -- o cliente OFERECEU o Dual mesmo sem precisar** |
+| **RSA-unico (atacante), sem Dual** | Hibrido-AND estrito | FALHA | servidor exige Dual, cliente nao oferece (handshake failure) | nao (nunca autenticou) | **SIM -- bloqueado** |
+| **RSA-unico (atacante), sem Dual** | **Hibrido-AND nao-estrito** | **SUCESSO (na camada TLS)** | **servidor nao exige Dual -- aceita a cadeia classica isolada** | **SIM -- autenticou com `DualAuthenticated=false`, SEM provar posse ML-DSA-65** | **NAO -- vulneravel, ver achado critico abaixo** |
 
 **Achado critico, linha extra (nao fazia parte da matriz 5x5 original,
 adicionada porque e exatamente o que "protecao AND efetiva" precisa
@@ -2453,28 +2476,112 @@ contra o baseline loopback da Decisao 14/15, nos 4 perfis:
 | Hibrido-v8 | 8.552 B | 8.786 B | **+234 B** |
 | Hibrido-AND | 12.177 B | 12.649 B | **+472 B** (2x o delta de 1 cadeia -- as duas cadeias levam o mesmo SAN) |
 
-Confirmado que TODAS as outras mensagens (ClientHello, ServerHello,
-EncryptedExtensions, CertificateRequest, CertificateVerify, Finished)
-ficaram EXATAMENTE do mesmo tamanho nas duas rodadas -- o SAN so afeta
-a mensagem `Certificate`, nunca as outras, porque e a unica que carrega
-a folha. **Tolerancia proposta: ±50 B na mensagem `Certificate`
-especificamente (cobre uma variacao de uns 20-25 caracteres entre o
-nome real que o Terraform atribuir e a minha estimativa -- generoso
-mesmo pra nomes privados mais longos que o exemplo usado), 0 B de
-tolerancia em qualquer outra mensagem** (ClientHello/ServerHello/
-EncryptedExtensions/CertificateRequest/CertificateVerify/Finished sao
-deterministicas pelo algoritmo e pela chave, nunca pela rede ou pelo
-SAN -- uma diferenca ali seria um sinal real de problema, nao
-variacao esperada).
+Confirmado que ServerHello/EncryptedExtensions/CertificateVerify/
+Finished ficaram EXATAMENTE do mesmo tamanho nas duas rodadas -- essas
+quatro nunca carregam nome nenhum. **Correcao apos revisao do Luciano:
+"0B fora da Certificate" estava errado para o ClientHello -- ele
+carrega o SNI, e o meu proxy hoje fixa `ServerName: "mtls"` (4
+caracteres) INDEPENDENTE do destino real (mesma convencao que o
+`tls_kem_proxy` real ja usa, de proposito, pra manter o ClientHello do
+laboratorio comparavel -- ver o comentario original em
+`tls_kem_proxy/main.go`). Numa campanha real, o SNI levaria o nome
+real do servidor, nao "mtls".**
 
-**(f) Formula do residuo, com os componentes e a origem de cada um:**
+**ClientHello, calculado com um nome de comprimento equivalente ao
+real:**
+
+| Nome (exemplo) | Comprimento | Delta vs `"mtls"` (4 car.) |
+|---|---|---|
+| DNS privado EC2 (`ip-10-0-1-134.sa-east-1.compute.internal`) | 40 car. | **+36 B** |
+| DNS publico EC2 (`ec2-18-230-105-42.sa-east-1.compute.amazonaws.com`) | 49 car. | **+45 B** |
+
+A extensao SNI so tem UM campo de tamanho variavel (o proprio
+hostname); o resto da extensao (tipo, comprimentos) e fixo, entao o
+delta no ClientHello e exatamente `len(nome_real) - 4`, sem precisar
+reconstruir a mensagem inteira pra confirmar. Uma campanha dentro da
+mesma VPC tipicamente usa o DNS PRIVADO entre instancias -- **estimativa
+central: +36 B**; **tolerancia proposta: ±15 B** (cobre a variacao
+entre codigos de regiao AWS de comprimento diferente, ex. `sa-east-1`
+(9 car.) vs `ap-southeast-2` (14 car.), mais 1-3 digitos extra por
+octeto do IP embutido no nome -- nao cobre a diferenca entre DNS
+privado e publico, que e estrutural, nao ruido: **se a campanha real
+usar o DNS PUBLICO em vez do privado, a estimativa central muda pra
++45B, nao e so uma questao de tolerancia** -- registrado para o
+Luciano decidir qual DNS a campanha real vai usar, antes do piloto.
+
+**Novo campo deployment-dependente encontrado, verificado no
+codigo-fonte do Go: `CertificateRequest` carrega
+`certificate_authorities` (lista de Subject DN de cada CA em
+`ClientCAs`, `handshake_server_tls13.go:862`,
+`certReq.certificateAuthorities = c.config.ClientCAs.Subjects()`) --
+estruturalmente depende do deploy (poderia variar se o nome da CA
+mudasse por ambiente). **Para a v9 especificamente, 0B de tolerancia
+AINDA vale aqui** porque o gerador (`certs/main.go`) usa um
+`CommonName` FIXO pra CA ("classico_ca" etc.), hardcoded no codigo,
+nao parametrizado por `-server-dns`/`-server-ips` nem por ambiente --
+confirmado lendo o gerador, nao assumido. Se um dia a CA passar a ter
+um nome dependente do deploy (ex.: incluindo a regiao), esse campo
+precisaria de tolerancia tambem; hoje nao precisa.
+
+**Nenhum outro campo encontrado com dependencia de deploy.** IPs SAN
+(presentes tanto no certificado quanto em principio relevantes aqui)
+NAO contribuem variabilidade adicional: um SAN de IP e codificado como
+OCTET STRING de tamanho FIXO por familia de endereco (4B IPv4, 16B
+IPv6), nunca como texto -- trocar `127.0.0.1`/`::1` (1 IPv4 + 1 IPv6)
+por 2 IPv4 reais ja estava INCLUIDO na minha medicao anterior do delta
+da `Certificate` (+236/+234/+472B), nao e um termo separado.
+
+**Tabela de tolerancia final, por mensagem:**
+
+| Mensagem | Depende do deploy? | Tolerancia |
+|---|---|---|
+| ClientHello | Sim (SNI) | **±15 B** em torno de +36B (DNS privado) -- recalcular a estimativa central se a campanha usar DNS publico |
+| ServerHello | Nao | 0 B |
+| EncryptedExtensions | Nao | 0 B |
+| CertificateRequest | Estruturalmente sim, na pratica nao (CA com nome fixo no gerador da v9) | 0 B |
+| Certificate (servidor) | Sim (SAN) | **±50 B** em torno do delta medido (+236/+234/+472B por perfil) |
+| CertificateVerify | Nao | 0 B |
+| Finished | Nao | 0 B |
+| Certificate (cliente) | Nao (identidade do cliente e fixa, "opin-client-one", nao ligada ao deploy fisico) | 0 B |
+
+**(f) Formula do residuo, com os componentes, a origem de cada um, e
+a guarda para rotas com Δ pequeno:**
 
 ```
 residuo_rota = (Δ_latencia_observada - Σ Δ_componentes_medidos) / Δ_latencia_observada
 ```
 
-Criterio: `|residuo_rota| <= 10%` em cada rota, ou o restante
-explicado e declarado (nao silenciosamente ignorado).
+**Criterio, com a guarda pedida:**
+
+```
+valido se: |residuo_absoluto| <= max(0.10 * |Δ_observado|, meia_largura_IC95(Δ_observado))
+```
+
+Sem a guarda, uma rota onde o Δ observado entre dois perfis e pequeno
+(ex.: 0ms, onde a diferenca Classico-PQC pode ser so alguns ms) faria
+o criterio de 10% relativo virar um limiar absurdamente apertado (10%
+de um numero pequeno e um numero menor ainda, menor que o proprio
+ruido de medicao) -- rejeitando como "residuo alto" uma rota onde na
+verdade nao ha dados suficientes pra distinguir residuo de ruido. A
+guarda aceita a rota mesmo com `|residuo| > 10%` SE esse residuo
+absoluto for menor que a propria incerteza estatistica da medida --
+ou seja, menor do que o que o ruido natural das 30 execucoes ja
+explicaria por si so.
+
+**Metodo do intervalo de confianca: bootstrap percentil, B=10.000
+reamostragens, sobre as 30 execucoes de cada perfil/rota.** Para cada
+rota: (1) calcular `Δ_observado` = diferenca das medias (ou medianas,
+a decidir com base na forma da distribuicao real -- esta tese ja
+documentou bimodalidade em pelo menos um incidente real, Decisao 98/99
+da v8, entao a escolha media-vs-mediana nao e trivial e deve ser
+decidida olhando os dados reais antes do piloto, nao suposta aqui);
+(2) reamostrar com reposicao as 30 execucoes de CADA perfil, B=10.000
+vezes, recalculando `Δ` em cada reamostragem; (3) `meia_largura_IC95`
+= (percentil 97,5% - percentil 2,5% das 10.000 reamostragens) / 2.
+Bootstrap (nao parametrico) escolhido especificamente por causa dessa
+bimodalidade ja documentada -- um IC baseado em normalidade assumida
+seria o metodo errado para uma distribuicao que a propria tese ja
+mostrou nao ser normal nalguns casos.
 
 | Componente (Δ entre perfis) | Origem/decisao que mede |
 |---|---|
@@ -2490,8 +2597,8 @@ local; o ultimo (rede do fluxo completo, 44 chamadas reais) so existe
 com latencia real, exige o piloto. A formula e o criterio ficam
 pre-registrados; a conta em si nao pode ser fechada em Fase 1 local.
 
-**(g) Plano de piloto, com N justificado e o fator de tamanho
-corrigido:**
+**(g) Piloto e campanha oficial, separados explicitamente, com N,
+rotas e tempo estimado de cada um -- e o fator de tamanho corrigido:**
 
 **Correcao do fator de tamanho** (meu rascunho anterior dizia "quase
 2x o Hibrido-v8" -- ERRADO). Usando o total real medido por handshake
@@ -2503,31 +2610,74 @@ Hibrido-AND = 12.177+11.902 = **24.079 B**. Hibrido-AND / Hibrido-v8 =
 batem exatos com os que o Luciano ja tinha calculado de forma
 independente.
 
-**Rotas:** as mesmas 6 latencias ja usadas na v7/v8 (0/14/30/140/225/
-320ms), pareadas com as mesmas regioes AWS que a v8 ja descobriu (nao
-redescoberto aqui -- fora do escopo desta Fase 1 local).
+**Campanha oficial** (dados do artigo, N grande, poder estatistico):
+4 perfis x 6 rotas (0/14/30/140/225/320ms, mesmas regioes da v7/v8) x
+N=30 (ancorado no precedente "Criterion 6/N=30" da v8, Decisao 89 --
+nao um calculo de poder novo, ver nota abaixo) = **720 execucoes
+combinadas** (o "960" do Luciano deve incluir um fator que nao
+reconstrui so com perfis x rotas x N -- possivelmente contando os 2
+sub-fluxos, insurance e person, como execucoes separadas em algum
+ponto da contagem oficial; nao resolvido aqui, registrado como
+pendente de reconciliar antes da campanha em si, nao bloqueia o
+PILOTO, que e o que este item pede agora).
 
-**N por perfil por rota: 30, mesmo numero ja usado e fechado na v8
-("Criterion 6/N=30", `v8/DECISIONS.md`, Decisao 89) -- ancorado num
-precedente real desta mesma tese, nao escolhido do zero.** Justificativa
-especifica para o Hibrido-AND: a diferenca de tamanho (+11% sobre o
-PQC, o perfil mais proximo em bytes) e pequena o bastante para que o
-N precise ser suficiente pra distinguir um efeito desse porte do ruido
-normal de rede -- N=30 e o mesmo numero que a v8 ja confirmou suficiente
-pra detectar as diferencas entre Classico/PQC/Hibrido-v8 (que tem
-diferencas percentuais de magnitude comparavel ou menor nalguns pares,
-ja fechadas com esse N). **Nao fiz um calculo de poder estatistico do
-zero aqui** (exigiria a variancia real da v7/v8 por rota, uma analise
-separada) -- esta e uma ancora em precedente, nao um numero derivado
-de uma formula de poder; se o Luciano quiser o calculo de poder formal
-antes de aceitar N=30 para o Hibrido-AND especificamente, e um passo
-adicional, nao feito aqui.
+**Piloto, MENOR, com objetivo de validacao/calibracao, nao de poder
+estatistico:**
 
-**Desenho para estressar as rotas distantes:** repetir os 4 perfis em
-TODAS as 6 rotas (nao so a mais lenta) com o mesmo N=30, pra que o
-residuo (item f) possa ser calculado rota a rota, nao so no agregado --
-um residuo que cresce com a rota seria o sinal de que falta um
-componente dependente de RTT na lista do item (f).
+| Item | Piloto | Campanha oficial |
+|---|---|---|
+| Perfis | 4 (Classico, PQC, Hibrido-v8, Hibrido-AND **estrito**) | os mesmos 4 |
+| Rotas | **3**: 0ms (controle), 140ms (meio), 320ms (extremo -- a rota que mais estressa) | as 6 completas |
+| N por perfil/rota | **5** | 30 |
+| Execucoes combinadas | 4 x 3 x 5 = **60** | 4 x 6 x 30 = 720 (ver nota do "960" acima) |
+
+**O que o piloto precisa provar, explicitamente, antes de autorizar a
+campanha (cada um e um criterio de ir/nao-ir, nao so uma coleta):**
+1. **Tamanhos por mensagem** batem a tolerancia do item (e) -- precisa
+   de 1 captura completa (pcap+keylog) por perfil por rota, nao as 5
+   execucoes inteiras instrumentadas assim (3 rotas x 4 perfis = 12
+   capturas, reaproveitando o mecanismo da Decisao 14).
+2. **initcwnd real** das instancias confirmado (`ss --info` ou
+   equivalente) -- uma vez por TIPO de instancia usado (servidor,
+   cliente), nao por execucao.
+3. **Rotas distantes funcionam sem erro** -- 0 erros nas 5 execucoes
+   de cada perfil na rota de 320ms especificamente (a mais exigente).
+4. **Contagens (44/6/28/4/4) reproduzem fora do localhost**, sob rede
+   real, nao so sob `tc`/`netem` local.
+5. **Zero erros nas 60 execucoes** -- criterio de ir/nao-ir pra
+   campanha oficial; qualquer erro precisa ser diagnosticado e
+   corrigido antes de autorizar as 720 execucoes completas.
+
+**Tempo estimado do piloto (estimativa, nao medido -- range largo de
+proposito):** cada execucao combinada (insurance+person, 44 chamadas
+HTTP) localmente, sem latencia de rede real, leva uns poucos segundos;
+a 320ms de RTT real, uma estimativa grosseira (44 chamadas x ~1 RTT
+cada de latencia pura, mais 6 handshakes x ~2 RTT cada) soma algo como
++15-20s so de latencia de rede por execucao naquela rota -- **10-30s
+por execucao**, dependendo da rota, variancia nao medida. 60 execucoes
+a essa faixa: **10-30 minutos de execucao pura**. Mais overhead real,
+historicamente relevante nesta tese (troca de perfil/regiao do
+cliente, settling runs, possivelmente criar/destruir instancia EC2 do
+cliente por rota se nao pre-criadas): 4 perfis x 3 rotas = 12 trocas
+de configuracao, cada uma historicamente levando minutos
+(`switch_crypto_profile.py` real: ~1-2min so de settling, sem contar
+Terraform se a instancia precisar ser recriada) -- **+30-60 minutos de
+overhead**. **Total estimado: ~1 a 1,5 hora**, faixa larga porque
+nenhuma parte disso foi medida ainda (e exatamente o que o piloto
+mede, nao algo que de pra saber sem rodar).
+
+**N=30 da campanha oficial: ancorado em precedente, nao calculo de
+poder novo** (sem mudanca desta rodada) -- mantém a mesma ressalva já
+registrada: um calculo de poder formal usando a variancia real da
+v7/v8 por rota e um passo adicional nao feito aqui, se o Luciano
+quiser antes de fechar o N=30 para o Hibrido-AND especificamente.
+
+**Desenho para estressar as rotas distantes, campanha oficial:**
+repetir os 4 perfis em TODAS as 6 rotas (nao so a mais lenta) com
+N=30, pra que o residuo (item f, com a guarda do IC95) possa ser
+calculado rota a rota -- um residuo que cresce com a rota seria o
+sinal de que falta um componente dependente de RTT na lista do item
+(f).
 
 ---
 
@@ -2556,16 +2706,23 @@ criada:**
 a linha critica do atacante RSA-unico contra o modo nao-estrito).
 
 **(e)** Piloto reproduz tamanhos locais + initcwnd real -- tolerancia
-agora definida (±50B na mensagem Certificate, 0B nas demais) --
+POR MENSAGEM agora definida e calculada (nao suposta): ±15B no
+ClientHello (SNI, em torno de +36B esperado com DNS privado), 0B em
+ServerHello/EncryptedExtensions/CertificateRequest/CertificateVerify/
+Finished/Certificate-do-cliente, ±50B na Certificate do servidor (SAN)
+-- **PENDENTE de execucao**, depende de AWS.
+
+**(f)** 90% do residuo atribuido -- formula com guarda de IC95
+(bootstrap, B=10.000, sobre as 30 execucoes) pra rotas de Δ pequeno,
+pre-registrada acima -- **PENDENTE de execucao**, depende de latencia
+real/fluxo completo com RTT real.
+
+**(g)** Pilotos desenhados pra rotas distantes -- piloto (60 execucoes,
+4 perfis x 3 rotas x N=5, ~1-1,5h estimado) SEPARADO da campanha
+oficial (720 execucoes, 4 perfis x 6 rotas x N=30 -- o "960" do
+Luciano ainda precisa ser reconciliado, registrado como pendente, nao
+bloqueia o piloto); fator de tamanho corrigido (1,4x/+11%) --
 **PENDENTE de execucao**, depende de AWS.
-
-**(f)** 90% do residuo atribuido -- formula e criterio pre-registrados
-acima -- **PENDENTE de execucao**, depende de latencia real/fluxo
-completo com RTT real.
-
-**(g)** Pilotos desenhados pra rotas distantes -- N=30/perfil/rota,
-fator de tamanho corrigido (1,4x/+11%), desenho cobrindo as 6 rotas
-completas -- **PENDENTE de execucao**, depende de AWS.
 
 **(h)** Checklist de equivalencia -- **mantido**, mais as entradas das
 Decisoes 17-19 (opin_flow.py editado aditivamente; nenhum carve-out de
