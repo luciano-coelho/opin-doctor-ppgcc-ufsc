@@ -62,8 +62,22 @@ EXPECTED_CURVE = {
 # que esse perfil tem DOIS certificados-folha de servidor, cada um
 # carregando o mesmo SAN, dobrando o efeito. Valores adotados: os
 # MEDIDOS (Decisao 29), nao os aritmeticos (Decisao 28, superados).
+# Decisao 42 (revisao independente, item D.10d): com o SAN hoje FIXO
+# (Decisao 29) e o baseline MEDIDO (nao estimado), nao ha mais
+# justificativa pra +-50B -- essa folga so fazia sentido quando o SAN
+# em si era incerto (Emenda 1, Decisao 28). A unica fonte de
+# variabilidade legitima que resta e o INTEIRO ASN.1 do numero de
+# serie do certificado (um valor por build, de tamanho em bytes
+# variavel: 1 byte extra de preenchimento sempre que o byte mais
+# significativo tem o bit alto ligado, pra nao ser lido como negativo
+# -- nunca mais que +-2B por certificado-folha). O Hibrido-AND tem
+# DOIS certificados-folha de servidor (Decisao 29), entao essa folga
+# dobra: +-4B no pior caso. +-4B flat (nao escalado por perfil) ainda
+# e MUITO mais estreito que +-50B e detecta corretamente a regressao
+# que a folga antiga escondia: faltar o EIP no SAN custa -14B
+# (Decisao 29) ou -28B no Hibrido-AND, ambos >> 4B.
 CERTIFICATE_BASELINE = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
-CERTIFICATE_TOLERANCE_B = 50
+CERTIFICATE_TOLERANCE_B = 4
 
 # Decisao 30 (Emenda 3 ao criterio 1): a Decisao 20/21 original supunha
 # que o SNI do ClientHello no piloto seria um hostname de deploy real

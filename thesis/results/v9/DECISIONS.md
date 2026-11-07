@@ -3757,6 +3757,24 @@ A estimativa da CAMPANHA OFICIAL (Decisao 24/25, ≈US$39,12/US$50,86,
 NAO cabe em US$27,72) nao muda por este item -- continua ancorada no
 gasto REAL da v8 nas regioes REAIS, nao numa topologia sintetica.
 
+**NOTA DATADA (2026-11-07, revisao independente, item D.10b --
+acrescentada depois, texto original intacto):** a Decisao 25 (item 4,
+"SENSIBILIDADE REGIONAL") calculou o custo do piloto assumindo "os 3
+clientes do piloto (L0/L219/L325) MAIS o servidor MAIS o controle
+estao TODOS em `sa-east-1`" -- exatamente a topologia que ESTA
+decisao (26) encontrou como erro real e corrigiu acima (L219 em
+`eu-north-1`, L325 em `ap-southeast-1`). **Decisao 25 fica, por este
+ponto, SUPERADA POR esta Decisao (26)**: o recalculo de custo com a
+topologia certa ja esta feito no item 1 acima (≈US$1,04/1,35 em vez
+de ≈US$1,27/1,65) -- nenhum numero da Decisao 25 continua em uso
+depois disso. O restante da Decisao 25 (tipos de instancia, build
+cross-arquitetura, papel do controle, artefato do Date) nao e
+afetado por este ponto e permanece valido. Esta mesma nota marca,
+formalmente, este item 1 como uma EMENDA a Decisao 25 (pedido
+explicito da revisao independente, item D.10b -- a correcao de
+topologia ja estava feita, so faltava o rotulo formal "superada por"
+em vez de so "ERRO REAL" no titulo).
+
 **2. TAGS EM TODAS AS REGIOES -- corrigido, `resourcegroupstaggingapi`
 e regional por natureza.**
 
@@ -3879,7 +3897,7 @@ decisao explicito depois de ver o resultado de cada um:
 # 1. Identidade e permissoes das credenciais (NUNCA imprimir o
 #    resultado literal no chat -- account ID/ARN, regra permanente)
 aws sts get-caller-identity
-aws iam list-attached-user-policies --user-name mockopin-pqc-experiment
+aws iam list-attached-user-policies --user-name <nome do usuario IAM, redigido em nota datada -- ver Decisao 44, item F.15>
 
 # 2. Cota de vCPU (Running On-Demand Standard (A,C,D,H,I,M,R,T,Z)),
 #    uma chamada por regiao do piloto
@@ -4516,6 +4534,20 @@ log (confirmado numa segunda rodada, log real de uma execucao
 `measure.sh` fresca) -- o fail-closed nao quebrou os criterios que ja
 funcionavam.
 
+**NOTA DATADA (2026-11-07, revisao independente, item D.10e --
+acrescentada depois, texto original intacto):** o PRINCIPIO
+fail-closed desta decisao (nenhum criterio retorna `pass: None`)
+permanece valido e nao foi tocado depois. Mas o METODO de medicao que
+esta decisao adotou pra criterio 2 (contar segmentos dentro do
+handshake TLS normal) **fica SUPERADO POR Decisao 34** (Emenda 6 --
+o metodo estava errado por construcao, handshake normal nunca satura
+o cwnd) e o metodo pro criterio 7 (RTT por `ping`/ICMP) **fica
+SUPERADO POR Decisao 35** (Emenda 7 -- o grupo de seguranca do piloto
+nunca abriria ICMP, substituido por probe TCP/443 + SYN/SYN-ACK do
+pcap). Os numeros da tabela de mutacao acima (linha "segmentos = 10")
+tambem foram refeitos sob o metodo novo, nao sao mais os vigentes --
+ver Decisao 34.
+
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
 
@@ -4571,6 +4603,17 @@ nao prova nada -- mesma classe de erro que motivou a correcao).
 | TSO ligado | FAIL | **FAIL** |
 | GSO ligado | FAIL | **FAIL** |
 | sem `--aws-dir` | FAIL | **FAIL** |
+
+**NOTA DATADA (2026-11-07, revisao independente, item D.10e --
+acrescentada depois, texto original intacto):** as duas linhas "TSO
+ligado"/"GSO ligado" acima (FAIL so por offload ligado, independente
+da concordancia bytes/MSS x `ss -ti`) **ficam SUPERADAS POR Decisao
+37** (Emenda 9) -- reprovar sempre que TSO/GSO estiver ligado tornaria
+o criterio inalcancavel na AWS real (GSO vem ligado por padrao); o
+offload passou a ser so EVIDENCIA registrada, nunca motivo de FAIL por
+si so, com a decisao vindo da concordancia entre bytes/MSS e `ss -ti`.
+O resto do metodo desta decisao (teste dedicado >=64KB, bytes/MSS,
+cross-check `ss -ti`) permanece vigente, so essas duas linhas mudaram.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
@@ -4630,6 +4673,16 @@ os proprios valores reais da v8 como baseline):
 | L219: probe=200 pcap=238 (ambos na faixa individual, mas divergem >10% entre si) | FAIL (inconsistencia) | **FAIL** |
 | L325 ausente do arquivo | FAIL | **FAIL** |
 | sem `--aws-dir` | FAIL | **FAIL** |
+
+**NOTA DATADA (2026-11-07, revisao independente, item D.10e --
+acrescentada depois, texto original intacto):** o limiar de
+concordancia usado acima (`Δ <= max(1ms, 10% do maior)`) era um
+PRIMEIRO numero, sem justificativa numerica explicita por rota --
+**fica SUPERADO POR Decisao 38** (Emenda 10), que define o limiar
+real, diferenciado por rota (absoluto 0,5ms pra L0, 5% do NOMINAL
+pra L219/L325, nao "10% do maior valor medido"). Os DOIS canais
+(probe TCP/443 + SYN/SYN-ACK do pcap) e a decisao de nao precisar de
+regra de SG nova permanecem vigentes, intocados por essa mudanca.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
@@ -4987,6 +5040,96 @@ existente); `combine` junta os dois por rota no formato final.
 **Testado fim a fim, as 3 rotas:** `combine` x3 (L0/L219/L325, com
 os valores reais da v8 como entrada sintetica) ->
 `criterion_7_latency_sanity()` real -> **PASS**.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 42. REVISAO INDEPENDENTE, SECAO D -- emendas formais registradas (criterio 6 vs Decisao 24, topologia da Decisao 26, escolhas interpretativas do avaliador); tolerancia da Certificate reduzida de +-50B pra +-4B (SAN fixo, baseline medido); notas de "superada por" marcadas nas Decisoes 25, 33, 34 e 35
+
+**(a) Criterio 6 vs Decisao 24 -- EMENDA 11 AO CRITERIO 6, formalizada
+agora (o trabalho em si ja estava feito na Decisao 40, item 2, so sem
+rotulo formal de emenda).** Decisao 24 (tabela do T7) define o
+criterio 6 como "keylog + captura + tamanhos por mensagem extraidos
+com sucesso em 100% das 60 execucoes... asserções de
+`ConnectionState.CurveID`... e `DualAuthenticated`... passando em
+60/60, 0 falhas". A Decisao 40 ja reconciliou `criterion_6_instrumentation`
+com esse texto exato: em modo piloto (`--aws-dir`), le
+`criterio6_execucoes.json` (lista de 60) e exige as 60 presentes, CADA
+uma com `keylog_evidence=true`. **Nada muda no codigo aqui** -- so o
+rotulo formal: isto e a Emenda 11, datada 2026-11-07, motivo "pedido
+explicito da revisao independente de registrar como emenda numerada o
+que ja tinha sido corrigido em prosa na Decisao 40".
+
+**(b) Topologia da Decisao 26 -- ja registrada como nota datada
+na propria Decisao 25, acima** (ver a NOTA DATADA acrescentada a
+Decisao 25 neste mesmo commit): a Decisao 26 fica marcada como a
+emenda que corrige a Decisao 25 nesse ponto especifico, com rotulo
+formal de "superada por", nao mais so o titulo "ERRO REAL corrigido".
+
+**(c) Escolhas interpretativas do avaliador -- documentadas,
+confirmadas ou contestadas com evidencia, nao aceitas por argumento:**
+
+- **N=5 execucoes por perfil no criterio 3 -- CONTESTADO: nao e uma
+  escolha interpretativa do avaliador.** `L325_N_PER_PROFILE = 5`
+  (`evaluate_criteria.py`, linha 529) implementa, literalmente, o que
+  o proprio Luciano pediu ("0 erros em 20/20 execuções (4 perfis x
+  N=5) em sa-east-1/L325", pedido anterior a esta revisao) -- o
+  avaliador nao inventou esse numero, so o codificou. Registrado aqui
+  pra nao ficar sem resposta, mas sem mudanca de codigo.
+- **Heuristica de FATAL (criterio 5) -- CONFIRMADA como escolha
+  interpretativa real, com limitacao documentada.**
+  `criterion_5_zero_errors` exclui linhas que contem `"FATAL:"` SE
+  TAMBEM contiverem `>&2` ou `exit 1` na mesma linha -- motivo: o
+  Dockerfile ecoa seu proprio comando-fonte
+  (`echo "FATAL: ..." >&2; exit 1; }`) no log de build mesmo numa
+  build bem-sucedida, e a primeira versao deste avaliador confundiu
+  essa linha ecoada com uma falha real (achado ao vivo, Decisao 22).
+  **Limitacao honesta, nao escondida:** uma mensagem FATAL de verdade
+  que por coincidencia contenha as substrings `>&2` ou `exit 1` na
+  MESMA linha (ex.: um stack trace que cite esse trecho de shell)
+  seria incorretamente excluida -- probabilidade baixa (nenhuma
+  mensagem de erro do stack real deste projeto tem esse formato,
+  confirmado pelos logs reais já vistos em T6/T6b), mas nao zero.
+  Nenhuma mudanca de codigo proposta agora (o heuristico funciona nos
+  dados reais ja vistos); registrado como limitacao conhecida, nao
+  como bug.
+- **Leitura do criterio 6 -- ver item (a) acima.**
+
+**(d) Tolerancia da Certificate -- reduzida de +-50B pra +-4B, SAN
+fixo e baseline medido tornam a folga antiga injustificavel.**
+`CERTIFICATE_TOLERANCE_B` (evaluate_criteria.py, linha ~80) mudou de
+`50` pra `4`. **Motivo:** a folga de +-50B so se justificava quando o
+proprio SAN do servidor era incerto (Emenda 1, Decisao 28) -- hoje o
+SAN e FIXO (Decisao 29/30) e o baseline e MEDIDO, nao estimado. A
+unica fonte de variabilidade legitima que resta e o inteiro ASN.1 do
+numero de serie do certificado (até +-2B por certificado-folha de
+preenchimento de sinal; o Hibrido-AND tem 2 certificados-folha de
+servidor, Decisao 29, dobrando pra +-4B no pior caso). **Testado
+contra o modulo real** (nao simulado, 7 mutacoes com
+`_message_sizes_for_profile` chamada direto, perfil `classico`,
+baseline 899B):
+
+| Delta sobre o baseline | Esperado | Resultado |
+|---|---|---|
+| +0B (baseline exato) | PASS | **PASS** |
+| +4B (limite superior exato) | PASS | **PASS** |
+| -4B (limite inferior exato) | PASS | **PASS** |
+| +5B (1B acima do novo limite) | FAIL | **FAIL** |
+| -5B (1B abaixo do novo limite) | FAIL | **FAIL** |
+| -6B (hipotetico SAN com 1 IP a menos) | FAIL | **FAIL** |
+| -14B (regressao real da Decisao 29 -- EIP faltando no SAN) | FAIL | **FAIL** |
+
+**Confirma o motivo da mudanca:** com a tolerancia antiga (+-50B), a
+regressao real de -14B (ou -28B no Hibrido-AND) teria passado
+silenciosamente -- com +-4B, falha corretamente. Nenhum dos 4 valores
+MEDIDOS do baseline (899/5618/6241/6554) precisou mudar.
+
+**Notas de "superada por" marcadas nesta rodada (texto original de
+cada decisao intacto, nota acrescentada ao final de cada uma):**
+Decisao 25 (superada por Decisao 26, item de custo regional), Decisao
+33 (superada por Decisoes 34 e 35, metodo dos criterios 2 e 7), Decisao
+34 (superada por Decisao 37, gating de offloads), Decisao 35 (superada
+por Decisao 38, limiar de concordancia do RTT).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
