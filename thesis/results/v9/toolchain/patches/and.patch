@@ -83,10 +83,10 @@ index c6d3084..322c841 100644
  	if (!c.didResume || c.extMasterSecret) && c.vers != VersionTLS13 {
 diff --git a/dual.go b/dual.go
 new file mode 100644
-index 0000000..ffd10b0
+index 0000000..a7034ef
 --- /dev/null
 +++ b/dual.go
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,364 @@
 +// Copyright 2026 The MockOPIN project. Not part of the Go standard
 +// library; a minimal, local fork of crypto/tls for the OPIN
 +// post-quantum migration thesis (v9).
@@ -157,6 +157,22 @@ index 0000000..ffd10b0
 +// (RSA-PSS-SHA256, ML-DSA-65) pair, handled entirely by the functions in
 +// this file.
 +const dualSignatureScheme SignatureScheme = 0xFE65
++
++// testingOnlyForceSingleChainCertificateVerify, set only in tests (see
++// dual_test.go), makes this side sign CertificateVerify with its
++// classical algorithm ALONE -- a single RSA-PSS-SHA256 signature over
++// a single classical chain, no post-quantum chain sent at all -- even
++// when dual authentication was otherwise negotiated (the peer offered
++// 0xFE65 and this side has Dual configured). It bypasses the normal
++// signature-algorithm negotiation entirely (which would otherwise fail
++// outright against a strict peer that only offers 0xFE65, masking the
++// actual property under test) by hardcoding PSSWithSHA256
++// directly, simulating a non-compliant or malicious implementation that
++// advertises/accepts the dual codepoint but does not actually use it.
++// Exists to prove that a strict (Dual.Require=true) peer on the OTHER
++// side refuses such a connection instead of silently accepting it as
++// classically (non-dual) authenticated.
++var testingOnlyForceSingleChainCertificateVerify bool
 +
 +// DualConfig enables AND dual-certificate TLS 1.3 authentication
 +// alongside -- never instead of -- the classical chain already
@@ -358,6 +374,12 @@ index 0000000..ffd10b0
 +	return nil
 +}
 +
++// leafHasAnySAN reports whether leaf carries at least one Subject
++// Alternative Name entry (DNS, email, IP, or URI).
++func leafHasAnySAN(leaf *x509.Certificate) bool {
++	return len(leaf.DNSNames) > 0 || len(leaf.EmailAddresses) > 0 || len(leaf.IPAddresses) > 0 || len(leaf.URIs) > 0
++}
++
 +// sameDualIdentity reports whether a client's classical and
 +// post-quantum leaf certificates identify the SAME pair, by comparing
 +// their Subject Alternative Name sets (DNS names, email addresses, IP
@@ -365,7 +387,28 @@ index 0000000..ffd10b0
 +// adversary from pairing a legitimately-issued classical certificate
 +// with an unrelated post-quantum certificate (or vice versa) to pass
 +// dual authentication as someone else.
++//
++// Decision 39 (real bug, found in independent review of HEAD
++// 23ee2ceb, and the first fix for it found live, the hard way: an
++// unconditional "require SAN under Require=true" broke this project's
++// OWN existing, passing TestDualStrictFullMTLS, whose client
++// certificates are deliberately SAN-less by this project's own
++// convention -- client certificates here are identified by Subject
++// CommonName, not SAN, and that is a legitimate, already-relied-upon
++// pattern, not a gap to close): when NEITHER leaf carries any SAN at
++// all, two empty sets would otherwise compare as "the same identity"
++// vacuously, with nothing actually compared. Falls back to comparing
++// Subject.CommonName in that specific case -- non-empty on both sides,
++// and equal -- which still correctly matches this project's own
++// SAN-less client certificates (same CommonName on both halves of a
++// legitimately-issued pair) while correctly rejecting an adversary who
++// pairs two unrelated, equally SAN-less certificates (different
++// CommonNames, or either one blank).
 +func sameDualIdentity(classicalLeaf, pqLeaf *x509.Certificate) bool {
++	if !leafHasAnySAN(classicalLeaf) && !leafHasAnySAN(pqLeaf) {
++		return classicalLeaf.Subject.CommonName != "" &&
++			classicalLeaf.Subject.CommonName == pqLeaf.Subject.CommonName
++	}
 +	sameSet := func(a, b []string) bool {
 +		if len(a) != len(b) {
 +			return false
@@ -410,10 +453,10 @@ index 0000000..ffd10b0
 +}
 diff --git a/dual_test.go b/dual_test.go
 new file mode 100644
-index 0000000..dcd4cba
+index 0000000..25d055c
 --- /dev/null
 +++ b/dual_test.go
-@@ -0,0 +1,903 @@
+@@ -0,0 +1,1034 @@
 +// Copyright 2026 The MockOPIN project. Tests for dual.go (the AND
 +// dual-certificate TLS 1.3 authentication mechanism), not part of the
 +// upstream Go standard library test suite.
@@ -1317,6 +1360,137 @@ index 0000000..dcd4cba
 +		t.Errorf("negotiated group = client:%v server:%v, want %v (the group the HelloRetryRequest asked for) on both sides", cs.CurveID, ss.CurveID, retryTargetGroup)
 +	}
 +}
++
++// --- Decision 39 (independent review of HEAD 23ee2ceb): a strict peer
++// must actually ENFORCE dual authentication, not just negotiate it.
++// The two tests below use testingOnlyForceSingleChainCertificateVerify
++// to make an otherwise dual-CAPABLE peer sign CertificateVerify with
++// its classical algorithm alone -- simulating a non-compliant (or
++// malicious) implementation that advertises/accepts the dual codepoint
++// but does not actually use it -- and confirm the STRICT side on the
++// other end refuses the connection instead of silently accepting it as
++// classically (non-dual) authenticated. ---
++
++func TestDualStrictClientRejectsServerThatIgnoresTheOffer(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	// The server is dual-CAPABLE (has a real, valid post-quantum chain
++	// configured) but NOT itself strict -- Require is false here on
++	// purpose, since the point under test is that it chooses not to
++	// use the dual codepoint even though it could, not that it was
++	// ever told dual was optional for IT.
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}}
++	// The client is strict: dual authentication of the SERVER is
++	// mandatory.
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++
++	testingOnlyForceSingleChainCertificateVerify = true
++	defer func() { testingOnlyForceSingleChainCertificateVerify = false }()
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if cerr == nil {
++		t.Fatalf("client: expected handshake failure (server signed CertificateVerify classically despite client.Dual.Require=true), got success (server error: %v)", serr)
++	}
++	if cs := cc.ConnectionState(); cs.DualAuthenticated {
++		t.Error("client: DualAuthenticated = true on a connection that should have failed outright")
++	}
++}
++
++func TestDualStrictServerRejectsClientThatIgnoresTheOffer(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	clientClassical := pki.classicalLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	clientPQ := pki.pqLeaf("and-client", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	// The client is dual-CAPABLE but NOT itself strict, same reasoning
++	// as the server's role in the test above, mirrored.
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Certificates: []Certificate{clientPQ}}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	// The server is strict: dual authentication of the CLIENT is
++	// mandatory.
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: pki.pqRootPool, Require: true}
++
++	testingOnlyForceSingleChainCertificateVerify = true
++	defer func() { testingOnlyForceSingleChainCertificateVerify = false }()
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("server: expected handshake failure (client signed CertificateVerify classically despite server.Dual.Require=true), got success (client error: %v)", cerr)
++	}
++	if ss := sc.ConnectionState(); ss.DualAuthenticated {
++		t.Error("server: DualAuthenticated = true on a connection that should have failed outright")
++	}
++}
++
++// --- Decision 39: Require=true with no post-quantum certificate
++// configured is a server misconfiguration, not a silent classical
++// fallback. ---
++
++func TestDualServerRequireWithEmptyCertificatesIsConfigError(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Require: true}
++	// Misconfigured on purpose: Require=true, but Certificates is
++	// left empty -- this server can never actually dual-authenticate
++	// itself, and must refuse rather than quietly fall back to
++	// classical-only authentication.
++	server.Dual = &DualConfig{Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("server: expected a configuration error (Require=true with empty Dual.Certificates), got success (client error: %v)", cerr)
++	}
++}
++
++// --- Decision 39: a classical/post-quantum pair that BOTH carry no
++// Subject Alternative Name at all must not be accepted as "the same
++// identity" under Require=true -- two empty SAN sets are trivially
++// equal to each other, which is not evidence of anything. ---
++
++func TestDualClientSANlessIdentityRejectedWhenRequired(t *testing.T) {
++	pki := newDualTestPKI(t)
++	client, server := baseDualConfigs(pki)
++
++	// Both leaves deliberately carry NO SAN of any kind (nil dnsNames,
++	// and dualTestPKI's own leaf helpers never set EmailAddresses/
++	// IPAddresses/URIs) -- sameDualIdentity's set comparison alone
++	// would call this a match (two empty sets), which is exactly the
++	// vacuous-match bug. Decision 39's actual fix falls back to
++	// comparing Subject.CommonName in exactly this SAN-less case
++	// (needed because this project's OWN legitimate client
++	// certificates are routinely SAN-less, identified by CommonName
++	// instead -- TestDualStrictFullMTLS, elsewhere in this file, is
++	// exactly that pattern and must keep passing) -- so this test
++	// gives the two leaves DIFFERENT CommonNames, simulating an
++	// adversary pairing two unrelated, equally SAN-less certificates,
++	// which the CommonName fallback must still correctly reject.
++	clientClassical := pki.classicalLeaf("and-client-classical", x509.ExtKeyUsageClientAuth, nil)
++	clientPQ := pki.pqLeaf("and-client-UNRELATED-pq", x509.ExtKeyUsageClientAuth, nil)
++	client.Certificates = []Certificate{clientClassical}
++	client.Dual = &DualConfig{RootCAs: pki.pqRootPool, Certificates: []Certificate{clientPQ}}
++	server.ClientAuth = RequireAndVerifyClientCert
++	server.ClientCAs = pki.classicalRootPool
++	serverPQ := pki.pqLeaf(dualTestServerName, x509.ExtKeyUsageServerAuth, []string{dualTestServerName})
++	server.Dual = &DualConfig{Certificates: []Certificate{serverPQ}, ClientCAs: pki.pqRootPool, Require: true}
++
++	cc, sc, cerr, serr := dualHandshakePipe(t, client, server)
++	defer cc.Close()
++	defer sc.Close()
++	if serr == nil {
++		t.Fatalf("server: expected rejection (client's classical and post-quantum certificates are both SAN-less AND have different CommonNames -- an unrelated pair), got success (client error: %v)", cerr)
++	}
++}
 diff --git a/handshake_client.go b/handshake_client.go
 index 7438945..5c908ec 100644
 --- a/handshake_client.go
@@ -1346,7 +1520,7 @@ index 7438945..5c908ec 100644
  	if maxVersion >= VersionTLS13 {
  		// Reset the list of ciphers when the client only supports TLS 1.3.
 diff --git a/handshake_client_tls13.go b/handshake_client_tls13.go
-index f551506..d8aeb3b 100644
+index f551506..771c506 100644
 --- a/handshake_client_tls13.go
 +++ b/handshake_client_tls13.go
 @@ -13,6 +13,7 @@ import (
@@ -1357,7 +1531,7 @@ index f551506..d8aeb3b 100644
  	"errors"
  	"hash"
  	"slices"
-@@ -637,6 +638,35 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
+@@ -637,6 +638,42 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
  		return err
  	}
  
@@ -1370,6 +1544,7 @@ index f551506..d8aeb3b 100644
 +	// has its PQ chain's validity confirmed (not strictly required by
 +	// the protocol, but it costs nothing and never weakens anything).
 +	var dualPeerCerts []*x509.Certificate
++	var dualVerifiedChain []*x509.Certificate
 +	if len(certMsg.dualPQCertificate) > 0 {
 +		if c.config.Dual == nil {
 +			c.sendAlert(alertUnexpectedMessage)
@@ -1385,15 +1560,21 @@ index f551506..d8aeb3b 100644
 +			c.sendAlert(alertBadCertificate)
 +			return err
 +		}
++		// Decision 39: c.dualPeerCertificates/c.dualVerifiedChains are
++		// NOT set here anymore -- only the chain's structural/crypto
++		// validity is confirmed at this point, not that the server
++		// actually proved possession of the post-quantum key (that
++		// only happens below, in the dualSignatureScheme branch). A
++		// caller inspecting ConnectionState must never see these
++		// fields populated unless DualAuthenticated is also true.
 +		dualPeerCerts = certs
-+		c.dualPeerCertificates = certs
-+		c.dualVerifiedChains = [][]*x509.Certificate{verified}
++		dualVerifiedChain = verified
 +	}
 +
  	// certificateVerifyMsg is included in the transcript, but not until
  	// after we verify the handshake signature, since the state before
  	// this message was sent is used.
-@@ -651,28 +681,43 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
+@@ -651,33 +688,73 @@ func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
  		return unexpectedMessageError(certVerify, msg)
  	}
  
@@ -1429,6 +1610,11 @@ index f551506..d8aeb3b 100644
 +			return errors.New("tls: " + err.Error())
 +		}
 +		c.dualAuthenticated = true
++		// Decision 39: set only now, together with dualAuthenticated --
++		// see the comment where dualPeerCerts/dualVerifiedChain were
++		// computed above.
++		c.dualPeerCertificates = dualPeerCerts
++		c.dualVerifiedChains = [][]*x509.Certificate{dualVerifiedChain}
 +		c.peerSigAlg = certVerify.signatureAlgorithm
 +	} else {
 +		// See RFC 8446, Section 4.4.3.
@@ -1458,7 +1644,32 @@ index f551506..d8aeb3b 100644
  
  	if err := transcriptMsg(certVerify, hs.transcript); err != nil {
  		return err
-@@ -746,9 +791,34 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+ 	}
+ 
++	// Decision 39 (real bug, found in independent review of HEAD
++	// 23ee2ceb): the `else` branch above verifies an ordinary single
++	// signature exactly like unmodified Go, with no check at all of
++	// c.config.Dual.Require -- so a server that negotiated/offered
++	// dual (sent a dualPQCertificate, or even without one) but then
++	// signed CertificateVerify with an ordinary classical algorithm
++	// instead of dualSignatureScheme would fall straight into that
++	// branch and be accepted as classically authenticated, with
++	// DualAuthenticated simply false and NO error at all -- even
++	// though this client's Dual.Require=true meant the connection was
++	// supposed to be impossible without dual authentication. Fixed
++	// here, at the one place both branches above converge, so neither
++	// one can individually forget it: dual authentication was
++	// REQUIRED and did not happen, so the handshake aborts, exactly
++	// like any other authentication failure.
++	if c.config.Dual != nil && c.config.Dual.Require && !c.dualAuthenticated {
++		c.sendAlert(alertHandshakeFailure)
++		return errors.New("tls: dual (AND) authentication required but the server did not dual-authenticate")
++	}
++
+ 	return nil
+ }
+ 
+@@ -746,9 +823,34 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
  		return nil
  	}
  
@@ -1494,11 +1705,11 @@ index f551506..d8aeb3b 100644
  		Version:          c.vers,
  		ctx:              hs.ctx,
  	})
-@@ -760,11 +830,16 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+@@ -760,11 +862,16 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
  		hs.c.localCertificate = cert.Certificate
  	}
  
-+	useDual := serverWantsDual && c.config.Dual != nil && len(c.config.Dual.Certificates) > 0 && len(cert.Certificate) > 0
++	useDual := serverWantsDual && c.config.Dual != nil && len(c.config.Dual.Certificates) > 0 && len(cert.Certificate) > 0 && !testingOnlyForceSingleChainCertificateVerify
 +
  	certMsg := new(certificateMsgTLS13)
  
@@ -1511,7 +1722,7 @@ index f551506..d8aeb3b 100644
  
  	if _, err := hs.c.writeHandshakeRecord(certMsg, hs.transcript); err != nil {
  		return err
-@@ -778,30 +853,41 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
+@@ -778,30 +885,51 @@ func (hs *clientHandshakeStateTLS13) sendClientCertificate() error {
  	certVerifyMsg := new(certificateVerifyMsg)
  	certVerifyMsg.hasSignatureAlgorithm = true
  
@@ -1531,6 +1742,16 @@ index f551506..d8aeb3b 100644
 +			return err
 +		}
 +		certVerifyMsg.signature = sig
++	} else if testingOnlyForceSingleChainCertificateVerify {
++		// See testingOnlyForceSingleChainCertificateVerify's own
++		// comment (dual.go): hs.certReq.supportedSignatureAlgorithms
++		// may be ONLY [dualSignatureScheme] against a strict server,
++		// which selectSignatureScheme below could never match to a
++		// classical RSA certificate -- hardcoding the scheme here is
++		// what actually exercises "signs classical anyway" instead of
++		// failing for the unrelated reason of finding no common
++		// algorithm.
++		certVerifyMsg.signatureAlgorithm = PSSWithSHA256
 +	} else {
 +		certVerifyMsg.signatureAlgorithm, err = selectSignatureScheme(c.vers, cert, hs.certReq.supportedSignatureAlgorithms)
 +		if err != nil {
@@ -1769,7 +1990,7 @@ index 511e073..a2e2c3a 100644
  	var certList cryptobyte.String
  	if !s.ReadUint24LengthPrefixed(&certList) {
 diff --git a/handshake_server_tls13.go b/handshake_server_tls13.go
-index 2c96e24..ffe8f52 100644
+index 2c96e24..de816fe 100644
 --- a/handshake_server_tls13.go
 +++ b/handshake_server_tls13.go
 @@ -52,6 +52,7 @@ type serverHandshakeStateTLS13 struct {
@@ -1780,7 +2001,7 @@ index 2c96e24..ffe8f52 100644
  	sigAlg          SignatureScheme
  	earlySecret     *tls13.EarlySecret
  	sharedKey       []byte
-@@ -484,6 +485,18 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
+@@ -484,6 +485,33 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
  		return c.sendAlert(alertMissingExtension)
  	}
  
@@ -1790,6 +2011,21 @@ index 2c96e24..ffe8f52 100644
 +	// if this server also has a post-quantum chain configured; a
 +	// server without Dual configured, or without a client offer,
 +	// proceeds through the ordinary, unmodified path.
++	// Decision 39 (real bug, found in independent review of HEAD
++	// 23ee2ceb): Require=true with an empty Dual.Certificates is a
++	// SERVER MISCONFIGURATION, not a reason to silently fall through
++	// to classical-only authentication below (the `len(c.config.Dual.
++	// Certificates) > 0` guard on the dual branch, further down,
++	// would otherwise make exactly that fallback happen -- Require
++	// promised dual authentication is mandatory, and an operator who
++	// set Require=true without ever provisioning a post-quantum
++	// certificate gets a clear configuration error instead of a
++	// connection that quietly never dual-authenticates anyone).
++	if c.config.Dual != nil && c.config.Dual.Require && len(c.config.Dual.Certificates) == 0 {
++		c.sendAlert(alertInternalError)
++		return errors.New("tls: dual (AND) authentication required (Dual.Require) but Dual.Certificates is empty -- server misconfiguration")
++	}
++
 +	clientOffersDual := slices.Contains(hs.clientHello.supportedSignatureAlgorithms, dualSignatureScheme)
 +	if c.config.Dual != nil && c.config.Dual.Require && !clientOffersDual {
 +		c.sendAlert(alertHandshakeFailure)
@@ -1799,22 +2035,53 @@ index 2c96e24..ffe8f52 100644
  	certificate, err := c.config.getCertificate(clientHelloInfo(hs.ctx, c, hs.clientHello))
  	if err != nil {
  		if err == errNoCertificates {
-@@ -496,6 +509,14 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
+@@ -496,12 +524,39 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
  	if certificate != nil {
  		hs.c.localCertificate = certificate.Certificate
  	}
+-	hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
+-	if err != nil {
+-		// getCertificate returned a certificate that is unsupported or
+-		// incompatible with the client's signature algorithms.
+-		c.sendAlert(alertHandshakeFailure)
+-		return err
 +
 +	if clientOffersDual && c.config.Dual != nil && len(c.config.Dual.Certificates) > 0 {
-+		hs.sigAlg = dualSignatureScheme
-+		hs.dualCert = &c.config.Dual.Certificates[0]
-+		hs.cert = certificate
-+		return nil
++		if testingOnlyForceSingleChainCertificateVerify {
++			// See testingOnlyForceSingleChainCertificateVerify's own
++			// comment (dual.go): fall through to the ordinary classical
++			// path below instead of taking the dual branch, even
++			// though every condition for it is met.
++		} else {
++			hs.sigAlg = dualSignatureScheme
++			hs.dualCert = &c.config.Dual.Certificates[0]
++			hs.cert = certificate
++			return nil
++		}
 +	}
 +
- 	hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
- 	if err != nil {
- 		// getCertificate returned a certificate that is unsupported or
-@@ -840,6 +861,17 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
++	if testingOnlyForceSingleChainCertificateVerify {
++		// See testingOnlyForceSingleChainCertificateVerify's own
++		// comment (dual.go): hs.clientHello.supportedSignatureAlgorithms
++		// may be ONLY [dualSignatureScheme] against a strict client,
++		// which selectSignatureScheme below could never match to a
++		// classical RSA certificate -- hardcoding the scheme here is
++		// what actually exercises "signs classical anyway" instead of
++		// failing for the unrelated reason of finding no common
++		// algorithm.
++		hs.sigAlg = PSSWithSHA256
++	} else {
++		hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
++		if err != nil {
++			// getCertificate returned a certificate that is unsupported or
++			// incompatible with the client's signature algorithms.
++			c.sendAlert(alertHandshakeFailure)
++			return err
++		}
+ 	}
+ 	hs.cert = certificate
+ 
+@@ -840,6 +895,17 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
  		if c.config.ClientCAs != nil {
  			certReq.certificateAuthorities = c.config.ClientCAs.Subjects()
  		}
@@ -1832,7 +2099,7 @@ index 2c96e24..ffe8f52 100644
  
  		if _, err := hs.c.writeHandshakeRecord(certReq, hs.transcript); err != nil {
  			return err
-@@ -851,6 +883,9 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
+@@ -851,6 +917,9 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
  	certMsg.certificate = *hs.cert
  	certMsg.scts = hs.clientHello.scts && len(hs.cert.SignedCertificateTimestamps) > 0
  	certMsg.ocspStapling = hs.clientHello.ocspStapling && len(hs.cert.OCSPStaple) > 0
@@ -1842,7 +2109,7 @@ index 2c96e24..ffe8f52 100644
  
  	if _, err := hs.c.writeHandshakeRecord(certMsg, hs.transcript); err != nil {
  		return err
-@@ -860,6 +895,21 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
+@@ -860,6 +929,21 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
  	certVerifyMsg.hasSignatureAlgorithm = true
  	certVerifyMsg.signatureAlgorithm = hs.sigAlg
  
@@ -1864,7 +2131,7 @@ index 2c96e24..ffe8f52 100644
  	sigType, sigHash, err := typeAndHashFromSignatureScheme(hs.sigAlg)
  	if err != nil {
  		return c.sendAlert(alertInternalError)
-@@ -943,6 +993,20 @@ func (hs *serverHandshakeStateTLS13) shouldSendSessionTickets() bool {
+@@ -943,6 +1027,20 @@ func (hs *serverHandshakeStateTLS13) shouldSendSessionTickets() bool {
  		return false
  	}
  
@@ -1885,7 +2152,7 @@ index 2c96e24..ffe8f52 100644
  	// QUIC tickets are sent by QUICConn.SendSessionTicket, not automatically.
  	if hs.c.quic != nil {
  		return false
-@@ -1060,6 +1124,37 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+@@ -1060,6 +1158,48 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
  		return err
  	}
  
@@ -1896,6 +2163,7 @@ index 2c96e24..ffe8f52 100644
 +	// pair, by SAN set, so a classical certificate for one identity
 +	// can't be paired with a post-quantum certificate for another.
 +	var dualPeerCerts []*x509.Certificate
++	var dualVerifiedChain []*x509.Certificate
 +	if len(certMsg.dualPQCertificate) > 0 {
 +		if c.config.Dual == nil {
 +			c.sendAlert(alertUnexpectedMessage)
@@ -1911,19 +2179,29 @@ index 2c96e24..ffe8f52 100644
 +			c.sendAlert(alertBadCertificate)
 +			return err
 +		}
++		// Decision 39: the SAN-less-pair guard against a vacuous match
++		// lives inside sameDualIdentity itself now (falls back to
++		// comparing Subject.CommonName instead of accepting an empty
++		// match) -- see that function's own comment for why this
++		// moved, found live: an earlier version of this fix rejected
++		// outright here, which broke this project's OWN legitimate
++		// SAN-less client certificates (TestDualStrictFullMTLS).
 +		if !sameDualIdentity(c.peerCertificates[0], certs[0]) {
 +			c.sendAlert(alertBadCertificate)
 +			return errors.New("tls: dual: client's classical and post-quantum certificates do not identify the same pair")
 +		}
++		// Decision 39: c.dualPeerCertificates/c.dualVerifiedChains are
++		// NOT set here anymore -- see the matching comment in
++		// handshake_client_tls13.go's readServerCertificate. Only set
++		// once dualAuthenticated is confirmed true, below.
 +		dualPeerCerts = certs
-+		c.dualPeerCertificates = certs
-+		c.dualVerifiedChains = [][]*x509.Certificate{verified}
++		dualVerifiedChain = verified
 +	}
 +
  	if c.config.VerifyConnection != nil {
  		if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
  			c.sendAlert(alertBadCertificate)
-@@ -1082,28 +1177,43 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
+@@ -1082,34 +1222,71 @@ func (hs *serverHandshakeStateTLS13) readClientCertificate() error {
  			return unexpectedMessageError(certVerify, msg)
  		}
  
@@ -1959,6 +2237,11 @@ index 2c96e24..ffe8f52 100644
 +				return errors.New("tls: " + err.Error())
 +			}
 +			c.dualAuthenticated = true
++			// Decision 39: set only now, together with dualAuthenticated
++			// -- see the matching comment where dualPeerCerts/
++			// dualVerifiedChain were computed above.
++			c.dualPeerCertificates = dualPeerCerts
++			c.dualVerifiedChains = [][]*x509.Certificate{dualVerifiedChain}
 +			c.peerSigAlg = certVerify.signatureAlgorithm
 +		} else {
 +			// See RFC 8446, Section 4.4.3.
@@ -1988,6 +2271,29 @@ index 2c96e24..ffe8f52 100644
  
  		if err := transcriptMsg(certVerify, hs.transcript); err != nil {
  			return err
+ 		}
+ 	}
+ 
++	// Decision 39 (real bug, found in independent review of HEAD
++	// 23ee2ceb): symmetric to readServerCertificate's own fix -- the
++	// `else` branch above has no check of c.config.Dual.Require at
++	// all, so a client that negotiated/offered dual but then signed
++	// CertificateVerify with an ordinary classical algorithm would be
++	// accepted as classically authenticated, DualAuthenticated simply
++	// false, no error -- even under Require=true, where that was
++	// supposed to be impossible. Checked here, after both branches
++	// above (and after the empty-certificate early return, which
++	// ordinary Go client-cert-optional behavior already governs and
++	// is unrelated to this fix) have had their chance to set
++	// dualAuthenticated.
++	if c.config.Dual != nil && c.config.Dual.Require && !c.dualAuthenticated {
++		c.sendAlert(alertHandshakeFailure)
++		return errors.New("tls: dual (AND) client authentication required but the client did not dual-authenticate")
++	}
++
+ 	// If we waited until the client certificates to send session tickets, we
+ 	// are ready to do it now.
+ 	if err := hs.sendSessionTickets(); err != nil {
 diff --git a/tls_test.go b/tls_test.go
 index 6fe4490..83b84d6 100644
 --- a/tls_test.go

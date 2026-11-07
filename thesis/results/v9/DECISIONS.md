@@ -4748,3 +4748,119 @@ cross-check nao adiciona rigor nenhum sobre o criterio individual
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 39. REVISAO INDEPENDENTE DO HEAD 23ee2ceb -- 4 bugs reais confirmados e corrigidos no patch AND (modo estrito nao abortava sem autenticacao dual; campos Dual* vazavam sem DualAuthenticated; servidor mal configurado caia pra RSA; sameDualIdentity vacuamente verdadeiro sem SAN); 4 testes novos (27 no total, suite completa verde); binarios amd64/arm64 reconstruidos, hashes e build_metadata.json atualizados
+
+**Contexto.** Uma revisao independente do commit `23ee2ceb` (o HEAD no
+momento) encontrou 4 bugs reais no mecanismo AND (`dual.go`,
+`handshake_client_tls13.go`, `handshake_server_tls13.go`) -- tratados
+aqui com evidencia (codigo lido, teste escrito e EXECUTADO contra o
+modulo real, nao so descrito), corrigindo o que se confirmou. Como
+isso muda o hash dos binarios, foi feito primeiro, antes de qualquer
+outro item desta rodada.
+
+**1. Modo estrito nao impunha AND na aceitacao -- CONFIRMADO e
+corrigido.** Lendo `readServerCertificate` (cliente) e
+`readClientCertificate` (servidor): o ramo `else` (CertificateVerify
+classico) nunca checava `c.config.Dual.Require` -- um peer que
+negociou/ofereceu dual mas assinou classicamente seria aceito como
+autenticado classicamente, `DualAuthenticated=false`, **sem erro
+algum**, mesmo com `Require=true` prometendo que isso era impossivel.
+**Corrigido:** ao fim das duas funcoes (depois que os dois ramos
+tiveram a chance de setar `dualAuthenticated`), `Require &&
+!dualAuthenticated` manda um alerta (`alertHandshakeFailure`) e aborta
+o handshake.
+
+**Hook de teste real, nao hipotetico.** Adicionado
+`testingOnlyForceSingleChainCertificateVerify` (`dual.go`, var
+pacote, mesmo padrao ja usado pelo proprio Go upstream --
+`testingOnlySupportedSignatureAlgorithms`, confirmado lendo
+`common.go`) -- forca ESTE lado a assinar com RSA-PSS-SHA256 isolado,
+cadeia unica, mesmo quando dual foi negociado, contornando a
+negociacao normal de algoritmo (que falharia por um motivo NAO
+relacionado contra um peer estrito cuja lista oferecida e so
+`[0xFE65]`) hardcodando `PSSWithSHA256` diretamente nos dois pontos de
+assinatura (cliente e servidor). **2 testes novos, pros dois papeis,
+PASSARAM:**
+- `TestDualStrictClientRejectsServerThatIgnoresTheOffer`: servidor
+  dual-capaz (NAO estrito) hookado pra assinar single-chain; cliente
+  estrito -- handshake falha, `DualAuthenticated=false`.
+- `TestDualStrictServerRejectsClientThatIgnoresTheOffer`: simetrico,
+  cliente dual-capaz hookado; servidor estrito -- handshake falha.
+
+**2. `DualPeerCertificates`/`DualVerifiedChains` vazavam sem
+`DualAuthenticated` -- CONFIRMADO e corrigido.** Esses campos eram
+setados assim que a cadeia PQ fosse estrutural/criptograficamente
+valida (dentro do `if len(certMsg.dualPQCertificate) > 0`), ANTES de
+saber se o `CertificateVerify` de fato usou o esquema dual -- um
+chamador inspecionando `ConnectionState` podia ver esses campos
+populados mesmo quando `DualAuthenticated=false` (cadeia valida, mas
+posse da chave nunca provada). **Corrigido:** movidos pra dentro do
+ramo `certVerify.signatureAlgorithm == dualSignatureScheme`, junto
+com `c.dualAuthenticated = true`, nos dois lados -- os valores
+locais (`dualPeerCerts`/`dualVerifiedChain`) continuam calculados no
+lugar original (ainda precisam existir pra `verifyDualMessage` usar),
+so os campos EXPORTADOS de `ConnectionState` que mudaram de lugar.
+Sem teste dedicado novo (nao pedido explicitamente) -- mudanca de
+baixo risco, mecanica, confirmada por inspecao e pela suite completa
+continuando verde.
+
+**3. Servidor com `Require=true` e `Dual.Certificates` vazio caia pra
+RSA -- CONFIRMADO e corrigido.** `len(c.config.Dual.Certificates) > 0`
+guardava o ramo dual; sem isso, o codigo caia direto pra selecao
+classica, SEM avisar que a propria configuracao do servidor nunca
+poderia cumprir `Require=true`. **Corrigido:** checagem explicita no
+inicio de `pickCertificate` -- `Require=true` com `Certificates`
+vazio e erro de configuracao (`alertInternalError`), nao fallback
+silencioso. **Teste novo, PASSOU:**
+`TestDualServerRequireWithEmptyCertificatesIsConfigError`.
+
+**4. `sameDualIdentity` vacuamente verdadeiro sem SAN -- CONFIRMADO,
+corrigido, e a PRIMEIRA correcao quebrou testes reais (registrado
+honestamente, nao escondido).** Duas listas de SAN vazias comparam
+como iguais (`len(a)==len(b)==0`) -- um atacante podia parear um
+certificado classico e um PQ SEM NENHUM SAN, de identidades
+completamente diferentes, e passar como "mesma identidade".
+
+**Erro real no caminho:** a primeira versao desta correcao REJEITAVA
+direto qualquer par sem SAN sob `Require=true` -- rodando a suite
+completa, isso QUEBROU `TestDualStrictFullMTLS` e
+`TestDualHandshakeAcrossHelloRetryRequest`, dois testes JA EXISTENTES
+e ate aqui sempre verdes: os certificados de CLIENTE deste projeto
+sao, por convencao propria, deliberadamente sem SAN (identificados
+por `Subject.CommonName`, nao por SAN) -- um padrao legitimo ja usado,
+nao uma lacuna. Corrigir isso rejeitando tudo teria sido corrigir um
+bug introduzindo outro.
+
+**Correcao final, testada e verde:** `sameDualIdentity` agora, quando
+NENHUM dos dois leafs tem SAN algum, cai pra comparar
+`Subject.CommonName` (nao-vazio nos dois lados, e igual) em vez de
+aceitar vacuamente. Isso mantem `TestDualStrictFullMTLS` passando (o
+par classico/PQ do cliente usa o MESMO CommonName, "and-client",
+legitimamente) e rejeita um par de identidades DIFERENTES que
+tambem nao tenham SAN. **Teste novo, com CommonNames DIFERENTES
+propositalmente (simulando o atacante de verdade, nao o caso
+legitimo), PASSOU:** `TestDualClientSANlessIdentityRejectedWhenRequired`.
+
+**5. Suite completa re-executada, binarios reconstruidos.** Toolchain
+reconstruido do zero (clone fresco do go1.27.3, patch novo aplicado,
+`make.bash`, suite `crypto/tls` completa): **`ok crypto/tls 153.090s`**
+-- 0 FAIL, incluindo os 23 testes originais do AND + os 4 novos (27
+no total) + toda a suite upstream do Go. `gateway`/`proxy`
+reconstruidos pra `linux/amd64` E `linux/arm64` com o toolchain
+corrigido, reprodutibilidade reconfirmada (rebuild do zero, mesmo
+hash):
+```
+gateway amd64: d1aa962d01788e053c0cc4efd4f146f5a55c654026d758661023a106cac8d588
+gateway arm64: 1afd6f51a03af905e677e5f4bb1122bddb9da1e0768776a903bac06b5241ab24
+proxy   amd64: 819f21de28c9942f3b22f886d71f5e60374107110c18b4e40e7a9e5352212f11
+proxy   arm64: f23877763b1ceaf129b5b2f292ec16c281f07f66c8b4c7b2df6f6719db41f738
+```
+**Superam os hashes da Decisao 22** (`gateway fa4c9c32...`, `proxy
+a4f901a9...`, so amd64, pre-correcao) -- aqueles binarios tinham o
+bug #1 (modo estrito nao impunha AND), **nunca devem ser usados no
+piloto.** `toolchain/build_metadata.json` atualizado
+(`and_patch_sha256` novo, `built_at_utc` novo).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
