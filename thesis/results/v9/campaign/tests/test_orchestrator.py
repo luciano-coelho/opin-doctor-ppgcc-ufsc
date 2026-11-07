@@ -117,18 +117,19 @@ def test_mutante_cardinalidade_errada_e_pega_pelo_avaliador(tmp_path):
     """Mutacao: um orquestrador que so rodasse N=4 (em vez de 5) por
     perfil produziria 48 execucoes, nao 60 -- o avaliador REAL deve
     reprovar o criterio 4 por cardinalidade, mesmo que cada execucao
-    individual estivesse perfeita."""
-    original_n = orch.N_PER_PROFILE
-    try:
-        orch.N_PER_PROFILE = 4  # mutante
-        manifest = orch.run_pilot(orch.LocalExecutor(), seed=2, out_dir=tmp_path)
-        assert manifest["total_execucoes"] == 48
-        log_text = Path(manifest["combined_log"]).read_text(encoding="utf-8")
-        execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
-        r4 = ec.criterion_4_counts(execucoes, log_text)
-        assert r4["pass"] is False, "avaliador deveria reprovar cardinalidade 48 != 60"
-    finally:
-        orch.N_PER_PROFILE = original_n
+    individual estivesse perfeita. (`N_PER_PROFILE=4` passado
+    diretamente -- mutar o modulo nao afetaria o default ja vinculado
+    da funcao, Python so avalia defaults uma vez, na definicao.)"""
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=2, out_dir=tmp_path, n_per_profile=4)
+    assert manifest["total_execucoes"] == 48
+    assert manifest["expected_total"] == 48
+    log_text = Path(manifest["combined_log"]).read_text(encoding="utf-8")
+    execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    r4 = ec.criterion_4_counts(execucoes, log_text)
+    # criterion_4_counts compara contra EXPECTED_EXECUCOES_PILOTO (60,
+    # constante fixa do avaliador) -- nunca contra o "expected_total"
+    # dinamico deste orquestrador, que e so pra uso interno/smoke.
+    assert r4["pass"] is False, "avaliador deveria reprovar cardinalidade 48 != 60"
 
 
 def test_ssh_executor_disca_sempre_pelo_ip_publico(monkeypatch):
@@ -194,3 +195,65 @@ def test_dedicated_capture_bate_com_os_baselines_reais_importados():
     block = orch._dedicated_capture_block("classico")
     row = ec._message_sizes_for_profile(block, "classico")
     assert row["ok"] is True, row
+
+
+def test_porta_de_fumaca_tem_cardinalidade_12_nunca_60(tmp_path):
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["smoke"] is True
+    assert manifest["n_per_profile"] == 1
+    assert manifest["total_execucoes"] == 12
+    assert manifest["expected_total"] == 12
+    assert manifest["total_execucoes"] != 60, "a porta de fumaca NUNCA pode ser confundida com as 60 execucoes oficiais"
+
+
+def test_porta_de_fumaca_passa_com_dados_bons(tmp_path):
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["smoke_ok"] is True
+    assert manifest["smoke_failures"] == []
+
+
+def test_porta_de_fumaca_aborta_se_qualquer_execucao_falhar(tmp_path, monkeypatch):
+    """Mutacao direta no Executor: UMA das 12 execucoes (L219/pqc)
+    devolve contagens HTTP erradas -- smoke_ok tem que virar False e
+    identificar exatamente qual (profile, route) falhou."""
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def broken_run_execution(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "pqc" and route == "L219":
+            result["person"] = result["person"][:-5]  # falta gente -- contagem HTTP erra
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", broken_run_execution)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["smoke_ok"] is False
+    assert len(manifest["smoke_failures"]) == 1
+    assert manifest["smoke_failures"][0]["profile"] == "pqc"
+    assert manifest["smoke_failures"][0]["route"] == "L219"
+
+
+def test_mutante_smoke_ok_sempre_true_e_pego(tmp_path, monkeypatch):
+    """Mutacao: smoke_ok calculado so pela cardinalidade, ignorando
+    `failures` -- o teste de abortar acima tem que reprovar com essa
+    mutacao, confirmando que smoke_ok depende de verdade da lista de
+    falhas, nao so da contagem total."""
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def broken_run_execution(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "pqc" and route == "L219":
+            result["person"] = result["person"][:-5]
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", broken_run_execution)
+
+    def mutated_run_smoke_gate(executor, seed, out_dir):
+        manifest = orch.run_pilot(executor, seed, out_dir, n_per_profile=orch.SMOKE_N_PER_PROFILE, smoke=True)
+        manifest["smoke_ok"] = manifest["total_execucoes"] == orch.SMOKE_EXPECTED_TOTAL  # mutante: ignora failures
+        manifest["smoke_failures"] = []
+        return manifest
+
+    mutant_manifest = mutated_run_smoke_gate(orch.LocalExecutor(), 1, tmp_path)
+    assert mutant_manifest["smoke_ok"] is True  # mutante esconde a falha real
+    with pytest.raises(AssertionError):
+        assert mutant_manifest["smoke_ok"] is False

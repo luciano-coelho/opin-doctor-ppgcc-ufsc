@@ -5614,3 +5614,83 @@ correspondente sera registrada separadamente, como sempre.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat. Nenhum push sem autorizacao explicita.
+
+## 48. EMENDA 12 AO PRE-REGISTRO v9-prereg -- porta de fumaca (12 execucoes, 1 por perfil x rota, nunca contadas nas 60) acrescentada ao roteiro do piloto, rodando so em modo SSH real, logo apos o apply/rele de PKI e antes do bloco cronometrado; dois achados reais que tornam a tabela de prontidao anterior otimista, registrados com evidencia
+
+**Motivo da emenda:** o pre-registro `v9-prereg` fixou os 7 criterios
+e seus limiares, mas nunca previu um portao de validacao rapida
+contra a infraestrutura REAL antes de comprometer as 60 execucoes
+oficiais a ela. Sem isso, um problema de infraestrutura (SG errada,
+binario desatualizado, PKI mal relayada) so apareceria DEPOIS das 60
+execucoes inteiras, desperdicando tempo/custo de uma rota inteira.
+Decisao 23 ja estabeleceu o precedente de "captura separada da
+medicao cronometrada" (as 12 capturas dedicadas do criterio 1, que
+tambem nunca contam nas 60) -- esta emenda estende o MESMO principio
+pra uma verificacao de fumaca, nova, antes de qualquer execucao real
+comecar.
+
+**O que muda, formalmente:** `orchestrator.py` ganha
+`run_smoke_gate()` -- roda `N=1` execucao por (perfil, rota), 12 no
+total, SEMPRE em diretorio de saida PROPRIO (nunca reaproveitado
+pelas 60 reais), com `manifest["smoke"] = true` explicito. Critério
+de abortar: **qualquer uma das 12 reprovando (excecao, contagem HTTP
+fora de 44/28/4/4, ou qualquer outra checagem de execucao-unica) e
+motivo pra abortar o piloto inteiro e rodar `cleanup.py` (destroy +
+verificacao de 5 chamadas), nunca prosseguir pras 60.** Nada no
+pre-registro das 60 execucoes/7 criterios muda -- a porta de fumaca
+NAO e um oitavo criterio, e um gate operacional ANTES deles.
+Testado: `test_porta_de_fumaca_tem_cardinalidade_12_nunca_60`,
+`test_porta_de_fumaca_passa_com_dados_bons`,
+`test_porta_de_fumaca_aborta_se_qualquer_execucao_falhar` (mutante:
+uma das 12 com contagem HTTP errada, `smoke_ok` vira False e
+identifica exatamente qual perfil/rota) e seu proprio mutante inverso
+(`smoke_ok` calculado so pela cardinalidade, ignorando falhas --
+reprovado corretamente pelo teste anterior).
+
+**Dois achados reais, que tornam a tabela de prontidao da rodada
+anterior OTIMISTA pra Terraform e pro orquestrador -- registrados
+aqui com evidencia, nao por argumento:**
+
+**(a) `aws_eip.this` (modulo Terraform, `main.tf` linha 192) fixa
+`instance = aws_instance.this.id`** -- isso forca o Terraform a criar
+a instancia ANTES (ou na mesma apply) do EIP, nunca permitindo
+`terraform apply -target=aws_eip.server` isolado pra descobrir o
+endereco ANTES da instancia subir. **Isso contradiz, ao pe da letra,
+a sequencia de 4 passos que a Decisao 27 item 1 exige** ("1) Terraform
+aloca o EIP do servidor (sem associar ainda) -- o endereco resultante
+e um output; 2) essa saida alimenta a chamada UNICA do gerador de PKI
+...; 3) a instancia do servidor sobe; 4) o EIP e associado a ela").
+O modulo copiado da v8 nunca precisou dessa sequencia (a v8 real nao
+usa IP no SAN do certificado) -- copiar verbatim trouxe esse gap
+junto. **NAO CORRIGIDO nesta rodada** (o pedido era evidencia, nao
+mais codigo) -- precisa de um `aws_eip` sem o atributo `instance` +
+um `aws_eip_association` separado antes de qualquer apply real.
+
+**(b) `SSHExecutor.run_execution`/`dedicated_capture`/
+`readiness_probe` (`orchestrator.py`) tem o comando remoto como um
+ESBOCO, nunca confirmado contra o `opin_flow.py` real.** Lendo o
+arquivo real agora: `opin_flow.py main()` (linha 2433+) EXIGE um
+diretorio `experimentN*` PRE-EXISTENTE (levanta `SystemExit` se nao
+achar, linha 2493-2497), espera flags como `--latency-ms`, e escreve
+o resultado (`baseline_metrics.json`, esquema `plan_alias`/`module`/
+`status`, NAO `{"insurance":[...], "person":[...]}`) **num ARQUIVO,
+nunca no stdout** -- o comando atual (`CRYPTO_PROFILE=... 
+REMOTE_GATEWAY_HOST=... V9_HARNESS=1 python3 opin_flow.py`, esperando
+`json.loads(proc.stdout)`) **falharia de verdade contra uma instancia
+real**, tanto pela falta do diretorio de experimento quanto pelo
+canal errado (stdout vazio, dado real no arquivo). **Unico caminho ja
+provado e confiavel e o modo `--mode simulate`** (LocalExecutor,
+testado fim a fim contra o avaliador real, Decisao 47) -- o modo
+`--mode ssh` precisa ser reescrito (comando remoto real: rodar
+`opin_flow.py` com os argumentos certos dentro de um `experimentN*`
+ja preparado, depois `cat` o `baseline_metrics.json` resultante e
+adaptar o parsing) antes de qualquer execucao real, inclusive antes
+da propria porta de fumaca.
+
+**Consequencia pratica:** a porta de fumaca desta emenda, tal como
+escrita, so e executavel de verdade DEPOIS que o achado (b) acima for
+corrigido -- documentado aqui exatamente pra essa dependencia nao
+ficar implicita.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat. Nenhum push sem autorizacao explicita.

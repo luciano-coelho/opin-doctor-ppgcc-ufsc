@@ -205,10 +205,19 @@ class SSHExecutor:
         return proc.stdout
 
 
-def run_pilot(executor, seed: int, out_dir: Path) -> dict:
-    """Roda as 60 execucoes + as 12 capturas dedicadas, escreve todos
-    os artefatos no formato que `evaluate_criteria.py --aws-dir`
-    espera. Devolve um resumo (cardinalidade, ordem por rota, seed)."""
+def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False) -> dict:
+    """Roda `n_per_profile` execucoes por bloco (4 perfis x 3 rotas)
+    + as 12 capturas dedicadas, escreve todos os artefatos no formato
+    que `evaluate_criteria.py --aws-dir` espera. Devolve um resumo
+    (cardinalidade, ordem por rota, seed).
+
+    `smoke=True` (Decisao 48/Emenda 12 ao pre-registro v9-prereg):
+    `n_per_profile` continua livre pro CHAMADOR escolher (a porta de
+    fumaca usa 1), mas o manifesto fica marcado explicitamente como
+    `"smoke": true` e `out_dir` tem que ser um diretorio PROPRIO,
+    nunca reaproveitado pelas 60 execucoes reais -- a porta de fumaca
+    NUNCA conta pro total oficial do piloto, mesmo que gere artefatos
+    no MESMO formato (pra poder ser avaliada pelos mesmos criterios)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     capturas_dir = out_dir / "criterio1_capturas"
     capturas_dir.mkdir(parents=True, exist_ok=True)
@@ -225,7 +234,7 @@ def run_pilot(executor, seed: int, out_dir: Path) -> dict:
         for profile in order:
             combined_log_lines.append(f"== Perfil: {profile} ==")
             combined_log_lines.append(executor.readiness_probe())
-            for run in range(1, N_PER_PROFILE + 1):
+            for run in range(1, n_per_profile + 1):
                 combined_log_lines.append(execucao_marker_inicio(profile, route, run))
                 result = executor.run_execution(profile, route, run)
                 combined_log_lines.extend(result["gateway_log_lines"])
@@ -254,14 +263,45 @@ def run_pilot(executor, seed: int, out_dir: Path) -> dict:
     criterio6_path = out_dir / "criterio6_execucoes.json"
     criterio6_path.write_text(json.dumps(criterio6_rows, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    expected_total = len(PROFILES) * len(ROUTES) * n_per_profile
     manifest = {
         "seed": seed, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "smoke": smoke, "n_per_profile": n_per_profile,
         "route_orders": route_orders,
-        "total_execucoes": len(execucoes_calls), "expected_total": EXPECTED_TOTAL,
+        "total_execucoes": len(execucoes_calls), "expected_total": expected_total,
         "total_capturas": EXPECTED_CAPTURES,
         "combined_log": str(combined_log_path), "calls_json": str(calls_path),
         "criterio6_json": str(criterio6_path), "capturas_dir": str(capturas_dir),
     }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return manifest
+
+
+SMOKE_N_PER_PROFILE = 1
+SMOKE_EXPECTED_TOTAL = len(PROFILES) * len(ROUTES) * SMOKE_N_PER_PROFILE  # 12
+
+
+def run_smoke_gate(executor, seed: int, out_dir: Path) -> dict:
+    """Decisao 48 (Emenda 12 ao pre-registro v9-prereg): 1 execucao
+    por perfil x rota (12 no total, NUNCA contadas nas 60 oficiais) --
+    roda ANTES do bloco cronometrado, so com `SSHExecutor` real,
+    contra as instancias de verdade recem-subidas. Critério de
+    abortar: QUALQUER uma das 12 execucoes falhando (excecao,
+    `insurance`/`person` vazios, ou qualquer criterio avaliavel por
+    execucao-unica dando FAIL) e motivo pra abortar o piloto inteiro
+    e destruir -- nunca prosseguir pras 60 execucoes reais sobre uma
+    infraestrutura que a propria porta de fumaca ja mostrou com
+    problema."""
+    manifest = run_pilot(executor, seed, out_dir, n_per_profile=SMOKE_N_PER_PROFILE, smoke=True)
+    execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    failures = []
+    for entry in execucoes:
+        counts = ec._http_counts_for_calls(entry)
+        if counts != _EXPECTED_HTTP:
+            failures.append({"profile": entry["profile"], "route": entry["route"],
+                              "esperado": _EXPECTED_HTTP, "obtido": counts})
+    manifest["smoke_ok"] = manifest["total_execucoes"] == SMOKE_EXPECTED_TOTAL and not failures
+    manifest["smoke_failures"] = failures
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
 
@@ -273,6 +313,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--inventory-json", help="obrigatorio no modo --mode ssh (terraform output -json inventory)")
     ap.add_argument("--ssh-key", help="caminho da chave privada do piloto (modo ssh)")
+    ap.add_argument("--smoke", action="store_true",
+                     help="Decisao 48: porta de fumaca, 1 execucao por perfil x rota (12, nunca contadas nas 60)")
     args = ap.parse_args()
 
     if args.mode == "simulate":
@@ -283,8 +325,13 @@ def main():
         inventory = json.load(open(args.inventory_json, encoding="utf-8"))
         executor = SSHExecutor(inventory, key_path=args.ssh_key)
 
-    manifest = run_pilot(executor, args.seed, Path(args.out))
+    if args.smoke:
+        manifest = run_smoke_gate(executor, args.seed, Path(args.out))
+    else:
+        manifest = run_pilot(executor, args.seed, Path(args.out))
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    if args.smoke and not manifest["smoke_ok"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
