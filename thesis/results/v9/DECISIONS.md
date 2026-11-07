@@ -4633,3 +4633,118 @@ os proprios valores reais da v8 como baseline):
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 36. EMENDA 8 AO CRITERIO 4 (T7, pos-tag `v9-prereg`) -- contagem de "6 conexoes mTLS client-facing" (44/6/28/4/4, Decisao 17/18) nunca tinha sido wireada no avaliador; adicionada contando "connection OK" real do gateway, excluindo o carve-out interno; o probe TCP/443 dedicado (Decisao 35) e EXCLUIDO POR CONSTRUCAO (nunca completa handshake, nunca produz essa linha)
+
+**Rotulo formal de emenda:**
+- **O que mudou:** `criterion_4_counts` ganhou um quinto campo
+  (`mtls`, esperado =6) e um segundo parametro (`log_text`) -- antes
+  so conferia http/jwts/jwks/ca.
+- **Motivo:** auditando o pedido do Luciano sobre poluicao do probe,
+  confirmei que "6 conexoes mTLS client-facing" (a contagem completa
+  44/6/28/4/4 que a Decisao 17/18 verificou MANUALMENTE) nunca tinha
+  sido conectada neste avaliador automatico -- uma lacuna real,
+  achada no caminho, nao so o que foi pedido.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-7).
+- **A tag `v9-prereg` permanece intacta.**
+
+**Metodo:** conta as linhas `"gateway: PERFIL connection OK
+remoteAddr=... sni=\"...\" ..."` que `business_server.go` (linha 103,
+`acceptBusinessConn`) realmente escreve -- cada uma e um handshake
+TLS COMPLETO e bem sucedido. **Excluido explicitamente:** o
+carve-out interno (`sni="matls-api.local"`, `internalCallerSNI`) --
+auth chamando de volta a RS, nao um dos "6" client-facing (mesma
+logica da Decisao 18/19). **Excluido POR CONSTRUCAO, sem nenhum
+filtro especial:** o probe TCP/443 dedicado (Decisao 35, pro
+criterio 7) NUNCA completa o handshake TLS (fecha a conexao antes de
+mandar `ClientHello`, ou nunca manda nada) -- `tlsConn.Handshake()`
+retorna erro e o codigo real escreve `"gateway: PERFIL: handshake
+failed: ..."` (TEXTO PURO, linha 75 de `business_server.go`), nunca
+a linha `"connection OK"` que esta contagem procura. **So contar
+sucessos reais ja exclui a tentativa falha do probe, sem precisar
+reconhecer o probe especificamente.**
+
+**5 mutacoes testadas:**
+| Mutacao | Esperado | Resultado |
+|---|---|---|
+| baseline: 6 "connection OK" client-facing + 1 interno + 1 probe falho | PASS (mtls=6) | **PASS** |
+| 5 "connection OK" (faltando 1) | FAIL | **FAIL** |
+| 7 "connection OK" (uma extra) | FAIL | **FAIL** |
+| so a linha do probe falho no log, nenhuma conexao real | FAIL (nao PASS indevido) | **FAIL** |
+| 6 "connection OK" + 5 tentativas de probe falhas | PASS (nao infla a contagem) | **PASS** |
+
+## 37. EMENDA 9 AO CRITERIO 2 (T7, pos-tag `v9-prereg`) -- reprovar por TSO/GSO ligados tornaria o criterio inalcancavel (GSO vem ligado por padrao na AWS); corrigido -- offloads sempre REGISTRADOS como evidencia, nunca reprovam por si so; decisao vem da CONCORDANCIA entre bytes/MSS e `ss -ti` cwnd, com diferenca maxima definida (2 segmentos); offloads das instancias NUNCA alterados (equivalencia com a v8 real)
+
+**Rotulo formal de emenda:**
+- **O que mudou:** a Decisao 34 fazia `offload_risk` (TSO ou GSO
+  ligados) reprovar o criterio diretamente. Corrigido: `ethtool -k`
+  e sempre EXIGIDO no arquivo (precisa estar registrado), mas seu
+  CONTEUDO nunca decide pass/fail -- a decisao passa a vir da
+  CONCORDANCIA entre os dois canais independentes
+  (`segments_computed` via bytes/MSS, e `ss_ti_cwnd`), com uma
+  diferenca maxima aceitavel EXPLICITA: **`INITCWND_MAX_DIFF_
+  SEGMENTS = 2`** (justificado: absorve um pequeno desvio de tempo
+  do snapshot do `ss -ti` -- se uma ou duas ACKs iniciais ja
+  chegaram antes do snapshot, o cwnd pode ja ter crescido um passo
+  de slow-start alem do initcwnd puro -- sem ser tao largo que deixe
+  de detectar uma discordancia real entre os dois metodos).
+- **Motivo:** reprovar so por TSO/GSO estarem ligados tornaria o
+  criterio praticamente inalcancavel -- **GSO costuma vir ligado por
+  PADRAO no kernel das instancias EC2** usadas aqui, e contar bytes
+  enviados antes do ACK dividido pelo MSS negociado INDEPENDE de
+  quantos "superpacotes" a NIC decidiu fazer no meio do caminho (o
+  numero de bytes e o MSS sao os mesmos, offload ligado ou nao).
+  Alem disso, desligar os offloads so pra este teste divergiria da
+  v8 real, que nunca tocou nisso -- **mantido: os offloads das
+  instancias do piloto NAO sao alterados**, por equivalencia
+  deliberada com a v8.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-8).
+- **A tag `v9-prereg` permanece intacta** -- o limiar >=10 segmentos
+  (Decisao 14/24) nao mudou; so o metodo de decisao (agora por
+  concordancia, nao por bloqueio de offload) foi corrigido.
+
+**4 mutacoes testadas:**
+| Mutacao | Esperado | Resultado |
+|---|---|---|
+| TSO=on, GSO=on, segmentos=10,0, `ss`=10 (concordam) | PASS (offload nao bloqueia mais) | **PASS** |
+| segmentos=10,0, `ss`=12 (diferenca=2, limite exato) | PASS | **PASS** |
+| segmentos=10,0, `ss`=13 (diferenca=3, 1 passo alem) | FAIL | **FAIL** |
+| campo `offloads` ausente do arquivo (precisa ser registrado, mesmo nao decidindo) | FAIL | **FAIL** |
+
+## 38. EMENDA 10 AO CRITERIO 7 (T7, pos-tag `v9-prereg`) -- diferenca maxima aceitavel entre probe TCP/443 e pcap SYN/SYN-ACK, definida explicitamente: absoluta (0,5ms) pra L0, percentual (5% do nominal) pra L219/L325
+
+**Rotulo formal de emenda:**
+- **O que mudou:** `_rtt_consistent()` (Decisao 35) nao tinha um
+  numero explicito, por rota -- corrigido com
+  `RTT_CONSISTENCY_ABS_MS = {"L0": 0.5}` e
+  `RTT_CONSISTENCY_FRACTION = 0.05`.
+- **Motivo:** o Luciano apontou corretamente que a exigencia de
+  concordancia existia sem numero definido.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-9).
+- **A tag `v9-prereg` permanece intacta.**
+
+**Justificativa dos numeros:** **L0 usa diferenca ABSOLUTA (0,5ms)**
+-- percentual nao faz sentido com nominal 0 (mesma razao estrutural
+da Emenda 5); 0,5ms da margem generosa sobre a propria precisao
+esperada dos dois metodos nessa escala (a v8 real mediu 0,14-
+0,18ms, uma dispersao de 0,04ms SO entre amostras do MESMO metodo --
+0,5ms cobre isso com folga). **L219/L325 usam diferenca PERCENTUAL
+(5% do NOMINAL da rota)** -- deliberadamente MAIS ESTRITO que a
+faixa de aceitacao do criterio em si (±10%, Decisao 20/24):
+concordancia entre dois metodos medindo a MESMA grandeza fisica
+precisa ser mais apertada que "dentro da faixa aceitavel", senao o
+cross-check nao adiciona rigor nenhum sobre o criterio individual
+(L219: 219ms x5% = 10,95ms; L325: 325ms x5% = 16,25ms).
+
+**6 mutacoes testadas, limiar exato e 1 passo alem, nas 3 rotas:**
+| Mutacao | Esperado | Resultado |
+|---|---|---|
+| L0 diferenca = 0,5ms exato (limite) | PASS | **PASS** |
+| L0 diferenca = 0,51ms (1 passo alem) | FAIL | **FAIL** |
+| L219 diferenca = 10,95ms exato (5% do nominal) | PASS | **PASS** |
+| L219 diferenca = 10,96ms (1 passo alem) | FAIL | **FAIL** |
+| L325 diferenca = 16,25ms exato (5% do nominal) | PASS | **PASS** |
+| L325 diferenca = 16,26ms (1 passo alem) | FAIL | **FAIL** |
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

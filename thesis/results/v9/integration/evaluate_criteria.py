@@ -254,7 +254,31 @@ def criterion_1_message_sizes(log_text: str) -> dict:
             "note": "avaliado so com o que o log local forneceu -- o criterio real exige as 12 capturas do piloto (4 perfis x 3 rotas)"}
 
 
-def criterion_4_counts(calls_json: dict | None) -> dict:
+# Decisao 36 (Emenda 8 ao criterio 4, poluicao do probe): "6
+# conexoes mTLS client-facing" (Decisao 17/18, 44/6/28/4/4) nunca
+# tinha sido wireada neste avaliador -- so verificada manualmente
+# naquela rodada. Adicionada agora, contando as linhas "gateway: ...
+# connection OK ..." que o `business_server.go` real escreve (linha
+# 103, `acceptBusinessConn`) -- cada handshake TLS COMPLETO E BEM
+# SUCEDIDO produz exatamente uma. O carve-out interno
+# (`matls-api.local`, `internalCallerSNI`, auth chamando de volta a
+# RS) e explicitamente EXCLUIDO da contagem -- nao e um dos "6"
+# client-facing, e um canal interno separado (mesma logica da
+# Decisao 18/19). O probe TCP/443 dedicado (Decisao 35) nunca produz
+# essa linha -- ele nunca completa o handshake TLS (fecha a conexao
+# antes de mandar qualquer coisa, ou nunca manda ClientHello), entao
+# `tlsConn.Handshake()` retorna erro e o codigo real escreve
+# "gateway: PERFIL: handshake failed: ..." (texto puro, linha 75 de
+# `business_server.go`) em vez de "connection OK" -- EXCLUIDO POR
+# CONSTRUCAO, sem precisar de nenhum filtro especial pro probe
+# especificamente: so contar "connection OK" ja ignora qualquer
+# tentativa que nao terminou um handshake de verdade.
+_MTLS_CONNECTION_OK_RE = re.compile(r'gateway: \S+ connection OK remoteAddr=\S+ sni="([^"]*)"')
+_INTERNAL_CALLER_SNI = "matls-api.local"
+EXPECTED_MTLS_CONNECTIONS = 6
+
+
+def criterion_4_counts(calls_json: dict | None, log_text: str = "") -> dict:
     # Decisao 33 (avaliador fail-closed): "nenhum dado fornecido" e
     # FAIL, nao None -- um criterio de ir/nao-ir sem evidencia nunca
     # autoriza a campanha por omissao.
@@ -267,8 +291,9 @@ def criterion_4_counts(calls_json: dict | None) -> dict:
     total_jwts = sum(len(c.get("jwts") or []) for c in calls1 + calls2)
     total_jwks = sum(1 for c in calls1 + calls2 if c.get("endpoint") == "/jwks")
     total_ca = sum(1 for c in calls1 + calls2 if c.get("endpoint") in ("/root-ca.pem", "/issuer-ca.pem"))
-    expected = {"http": 44, "jwts": 28, "jwks": 4, "ca": 4}
-    actual = {"http": total_calls, "jwts": total_jwts, "jwks": total_jwks, "ca": total_ca}
+    total_mtls = sum(1 for sni in _MTLS_CONNECTION_OK_RE.findall(log_text) if sni != _INTERNAL_CALLER_SNI)
+    expected = {"http": 44, "mtls": EXPECTED_MTLS_CONNECTIONS, "jwts": 28, "jwks": 4, "ca": 4}
+    actual = {"http": total_calls, "mtls": total_mtls, "jwts": total_jwts, "jwks": total_jwks, "ca": total_ca}
     ok = actual == expected
     return {"criterion": 4, "name": "contagens do fluxo", "expected": expected,
             "actual": actual, "pass": ok}
@@ -325,6 +350,14 @@ def criterion_6_instrumentation(log_text: str) -> dict:
 
 INITCWND_MIN_SEGMENTS = 10
 INITCWND_MIN_BYTES_SENT = 64 * 1024  # 64KB -- o teste dedicado precisa mandar isso ou mais
+# Decisao 37 (Emenda 9): diferenca maxima aceitavel, em SEGMENTOS,
+# entre os dois canais independentes (bytes/MSS vs `ss -ti` cwnd).
+# 2 segmentos -- margem suficiente pra absorver um pequeno desvio de
+# tempo do snapshot do `ss -ti` (se uma ou duas ACKs iniciais ja
+# chegaram antes do snapshot, o cwnd ja pode ter crescido um passo
+# de slow-start alem do initcwnd puro) sem ser tao larga que deixe
+# de detectar uma discordancia real entre os dois metodos.
+INITCWND_MAX_DIFF_SEGMENTS = 2
 L325_PROFILES = ("classico", "pqc", "hibrido-v8", "hibrido-and")
 L325_N_PER_PROFILE = 5
 
@@ -346,24 +379,33 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     `bytes_sent_before_first_client_ack / mss_bytes` (MSS lido das
     OPCOES do SYN dessa mesma conexao, nao suposto) da o numero de
     segmentos que o cwnd inicial permitiu enviar sem esperar ACK.
-    Confirmado por DOIS canais independentes, nao um so: (1) `ss -ti`
-    logo depois da conexao, campo `cwnd` reportado pelo proprio
-    kernel; (2) o estado dos offloads (`ethtool -k`: tso/gso/gro) --
-    **limite registrado explicitamente**: TSO/GSO no lado que ENVIA
-    pode agregar multiplos segmentos num unico "superpacote" antes de
-    chegar na NIC real: se a captura observar o trafego ANTES da
-    segmentacao de hardware, a contagem de segmentos fica
-    inteiramente errada (superestimada se TSO juntou o que seriam 10
-    segmentos reais em 1-2 "superpacotes" vistos pela captura). Por
-    isso o estado do offload e um dado OBRIGATORIO, nao so
-    informativo -- se TSO/GSO estiver ligado e a contagem de bytes
-    nao vier de um ponto de captura confiavelmente pos-segmentacao,
-    o resultado nao pode ser aceito como prova.
+    Confirmado por DOIS canais independentes: (1) `bytes_antes_do_
+    ACK / MSS`, calculado aqui; (2) `ss -ti` logo depois da conexao,
+    campo `cwnd` reportado pelo proprio kernel.
+
+    Decisao 37 (Emenda 9, corrige a Decisao 34): **reprovar so porque
+    TSO/GSO estao ligados tornaria o criterio praticamente
+    inalcancavel** -- GSO em particular costuma vir ligado por
+    PADRAO no kernel das instancias EC2 usadas aqui (`m7i-flex.large`),
+    e desliga-lo so pra este teste divergiria da v8 real (que nunca
+    tocou nos offloads de nenhuma instancia) sem necessidade: contar
+    bytes ENVIADOS antes do ACK e dividir pelo MSS NEGOCIADO
+    independe de quantos "superpacotes" a NIC decidiu fazer no meio
+    do caminho -- o numero de bytes e o MSS sao os mesmos, TSO/GSO
+    ligado ou nao. **Corrigido: `ethtool -k` e sempre REGISTRADO como
+    evidencia (nunca reprova por si so), e os offloads das instancias
+    NAO sao alterados (equivalencia com a v8 real, que nunca mexeu
+    nisso).** A decisao de pass/fail vem da CONCORDANCIA entre os
+    dois canais independentes -- `segments_computed` (bytes/MSS) e
+    `ss_ti_cwnd` -- dentro de `INITCWND_MAX_DIFF_SEGMENTS` (ver
+    constante, com a justificativa de porque esse numero, nao outro).
 
     Formato esperado em `<aws_dir>/criterio2_initcwnd.json`:
     `{"bytes_sent_total": int, "bytes_sent_before_first_client_ack": int,
     "mss_bytes": int, "ss_ti_cwnd": int, "offloads": {"tso": "on"|"off",
-    "gso": "on"|"off", "gro": "on"|"off"}}`.
+    "gso": "on"|"off", "gro": "on"|"off"}}` -- `offloads` e sempre
+    exigido no arquivo (pra garantir que foi de fato registrado), mas
+    seu CONTEUDO nunca decide pass/fail.
     """
     if not aws_dir:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
@@ -385,22 +427,24 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     # Pre-condicao: o proprio teste precisa ter mandado dado suficiente,
     # senao o resultado nao prova nada (mesmo problema que motivou a
     # correcao -- um teste pequeno de novo so mediria "quanto dado
-    # havia", nao o cwnd).
+    # havia", nao o cwnd). `offloads` e exigido no arquivo (confirma
+    # que foi registrado) mas nunca participa do calculo de pass/fail
+    # -- Decisao 37.
+    if not isinstance(offloads, dict) or "tso" not in offloads or "gso" not in offloads or "gro" not in offloads:
+        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+                "note": "campo 'offloads' ausente ou incompleto -- precisa ser registrado (tso/gso/gro), mesmo que nao decida o resultado"}
     test_valid = isinstance(total, (int, float)) and total >= INITCWND_MIN_BYTES_SENT
     segments_computed = (before_ack / mss) if (isinstance(before_ack, (int, float)) and isinstance(mss, (int, float)) and mss > 0) else None
     segments_ok = segments_computed is not None and segments_computed >= INITCWND_MIN_SEGMENTS
     ss_ok = isinstance(ss_cwnd, (int, float)) and ss_cwnd >= INITCWND_MIN_SEGMENTS
-    # Offload ligado SEM confirmacao de que a captura e pos-segmentacao
-    # invalida a contagem por segmentos (ver docstring) -- o cross-check
-    # do `ss -ti` (que le o cwnd do proprio kernel, nunca afetado por
-    # TSO/GSO de captura) continua valendo como evidencia independente
-    # mesmo nesse caso, mas a contagem por bytes/MSS fica suspeita.
-    offload_risk = bool(offloads.get("tso") == "on" or offloads.get("gso") == "on") if isinstance(offloads, dict) else True
-    ok = test_valid and segments_ok and ss_ok and not offload_risk
+    agree = (segments_computed is not None and isinstance(ss_cwnd, (int, float))
+             and abs(segments_computed - ss_cwnd) <= INITCWND_MAX_DIFF_SEGMENTS)
+    ok = test_valid and segments_ok and ss_ok and agree
     return {"criterion": 2, "name": "initcwnd real",
             "bytes_sent_total": total, "min_bytes_required": INITCWND_MIN_BYTES_SENT, "test_valid": test_valid,
             "segments_computed": segments_computed, "ss_ti_cwnd": ss_cwnd, "threshold": INITCWND_MIN_SEGMENTS,
-            "offloads": offloads, "offload_risk": offload_risk,
+            "max_diff_segments": INITCWND_MAX_DIFF_SEGMENTS, "agree": agree,
+            "offloads": offloads,
             "pass": ok}
 
 
@@ -435,13 +479,34 @@ def criterion_3_distant_route(aws_dir) -> dict:
             "errors_found": len(errors), "pass": ok}
 
 
-def _rtt_consistent(a: float, b: float) -> bool:
-    """Decisao 35: os dois canais de RTT (probe TCP e pcap SYN/SYN-ACK)
-    devem concordar dentro de uma margem -- nao e so cada um passar
-    sozinho, e os dois baterem um com o outro (confirmacao cruzada de
-    verdade, nao dois numeros soltos que por acaso passam cada um na
-    sua faixa)."""
-    return abs(a - b) <= max(1.0, 0.10 * max(a, b))
+# Decisao 38 (Emenda 10 ao criterio 7): limiar de concordancia
+# EXPLICITO entre os dois canais (probe TCP/443 e pcap SYN/SYN-ACK),
+# nunca deixado implicito. L0 usa diferenca ABSOLUTA (nominal 0ms,
+# percentual nao faz sentido aqui pela mesma razao da Emenda 5) --
+# 0,5ms da margem generosa sobre a propria precisao esperada dos dois
+# metodos nessa escala (a v8 real mediu 0,14-0,18ms, uma dispersao de
+# 0,04ms entre amostras do MESMO metodo -- 0,5ms cobre isso com
+# folga, sem ser tao largo que aceite dois metodos discordando de
+# verdade). L219/L325 usam diferenca PERCENTUAL -- 5% do NOMINAL da
+# rota, deliberadamente MAIS ESTRITO que a faixa de aceitacao do
+# criterio em si (±10%, Decisao 20/24): concordancia entre dois
+# metodos medindo a MESMA grandeza fisica deve ser mais apertada que
+# "dentro da faixa aceitavel", senao o cross-check nao adiciona rigor
+# nenhum sobre o criterio individual.
+RTT_CONSISTENCY_ABS_MS = {"L0": 0.5}
+RTT_CONSISTENCY_FRACTION = 0.05
+
+
+def _rtt_consistent(route: str, a: float, b: float) -> bool:
+    """Decisao 35/38: os dois canais de RTT (probe TCP e pcap
+    SYN/SYN-ACK) devem concordar dentro de uma margem EXPLICITA --
+    nao e so cada um passar sozinho, e os dois baterem um com o outro
+    (confirmacao cruzada de verdade, nao dois numeros soltos que por
+    acaso passam cada um na sua faixa)."""
+    if route in RTT_CONSISTENCY_ABS_MS:
+        return abs(a - b) <= RTT_CONSISTENCY_ABS_MS[route]
+    nominal = NOMINAL_RTT_MS[route]
+    return abs(a - b) <= RTT_CONSISTENCY_FRACTION * nominal
 
 
 def criterion_7_latency_sanity(aws_dir) -> dict:
@@ -505,7 +570,7 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
         probe, pcap = entry["rtt_ms_probe"], entry["rtt_ms_pcap"]
         probe_ok = _rtt_ok(route, probe)
         pcap_ok = _rtt_ok(route, pcap)
-        consistent = _rtt_consistent(probe, pcap)
+        consistent = _rtt_consistent(route, probe, pcap)
         ok = probe_ok and pcap_ok and consistent
         all_ok = all_ok and ok
         rows[route] = {
@@ -529,7 +594,7 @@ def main():
         criterion_1_message_sizes(log_text),
         criterion_2_initcwnd(args.aws_dir),
         criterion_3_distant_route(args.aws_dir),
-        criterion_4_counts(calls_json),
+        criterion_4_counts(calls_json, log_text),
         criterion_5_zero_errors(log_text),
         criterion_6_instrumentation(log_text),
         criterion_7_latency_sanity(args.aws_dir),
