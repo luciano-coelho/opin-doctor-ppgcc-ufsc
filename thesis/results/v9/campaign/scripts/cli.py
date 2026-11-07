@@ -61,6 +61,67 @@ def run_aws_json(args, profile=None, region=None, timeout=30):
     return json.loads(text)
 
 
+class _LocalShellShim:
+    """Decisao 49: pra PROVAR que o comando remoto real do orquestrador
+    funciona (sem SSH, sem AWS), roda o MESMO `remote_cmd` num shell
+    LOCAL, contra o stack local da v9 -- nunca usado por padrao, nunca
+    em producao. `host`/`user`/`key_path` sao ignorados de proposito
+    (o shim nunca disca nada de verdade); so existe pra validacao
+    manual/local, ligado explicitamente via `enable()`.
+
+    Reescreve so o que e diferente entre uma instancia EC2 real
+    (`~` = `/home/ec2-user`, `python3` no PATH) e esta maquina de
+    desenvolvimento: troca o prefixo `cd ~/thesis/scripts && ` pelo
+    `cwd` real passado, e injeta um `python3` real no PATH do
+    subprocesso (nesta maquina, `python3` resolve pro stub inutil da
+    Microsoft Store -- achado ja registrado nesta sessao)."""
+
+    def __init__(self, scripts_cwd, python_exe, shim_bin_dir):
+        self.scripts_cwd = str(scripts_cwd)
+        self.python_exe = str(python_exe)
+        self.shim_bin_dir = str(shim_bin_dir)
+
+    def run(self, remote_cmd, timeout):
+        import os
+        import shutil
+
+        prefix = "cd ~/thesis/scripts && "
+        cmd = remote_cmd[len(prefix):] if remote_cmd.startswith(prefix) else remote_cmd
+        Path(self.shim_bin_dir).mkdir(parents=True, exist_ok=True)
+        python3_shim = Path(self.shim_bin_dir) / "python3"
+        python3_shim.write_text(f'#!/bin/sh\nexec "{self.python_exe}" "$@"\n', encoding="utf-8")
+        python3_shim.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = self.shim_bin_dir + os.pathsep + env.get("PATH", "")
+        # MSYS_NO_PATHCONV: sem isso, o git-bash deste ambiente Windows
+        # mangla argumentos de `docker run -v <host>:<container>`
+        # (confirmado nesta sessao, repetidas vezes) -- o `$(pwd)/...`
+        # usado nos comandos remotos reais precisa chegar ao `docker`
+        # intacto.
+        env["MSYS_NO_PATHCONV"] = "1"
+        shell = shutil.which("bash") or shutil.which("sh") or "bash"
+        proc = subprocess.run([shell, "-c", cmd], capture_output=True, text=True,
+                               cwd=self.scripts_cwd, env=env, timeout=timeout)
+        return proc
+
+
+_local_shell_shim: "_LocalShellShim | None" = None
+
+
+def enable_local_shell_shim(scripts_cwd, python_exe, shim_bin_dir):
+    """SO pra validacao manual/local (Decisao 49) -- NUNCA chamado
+    pelo fluxo normal do piloto. Depois de habilitado, `run_ssh()`
+    para de discar SSH de verdade e passa a rodar `remote_cmd` num
+    shell local, contra `scripts_cwd`."""
+    global _local_shell_shim
+    _local_shell_shim = _LocalShellShim(scripts_cwd, python_exe, shim_bin_dir)
+
+
+def disable_local_shell_shim():
+    global _local_shell_shim
+    _local_shell_shim = None
+
+
 def run_ssh(host, remote_cmd, user="ec2-user", key_path=None, port=22, connect_timeout=20):
     """SSH pro `host` dado EXATAMENTE como passado -- esta funcao
     nunca escolhe IP publico ou privado por conta propria; Decisao
@@ -68,7 +129,13 @@ def run_ssh(host, remote_cmd, user="ec2-user", key_path=None, port=22, connect_t
     especificamente, sempre passe o IP PUBLICO do alvo, nunca o
     privado, mesmo pro cliente L0 co-localizado (so o trafego de
     GATEWAY/443 usa o IP privado do L0, Decisao 27 item 1 -- isso e
-    decidido pelo orquestrador, nunca aqui)."""
+    decidido pelo orquestrador, nunca aqui).
+
+    Se `enable_local_shell_shim()` tiver sido chamada (so validacao
+    manual, Decisao 49), `host`/`user`/`key_path` sao ignorados e o
+    comando roda localmente -- ver `_LocalShellShim`."""
+    if _local_shell_shim is not None:
+        return _local_shell_shim.run(remote_cmd, timeout=connect_timeout + 60)
     argv = ["ssh", "-p", str(port),
              "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
              "-o", f"ConnectTimeout={connect_timeout}", "-o", "BatchMode=yes"]

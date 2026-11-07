@@ -5694,3 +5694,217 @@ ficar implicita.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat. Nenhum push sem autorizacao explicita.
+
+## 49. Quatro pontos pedidos depois do achado (b) da Decisao 48 -- modo --mode ssh corrigido e provado de verdade (shim local, stack real, 5 execucoes classico + hibrido-v8 passando a sondagem, achado NOVO e real no caminho: pqc/hibrido-and travam num gap de biblioteca, nao do orquestrador); EIP registrado como nao-problema (SAN decorativo, verificacao por DNS); porta de fumaca corrigida pra pausar, nunca destruir sozinha; limpeza confirmada cobrindo o controle, risco residual listado
+
+**1. `--mode ssh` corrigido -- reaproveitando a invocacao REAL da v8,
+provado contra o stack local de verdade (shim), nao suposto.**
+
+Lido direto no `campaign_run.py` real (`SSHExecutor.run_one_execution`/
+`start_block_proxies`/`stop_block_proxies`, 720 execucoes reais da v8,
+zero erros) e no `campaign_client_runner.py` real (`thesis/scripts/`,
+generico, nunca v8-especifico -- so chama
+`latency_automation.run_once_timed_with_retry()`): o comando remoto
+certo e `campaign_client_runner.py --label <X>`, nunca `opin_flow.py`
+direto (que exige um diretorio `experimentN*` pre-existente e escreve
+o resultado num ARQUIVO -- achado da Decisao 48, agora corrigido).
+`SSHExecutor` (`orchestrator.py`) reescrito:
+- **Traducao de nome de perfil -- achado real, confirmado lendo
+  `opin_flow.py` (`V9_PROFILE_NAME`, linha ~263):** o GATEWAY e o
+  avaliador usam os nomes de exibicao da v9 ("classico"/"hibrido-v8");
+  o CLIENTE (`CRYPTO_PROFILE` que `_CRYPTO_PROFILE_FOR_ROUTING` le)
+  so reconhece os nomes antigos da v8 ("classic"/"hybrid") -- "pqc"
+  e "hibrido-and" sao os mesmos nos dois lados. Usar o nome errado do
+  lado do cliente faria `_USE_TLS_KEM_PROXY` dar falso e o fluxo
+  rodar sem proxy, contra o alvo errado -- nunca exercitado antes
+  desta rodada, achado AO VIVO, nao suposto.
+- **Ciclo de vida por bloco** (`start_block`/`stop_block`, novos):
+  reusa literalmente o comando real da v8 pra subir/derrubar
+  `tls_kem_proxy_run`/`pqc_signer_service_run` (`of.start_tls_kem_proxy(
+  ..., detached=True)`/`of.start_pqc_signer_service(...)`, depois
+  `docker stop`+`docker rm -f` dos dois nomes fixos).
+- **Sondagem de prontidao real** (`readiness_probe`): 1 execucao de
+  settling de verdade (mesmo padrao `SETTLING_RUNS` da v8), nunca
+  contada, com a linha "connection OK" extraida do log REAL do
+  gateway (nao inventada).
+- **Contagem de mTLS/CurveID/DualAuthenticated real**: regex sobre o
+  log de verdade do gateway (`gateway: PERFIL connection OK
+  remoteAddr=... sni="..." curve=... dualAuthenticated=...`), excluindo
+  o carve-out interno (`matls-api.local`) -- nunca mais um numero fixo
+  por perfil.
+
+**Provado com um SHIM de verdade, nao um stub -- `cli.enable_local_
+shell_shim()` (novo, `cli.py`): o MESMO `remote_cmd` que iria por SSH
+roda num shell LOCAL, contra o stack Docker local da v9 (backend
+`insurance-server-lambdas` real + gateway/proxy/signer reais da v9,
+nunca mockado).**
+
+**Resultado 1 -- bloco de 5 execucoes (classico/L0), 100% real:**
+```
+criterio4: as 5 execucoes, cada uma {"http":44,"jwts":28,"jwks":4,"ca":4,"mtls":6}, "ok":true
+criterio5 (zero erros): pass=true, errors_found=[]
+```
+**Os 5 numeros batem EXATOS com os numeros reais ja medidos (Decisao
+17/18), em todas as 5 execucoes, individualmente** -- prova que a
+invocacao corrigida produz dados identicos aos que uma campanha real
+produziria, nao so "não quebra".
+
+**Resultado 2 -- porta de fumaca (12 execucoes, 4 perfis x 3 rotas):
+PARCIAL, e achou um problema real -- exatamente pra isso que ela
+existe.** `classico` e `hibrido-v8` passaram a sondagem de prontidao
+de verdade (handshake mTLS real, AND-gate confirmado pro hibrido-v8,
+JWKS/CA/token reais). **`pqc` (e, pelo mesmo motivo, `hibrido-and`,
+que tambem usa CA ML-DSA-65) travou num erro NOVO, nunca visto antes
+desta rodada:**
+```
+ValueError: Unknown key type: 2.16.840.1.101.3.4.3.18
+  opin_flow.py:917, _verify_cert_signed_by_mldsa65():
+    pqc_jwk = {... "pub": _b64url_encode(issuer_cert.public_key().public_bytes_raw())}
+```
+OID `2.16.840.1.101.3.4.3.18` e ML-DSA-65 (FIPS 204) -- a biblioteca
+`cryptography` Python instalada nesta maquina (confirmada: versao
+46.0.3, recente) nao reconhece esse tipo de chave ao chamar
+`.public_key()` num certificado ML-DSA-65 de verdade (as CAs PQC/
+Hibrido-AND da v9, Decisao 9/10). **Isso NAO e um bug do orquestrador
+nem do gateway/proxy da v9** -- e uma limitacao da biblioteca Python
+do CLIENTE nesta maquina de desenvolvimento especificamente, achada
+so porque a porta de fumaca testou de verdade contra material
+criptografico real em vez de sintetico. **Registrado honestamente,
+nao escondido nem contornado:** a instancia real do piloto (Amazon
+Linux 2023, pip fresco) pode ter uma versao diferente -- isso so pode
+ser confirmado rodando la, que e exatamente o motivo de a porta de
+fumaca existir antes das 60 execucoes oficiais.
+
+**Dois achados operacionais extras, achados ao vivo montando este
+shim (documentados, nao escondidos):** (a) trocar SO o perfil do
+GATEWAY nunca bastava -- `auth` roda com seu PROPRIO `CRYPTO_PROFILE`
+(log real: "Crypto profile: classic (signingAlgs: PS256)"), que
+precisa ser trocado TAMBEM (`docker compose up -d --force-recreate
+auth mongo_seed mockapi`, mesmo comando real de
+`switch_crypto_profile.py`, exceto por excluir "mtls") -- sem isso,
+`/token` reprova com 401 pra qualquer perfil diferente do que `auth`
+ja estava rodando. (b) `mockapi` (Java/Micronaut, Hibernate) demora
+~30s de verdade pra subir depois de um `--force-recreate` -- sem
+esperar por ela especificamente, a primeira chamada real trava em 502
+Bad Gateway. Os dois SO se aplicam ao mecanismo de troca de perfil do
+BACKEND local desta validacao (`local_shim_bridge_join=True`) -- pra
+um piloto remoto de verdade, o servidor roda um perfil fixo por bloco
+inteiro, decidido ANTES do bloco comecar (Decisao 23), nao troca a
+cada chamada.
+
+**Testes novos (`test_orchestrator.py`), todos com stub, nenhuma
+chamada real:** traducao de nome de perfil (+mutante), `start_block`
+troca o gateway e sobe proxy/signer (+mutante via `stop_block`),
+extracao de curve/dualAuthenticated do log real (+mutante que nao
+filtra o carve-out interno) -- 48 testes no total agora, todos verdes.
+
+**2. EIP -- registrado como NAO-PROBLEMA, Terraform intocado.**
+
+A Decisao 48 (achado a) apontou que `aws_eip.this` (modulo, linha
+192) fixa `instance = aws_instance.this.id`, impedindo o `apply
+-target` isolado que a sequencia literal da Decisao 27 item 1 descreve.
+**Reexaminado: isso nao e um problema real, por tres fatos ja
+confirmados no proprio codigo, nunca supostos:**
+
+- **O IP no SAN e decorativo.** Decisao 30 (ja registrada):
+  `proxy/main.go`/`proxy/relay.go` fixam `ServerName: "mtls"` --
+  `cert.VerifyHostname("mtls")` compara contra `DNSNames`, NUNCA
+  contra `IPAddresses` (`crypto/x509`, Go std -- "mtls" nao e um IP
+  valido, entao o verificador nunca olha pra lista de IPs). **O valor
+  exato do IP no SAN nunca e checado por ningum, em lugar nenhum desta
+  arquitetura** -- so contribui pro TAMANHO do certificado (Decisao
+  28/29), nunca pra decisao de aceitar/recusar a conexao.
+- **O inventario e os clientes SEMPRE discam o EIP.** Confirmado no
+  codigo (`SSHExecutor._client_ip`, `orchestrator.py`): retorna
+  `self.inventory["clients"][route]["public_ip"]` sem excecao, pra
+  TODA rota -- nunca o privado, nem pro L0 co-localizado (Decisao
+  43/45). O unico lugar que usa o IP PRIVADO e `_server_gateway_ip`,
+  e so pro trafego de dados (443) do proxio DENTRO do cliente L0
+  co-localizado -- nunca pra SSH, nunca pro inventario em si.
+- **O gateway espera os certificados do rele antes de aceitar
+  trafego.** Confirmado no codigo (`gateway/main.go`, linhas ~259-266):
+  cada `case` de perfil chama `singleChainServerConfig`/monta a config
+  dual lendo os arquivos de certificado do disco NA HORA -- se
+  ausentes, `log.Fatalf` encerra o processo, nunca sobe parcialmente.
+  **Isso fecha a sequencia real:** `terraform apply` cria instancia+EIP
+  JUNTOS (uma apply so, confirmado -- `aws_eip.this` depende de
+  `aws_instance.this.id`); `terraform output` le o EIP, ja estavel;
+  o certificado e gerado com esse EIP no SAN (decorativo, mas gerado
+  do jeito certo mesmo assim); o REL
+  da PKI (Decisao 26 item 3) entrega certificado+binario pra instancia
+  JA EXISTENTE; SO ENTAO o operador inicia o gateway, que so sobe se
+  os certificados ja estiverem no lugar. **Nunca ha uma janela onde o
+  gateway aceita trafego com o certificado errado ou ausente** -- o
+  `log.Fatalf` de inicializacao impede isso por construcao.
+
+**Conclusao: o Terraform fica como esta.** A sequencia de 4 passos
+da Decisao 27 item 1 (EIP isolado, depois instancia) descrevia uma
+precaucao que a arquitetura real (verificacao por DNS, gateway que
+nunca sobe sem certificado) ja torna innecessaria -- mantida aqui como
+nota datada, NAO reescrevendo o texto original da Decisao 27.
+
+**3. Porta de fumaca -- corrigida pra PAUSAR, nunca destruir sozinha
+(Emenda 12 revisada).**
+
+A Decisao 48 registrou "qualquer uma das 12 reprovando... e motivo
+pra abortar o piloto inteiro e destruir" -- **texto ambiguo, corrigido
+aqui por nota datada (nao reescrito): o ORQUESTRADOR NUNCA destroi
+nada por conta propria, em NENHUM caminho de codigo** (confirmado:
+nem `orchestrator.py` nem `run_smoke_gate` chamam `cleanup.py` ou
+`terraform destroy` em lugar nenhum -- a frase da Decisao 48 descrevia
+a INTENCAO do roteiro operacional, nunca uma acao automatica de
+verdade). `orchestrator.py --smoke`, numa reprovacao, agora imprime
+explicitamente:
+```
+*** PORTA DE FUMACA REPROVADA -- PAUSADO. ***
+Nao executado: nenhum destroy automatico. Decisao do Luciano:
+  (a) corrigir e repetir --smoke dentro da janela de 4h, ou
+  (b) mandar destruir (cleanup.py).
+```
+e sai com codigo 1 -- nunca mais que isso. **O destroy ao FIM do
+piloto (apos as 60 execucoes oficiais) continua obrigatorio, sem
+excecao** (Decisao 43/45/48); **o autodesligamento por tempo (4h)
+continua sendo gatilho de teardown completo** (Decisao 45/49 item 4
+abaixo) -- nenhum dos dois muda aqui, so o comportamento NO MEIO da
+porta de fumaca.
+
+**4. Limpeza cobre a instancia de controle -- confirmado; risco
+residual listado.**
+
+Confirmado no codigo (`cleanup.py`, `verify_region`): a filtragem e
+por `tag:Project={PROJECT_TAG}` em CADA regiao, sem excecao de `Role`
+-- o controle (Role=campaign-control, sa-east-1) e contado junto do
+servidor/clientes nas 5 chamadas, e `terraform destroy` destroi TODOS
+os recursos do state, controle incluido, independente de qualquer
+autodesligamento (o controle nunca tem um, Decisao 26 item 3 -- ele
+precisa estar vivo pra orquestrar o piloto inteiro).
+
+**Risco residual, registrado explicitamente (nao mitigado nesta
+rodada -- so pedido pra listar, nao pra corrigir):** como o controle
+e DELIBERADAMENTE isento de autodesligamento, ele e o UNICO recurso
+do piloto sem rede de seguranca automatica nenhuma. Se a sessao for
+abandonada sem ninguem rodar `cleanup.py` (maquina do operador trava,
+rede cai, sessao esquecida), o controle (e o EIP dele) ficam rodando
+INDEFINIDAMENTE, cobrando, sem nenhum mecanismo que os pare por conta
+propria -- diferente do servidor/clientes, que o autodesligamento de
+4h sempre alcança mesmo nesse cenario. **Nao corrigido de proposito**
+(pedido era listar, nao mitigar) -- se o Luciano quiser, a mitigacao
+mais simples seria um autodesligamento MUITO mais longo so pro
+controle (ex.: 24h, bem acima de qualquer piloto real), como rede de
+seguranca de ultimo recurso, nunca como substituto do `cleanup.py`.
+
+**Itens ainda otimistas, reportados explicitamente:**
+- O modo `--mode ssh` agora E real e testado pra `classico`/
+  `hibrido-v8` -- mas `pqc`/`hibrido-and` NUNCA completaram uma
+  execucao de verdade nesta maquina (gap de biblioteca, item 1
+  acima). Só a instancia real do piloto confirma se isso se repete
+  la.
+- O mecanismo de troca de perfil do GATEWAY *remoto* (nao o atalho
+  local desta validacao) continua inexistente -- Decisao 48 ja
+  registrou isso, ainda vale.
+- `dedicated_capture` (as 12 capturas do criterio 1) continua fora do
+  escopo do `SSHExecutor` -- nunca testada nesta rodada nem na
+  anterior.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat. Nenhum push sem autorizacao explicita.

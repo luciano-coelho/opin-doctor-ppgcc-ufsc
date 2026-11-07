@@ -132,6 +132,26 @@ def test_mutante_cardinalidade_errada_e_pega_pelo_avaliador(tmp_path):
     assert r4["pass"] is False, "avaliador deveria reprovar cardinalidade 48 != 60"
 
 
+def _fake_run_factory(calls):
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        class FakeProc:
+            returncode = 0
+            stdout = '{"calls": [], "call_count": 0, "retries": []}'
+            stderr = ""
+        return FakeProc()
+    return fake_run
+
+
+def _client_runner_call(calls):
+    """Entre as varias chamadas ssh de UMA run_execution (cliente +
+    busca de log do gateway), acha a que de fato roda
+    campaign_client_runner.py -- so essa precisa discar o cliente."""
+    matches = [c for c in calls if any("campaign_client_runner.py" in a for a in c)]
+    assert matches, "nenhuma chamada rodou campaign_client_runner.py"
+    return matches[-1]
+
+
 def test_ssh_executor_disca_sempre_pelo_ip_publico(monkeypatch):
     """Decisao 43/45: SSH tem que sempre usar o IP PUBLICO do alvo,
     inclusive pro cliente L0 co-localizado -- nunca o privado."""
@@ -143,23 +163,16 @@ def test_ssh_executor_disca_sempre_pelo_ip_publico(monkeypatch):
         },
     }
     calls = []
-
-    def fake_run(argv, timeout=None):
-        calls.append(argv)
-        class FakeProc:
-            returncode = 0
-            stdout = '{"insurance": [], "person": [], "gateway_log_lines": [], "curveID": "x", "dualAuthenticated": false}'
-            stderr = ""
-        return FakeProc()
-
-    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
     executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+
     executor.run_execution("classico", "L0", 1)
-    ssh_target = [a for a in calls[-1] if "@" in a][0]
+    ssh_target = [a for a in _client_runner_call(calls) if "@" in a][0]
     assert ssh_target.endswith("@203.0.113.60"), f"deveria discar o IP PUBLICO do L0, discou: {ssh_target}"
 
+    calls.clear()
     executor.run_execution("classico", "L219", 1)
-    ssh_target = [a for a in calls[-1] if "@" in a][0]
+    ssh_target = [a for a in _client_runner_call(calls) if "@" in a][0]
     assert ssh_target.endswith("@203.0.113.70")
 
 
@@ -172,20 +185,11 @@ def test_mutante_ssh_por_ip_privado_e_detectado(monkeypatch):
         "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
     }
     calls = []
-
-    def fake_run(argv, timeout=None):
-        calls.append(argv)
-        class FakeProc:
-            returncode = 0
-            stdout = '{"insurance": [], "person": [], "gateway_log_lines": [], "curveID": "x", "dualAuthenticated": false}'
-            stderr = ""
-        return FakeProc()
-
-    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
     executor = orch.SSHExecutor(inventory, key_path="/fake/key")
     monkeypatch.setattr(orch.SSHExecutor, "_client_ip", lambda self, route: self.inventory["clients"][route]["private_ip"])  # mutante
     executor.run_execution("classico", "L0", 1)
-    ssh_target = [a for a in calls[-1] if "@" in a][0]
+    ssh_target = [a for a in _client_runner_call(calls) if "@" in a][0]
     assert ssh_target.endswith("@10.0.1.60")  # confirma que o mutante de fato mudou o comportamento
     with pytest.raises(AssertionError):
         assert ssh_target.endswith("@203.0.113.60")
@@ -257,3 +261,107 @@ def test_mutante_smoke_ok_sempre_true_e_pego(tmp_path, monkeypatch):
     assert mutant_manifest["smoke_ok"] is True  # mutante esconde a falha real
     with pytest.raises(AssertionError):
         assert mutant_manifest["smoke_ok"] is False
+
+
+def test_ssh_executor_traduz_nome_de_perfil_pro_cliente(monkeypatch):
+    """Decisao 49 (revisao independente): achado real -- o CLIENTE
+    (opin_flow.py) so reconhece os nomes antigos da v8
+    ("classic"/"hybrid"), nunca os de exibicao da v9
+    ("classico"/"hibrido-v8"). CRYPTO_PROFILE no comando remoto do
+    CLIENTE tem que vir traduzido; o perfil passado pro orquestrador
+    (e usado no manifesto/avaliador) continua sendo o de exibicao."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    executor.run_execution("hibrido-v8", "L0", 1)
+    remote_cmd = _client_runner_call(calls)[-1]
+    assert "CRYPTO_PROFILE=hybrid" in remote_cmd, f"esperava CRYPTO_PROFILE=hybrid, comando: {remote_cmd}"
+    assert "CRYPTO_PROFILE=hibrido-v8" not in remote_cmd
+
+
+def test_mutante_sem_traducao_de_perfil_e_pego(monkeypatch):
+    """Mutacao: usar o nome de exibicao direto (sem traducao) no
+    ambiente do cliente -- o teste acima tem que reprovar."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    monkeypatch.setattr(orch.SSHExecutor, "_client_env",
+                         lambda self, profile, gw: {"V9_HARNESS": "1", "CRYPTO_PROFILE": profile, "REMOTE_GATEWAY_HOST": gw})
+    executor.run_execution("hibrido-v8", "L0", 1)
+    remote_cmd = _client_runner_call(calls)[-1]
+    assert "CRYPTO_PROFILE=hibrido-v8" in remote_cmd  # mutante: nome errado foi usado
+    with pytest.raises(AssertionError):
+        assert "CRYPTO_PROFILE=hybrid" in remote_cmd
+
+
+def test_start_block_troca_perfil_do_gateway_e_sobe_proxy_signer(monkeypatch):
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert any("docker run -d --name v9-mtls" in c and "CRYPTO_PROFILE=classico" in c for c in flat), flat
+    assert any("start_tls_kem_proxy" in c and "start_pqc_signer_service" in c for c in flat), flat
+
+
+def test_stop_block_para_os_dois_containers_fixos(monkeypatch):
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    executor.stop_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert any("docker stop tls_kem_proxy_run pqc_signer_service_run" in c for c in flat), flat
+    assert any("docker rm -f tls_kem_proxy_run pqc_signer_service_run" in c for c in flat), flat
+
+
+def test_connection_ok_extrai_curve_e_dual_authenticated_reais():
+    log = (
+        '2026/11/07 20:58:35 gateway: classico connection OK remoteAddr=172.21.0.7:1 '
+        'sni="mtls" curve=CurveP384 dualAuthenticated=false clientCert="classico_client" '
+        'handshakeBytesIn=1 handshakeBytesOut=1\n'
+        '2026/11/07 20:58:35 gateway: classico connection OK remoteAddr=172.21.0.7:2 '
+        'sni="matls-api.local" curve=CurveP256 dualAuthenticated=false clientCert="op" '
+        'handshakeBytesIn=1 handshakeBytesOut=1\n'
+    )
+    executor = orch.SSHExecutor({"server": {}, "clients": {}})
+    raw_lines, parsed = executor._connection_ok_lines(log)
+    assert len(raw_lines) == 2
+    client_facing = [p for p in parsed if p["sni"] != orch._INTERNAL_CALLER_SNI]
+    assert len(client_facing) == 1
+    assert client_facing[0]["curve"] == "CurveP384"
+    assert client_facing[0]["dual"] == "false"
+
+
+def test_mutante_sem_excluir_internal_caller_conta_errado():
+    """Mutacao: nao filtrar pelo SNI interno -- contaria 2 'client
+    facing' em vez de 1, o teste acima tem que reprovar."""
+    log = (
+        '2026/11/07 20:58:35 gateway: classico connection OK remoteAddr=172.21.0.7:1 '
+        'sni="mtls" curve=CurveP384 dualAuthenticated=false clientCert="classico_client" '
+        'handshakeBytesIn=1 handshakeBytesOut=1\n'
+        '2026/11/07 20:58:35 gateway: classico connection OK remoteAddr=172.21.0.7:2 '
+        'sni="matls-api.local" curve=CurveP256 dualAuthenticated=false clientCert="op" '
+        'handshakeBytesIn=1 handshakeBytesOut=1\n'
+    )
+    executor = orch.SSHExecutor({"server": {}, "clients": {}})
+    _, parsed = executor._connection_ok_lines(log)
+    client_facing_mutante = parsed  # mutante: sem filtro de SNI
+    assert len(client_facing_mutante) == 2
+    with pytest.raises(AssertionError):
+        assert len(client_facing_mutante) == 1
