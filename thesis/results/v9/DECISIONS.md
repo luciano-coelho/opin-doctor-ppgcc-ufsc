@@ -2888,3 +2888,189 @@ mesmo que um criterio seja revisto depois.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 22. T8 (parte local), checklist completa de equivalencia com a v8; roteiro de PKI corrigido (uma emissao, distribuicao por scp); roteiro de destruicao corrigido (Resource Groups Tagging API + autodesligamento); avaliador dos 7 criterios escrito e testado (3 bugs reais achados e corrigidos); SHA-256 do binario Go; limitacao do Hibrido-v8 registrada
+
+**1. T8, checklist completa de equivalencia com a v8.** Pesquisei
+`v8/DECISIONS.md` diretamente para cada item (nao confiei na memoria --
+o erro das "6 rotas" da rodada anterior foi exatamente isso).
+
+| Item | v8 (real) | v9 (Fase 1 / planejado) | Status |
+|---|---|---|---|
+| Tipos de instancia | `t4g.micro` (controle, arm64); `m7i-flex.large` (servidor e clientes, x86_64, 2 vCPU/8GiB) | mesmos tipos, planejado | **NAO VERIFICAVEL SEM AWS** (nunca deployado na v9 ainda) |
+| Regioes e rotas | 8 rotas reais: `sa-east-1` L0/L123/L219/L325, `us-east-1` L0/L14, `ap-northeast-1` L0/L30 -- latencia REAL por distancia geografica, nao simulada | as MESMAS 8 rotas (Decisao 21) | **IGUAL**, por decisao |
+| Como L0/L219/L325 sao produzidos | L0 = cliente colocado na MESMA regiao/AZ do servidor (latencia de rede real minima, nao zero); os demais = cliente numa instancia realmente deployada em OUTRA regiao/distancia, latencia real do caminho IP, nunca `tc`/`netem` | identico, mesma logica (reaproveita a infra da v8) | **IGUAL**, por decisao -- **NAO VERIFICAVEL SEM AWS** que o RTT realmente saia nos valores nominais (isso e o criterio 7 do piloto) |
+| AMI | Amazon Linux 2023 (AL2023), AMI especifica resolvida via `data "aws_ami"` (`al2023-ami-*-kernel-*`, `most_recent=true`) -- IDs reais ja ficaram obsoletos (AMI muda com o tempo) | mesma fonte (`data "aws_ami"`, mesmo filtro) | **IGUAL por construcao** (mesmo mecanismo de resolucao); o ID exato sera outro, por design (`most_recent`) -- **NAO VERIFICAVEL SEM AWS** qual ID exato sai no piloto |
+| SO e kernel | AL2023; versao exata do kernel (`uname -r`) NUNCA foi fixada em texto no `v8/DECISIONS.md` -- so capturada como metadado, nunca comparada a um valor esperado | mesma pratica (capturar, nao fixar) | **NAO VERIFICAVEL SEM AWS** -- nem a v8 tem um valor fixo pra comparar, entao "igual" aqui significa "mesma AMI/familia", nao "mesmo numero de kernel byte a byte" |
+| Go | `golang:1.27-rc` (release candidate) | `go1.27.3`, compilado do fonte, commit verificado (`2aae1000...`) | **DIVERGENCIA DELIBERADA**, ja registrada (Decisao 3): 1.27.3 e estavel, tem correcao de seguranca em `crypto/x509` que o 1.27rc2 nao tem, e e a versao que o patch do AND ja foi validado contra |
+| Node.js | `node:24-alpine` (Node 24), fixado no Dockerfile real do `mock_as` | o MESMO -- T6b reusa `mock_as` sem alteracao nenhuma | **IGUAL**, confirmado (nenhum Dockerfile do backend foi tocado) |
+| MongoDB | `mongo:latest@sha256:dc28ed...` | o MESMO -- T6b reusa o `mongodb` real sem alteracao | **IGUAL**, confirmado |
+| initcwnd | nunca medido na v8 (a propria Decisao 14 da v9 assume 10, sem medir) | mesma suposicao, agora um criterio formal do piloto (#2) | **NAO VERIFICAVEL SEM AWS** -- vira item da lista de verificacao do piloto |
+| Algoritmo de controle de congestionamento (cubic/bbr) | nunca verificado em lugar nenhum, nem na v8 | idem | **NAO VERIFICAVEL SEM AWS** -- **NOVO item da lista de verificacao do piloto**, nao existia antes |
+| Slow start apos ociosidade (RFC 2861) | nunca verificado | idem | **NAO VERIFICAVEL SEM AWS** -- **NOVO item da lista de verificacao do piloto**, relevante porque o piloto tem gaps entre execucoes (settling, troca de perfil) |
+| MTU | REAL: NIC com jumbo frames (9001) nas instancias, mas o PATH MTU real (internet/VPC entre regioes) e 1500 -- isso ja causou um bug real na v8 (certificados grandes de PQC/Hibrido fragmentados em multiplos segmentos TCP, pcap precisou reassemblar) | mesma infra, MESMO RISCO esperado | **NAO VERIFICAVEL SEM AWS**, mas **RISCO JA CONHECIDO, registrado para o piloto**: a captura do criterio 1 (tamanhos por mensagem) precisa reassemblar corretamente certificados grandes (PQC 5.632B, Hibrido-AND 6.582B) fragmentados por um path MTU de 1500B -- nao assumir 1 segmento = 1 mensagem |
+| Ordem/randomizacao das execucoes | perfil RANDOMIZADO por janela (3 janelas/dia); ROTA fixa, round-robin, nunca aleatoria, dentro de cada janela | **A DECIDIR**: piloto e pequeno (60 execucoes, provavelmente 1 janela) -- proposta: perfil aleatorizado por execucao (`random.shuffle`), rota em ordem fixa (L0, L219, L325), replicando a v8 na parte que importa (rota nunca aleatoria) | **DIVERGENCIA POR ESCALA, nao por design** -- a v8 randomiza ENTRE janelas (multiplas por dia); o piloto provavelmente so tem uma |
+| Aquecimento | 5 execucoes descartadas por troca de perfil (`SETTLING_WARMUP_RUNS = 5`, `switch_crypto_profile.py`) | o MESMO numero, reaproveitando a mesma constante | **IGUAL**, confirmado na fonte, nao so lembrado |
+| Sincronizacao de relogio | REAL, verificada: Amazon Time Sync (NTP do kernel), `chronyc tracking`, offsets medidos <1µs, Stratum 2 em toda instancia | mesma infra (Amazon Time Sync vem de fabrica em qualquer instancia AWS) -- **AINDA NAO CONFIRMADO PRA V9 ESPECIFICAMENTE** | **NAO VERIFICAVEL SEM AWS** -- **NOVO item da lista de verificacao do piloto** (confirmar `chronyc tracking` em toda instancia, esperado bater com o padrao da v8 por usar a mesma infra) |
+| Numero de execucoes | 30/perfil/rota (720 total, 3 perfis x 8 rotas) | 30/perfil/rota tambem (960 total, 4 perfis x 8 rotas); piloto usa N=5 | **IGUAL o N por celula**; total maior so pelo 4º perfil (Decisao 21, reconciliado) |
+| Contagens do fluxo | 44 HTTP / 6 mTLS client-facing / 28 JWTs / 4 jwks / 4 CA, por execucao | os MESMOS 5 numeros, confirmados nos 4 perfis (Decisao 17/18) | **IGUAL**, verificado empiricamente, nao suposto |
+| Tamanhos de corpo e cabecalhos HTTP | definidos pelo `mock_as`/`mockapi` reais | os MESMOS -- T6b nunca altera o backend, so a camada TLS | **IGUAL por construcao, NAO comparado byte a byte nesta rodada** -- registrado honestamente como lacuna: eu NAO rodei uma comparacao byte a byte dos corpos/cabecalhos HTTP entre uma execucao v8 antiga e uma v9 nova; a expectativa teorica (mesmo backend, mesmo codigo) e forte, mas nao e a mesma coisa que ter medido |
+| Algoritmos de JWT por perfil | Classic=PS256 (RSA), PQC=ML-DSA-65, Hybrid=PS256 no lado cliente-para-AS (ver docstring de `sign_jwt()`) | os MESMOS pros 3 perfis equivalentes (backend real, inalterado); Hibrido-AND usa PS256 (roda com o backend em "classic" de proposito, Decisao 17) | **IGUAL** nos 3 perfis originais; **DIVERGENCIA DELIBERADA, perfil novo** pro Hibrido-AND (nao existe correspondente na v8) |
+| Tamanhos de chave | Classic/Hybrid RSA-4096; PQC/Hybrid ML-DSA-65 | Classico/Hibrido-v8 RSA-2048 (gap #1, Decisao 9/10); PQC/Hibrido-AND ML-DSA-65 (mesmo nivel) | **DIVERGENCIA DELIBERADA**, ja registrada |
+| Metodo de medicao | `ConnState -> StateActive`, contaminado por ticket + inicio da 1a requisicao (Decisao 78/79 da v8, aceito por comparabilidade com a v7) | fronteira exata do `Handshake()`, tickets desligados por padrao (Decisao 13/14) | **DIVERGENCIA DELIBERADA**, ja registrada |
+| Autodesligamento de seguranca | REAL, ja implementado: timer systemd (`safety_timer.sh.tftpl`), checa um arquivo de prazo a cada 5min, autodesliga (nao destroi) apos 48h por padrao, renovavel | reaproveitar o MESMO modulo Terraform, N menor (ver ponto 3 abaixo) | **IGUAL o mecanismo, DIVERGENCIA deliberada no N** (48h e demais pra um piloto de ~1-1,5h) |
+
+**Itens que ficam na lista de verificacao do piloto** (nao avaliaveis
+localmente, precisam da AWS real): tipos de instancia exatos, AMI
+exata, RTT real por rota, initcwnd, algoritmo de congestionamento,
+slow start apos ociosidade, sincronizacao de relogio, e o risco de
+fragmentacao por MTU=1500 na captura do criterio 1.
+
+**2. Roteiro de PKI, corrigido -- UMA emissao, nao uma por instancia.**
+
+A versao anterior estava errada: "cada instancia gera sua propria
+PKI" produziria CAs DIFERENTES em cada lado, quebrando a verificacao
+mutua (exatamente o tipo de erro que a Decisao 17 desta mesma pasta ja
+tinha corrigido no harness local -- nao devia ter voltado no roteiro
+do piloto). Corrigido:
+
+1. Servidor sobe primeiro, Terraform resolve seu endereco real
+   (IP/DNS). So DEPOIS disso, **uma unica chamada** ao gerador
+   (`certs/main.go`, o mesmo binario ja existente, sem mudanca) com
+   `-server-dns=<hostname real>` `-server-ips=<IP real>`
+   `-client-dns=opin-client-one`, rodando na maquina do OPERADOR
+   (dentro desta sessao, scratch local) ou numa instancia de controle
+   efemera -- nunca nas instancias servidor/cliente diretamente,
+   porque nenhuma das duas sabe o endereco da OUTRA na hora do seu
+   proprio boot. Essa chamada produz, de uma vez: 1 CA + 1 servidor +
+   1 cliente POR perfil (4 perfis), todos com a MESMA identidade de
+   servidor/cliente, assinados por CAs COMPARTILHADAS entre os dois
+   lados -- exatamente o que faltava corrigir.
+2. **Distribuicao, por `scp` sobre o MESMO canal SSH do operador** (ja
+   em uso desde a v8 -- `MOCKOPIN_OPERATOR_SSH_PRIVATE_KEY_FILE`, IP de
+   controle nunca impresso): servidor recebe os 4 certificados+chaves
+   de SERVIDOR + as CAs publicas (para validar os clientes); cliente
+   recebe os 4 certificados+chaves de CLIENTE + as MESMAS CAs publicas
+   (para validar o servidor). `scp`, nao SSM Parameter Store -- mais
+   simples, nao poe chave privada em MAIS um sistema (SSM guardaria a
+   chave como SecureString, mas e um sistema extra com sua propria
+   superficie; `scp` sobre um canal que ja existe nao adiciona nada
+   novo a proteger).
+3. **Limpeza:** a copia LOCAL do operador (scratch desta sessao) e
+   apagada imediatamente apos a confirmacao de entrega bem-sucedida
+   nas duas instancias (checksum ou simplesmente reler o arquivo
+   remoto). A copia em CADA instancia e apagada no fim do uso daquela
+   instancia -- pro cliente, ao final da sua ultima execucao antes de
+   trocar de rota/regiao (ou ser destruido); pro servidor, ao final do
+   piloto inteiro. Nenhuma chave e logada em texto claro em nenhum
+   momento (nem no transporte `scp`, que e cifrado por natureza, nem
+   em nenhum log de shell).
+
+**3. Roteiro de destruicao, corrigido -- verificacao por TAG, nao so
+por tipo de recurso, mais autodesligamento com N definido.**
+
+- **Verificacao por tag, API unica:** `aws resourcegroupstaggingapi
+  get-resources --tag-filters Key=Project,Values=mockopin-pqc-v9`
+  antes E depois de cada destroy -- cobre TUDO que aceita tag numa
+  chamada so (instancias, volumes EBS, interfaces de rede, grupos de
+  seguranca, pares de chave, IPs elasticos), ao contrario da v8 real,
+  que verificou tipo por tipo (`describe-instances`/
+  `describe-security-groups`/`describe-key-pairs`/`describe-volumes`)
+  e nunca checou interfaces de rede especificamente (confirmado
+  pesquisando `v8/DECISIONS.md` -- nenhum hit pra
+  `describe-network-interfaces` nem pra essa API de tags). Esperado
+  **vazio** depois de cada destroy; qualquer resultado nao-vazio
+  bloqueia o encerramento da sessao.
+- **Autodesligamento, reaproveitando o MODULO REAL da v8** (nao
+  reinventado -- `modules/campaign_instance/templates/
+  safety_timer.sh.tftpl`, ja testado, ja em produção la): mesmo
+  mecanismo (timer systemd, checa um arquivo de prazo a cada 5min),
+  **N = 4 horas** pro piloto (nao as 48h padrao da v8, que e pensada
+  pra uma CAMPANHA de dias) -- margem generosa sobre a estimativa de
+  1-1,5h do piloto (Decisao 20), mas curta o bastante pra nao deixar
+  nada ligado a noite toda se a sessao cair. Autodesliga (nao
+  destroi) -- a verificacao por tag acima e que confirma destruicao
+  real, o timer e so a rede de seguranca contra esquecimento.
+
+**4. Avaliador dos 7 criterios -- escrito e testado contra dados
+locais reais, 3 bugs achados e corrigidos no caminho.**
+
+`thesis/results/v9/integration/evaluate_criteria.py` (novo) -- le os
+artefatos que `run_t6.sh` e uma rodada T6b ja produzem (nenhum formato
+novo inventado) e calcula os criterios 1, 4, 5 e 6 (os que o Luciano
+confirmou serem avaliaveis localmente); 2, 3 e 7 ficam com a logica
+escrita mas retornam `None` (sem dados) ate existirem artefatos reais
+do piloto.
+
+**Tres bugs reais achados testando contra uma rodada real do
+`run_t6.sh` + uma rodada T6b real (nao dados inventados):**
+1. O recorte de blocos por perfil parava no primeiro `==` que
+   encontrasse (inclusive os de dentro do proprio bloco, como "==
+   gateway" ou "== tshark: registros..."), nunca chegando a secao de
+   tamanho por mensagem. Corrigido: recorte vai até o PROXIMO `==
+   Perfil:`, nao até qualquer `==`.
+2. A checagem de erro (`FATAL:`) capturava o PROPRIO texto do
+   `Dockerfile` (`echo "FATAL: ..." >&2; exit 1; }`), que o Docker
+   reimprime como parte normal do log de build mesmo numa build
+   bem-sucedida -- reportando falso-positivo numa rodada que na
+   verdade passou. Corrigido: so conta como erro real uma linha com
+   `FATAL:` que NAO tenha sintaxe de shell (`>&2`/`exit 1`) do lado.
+3. O tamanho da mensagem `Certificate` estava sendo somado contando a
+   do SERVIDOR e a do CLIENTE juntas (as duas tem o mesmo tipo TLS,
+   11) -- quase dobrando o numero. Corrigido: so conta a `Certificate`
+   do frame que TAMBEM contem `ServerHello` (tipo 2), que e
+   inequivocamente o flight do servidor.
+
+**Resultado, rodando contra uma execucao real do harness local (4
+perfis, `run_t6.sh` + uma rodada T6b real do perfil Classico):**
+
+```
+criterio 1 (tamanhos por mensagem): PASS
+criterio 2 (initcwnd real): N/A (sem dados -- precisa do piloto)
+criterio 3 (zero erros na rota mais distante): N/A (sem dados -- precisa do piloto)
+criterio 4 (contagens do fluxo): PASS
+criterio 5 (zero erros): PASS
+criterio 6 (instrumentacao completa + asserções): PASS
+criterio 7 (sanidade de latencia por rota): N/A (sem dados -- precisa do piloto)
+```
+
+**5. Binario Go -- SHA-256 calculado, reprodutibilidade confirmada.**
+
+```
+gateway: fa4c9c32412abab4533bb40e8a45524c149be59e7d10888b00a1895bc0dc4871
+proxy:   a4f901a94253aa6bafaf0579518f9487405e3358218db5a9e635d13d55c1d6e9
+```
+
+Confirmado reproduzivel: rebuild completo com `--no-cache` (fonte
+identico, toolchain identica) produziu o MESMO hash do `gateway`,
+byte a byte, nao so "parecido". **Procedimento proposto pro piloto:**
+buildar UMA VEZ (nesta sessao ou numa instancia de controle efemera),
+calcular o SHA-256, `scp` o binario (nao o codigo-fonte, nao
+reconstruir em cada instancia) pro servidor e pro cliente junto com um
+arquivo `.sha256`, e cada instancia roda `sha256sum -c` no boot antes
+de usar o binario -- falha o deploy daquela instancia se o hash nao
+bater, em vez de rodar um binario potencialmente diferente sem saber.
+
+**6. Hibrido-v8, limitacao registrada -- mantida como esta, por
+fidelidade a v8.** Confirmado explicitamente (Decisao 21, achado
+extra, agora formalizado como limitacao documentada do perfil): **nenhum
+cliente desta matriz -- incluindo o proprio Hibrido-v8 agindo como
+cliente -- verifica a assinatura alternativa (`AltSignatureValue`) do
+certificado do SERVIDOR; so o servidor verifica a do cliente.** Isso
+e fiel ao comportamento da v8 real, nao uma lacuna introduzida pela
+v9: o `tls_kem_proxy` real usa `InsecureSkipVerify: true` (nao faz
+NENHUMA verificacao de cadeia do servidor, nem a classica nem a
+alternativa); a v9 ja e mais estrita que isso (verifica a cadeia RSA
+classica do servidor sempre, Decisao 12), so nao estende essa
+verificacao ao gate X.509 alternativo. **Implicacao de medicao,
+registrada:** o custo de CPU do CLIENTE no perfil Hibrido-v8 (bench,
+Decisao 14) SUBESTIMA o custo real de um cliente que de fato
+verificasse a assinatura alternativa do servidor -- essa operacao
+(1 verificacao ML-DSA-65 extra por conexao) nunca e exercitada do lado
+cliente, nem na v8 nem na v9. **Decisao: mantido como esta**, por
+fidelidade a v8 -- registrado aqui pra quem for ler os numeros de CPU
+do Hibrido-v8 saber que o lado cliente especificamente tem esse viés
+pra baixo, nao e um numero "completo".
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
