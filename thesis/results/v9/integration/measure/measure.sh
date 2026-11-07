@@ -49,6 +49,11 @@ tshark -r "$PCAP" -o "tls.keylog_file: $KEYLOG" -Y tls \
   -T fields -e frame.number -e ip.src -e tcp.len -e tls.record.content_type -e tls.handshake.type \
   2>/dev/null || echo "(tshark nao produziu linhas decifradas)"
 
+echo "== tshark: tamanho POR MENSAGEM de handshake (tipo + comprimento declarado, 4B de header por mensagem) =="
+tshark -r "$PCAP" -o "tls.keylog_file: $KEYLOG" -Y tls.handshake \
+  -T fields -e frame.number -e tls.handshake.type -e tls.handshake.length \
+  2>/dev/null || echo "(tshark nao produziu linhas de handshake)"
+
 echo "== tshark: bytes brutos por direcao, pcap inteiro (independente de decifragem, cross-check) =="
 tshark -r "$PCAP" -T fields -e ip.src -e ip.dst -e tcp.len 2>/dev/null \
   | awk 'NF==3 {sum[$1" -> "$2]+=$3} END {for (k in sum) printf "%-32s %8d B\n", k, sum[k]}'

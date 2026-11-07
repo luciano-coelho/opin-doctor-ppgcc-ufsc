@@ -1466,7 +1466,7 @@ pedido, antes de qualquer piloto na AWS.
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
 
-## 14. T6, instrumentacao: keylog+pcap decifrado cruzado com contagem dentro do processo na fronteira exata do Handshake(), microbenchmarks de CPU, tickets quantificados (achado estrutural: Hibrido-AND nunca emite ticket), analise de initcwnd/RTT para rotas distantes
+## 14. T6, instrumentacao: keylog+pcap decifrado cruzado com contagem dentro do processo na fronteira exata do Handshake(), microbenchmarks de CPU, tickets quantificados (achado estrutural: Hibrido-AND em MODO ESTRITO nunca emite ticket -- modo nao estrito nao testado, emitiria normalmente), analise de initcwnd/RTT para rotas distantes
 
 **Arquitetura, para evitar bind mount (nao funciona neste ambiente --
 Decisao 11):** `thesis/results/v9/integration/measure/` builda UM
@@ -1555,20 +1555,46 @@ lado ou outro da fronteira dependendo de QUEM mede e QUANDO -- exatamente
 por isso o pedido original (medir as duas janelas, nos dois lados) nao
 era redundante.
 
-**Achado estrutural, nao previsto, com implicacao direta para a
-tese:** o Hibrido-AND **nunca emite ticket, em nenhum modo** -- nao
-por causa deste ajuste (`SessionTicketsDisabled`), e sim por uma
-decisao de design ja tomada na T3 (`dual.go`'s
-`shouldSendSessionTickets()`: `if hs.c.config.Dual != nil &&
-hs.c.config.Dual.Require { return false }`), porque retomar uma sessao
-por PSK pularia TODA a troca de Certificate/CertificateVerify que
-prova posse das duas chaves -- um ticket emitido herdaria
-`DualAuthenticated=true` numa conexao futura sem jamais reverificar
-nada, o que anularia a garantia central do mecanismo. **Isso significa
-que o Hibrido-AND e estruturalmente IMUNE ao artefato de inflacao que
-contaminou os numeros historicos da v7/v8 (Decisao 78/79 da v8) -- os
-outros 3 perfis da v9 (e os 3 da v7/v8) continuam vulneraveis a ele se
-um operador religar tickets.** Tambem explica por que o tamanho do
+**Achado estrutural, CORRIGIDO apos revisao do Luciano -- a formulacao
+original ("nunca emite ticket, em nenhum modo") estava imprecisa e
+contradizia o que a propria T3 ja tinha documentado (modo nao estrito
+emite ticket normalmente). Reconciliado aqui, lendo o codigo de novo
+em vez de confiar na memoria:** a supressao de ticket em `dual.go`'s
+`shouldSendSessionTickets()` e gated SO por `Dual.Require`:
+
+```go
+if hs.c.config.Dual != nil && hs.c.config.Dual.Require {
+    return false
+}
+```
+
+Ou seja: com **`Dual.Require = true` (modo estrito)**, nenhum ticket e
+emitido, nunca -- confirmado, esta parte da formulacao original estava
+certa. Com **`Dual.Require = false` (modo nao estrito)**, esse `if`
+nem entra, e o ticket e emitido normalmente, sujeito ao mesmo gate
+RFC 8446 dos outros 3 perfis (`ClientSessionCache`/`pskModeDHE`) --
+exatamente como a T3 ja tinha registrado ("non-strict connections keep
+issuing tickets as before", comentario de `dual.go`/Decisao 6). **"Em
+nenhum modo" estava errado** -- deveria ser "no modo estrito". O
+harness da T5/T6 so testa `Dual.Require = true` para o Hibrido-AND
+(e a especificacao do mecanismo exige isso -- Decisao 5, modo estrito
+e o unico que faz sentido pra v9 provar a garantia de posse dupla), por
+isso os dois testes (normal e diagnostico) deram o mesmo resultado:
+nao e que o modo nao estrito tambem seja imune, e que ele nunca foi
+exercitado aqui.
+
+**Correcao da conclusao:** o Hibrido-AND e imune ao artefato de
+inflacao **especificamente no modo estrito** (`Dual.Require=true`),
+que e o unico modo que a v9 usa e mede -- a razao e a mesma: retomar
+uma sessao por PSK pularia TODA a troca de Certificate/
+CertificateVerify que prova posse das duas chaves, o que anularia a
+garantia central do mecanismo, entao o patch desliga ticket
+incondicionalmente nesse modo. Em modo nao estrito (nao usado pela
+v9), o Hibrido-AND se comportaria como os outros 3 perfis: vulneravel
+ao mesmo artefato se um operador religasse tickets. Os outros 3
+perfis da v9 (e os 3 da v7/v8) continuam vulneraveis ao artefato
+independente de modo, porque nao tem noção de `Dual` nenhuma.
+Tambem explica por que o tamanho do
 ticket escala com o perfil (1.691B Classico -> 7.039B Hibrido-v8 ->
 11.129B PQC): o ticket do Go embute a cadeia de certificados do PEER
 verificada, para que uma sessao retomada ainda tenha
@@ -1684,6 +1710,113 @@ keylog, tickets parametrizados); `measure/{Dockerfile,measure.sh,
 instrumentacao). Nenhuma chave, nenhum certificado, nenhum pcap ou
 keylog commitado -- tudo gerado e descartado a cada execucao
 (`t6_out/` e `measure/certs/` gitignored).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 15. Esclarecimentos pedidos apos a T6: tabela por mensagem TLS (4 perfis), tempos por etapa, implicacao do initcwnd para o residuo da v8
+
+**Ponto 1 (tickets)** reconciliado na propria Decisao 14 acima (texto
+corrigido, nao uma nova secao): a imunidade e so no modo estrito
+(`Dual.Require=true`), o unico que a v9 usa.
+
+**Ponto 2: tamanho por mensagem TLS, por perfil, por sentido,
+medido na mesma rodada (normal, tickets desligados).**
+`measure.sh` ganhou uma segunda consulta ao tshark
+(`-Y tls.handshake -e tls.handshake.type -e tls.handshake.length`),
+decifrada pelo mesmo keylog -- tamanho de cada mensagem = 4 bytes de
+cabecalho de handshake + o comprimento declarado (`tls.handshake.length`).
+Confirmado contra o ClientHello isolado (unico numero que nao tem
+ambiguidade de agrupamento): Classico 332+4=336, frame real 341 (336 +
+5B de cabecalho de registro TLS -- unico registro, sem CCS, sem tag
+AEAD, porque o ClientHello nunca e cifrado). Os demais ja chegam
+cifrados; o numero abaixo e o tamanho da MENSAGEM dentro do registro,
+nao o registro cifrado inteiro.
+
+| Mensagem | Classico | PQC | Hibrido-v8 | Hibrido-AND |
+|---|---|---|---|---|
+| ClientHello | 336 | 1.779 | 1.876 | 1.858 |
+| ServerHello | 187 | 1.658 | 1.755 | 1.755 |
+| EncryptedExtensions | 10 | 10 | 10 | 10 |
+| CertificateRequest | 109 | 104 | 111 | 98 |
+| Certificate (servidor) | 913 | 5.632 | 6.255 | 6.582 |
+| CertificateVerify (servidor) | 264 | 3.317 | 264 | 3.575 |
+| Finished (servidor) | 36 | 36 | 36 | 36 |
+| Certificate (cliente) | 800 | 5.519 | 6.144 | 6.356 |
+| CertificateVerify (cliente) | 264 | 3.317 | 264 | 3.575 |
+| Finished (cliente) | 36 | 36 | 36 | 36 |
+| **Soma, sentido cliente->servidor** (CH+Cert+CV+Fin do cliente) | 1.436 | 10.651 | 8.320 | 11.825 |
+| **Soma, sentido servidor->cliente** (SH+EE+CR+Cert+CV+Fin do servidor) | 1.519 | 10.757 | 8.431 | 12.056 |
+| **Total medido na fronteira do Handshake(), ja sem a 1a requisicao HTTP -- cliente->servidor** | **1.513** | **10.728** | **8.397** | **11.902** |
+| **Total medido na fronteira do Handshake(), ja sem a 1a requisicao HTTP -- servidor->cliente** | **1.640** | **10.878** | **8.552** | **12.177** |
+| Overhead de camada de registro (medido - soma das mensagens) | 77 / 121 | 77 / 121 | 77 / 121 | 77 / 121 |
+
+O overhead de camada de registro (cabecalhos de registro TLS 1.3 de 5B
++ byte de tipo interno + tag AEAD de 16B por registro cifrado, mais o
+registro de ChangeCipherSpec de compatibilidade) sai **exatamente
+77B no sentido cliente->servidor e 121B no sentido servidor->cliente,
+nos 4 perfis, sem excecao** -- faz sentido: o NUMERO de mensagens por
+flight e identico nos 4 perfis (sempre 1 ClientHello; sempre
+SH+EE+CR+Cert+CV+Fin do servidor; sempre Cert+CV+Fin do cliente), so o
+CONTEUDO varia, e o overhead de registro depende de quantos registros
+existem, nao do tamanho de cada um. Essa consistencia e ela mesma uma
+confirmacao adicional (quarta, alem das tres ja relatadas na Decisao
+14) de que a medicao esta correta nos 4 perfis igualmente, nao so por
+coincidencia num deles.
+
+**Ponto 3: tempos do gateway por etapa, por perfil (mesma rodada,
+modo normal, sem o viés da pausa diagnostica).**
+
+| Perfil | `handshakeDurationUs` | `requestDurationUs` |
+|---|---|---|
+| Classico | 4.752 | 30 |
+| PQC | 2.813 | 63 |
+| Hibrido-v8 | 5.402 | 43 |
+| Hibrido-AND | 8.734 | 115 |
+
+N=1 por perfil -- prova de que a instrumentacao mede a etapa certa
+(handshake isolado da requisicao, nenhuma contaminacao pela pausa de
+diagnostico de ticket, ver Decisao 14), nao ainda uma campanha
+estatistica (isso e N maior, trabalho de piloto/T7). Hibrido-AND mais
+lento que os outros 3 tanto no handshake (mais bytes para gerar/
+verificar: duas cadeias completas) quanto na etapa de servir a
+resposta (mais trabalho de `ConnState` considerando dois conjuntos de
+certificados) -- direcao esperada, magnitude exata so com mais
+amostras.
+
+**Ponto 4: o que o initcwnd=10 implica para o residuo nao atribuido da
+v8 (tempo de handshake acima do esperado que a tese ainda nao tinha
+explicado), e qual componente medido pela T6 pode explica-lo.**
+
+Com `initcwnd=10` cobrindo o flight inteiro de qualquer um dos 4
+perfis em UMA janela (Decisao 14), a hipotese de que o residuo vinha
+de uma RTT extra por estouro de janela de congestionamento fica
+**descartada para os tiers de latencia ja usados nesta tese
+(14-320ms)** -- nenhum flight, nem o do Hibrido-AND (12.177B), chega
+perto do limite de 14.600B. Isso desloca a explicacao pra dois
+componentes que a T6 agora mede pela primeira vez, separadamente, e
+que a v7/v8 nunca isolou:
+
+1. **Custo de geracao/transmissao do ticket de sessao.** A v7/v8
+   sempre rodou com tickets LIGADOS (Decisao 13) -- cada handshake
+   pagou o custo de CIFRAR e enviar um ticket que embute a cadeia de
+   certificado do peer (Decisao 14), **1.691 a 11.129B extras, dependendo
+   do perfil**, nunca contabilizado como linha separada em nenhum
+   relatorio anterior. Esse custo (cifragem AEAD de um blob de alguns
+   KB, mais a escrita de rede correspondente) e um candidato direto
+   para parte do residuo -- especialmente nos perfis PQC/Hibrido, onde
+   o ticket e maior porque o certificado do cliente e maior.
+2. **Custo de CPU das primitivas em si (assinar, verificar, KEX),
+   agora medido isoladamente pelo `bench`** (Decisao 14): nunca tinha
+   sido isolado como fracao do tempo de handshake total na v7/v8 --
+   estava implicitamente dentro do tempo total, nunca decomposto.
+
+**Nao decidido aqui, registrado para a T7/piloto:** confirmar se a
+soma (custo de ticket, quando ligado + custo de CPU medido) realmente
+fecha o residuo historico da v8 exigiria reprocessar os dados brutos
+da v8 (fora do escopo desta rodada, que e Fase 1 local da v9) -- o que
+esta rodada entrega e as DUAS pecas que faltavam pra essa conta, nao a
+conta fechada.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
