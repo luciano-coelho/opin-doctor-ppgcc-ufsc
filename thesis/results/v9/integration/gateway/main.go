@@ -328,7 +328,13 @@ func dualServerConfig(certDir string) (*tls.Config, error) {
 		Dual: &tls.DualConfig{
 			Certificates: []tls.Certificate{mldsaCert},
 			ClientCAs:    mldsaClientCAs,
-			Require:      true,
+			// STRICT (new, T7 interoperability matrix, Decisao 19):
+			// default "true" preserves every existing behavior
+			// (Hibrido-AND has always meant strict in this project);
+			// STRICT=false exists only so the matrix can show what a
+			// non-strict Hibrido-AND server actually does, never used
+			// outside that one-off test.
+			Require: envOr("STRICT", "true") == "true",
 		},
 	}, nil
 }

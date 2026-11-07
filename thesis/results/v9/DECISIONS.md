@@ -2313,3 +2313,266 @@ reverter e mover, aviso e eu desfaco.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 19. Correcao da sondagem (confirmada sem brecha), carve-out interno documentado, testes negativos nos 4 perfis (16 cenarios, todos corretos), matriz de interoperabilidade 5x5 executada -- achado critico: o mecanismo AND so protege em modo estrito, confirmado na camada TLS pura
+
+**1. A sondagem de prontidao SEMPRE apresenta certificado de cliente
+-- nao ha brecha.** `_wait_for_tls_kem_proxy_ready()` faz
+`requests.get(url, timeout=1, verify=False)` -- uma chamada de modulo
+SEM `cert=` nenhum, sem Session, logo SEM certificado na perna LOCAL
+(Python -> listener local do meu proxy, que nunca exige um). Mas o meu
+proxy relay (`relay.go`) constroi `buildClientTLSConfig` UMA VEZ, no
+inicio do processo, e usa ESSA MESMA config, com o certificado real do
+perfil, pra TODA conexao local aceita -- incluindo a da sondagem.
+Confirmado direto no log: a conexao da sondagem (`:39996` na rodada da
+Decisao 18) aparece com `clientCert="classico_client"`, um certificado
+REAL, verificado pelo `RequireAndVerifyClientCert` do gateway como
+qualquer outra. Nao ha brecha porque a arquitetura em dois saltos
+(perna local sem certificado, perna real sempre com o certificado
+fixo do processo) e exatamente o que o `tls_kem_proxy` real tambem
+sempre fez -- nenhuma mudanca da v9 nisso.
+
+**Confirmado que a sondagem NAO entra em nenhum contador medido.**
+Bytes: a sondagem nunca chega em `loggingMiddleware` (404 do handler
+padrao do `ServeMux`, que esse middleware nao envolve), entao nunca
+gera uma linha de log de ACESSO -- so a linha de CONEXAO (que eu
+adicionei soh para este diagnostico; o modo `measure`/T6 normal nao
+loga conexao por padrao, soh usa o contador pra handshake_bytes, que e
+por si so irrelevante aqui porque essa conexao nunca fez parte de
+nenhuma medicao oficial). Conexoes: confirmado pela estrutura do
+`switch_crypto_profile.py` real -- o proxy e iniciado UMA VEZ por
+TROCA DE PERFIL (nao por execucao), e a sondagem roda nesse momento,
+ANTES de qualquer uma das N execucoes medidas daquele perfil comecar;
+as execucoes medidas reusam o MESMO proxy ja sondado. **A v8 real
+tambem excluia a sondagem do "6" -- nao por um filtro explicito, mas
+estruturalmente: a sondagem nunca acontece DENTRO da janela de uma
+execucao medida, acontece uma vez só, na troca de perfil, antes da
+primeira.** O MEU script de teste ad-hoc (que chama
+`start_tls_kem_proxy()` a cada chamada, simulando "cada execucao e uma
+troca de perfil") e que reintroduziu a sondagem dentro da janela que
+eu estava medindo -- um artefato do MEU metodo de teste, nao do
+mecanismo real, ja fechado na Decisao 18.
+
+**2. Carve-out interno (`matls-api.local`), documentado:**
+
+| Aspecto | Valor |
+|---|---|
+| Autenticacao usada | TLS classico puro (CurvePreferences `[P521, P384, P256]`, negociado `CurveP256` nos testes) -- nunca o grupo hibrido/PQC do perfil principal |
+| Certificado do servidor (meu gateway) | SEMPRE o real `mock-service-os/certs/mtls.crt`/`.key` -- fixo, nao depende do perfil v9 |
+| Certificado do cliente (auth) esperado | `op.crt` (classic/hibrido-and) / `op_pqc.crt` (pqc) / `op_hybrid.crt` (hybrid) -- o que o `setup_ssm.sh` publicar para aquele `CRYPTO_PROFILE` do BACKEND real, nao do perfil TLS da v9 |
+| `ClientCAs` | sempre `ca.crt` real; **mais** `root_ca_pqc.crt` quando o perfil e `pqc` (Decisao 17, bug #2) -- unica variacao entre perfis |
+| `VerifyPeerCertificate` | sempre `nil` (Decisao 17, bug #3) -- nunca o gate AND/hibrido do perfil principal |
+| Igual nos 4 perfis? | O CODIGO que constroi o carve-out e identico nos 4 (`attachInternalCallerCarveOut`, uma unica funcao, sempre chamada); o CONTEUDO do pool de CA varia so sob `pqc`, espelhando o que o backend real publica sob esse `CRYPTO_PROFILE` -- nao uma divergencia entre os 4 perfis da v9, e sim o carve-out seguindo fielmente o que o AS real apresenta |
+| Entra em algum contador medido? | Sim, como categoria PROPRIA ("conexoes internas", SNI `matls-api.local`) -- nunca somada as conexoes client-facing. 7 por execucao combinada, nos 4 perfis, batendo exato com a Decisao 77 da v8 ("7 internal AS-to-RS requests") |
+
+**3. Testes negativos, 4 perfis, 16 cenarios -- TODOS corretos (nenhuma
+aceitacao indevida):**
+
+Construidos em `thesis/results/v9/integration/negtest/` (novo),
+rodados contra os binarios REAIS do gateway/proxy da v9 (nao so a
+suite `dual_test.go`). Achado metodologico no caminho, corrigido antes
+de confiar em qualquer resultado: um `Handshake()` que retorna sucesso
+do lado do CLIENTE nao basta -- TLS 1.3 deixa o cliente terminar antes
+do servidor confirmar o certificado dele, a MESMA assimetria que
+`dual_test.go`'s `dualHandshakePipe` ja tinha documentado e contornado
+nesta mesma sessao (T3). Sem uma leitura extra apos o `Handshake()`,
+os 3 primeiros perfis reportavam `UNEXPECTED_SUCCESS` em
+`no-client-cert`/`untrusted-client-ca` -- ERRADO, o servidor rejeita
+os dois, so que o alerta chega depois. Corrigido (leitura extra,
+2s de prazo); resultado final, limpo:
+
+| Cenario | Classico | PQC | Hibrido-v8 | Hibrido-AND |
+|---|---|---|---|---|
+| (i) sem certificado de cliente | REJEITADO (`certificate required`) | REJEITADO (`certificate required`) | REJEITADO (`certificate required`) | REJEITADO (`handshake failure`) |
+| (ii) certificado de cliente de CA nao confiavel | REJEITADO (`certificate required`\*) | REJEITADO (`certificate required`\*) | REJEITADO (`certificate required`\*) | REJEITADO (`certificate required`\*) |
+| (iii-a) certificado de servidor de CA nao confiavel | REJEITADO (`signed by unknown authority`) | REJEITADO (`signed by unknown authority`) | REJEITADO (`signed by unknown authority`) | REJEITADO (`signed by unknown authority`) |
+| (iii-b) certificado de servidor com SAN errado | REJEITADO (`certificate is valid for [...], not not-a-real-san.invalid`) | REJEITADO (idem) | REJEITADO (idem) | REJEITADO (idem) |
+| (iv) Hibrido-AND, cadeia unica RSA, modo ESTRITO | -- | -- | -- | REJEITADO (`handshake failure`) |
+
+\* O erro reportado para um certificado de CA nao confiavel chega
+como o mesmo alerta `certificate_required` do cenario (i) nesta
+implementacao -- a verificacao de cadeia do Go roda ANTES do
+`Handshake()` do cliente retornar, entao o alerta observado e o da
+mesma classe; a rejeicao em si e real e confirmada (o cliente nunca
+autentica), so o texto do alerta nao distingue "sem certificado" de
+"certificado de CA errada" nestes casos -- comportamento do proprio
+`crypto/tls`, nao um bug desta implementacao.
+
+**4. Matriz de interoperabilidade, 5x5, executada agora, localmente:**
+
+| Cliente \\ Servidor | Classico | PQC | Hibrido-v8 | Hibrido-AND estrito | Hibrido-AND nao-estrito |
+|---|---|---|---|---|---|
+| **Classico** | SUCESSO (CurveP384) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) |
+| **PQC** | FALHA (handshake failure) | SUCESSO (MLKEM1024) | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) |
+| **Hibrido-v8** | FALHA (handshake failure) | FALHA (handshake failure) | SUCESSO (SecP384r1MLKEM1024) | FALHA (handshake failure) | FALHA (`CA nao confiavel`) |
+| **Hibrido-AND estrito** | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (handshake failure) | SUCESSO, `DualAuthenticated=true` | SUCESSO, `DualAuthenticated=true` |
+| **Hibrido-AND nao-estrito** | FALHA (handshake failure) | FALHA (handshake failure) | FALHA (`CA nao confiavel`) | SUCESSO, `DualAuthenticated=true` | SUCESSO, `DualAuthenticated=true` |
+| **RSA-unico (atacante), sem Dual** | -- | -- | -- | FALHA (handshake failure) | **ver achado critico abaixo** |
+
+**Achado critico, linha extra (nao fazia parte da matriz 5x5 original,
+adicionada porque e exatamente o que "protecao AND efetiva" precisa
+responder): um atacante com SO a chave RSA (sem nenhum material PQ,
+`Dual=nil` no cliente) foi ACEITO, na camada TLS pura, pelo servidor
+Hibrido-AND NAO-ESTRITO.** Confirmado direto, sem interpretacao: o
+proprio `Handshake()` do cliente retornou sucesso --
+`curve=SecP384r1MLKEM1024 dualAuthenticated=false` -- uma autenticacao
+TLS completa, valida, SEM jamais provar posse da chave ML-DSA-65.
+**Isso e, literalmente, a mesma vulnerabilidade que o Hibrido real da
+v8 tem e que todo este projeto existe para fechar** -- só que agora
+reproduzida e confirmada live dentro do proprio mecanismo Dual, no
+modo que o deixa desligado. A conexao so NAO chegou a ser servida
+porque o MEU gateway de teste (modo `measure`) tem uma segunda
+checagem, na camada de APLICACAO (nao do protocolo TLS), que fecha
+qualquer conexao `hibrido-and` com `DualAuthenticated=false`
+independente do `Require` configurado -- uma defesa extra que eu
+escrevi para o harness de teste, NAO uma propriedade do mecanismo Dual
+em si. Um deployment real que configurasse `Dual.Require=false` sem
+essa checagem adicional estaria genuinamente vulneravel. **Confirma,
+de forma definitiva e agora medida (nao so argumentada), por que o
+modo estrito e obrigatorio -- nao e uma preferencia de design, e a
+unica configuracao em que a garantia de posse dupla existe de verdade
+no protocolo.**
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 20. T7 revisado: itens (e)/(f)/(g) com numeros concretos, pre-registraveis -- fator de tamanho do Hibrido-AND corrigido (1,4x o Hibrido-v8, +11% sobre o PQC, nao "quase 2x" como eu tinha escrito). RASCUNHO, nao aprovado, nenhuma tag criada.
+
+**(e) Tolerancia do piloto reproduzir os tamanhos por mensagem --
+calculada, nao suposta.** Regenerei os certificados com SANs do
+tamanho real que uma instancia AWS teria (DNS publico/privado EC2,
+`sa-east-1`, ex.: `ec2-18-230-105-42.sa-east-1.compute.amazonaws.com`/
+`ip-10-0-1-134.sa-east-1.compute.internal`, mais 5 nomes internos do
+mesmo padrao do default atual, so mais longos) e medi a diferenca REAL
+contra o baseline loopback da Decisao 14/15, nos 4 perfis:
+
+| Perfil | Certificate (loopback) | Certificate (SAN realista AWS) | Delta |
+|---|---|---|---|
+| Classico | 1.640 B | 1.876 B | **+236 B** |
+| PQC | 10.878 B | 11.114 B | **+236 B** |
+| Hibrido-v8 | 8.552 B | 8.786 B | **+234 B** |
+| Hibrido-AND | 12.177 B | 12.649 B | **+472 B** (2x o delta de 1 cadeia -- as duas cadeias levam o mesmo SAN) |
+
+Confirmado que TODAS as outras mensagens (ClientHello, ServerHello,
+EncryptedExtensions, CertificateRequest, CertificateVerify, Finished)
+ficaram EXATAMENTE do mesmo tamanho nas duas rodadas -- o SAN so afeta
+a mensagem `Certificate`, nunca as outras, porque e a unica que carrega
+a folha. **Tolerancia proposta: ±50 B na mensagem `Certificate`
+especificamente (cobre uma variacao de uns 20-25 caracteres entre o
+nome real que o Terraform atribuir e a minha estimativa -- generoso
+mesmo pra nomes privados mais longos que o exemplo usado), 0 B de
+tolerancia em qualquer outra mensagem** (ClientHello/ServerHello/
+EncryptedExtensions/CertificateRequest/CertificateVerify/Finished sao
+deterministicas pelo algoritmo e pela chave, nunca pela rede ou pelo
+SAN -- uma diferenca ali seria um sinal real de problema, nao
+variacao esperada).
+
+**(f) Formula do residuo, com os componentes e a origem de cada um:**
+
+```
+residuo_rota = (Δ_latencia_observada - Σ Δ_componentes_medidos) / Δ_latencia_observada
+```
+
+Criterio: `|residuo_rota| <= 10%` em cada rota, ou o restante
+explicado e declarado (nao silenciosamente ignorado).
+
+| Componente (Δ entre perfis) | Origem/decisao que mede |
+|---|---|
+| Δ bytes de handshake x tempo de transmissao (nao RTT extra -- Decisao 14 ja descarta RTT extra sob initcwnd=10) | Decisao 14/15 (tabela por mensagem, byte real por perfil) |
+| Δ CPU de assinatura/verificacao (RSA-2048, ML-DSA-65) | `bench` (Decisao 14) |
+| Δ CPU de KEX (ECDH P-384, ML-KEM-1024) | `bench` (Decisao 14) |
+| Δ custo de ticket de sessao, SE ligado (nao se aplica ao default da v9, tickets desligados -- Decisao 13) | Decisao 14 (modo diagnostico) |
+| Δ tempo de processamento HTTP por chamada (durationMs do log de acesso) | T6b (Decisao 17/18), `access log` do gateway |
+| Δ tempo de rede fixo do fluxo completo (RTT x numero de round trips REAIS do fluxo, nao so do handshake -- 44 chamadas, nao 1) | A MEDIR no piloto -- nao existe ainda localmente, fluxo completo roda em 0ms so |
+
+**Nao fechado aqui:** os 2 primeiros grupos (handshake+CPU) tem numero
+local; o ultimo (rede do fluxo completo, 44 chamadas reais) so existe
+com latencia real, exige o piloto. A formula e o criterio ficam
+pre-registrados; a conta em si nao pode ser fechada em Fase 1 local.
+
+**(g) Plano de piloto, com N justificado e o fator de tamanho
+corrigido:**
+
+**Correcao do fator de tamanho** (meu rascunho anterior dizia "quase
+2x o Hibrido-v8" -- ERRADO). Usando o total real medido por handshake
+(servidor+cliente, Decisao 14, baseline loopback): Hibrido-v8 =
+8.552+8.397 = **16.949 B**; PQC = 10.878+10.728 = **21.606 B**;
+Hibrido-AND = 12.177+11.902 = **24.079 B**. Hibrido-AND / Hibrido-v8 =
+24.079/16.949 = **1,42x** (≈1,4x, nao ≈2x); Hibrido-AND / PQC =
+24.079/21.606 = **1,1145** (**+11,45%**, ≈+11%). Os tres numeros
+batem exatos com os que o Luciano ja tinha calculado de forma
+independente.
+
+**Rotas:** as mesmas 6 latencias ja usadas na v7/v8 (0/14/30/140/225/
+320ms), pareadas com as mesmas regioes AWS que a v8 ja descobriu (nao
+redescoberto aqui -- fora do escopo desta Fase 1 local).
+
+**N por perfil por rota: 30, mesmo numero ja usado e fechado na v8
+("Criterion 6/N=30", `v8/DECISIONS.md`, Decisao 89) -- ancorado num
+precedente real desta mesma tese, nao escolhido do zero.** Justificativa
+especifica para o Hibrido-AND: a diferenca de tamanho (+11% sobre o
+PQC, o perfil mais proximo em bytes) e pequena o bastante para que o
+N precise ser suficiente pra distinguir um efeito desse porte do ruido
+normal de rede -- N=30 e o mesmo numero que a v8 ja confirmou suficiente
+pra detectar as diferencas entre Classico/PQC/Hibrido-v8 (que tem
+diferencas percentuais de magnitude comparavel ou menor nalguns pares,
+ja fechadas com esse N). **Nao fiz um calculo de poder estatistico do
+zero aqui** (exigiria a variancia real da v7/v8 por rota, uma analise
+separada) -- esta e uma ancora em precedente, nao um numero derivado
+de uma formula de poder; se o Luciano quiser o calculo de poder formal
+antes de aceitar N=30 para o Hibrido-AND especificamente, e um passo
+adicional, nao feito aqui.
+
+**Desenho para estressar as rotas distantes:** repetir os 4 perfis em
+TODAS as 6 rotas (nao so a mais lenta) com o mesmo N=30, pra que o
+residuo (item f) possa ser calculado rota a rota, nao so no agregado --
+um residuo que cresce com a rota seria o sinal de que falta um
+componente dependente de RTT na lista do item (f).
+
+---
+
+**T7 completo, revisado, para aprovacao do Luciano -- nenhuma tag
+criada:**
+
+**(a)** Fluxo completo, contagens da v8, zero erros -- **FECHADO**
+(Decisao 17/18: 44/6/28/4/4, 0 erros, 4 perfis).
+
+**(b)** As cinco lacunas de validade da v8:
+1. RSA-4096->2048 -- **FECHADO**
+2. Cliente nao verificava servidor -- **FECHADO** (Decisao 19, testes
+   negativos (iii-a)/(iii-b), 4 perfis)
+3. Servidor com certificado de cliente opcional -- **FECHADO**
+   (Decisao 19, testes negativos (i)/(ii), 4 perfis, e (iv) pro
+   Hibrido-AND especificamente)
+4. Contador contaminado -- **FECHADO**
+5. Tamanho por mensagem e residuo -- **PARCIAL**: tamanho por mensagem
+   fechado (Decisao 15, agora com tolerancia calculada no item (e)
+   acima); formula e criterio do residuo pre-registrados (item (f)
+   acima), conta em si pendente do piloto
+
+**(c)** CurveID/DualAuthenticated -- **FECHADO**.
+
+**(d)** Matriz de interoperabilidade -- **FECHADO** (Decisao 19, 5x5 +
+a linha critica do atacante RSA-unico contra o modo nao-estrito).
+
+**(e)** Piloto reproduz tamanhos locais + initcwnd real -- tolerancia
+agora definida (±50B na mensagem Certificate, 0B nas demais) --
+**PENDENTE de execucao**, depende de AWS.
+
+**(f)** 90% do residuo atribuido -- formula e criterio pre-registrados
+acima -- **PENDENTE de execucao**, depende de latencia real/fluxo
+completo com RTT real.
+
+**(g)** Pilotos desenhados pra rotas distantes -- N=30/perfil/rota,
+fator de tamanho corrigido (1,4x/+11%), desenho cobrindo as 6 rotas
+completas -- **PENDENTE de execucao**, depende de AWS.
+
+**(h)** Checklist de equivalencia -- **mantido**, mais as entradas das
+Decisoes 17-19 (opin_flow.py editado aditivamente; nenhum carve-out de
+certificado opcional na v9; carve-out interno documentado).
+
+**Nenhuma tag `v9-prereg` criada. Aguardando aprovacao explicita do
+Luciano.**
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
