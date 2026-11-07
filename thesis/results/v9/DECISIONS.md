@@ -4395,3 +4395,126 @@ nao uma coincidencia).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 32. EMENDA 5 AO CRITERIO 7 (T7, pos-tag `v9-prereg`) -- nominal de L0 e 0ms, +-10% e uma faixa vazia/indefinida; piso absoluto (<1ms) adotado pra L0; L219/L325 mantem +-10% do nominal; avaliador atualizado
+
+**Rotulo formal de emenda:**
+- **O que mudou:** o criterio 7 (Decisao 20/21/24: "RTT medido de
+  cada rota dentro de ±10% do nominal") passa a ter DOIS metodos
+  diferentes dependendo da rota: L0 usa um PISO ABSOLUTO (RTT <
+  1ms), L219/L325 continuam com ±10% do nominal (219ms/325ms).
+- **Motivo:** L0 tem nominal 0ms -- ±10% de 0 e 0, uma faixa de
+  largura zero que NENHUM RTT real (nem os ~0,14-0,18ms que a v8
+  real mediu nesse mesmo cenario co-localizado) jamais satisfaz. O
+  criterio, como escrito originalmente, reprovaria L0 SEMPRE, por
+  construcao matematica, nunca por uma falha real da rota.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1-4).
+- **A tag `v9-prereg` permanece intacta** -- o texto original da
+  Decisao 20/21/24 (±10% do nominal, sem excecao pra L0) nao foi
+  reescrito, so superado por esta entrada nova.
+
+**Piso adotado:** RTT de L0 < **1ms** -- dá margem confortavel sobre
+o que a v8 real ja mediu nesse cenario exato (0,14-0,18ms, Decisao
+52/53 da v8) sem abrir a porta pra uma rota que na verdade atravessou
+rede real (qualquer coisa >=1ms já seria suspeita de nao estar
+genuinamente co-localizada). L219/L325 mantem ±10% do NOMINAL da
+rota (219ms/325ms) -- NAO do valor que a v8 mediu (219,9ms/330,3ms),
+que e so contexto confirmando que o nominal e realista, nunca o alvo
+da propria tolerancia.
+
+`evaluate_criteria.py`: `NOMINAL_RTT_MS = {"L0": 0, "L219": 219,
+"L325": 325}`, `L0_RTT_ABSOLUTE_FLOOR_MS = 1.0`,
+`RTT_TOLERANCE_FRACTION = 0.10`, funcao `_rtt_ok(route, measured_ms)`
+aplicando o metodo certo por rota. Testado com os proprios valores
+reais da v8 (0,16/219,9/330,3) -- PASS nas 3 rotas (ver Decisao 33
+pros testes de limiar exato).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 33. AVALIADOR FAIL-CLOSED -- nenhum criterio retorna `pass: None` nunca mais; criterios 2, 3 e 7 IMPLEMENTADOS de verdade (nao mais stubs); testes de mutacao reais pros 3 (limiares, acima e abaixo) mais um teste global (diretorio vazio/dado ausente -> os 7 criterios falham)
+
+**1. Principio fail-closed, aplicado nos 7 criterios.** Antes desta
+decisao, "sem dados" resultava em `pass: None` (criterios 2, 3, 7
+sempre; criterio 4 quando `--calls-json` faltava) -- um estado que o
+relatorio final poderia erroneamente tratar como "nao relevante" em
+vez de "nao autorizado". Corrigido: **ausencia de dado, arquivo nao
+encontrado, ou formato invalido agora sempre resultam em `pass:
+False`**, em TODOS os 7 criterios. `main()`'s mapa de status
+(`{"True":"PASS","False":"FAIL"}`) teve o ramo `"None"` removido de
+proposito -- se algum criterio um dia voltar a devolver `None`, o
+script quebra alto e visivel (`KeyError`), em vez de imprimir "N/A"
+silenciosamente.
+
+**2. Criterios 2, 3 e 7 -- implementados de verdade, nao mais
+stubs.**
+
+- **Criterio 2 (initcwnd >= 10):** `ip route show` so mostra
+  initcwnd quando ha um override explicito de rota -- o valor
+  efetivo do kernel nao aparece ali por padrao. Metodo adotado: a
+  CAPTURA dedicada do criterio 1 (Decisao 24) ja serve de base --
+  contar quantos SEGMENTOS TCP o SERVIDOR manda (origem porta 443)
+  ANTES do primeiro ACK do cliente que reconhece esses bytes; a
+  configuracao do sistema (`sysctl`) e lida como REFERENCIA cruzada,
+  nunca como fonte primaria. **Limite registrado explicitamente:**
+  em loopback local o MSS e grande o bastante pra nunca segmentar de
+  verdade -- esse criterio estruturalmente NAO pode ser exercitado
+  contra dados locais reais, so contra a captura real do piloto numa
+  rota com RTT > 0. A funcao `criterion_2_initcwnd(aws_dir)` le
+  `<aws_dir>/criterio2_initcwnd.json` (`{"server_segments_before_
+  client_ack": N, "sysctl_reference": {...}}`), produzido por essa
+  analise de pcap fora desta funcao (mesmo padrao de confianca que o
+  criterio 4 ja tem com `--calls-json` -- o avaliador confere um
+  resultado, nao reimplementa a extracao de pacotes).
+- **Criterio 3 (0 erros, 20/20 em L325):** `criterion_3_
+  distant_route(aws_dir)` le `<aws_dir>/criterio3_l325_execucoes.json`
+  (`{"execucoes": [{"profile", "route", "ok"}, ...]}`) e confere: 20
+  entradas EXATAS, todas `route=="L325"`, 4 perfis distintos x 5 cada
+  (`L325_PROFILES`/`L325_N_PER_PROFILE`), 0 com `ok=false`.
+- **Criterio 7 (RTT por rota):** `criterion_7_latency_sanity(aws_dir)`
+  le `<aws_dir>/criterio7_rtt_por_rota.json` (`{"L0":{"rtt_ms":...},
+  "L219":{...}, "L325":{...}}`, produzido por `ping -c 20 <endereco>`,
+  media, metodo definido explicitamente) e aplica `_rtt_ok()` (Decisao
+  32) por rota.
+
+**3. Testes de mutacao reais, rodados contra o modulo (nao
+reimplementados), limiar por limiar:**
+
+| Criterio | Mutacao | Esperado | Resultado |
+|---|---|---|---|
+| 2 | segmentos = 10 (limiar exato) | PASS | **PASS** |
+| 2 | segmentos = 9 (1 abaixo) | FAIL | **FAIL** |
+| 2 | segmentos = 11 (1 acima) | PASS | **PASS** |
+| 3 | 20/20, 0 erros (baseline) | PASS | **PASS** |
+| 3 | 1 erro entre as 20 | FAIL | **FAIL** |
+| 3 | 19 execucoes (faltando 1) | FAIL | **FAIL** |
+| 3 | rota errada (L219 em vez de L325) | FAIL | **FAIL** |
+| 7 | L0 = 0,999ms (abaixo do piso) | PASS | **PASS** |
+| 7 | L0 = 1,0ms (no piso, exclusivo) | FAIL | **FAIL** |
+| 7 | L219 = 197,1ms (limite inferior exato, nominal-10%) | PASS | **PASS** |
+| 7 | L219 = 197,0ms (1 passo abaixo) | FAIL | **FAIL** |
+| 7 | L219 = 240,9ms (limite superior exato) | PASS | **PASS** |
+| 7 | L219 = 241,0ms (1 passo acima) | FAIL | **FAIL** |
+| 7 | L325 = 292,5ms (limite inferior exato) | PASS | **PASS** |
+| 7 | L325 = 292,4ms (1 passo abaixo) | FAIL | **FAIL** |
+| 7 | L325 = 357,5ms (limite superior exato) | PASS | **PASS** |
+| 7 | L325 = 357,6ms (1 passo acima) | FAIL | **FAIL** |
+| 7 | baseline com os valores REAIS da v8 (0,16/219,9/330,3) | PASS | **PASS** |
+
+**16 mutacoes, todas com o resultado esperado** -- confirma os
+limiares EXATOS (inclusivos nas duas pontas) e os valores reais da
+v8 passando confortavelmente dentro das faixas adotadas.
+
+**4. Teste global: diretorio vazio / dado ausente -> os 7 criterios
+devem falhar.** Rodado com `log_text=""`, `calls_json=None`,
+`aws_dir=<diretorio vazio recem-criado>` contra os 7 criterios
+diretamente: **os 7 deram `pass: False`**, confirmado um a um (nao
+assumido). Reconfirmado tambem via `main()` (pipeline real, log
+vazio, sem `--calls-json`, sem `--aws-dir`): criterios 2/3/4/7 FAIL
+como esperado; 1/5/6 continuam PASS quando ha dados reais validos no
+log (confirmado numa segunda rodada, log real de uma execucao
+`measure.sh` fresca) -- o fail-closed nao quebrou os criterios que ja
+funcionavam.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

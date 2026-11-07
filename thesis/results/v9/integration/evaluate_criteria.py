@@ -6,8 +6,15 @@ v9, Fase 1, T7/piloto: avalia os 7 criterios de ir/nao-ir
 
 Criterios 1, 4, 5, 6: avaliaveis com dados LOCAIS (Fase 1), testados
 aqui. Criterios 2, 3, 7: dependem de dados reais de AWS (initcwnd,
-execucoes na rota mais distante, RTT real por rota) -- a logica existe,
-mas so pode ser exercitada de verdade com os artefatos do piloto.
+execucoes na rota mais distante, RTT real por rota) -- a logica ja
+existe e e testada com dados sinteticos (Decisao 33), mas so vira
+PASS de verdade com os artefatos reais do piloto em `--aws-dir`.
+
+Decisao 33: o avaliador e FAIL-CLOSED -- nenhum criterio retorna
+`pass: None`. Dado ausente, arquivo nao encontrado, ou formato
+invalido sempre resultam em `pass: False`, nunca em "sem dados"
+silencioso. Um criterio de ir/nao-ir sem evidencia nunca autoriza a
+campanha por omissao.
 
 Uso:
   python evaluate_criteria.py --run-t6-log <arquivo> [--calls-json <arquivo>] [--aws-dir <diretorio>]
@@ -20,8 +27,10 @@ medicao, so reconferindo contra os limiares ja definidos.
 """
 import argparse
 import json
+import os
 import re
 import sys
+from collections import Counter
 
 EXPECTED_CURVE = {
     "classico": "CurveP384",
@@ -122,6 +131,28 @@ HANDSHAKE_MESSAGE_TOLERANCE_B = 0
 # que e o que o codigo realmente confere agora).
 ZERO_TOLERANCE_MESSAGES = {"ServerHello", "EncryptedExtensions", "CertificateRequest", "CertificateVerify", "Finished"}
 
+# Decisao 32 (Emenda 5 ao criterio 7): o nominal de L0 e 0ms -- +-10%
+# de 0 e 0, uma faixa vazia/indefinida, nunca satisfazivel por
+# qualquer RTT real medido (mesmo os ~0,14-0,18ms que a v8 real mediu
+# nesse mesmo cenario co-localizado). Corrigido: L0 usa um PISO
+# ABSOLUTO (RTT < 1ms), nao uma fracao do nominal -- 1ms da margem
+# confortavel sobre o que a v8 real ja mediu (0,14-0,18ms) sem abrir
+# a porta pra uma rota que na verdade atravessou rede real. L219 e
+# L325 mantem +-10% do NOMINAL da rota (219ms/325ms -- nao do valor
+# que a v8 mediu, 219,9/330,3ms, que e so contexto confirmando que o
+# nominal e realista, nao o alvo da tolerancia em si).
+NOMINAL_RTT_MS = {"L0": 0, "L219": 219, "L325": 325}
+L0_RTT_ABSOLUTE_FLOOR_MS = 1.0
+RTT_TOLERANCE_FRACTION = 0.10
+
+
+def _rtt_ok(route: str, measured_ms: float) -> bool:
+    if route == "L0":
+        return measured_ms < L0_RTT_ABSOLUTE_FLOOR_MS
+    nominal = NOMINAL_RTT_MS[route]
+    lo, hi = nominal * (1 - RTT_TOLERANCE_FRACTION), nominal * (1 + RTT_TOLERANCE_FRACTION)
+    return lo <= measured_ms <= hi
+
 
 def criterion_1_message_sizes(log_text: str) -> dict:
     """Extrai os tamanhos por mensagem do log do measure.sh (secao
@@ -212,14 +243,23 @@ def criterion_1_message_sizes(log_text: str) -> dict:
             "other_messages": other_rows,
             "ok": cert_ok and ch_ok and other_all_ok,
         })
+    # Decisao 33 (avaliador fail-closed): sem nenhum bloco de perfil no
+    # log (arquivo vazio, caminho errado, execucao que nunca rodou),
+    # o criterio tem que FALHAR -- nao "sem dados" (None), que o
+    # relatorio final poderia confundir com "ainda nao relevante".
+    # Ausencia de dado NUNCA e PASS nem N/A pra um criterio de ir/nao
+    # ir -- e FAIL, ate prova em contrario.
     return {"criterion": 1, "name": "tamanhos por mensagem", "rows": results,
-            "pass": all(r["ok"] for r in results) if results else None,
+            "pass": all(r["ok"] for r in results) if results else False,
             "note": "avaliado so com o que o log local forneceu -- o criterio real exige as 12 capturas do piloto (4 perfis x 3 rotas)"}
 
 
 def criterion_4_counts(calls_json: dict | None) -> dict:
+    # Decisao 33 (avaliador fail-closed): "nenhum dado fornecido" e
+    # FAIL, nao None -- um criterio de ir/nao-ir sem evidencia nunca
+    # autoriza a campanha por omissao.
     if calls_json is None:
-        return {"criterion": 4, "name": "contagens do fluxo", "pass": None,
+        return {"criterion": 4, "name": "contagens do fluxo", "pass": False,
                 "note": "nenhum --calls-json fornecido -- precisa de uma rodada T6b (opin_flow.py) real"}
     calls1 = calls_json.get("insurance", [])
     calls2 = calls_json.get("person", [])
@@ -235,6 +275,17 @@ def criterion_4_counts(calls_json: dict | None) -> dict:
 
 
 def criterion_5_zero_errors(log_text: str) -> dict:
+    # Decisao 33 (avaliador fail-closed): "nenhum erro encontrado" so
+    # significa algo se o log realmente tem execucoes reais dentro --
+    # um arquivo vazio tambem teria zero ocorrencias de "ok":false,
+    # mas isso NAO E evidencia de zero erros, e ausencia de qualquer
+    # evidencia. Exige pelo menos um bloco "== Perfil:" real (mesmo
+    # marcador que o criterio 1 ja usa) antes de aceitar a contagem de
+    # erros como significativa.
+    if "== Perfil:" not in log_text:
+        return {"criterion": 5, "name": "zero erros", "errors_found": [],
+                "pass": False,
+                "note": "log sem nenhum bloco '== Perfil:' -- nao ha evidencia de execucao real, zero erros encontrados nao significa zero erros ocorridos"}
     errors = re.findall(r'"ok":false[^}]*"error":"([^"]+)"', log_text)
     # Excludes lines that are the Dockerfile's OWN echoed command text
     # (`echo "FATAL: ..." >&2; exit 1; }`), which Docker reprints as
@@ -272,19 +323,123 @@ def criterion_6_instrumentation(log_text: str) -> dict:
             "pass": all_ok and has_keylog_evidence and len(rows) > 0}
 
 
+INITCWND_MIN_SEGMENTS = 10
+L325_PROFILES = ("classico", "pqc", "hibrido-v8", "hibrido-and")
+L325_N_PER_PROFILE = 5
+
+
 def criterion_2_initcwnd(aws_dir) -> dict:
-    return {"criterion": 2, "name": "initcwnd real", "pass": None,
-            "note": "exige `ss --info` nas instancias reais do piloto -- nao avaliavel localmente"}
+    """Decisao 32/34: initcwnd real das instancias do piloto.
+
+    Metodo (descrito aqui, nao reimplementado dentro desta funcao --
+    ela confere um RESULTADO ja computado, mesmo padrao de confianca
+    que o criterio 4 ja tem com --calls-json): `ip route show` SO
+    mostra initcwnd quando ha um override explicito de rota -- o
+    valor efetivo do kernel (`TCP_INIT_CWND`, hoje tipicamente 10)
+    nao aparece ali quando ninguem configurou nada. Em vez de
+    confiar nisso, o metodo primario e a CAPTURA dedicada (Decisao
+    24, criterio 1): contar quantos SEGMENTOS TCP o SERVIDOR manda,
+    na origem (porta 443), ANTES do primeiro ACK do CLIENTE que
+    reconhece esses bytes -- esse numero de segmentos e o que o
+    initcwnd real da instancia permite enviar sem esperar um ACK.
+    `sysctl net.ipv4.tcp_...`/a configuracao do sistema e lida como
+    REFERENCIA cruzada, nunca como fonte primaria (pode nao refletir
+    o que o kernel realmente aplica numa conexao especifica).
+
+    Limites do metodo: precisa de uma captura `tcpdump -s 0` real
+    (nao fragmentada) com numeros de sequencia/ACK TCP preservados;
+    em loopback local o MSS e grande o bastante pra nunca segmentar
+    de verdade, entao esse criterio estruturalmente NAO pode ser
+    exercitado contra dados locais -- so contra a captura real do
+    piloto, numa rota com RTT > 0 (initcwnd so importa quando ha
+    espera de rede entre o envio e o ACK).
+
+    Formato esperado em `<aws_dir>/criterio2_initcwnd.json`:
+    `{"server_segments_before_client_ack": <int>, "sysctl_reference": {...}}`.
+    """
+    if not aws_dir:
+        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem captura real, nao ha evidencia de initcwnd"}
+    path = os.path.join(aws_dir, "criterio2_initcwnd.json")
+    if not os.path.isfile(path):
+        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+                "note": f"arquivo nao encontrado: {path}"}
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+        segments = data["server_segments_before_client_ack"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+                "note": f"arquivo malformado ou campo ausente ({e})"}
+    ok = isinstance(segments, int) and segments >= INITCWND_MIN_SEGMENTS
+    return {"criterion": 2, "name": "initcwnd real",
+            "segments_measured": segments, "threshold": INITCWND_MIN_SEGMENTS,
+            "sysctl_reference": data.get("sysctl_reference"),
+            "pass": ok}
 
 
 def criterion_3_distant_route(aws_dir) -> dict:
-    return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": None,
-            "note": "exige as 20 execucoes reais em sa-east-1/L325 -- nao avaliavel localmente"}
+    """Decisao 24, criterio 3: 0 erros em 20/20 execucoes (4 perfis x
+    N=5) especificamente na rota `sa-east-1/L325`. Formato esperado
+    em `<aws_dir>/criterio3_l325_execucoes.json`:
+    `{"execucoes": [{"profile": ..., "route": "L325", "ok": true}, ...]}`
+    -- exatamente 20 entradas, todas route=="L325", 4 perfis distintos
+    x 5 cada, todas ok=true."""
+    if not aws_dir:
+        return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem log de execucoes, nao ha evidencia"}
+    path = os.path.join(aws_dir, "criterio3_l325_execucoes.json")
+    if not os.path.isfile(path):
+        return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
+                "note": f"arquivo nao encontrado: {path}"}
+    try:
+        execs = json.load(open(path, encoding="utf-8"))["execucoes"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        return {"criterion": 3, "name": "zero erros na rota mais distante", "pass": False,
+                "note": f"arquivo malformado ou campo ausente ({e})"}
+    all_l325 = all(e.get("route") == "L325" for e in execs)
+    count_ok = len(execs) == len(L325_PROFILES) * L325_N_PER_PROFILE
+    per_profile = Counter(e.get("profile") for e in execs)
+    profiles_ok = all(per_profile.get(p) == L325_N_PER_PROFILE for p in L325_PROFILES)
+    errors = [e for e in execs if not e.get("ok")]
+    ok = all_l325 and count_ok and profiles_ok and len(errors) == 0
+    return {"criterion": 3, "name": "zero erros na rota mais distante",
+            "total_execucoes": len(execs), "expected_total": len(L325_PROFILES) * L325_N_PER_PROFILE,
+            "all_route_l325": all_l325, "profile_distribution_ok": profiles_ok,
+            "errors_found": len(errors), "pass": ok}
 
 
 def criterion_7_latency_sanity(aws_dir) -> dict:
-    return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": None,
-            "note": "exige RTT medido real por rota -- nao avaliavel localmente"}
+    """Decisao 24, criterio 7 + Decisao 32 (Emenda 5): RTT medido por
+    rota, via `ping -c 20 <endereco>` (media), contra a tabela
+    nominal -- L0 com piso absoluto (<1ms), L219/L325 com +-10% do
+    nominal (ver NOMINAL_RTT_MS/_rtt_ok). Formato esperado em
+    `<aws_dir>/criterio7_rtt_por_rota.json`:
+    `{"L0": {"rtt_ms": ...}, "L219": {"rtt_ms": ...}, "L325": {"rtt_ms": ...}}`."""
+    if not aws_dir:
+        return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem medicao de RTT, nao ha evidencia"}
+    path = os.path.join(aws_dir, "criterio7_rtt_por_rota.json")
+    if not os.path.isfile(path):
+        return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
+                "note": f"arquivo nao encontrado: {path}"}
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"criterion": 7, "name": "sanidade de latencia por rota", "pass": False,
+                "note": f"arquivo malformado ({e})"}
+    rows = {}
+    all_ok = True
+    for route in NOMINAL_RTT_MS:
+        entry = data.get(route)
+        if not entry or "rtt_ms" not in entry:
+            rows[route] = {"rtt_ms": None, "ok": False}
+            all_ok = False
+            continue
+        rtt = entry["rtt_ms"]
+        ok = _rtt_ok(route, rtt)
+        all_ok = all_ok and ok
+        rows[route] = {"rtt_ms": rtt, "nominal_ms": NOMINAL_RTT_MS[route], "ok": ok}
+    return {"criterion": 7, "name": "sanidade de latencia por rota", "rows": rows, "pass": all_ok}
 
 
 def main():
@@ -309,8 +464,13 @@ def main():
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
     print()
+    # Decisao 33: "pass" so pode ser True ou False agora -- nunca None.
+    # Deixado sem fallback de proposito: se algum criterio algum dia
+    # voltar a devolver None, isso deve estourar aqui (KeyError),
+    # alto e visivel, em vez de imprimir silenciosamente "N/A" e
+    # deixar passar por omissao.
     for r in results:
-        status = {"True": "PASS", "False": "FAIL", "None": "N/A (sem dados)"}[str(r["pass"])]
+        status = {"True": "PASS", "False": "FAIL"}[str(r["pass"])]
         print(f"criterio {r['criterion']} ({r['name']}): {status}")
 
     if any(r["pass"] is False for r in results):
