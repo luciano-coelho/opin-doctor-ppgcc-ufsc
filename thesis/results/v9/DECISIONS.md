@@ -4110,6 +4110,18 @@ QUALQUER deploy real futuro, nao so este piloto especifico (o delta
 e deployment-independente, so depende da CONTAGEM de enderecos no
 SAN, fixada em 2 por decisao de arquitetura, nao por sorte de IP).
 
+**NOTA DATADA (2026-11-07, acrescentada depois -- ver Decisao 30):
+a justificativa acima presume, sem verificar, que o cliente valida o
+servidor pelo endereco IP do SAN. Confirmado depois (Decisao 30) que
+NAO e assim: a verificacao real e por NOME DNS (`cert.VerifyHostname
+("mtls")`, contra `DNSNames`, nunca contra `IPAddresses`) -- os IPs
+adicionados ao SAN nesta decisao sao inofensivos e ja estao
+calibrados no baseline medido (Decisao 29), mas NAO sao o que o
+proxy de fato confere pra autenticar o servidor. Nesta arquitetura, a
+identidade do servidor e o NOME emitido pela CA do experimento
+(`mtls`), nao o endereco. Texto original acima mantido intacto, sem
+reescrita -- essa nota so acrescenta o que faltava.**
+
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
 
@@ -4198,6 +4210,18 @@ Emenda 1 fica registrada como historico (seu raciocinio e seus
 numeros nao foram apagados, Decisao 28 permanece intacta), mas o
 avaliador usa os numeros desta emenda.
 
+**NOTA DATADA (2026-11-07, acrescentada depois -- ver Decisao 30):
+os valores medidos acima ficam corretos e continuam sendo o que o
+avaliador usa -- a Certificate do servidor REALMENTE tem esse
+tamanho, byte a byte confirmado por medicao. O que precisa de nota
+e a MOTIVACAO original: essa decisao tratou os IPs do SAN como
+necessarios pra "verificacao estrita do servidor pelo cliente"
+(T5). Confirmado depois (Decisao 30) que a verificacao real usa o
+NOME DNS (`cert.VerifyHostname("mtls")`), nunca os IPs do SAN --
+entao os IPs sao inofensivos e corretamente medidos, mas nao sao,
+nesta arquitetura, o mecanismo que de fato autentica o servidor.
+Texto original mantido intacto.**
+
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
 
@@ -4280,6 +4304,94 @@ de loopback da Decisao 29): **PASS nos 4 perfis, Certificate e
 ClientHello juntos**, saida completa reproduzida (nao resumida):
 `classico`/`pqc`/`hibrido-v8`/`hibrido-and` todos com
 `certificate_ok: true` e `clienthello_ok: true`.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 31. EMENDA 4 AO CRITERIO 1 (T7, pos-tag `v9-prereg`) -- auditoria completa do evaluate_criteria.py (criterios 1-7), teste de mutacao por mensagem/contagem/erro; achado real -- ServerHello/EncryptedExtensions/CertificateRequest/CertificateVerify/Finished/Certificate-do-cliente NUNCA eram checados (so documentados); corrigido, conectado, testado
+
+**Rotulo formal de emenda:**
+- **O que mudou:** `ZERO_TOLERANCE_MESSAGES` (Decisao 20/21) existia
+  como constante mas NUNCA controlava nenhuma comparacao real no
+  codigo -- a mesma classe de bug que a Emenda 3 ja achou pro
+  ClientHello, agora confirmada pras outras 5 mensagens do
+  handshake MAIS a Certificate do CLIENTE (nunca extraida). Corrigido:
+  `HANDSHAKE_MESSAGE_BASELINE` (8 campos por perfil, medidos) agora e
+  extraido e conferido de verdade dentro de `criterion_1_message_sizes()`.
+- **Motivo:** auditoria pedida pelo Luciano, apos a Emenda 3 ja ter
+  achado o mesmo padrao de bug uma vez.
+- **Data:** 2026-11-07 (mesmo dia das Emendas 1, 2 e 3).
+- **A tag `v9-prereg` permanece intacta** -- o texto original da
+  Decisao 20/21 (que ja listava essas 5 mensagens como "0B de
+  tolerancia") nao foi reescrito; essa emenda so corrige a
+  IMPLEMENTACAO que faltava, nao a definicao do criterio.
+
+**1. Auditoria completa, criterio por criterio, mensagem por
+mensagem -- onde (se em algum lugar) cada valor e de fato
+comparado no codigo:**
+
+| Criterio | Item | Onde e checado (linha/funcao) | Teste de mutacao |
+|---|---|---|---|
+| 1 | ClientHello | `criterion_1_message_sizes`, `ch_ok` (ja corrigido na Emenda 3) | FAIL com +1B (tolerancia 0) -- **detectado** |
+| 1 | ServerHello | **NAO era checado antes desta emenda** -- agora `other_messages["ServerHello"]` | FAIL com +1B -- **detectado** (depois da correcao) |
+| 1 | EncryptedExtensions | **NAO era checado** -- agora `other_messages["EncryptedExtensions"]` | FAIL com +1B -- **detectado** |
+| 1 | CertificateRequest | **NAO era checado** -- agora `other_messages["CertificateRequest"]` | FAIL com +1B -- **detectado** |
+| 1 | Certificate (servidor) | `criterion_1_message_sizes`, `cert_ok` (ja existia, Decisao 20/28/29) | FAIL com +51B (tolerancia 50) -- **detectado**; PASS com +50B exato (limiar inclusivo, `abs(...)<=tolerancia`) -- **confirmado** |
+| 1 | Certificate (cliente) | **NAO era checado, nem extraido** -- agora `other_messages["Certificate_cliente"]` | FAIL com +1B -- **detectado** |
+| 1 | CertificateVerify (servidor) | **NAO era checado** -- agora `other_messages["CertificateVerify_servidor"]` | FAIL com +1B -- **detectado** |
+| 1 | CertificateVerify (cliente) | **NAO era checado** -- agora `other_messages["CertificateVerify_cliente"]` | FAIL com +1B -- **detectado** |
+| 1 | Finished (servidor) | **NAO era checado** -- agora `other_messages["Finished_servidor"]` | FAIL com +1B -- **detectado** |
+| 1 | Finished (cliente) | **NAO era checado** -- agora `other_messages["Finished_cliente"]` | FAIL com +1B -- **detectado** |
+| 4 | contagem HTTP (44) | `criterion_4_counts`, `ok = actual == expected` | FAIL com 43 e com 45 -- **detectado nos dois sentidos** |
+| 4 | contagem JWT (28) | idem | FAIL com 27 e com 29 -- **detectado** |
+| 4 | contagem /jwks (4) | idem | FAIL com 3 e com 5 -- **detectado** |
+| 4 | contagem CA (4) | idem | FAIL com 3 e com 5 -- **detectado** |
+| 5 | erro real (`"ok":false...error`) | `criterion_5_zero_errors`, regex + lista `errors_found` | FAIL ao injetar um erro real -- **detectado** |
+| 5 | falso-positivo do Dockerfile (`FATAL` com `>&2`/`exit 1`) | mesma funcao, filtro explicito (Decisao 22) | PASS mesmo com a linha do Dockerfile presente -- **confirmado, sem falso-positivo** |
+| 5 | FATAL real (sem sintaxe de shell) | mesma funcao | FAIL -- **detectado** |
+| 6 | CurveID por perfil | `criterion_6_instrumentation`, `curve_ok` | FAIL com curva errada no perfil Classico -- **detectado** |
+| 6 | DualAuthenticated (Hibrido-AND) | mesma funcao, `dual_ok` | FAIL com `dualAuthenticated:false` no Hibrido-AND -- **detectado** |
+| 6 | Evidencia de keylog decifrado | mesma funcao, `has_keylog_evidence` | FAIL sem a linha de evidencia no log -- **detectado** |
+| 2 | initcwnd real | `criterion_2_initcwnd` -- **stub, retorna `None` incondicional, NUNCA le o argumento** | Mutacao nao se aplica -- confirmado que `pass=None` nao muda com NENHUM conteudo de entrada (testado com `None` e com um texto arbitrario) -- **comportamento documentado desde a Decisao 22, nao e um bug, e a logica real so existe depois do piloto** |
+| 3 | zero erros na rota distante | `criterion_3_distant_route` -- mesmo padrao de stub | idem -- nao se aplica, mesma razao |
+| 7 | sanidade de latencia (RTT) | `criterion_7_latency_sanity` -- mesmo padrao de stub | idem -- "RTT um passo acima do limiar" nao tem efeito algum porque NAO HA limiar codificado ainda (so a logica dos 5 criterios locais existe; 2/3/7 sao placeholders ate o piloto, por desenho, Decisao 22) |
+
+**2. Teste de mutacao executado de verdade (nao so descrito) --
+script roda contra o modulo real `evaluate_criteria.py`, nao uma
+reimplementacao.** Baseline (sem nenhuma mutacao): critérios 1, 4, 5,
+6 todos PASS. Cada uma das 11 mutacoes do criterio 1 (10 mensagens +
+1 teste de limiar exato), 8 do criterio 4, 3 do criterio 5, 3 do
+criterio 6 -- **26 mutacoes no total, todas com o resultado
+esperado** (FAIL quando deveria falhar, PASS quando deveria passar
+no limiar exato ou no caso benigno do Dockerfile).
+
+**3. Correcao aplicada.** `evaluate_criteria.py`:
+`HANDSHAKE_MESSAGE_BASELINE` (8 campos x 4 perfis, medidos agora,
+mesma rodada `measure.sh`, mesma convencao `+4B` de cabecalho),
+`HANDSHAKE_MESSAGE_TOLERANCE_B = 0`, conectados dentro de
+`criterion_1_message_sizes()` via extracao posicional de CADA linha
+da secao "tamanho POR MENSAGEM" (nao so a linha com Certificate) --
+tanto o flight do SERVIDOR (frame com ServerHello, tipo `2`) quanto o
+flight do CLIENTE (frame com Certificate mas SEM ServerHello).
+`ZERO_TOLERANCE_MESSAGES` mantida no arquivo (nome antigo, retro-
+compatibilidade), mas o comentario deixa explicito que NAO controla
+mais nada -- `HANDSHAKE_MESSAGE_BASELINE` e a fonte de verdade agora.
+
+**Valores medidos, os 8 campos x 4 perfis (measure.sh, hoje, mesma
+rodada da Emenda 3):**
+| Perfil | ServerHello | EncryptedExtensions | CertificateRequest | Certificate_cliente | CertificateVerify_servidor | CertificateVerify_cliente | Finished_servidor | Finished_cliente |
+|---|---|---|---|---|---|---|---|---|
+| Classico | 187 | 10 | 109 | 800 | 264 | 264 | 36 | 36 |
+| PQC | 1.658 | 10 | 104 | 5.519 | 3.317 | 3.317 | 36 | 36 |
+| Hibrido-v8 | 1.755 | 10 | 111 | 6.144 | 264 | 264 | 36 | 36 |
+| Hibrido-AND | 1.755 | 10 | 98 | 6.356 | 3.575 | 3.575 | 36 | 36 |
+
+Confirmado por medicao (nao suposto) que nenhum destes varia entre
+as duas rodadas de SAN da Decisao 29/30 (loopback vs documentacao) --
+so a Certificate do SERVIDOR varia, exatamente como ja estabelecido.
+`Finished` e sempre 36B (32B de HMAC + 4B de cabecalho) em qualquer
+perfil/lado -- estrutural do TLS 1.3 (tamanho fixo do `Finished`,
+nao uma coincidencia).
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.

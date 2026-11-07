@@ -80,6 +80,46 @@ CERTIFICATE_TOLERANCE_B = 50
 # variabilidade entre loopback e piloto nesta mensagem especifica.
 CLIENTHELLO_BASELINE = {"classico": 336, "pqc": 1779, "hibrido-v8": 1876, "hibrido-and": 1858}
 CLIENTHELLO_TOLERANCE_B = 0
+
+# Decisao 31 (Emenda 4 ao criterio 1) -- auditoria pedida pelo Luciano
+# achou que `ZERO_TOLERANCE_MESSAGES` (abaixo, mantida so pra nao
+# apagar o nome antigo) NUNCA foi de fato extraida nem comparada em
+# lugar nenhum do codigo -- a mesma classe de bug que a Emenda 3 ja
+# achou pro ClientHello, agora encontrada pras outras 5 mensagens MAIS
+# a Certificate do CLIENTE (que tambem nunca era extraida). Corrigido:
+# toda mensagem do handshake agora e extraida da SECAO "tamanho POR
+# MENSAGEM" e comparada. Confirmado por medicao (nao suposto) que
+# NENHUMA destas varia entre as duas rodadas de SAN da Decisao 29/30
+# (loopback vs documentacao) -- so a Certificate do SERVIDOR varia
+# (depende do SAN) -- entao tolerancia 0B se aplica a todas as outras,
+# `+4B` de cabecalho por mensagem (mesma convencao da Certificate/
+# ClientHello). Valores medidos hoje, measure.sh, 4 perfis:
+HANDSHAKE_MESSAGE_BASELINE = {
+    "classico": {
+        "ServerHello": 187, "EncryptedExtensions": 10, "CertificateRequest": 109,
+        "Certificate_cliente": 800, "CertificateVerify_servidor": 264,
+        "CertificateVerify_cliente": 264, "Finished_servidor": 36, "Finished_cliente": 36,
+    },
+    "pqc": {
+        "ServerHello": 1658, "EncryptedExtensions": 10, "CertificateRequest": 104,
+        "Certificate_cliente": 5519, "CertificateVerify_servidor": 3317,
+        "CertificateVerify_cliente": 3317, "Finished_servidor": 36, "Finished_cliente": 36,
+    },
+    "hibrido-v8": {
+        "ServerHello": 1755, "EncryptedExtensions": 10, "CertificateRequest": 111,
+        "Certificate_cliente": 6144, "CertificateVerify_servidor": 264,
+        "CertificateVerify_cliente": 264, "Finished_servidor": 36, "Finished_cliente": 36,
+    },
+    "hibrido-and": {
+        "ServerHello": 1755, "EncryptedExtensions": 10, "CertificateRequest": 98,
+        "Certificate_cliente": 6356, "CertificateVerify_servidor": 3575,
+        "CertificateVerify_cliente": 3575, "Finished_servidor": 36, "Finished_cliente": 36,
+    },
+}
+HANDSHAKE_MESSAGE_TOLERANCE_B = 0
+# Mantida so por retrocompatibilidade de nome -- nao e mais usada pra
+# controlar nenhum comportamento (ver HANDSHAKE_MESSAGE_BASELINE acima,
+# que e o que o codigo realmente confere agora).
 ZERO_TOLERANCE_MESSAGES = {"ServerHello", "EncryptedExtensions", "CertificateRequest", "CertificateVerify", "Finished"}
 
 
@@ -104,39 +144,73 @@ def criterion_1_message_sizes(log_text: str) -> dict:
             continue
         total_cert_bytes = None
         clienthello_bytes = None
+        other = {}  # key (ver _HANDSHAKE_TYPE_NAMES/sufixo) -> bytes medidos
         for line in msg_section.group(1).splitlines():
             cols = line.split("\t")
             if len(cols) < 3:
                 continue
             types = [t.strip() for t in cols[1].split(",")]
             lengths = cols[2].split(",")
+            per_type = {t: int(l) + 4 for t, l in zip(types, lengths)}
             # Both the server's AND the client's flight contain a
             # Certificate message (type 11) -- summing every "11" found
             # anywhere in the profile block double-counts them (found
             # live: the first version of this reported ~12.4KB for
             # Hibrido-v8 against an 8.5KB baseline, nearly 2x, exactly
             # consistent with counting both). Only the frame that ALSO
-            # contains ServerHello (type 2) is the server's own flight --
-            # that frame's "11" is the one the Decisao 20 tolerance is
-            # actually about.
+            # contains ServerHello (type 2) is the server's own flight.
             if "2" in types and "11" in types:
-                total_cert_bytes = int(lengths[types.index("11")]) + 4
+                total_cert_bytes = per_type["11"]
+                # Decisao 31 (Emenda 4): o resto do flight do SERVIDOR
+                # tambem precisa ser conferido, nao so a Certificate --
+                # ServerHello/EncryptedExtensions/CertificateRequest nunca
+                # tinham sido extraidos antes desta emenda.
+                if "2" in per_type:
+                    other["ServerHello"] = per_type["2"]
+                if "8" in per_type:
+                    other["EncryptedExtensions"] = per_type["8"]
+                if "13" in per_type:
+                    other["CertificateRequest"] = per_type["13"]
+                if "15" in per_type:
+                    other["CertificateVerify_servidor"] = per_type["15"]
+                if "20" in per_type:
+                    other["Finished_servidor"] = per_type["20"]
+            # O flight do CLIENTE (Certificate/CertificateVerify/Finished
+            # dele) tem "11" mas NUNCA "2" (ServerHello e so do servidor)
+            # -- nunca era extraido antes desta emenda, nem a Certificate
+            # do cliente nem o resto do flight dele.
+            elif "11" in types:
+                if "11" in per_type:
+                    other["Certificate_cliente"] = per_type["11"]
+                if "15" in per_type:
+                    other["CertificateVerify_cliente"] = per_type["15"]
+                if "20" in per_type:
+                    other["Finished_cliente"] = per_type["20"]
             # ClientHello (type 1) is always alone in the client's own
             # first frame -- confirmed never sharing a frame with any
             # other handshake type in any of this project's captures.
             if types == ["1"]:
-                clienthello_bytes = int(lengths[0]) + 4
+                clienthello_bytes = per_type["1"]
         cert_baseline = CERTIFICATE_BASELINE.get(profile)
         cert_ok = cert_baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - cert_baseline) <= CERTIFICATE_TOLERANCE_B
         ch_baseline = CLIENTHELLO_BASELINE.get(profile)
         ch_ok = ch_baseline is not None and clienthello_bytes is not None and abs(clienthello_bytes - ch_baseline) <= CLIENTHELLO_TOLERANCE_B
+        other_baseline = HANDSHAKE_MESSAGE_BASELINE.get(profile, {})
+        other_rows = {}
+        other_all_ok = True
+        for key, baseline in other_baseline.items():
+            measured = other.get(key)
+            ok = measured is not None and abs(measured - baseline) <= HANDSHAKE_MESSAGE_TOLERANCE_B
+            other_all_ok = other_all_ok and ok
+            other_rows[key] = {"bytes": measured, "baseline": baseline, "ok": ok}
         results.append({
             "profile": profile,
             "certificate_bytes": total_cert_bytes, "certificate_baseline": cert_baseline,
             "certificate_tolerance": CERTIFICATE_TOLERANCE_B, "certificate_ok": cert_ok,
             "clienthello_bytes": clienthello_bytes, "clienthello_baseline": ch_baseline,
             "clienthello_tolerance": CLIENTHELLO_TOLERANCE_B, "clienthello_ok": ch_ok,
-            "ok": cert_ok and ch_ok,
+            "other_messages": other_rows,
+            "ok": cert_ok and ch_ok and other_all_ok,
         })
     return {"criterion": 1, "name": "tamanhos por mensagem", "rows": results,
             "pass": all(r["ok"] for r in results) if results else None,
