@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euo pipefail
+mkdir -p /etc/mockopin-campaign
+date -d "+${self_terminate_hours} hours" +%s > /etc/mockopin-campaign/deadline
+
+cat > /etc/systemd/system/mockopin-safety-timer.service <<'UNIT'
+[Unit]
+Description=mockopin campaign safety timer -- shuts the instance down past its deadline (Decision 49)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mockopin-safety-check.sh
+UNIT
+
+cat > /etc/systemd/system/mockopin-safety-timer.timer <<'UNIT'
+[Unit]
+Description=Runs mockopin-safety-timer.service every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat > /usr/local/bin/mockopin-safety-check.sh <<'SCRIPT'
+#!/bin/bash
+deadline_file=/etc/mockopin-campaign/deadline
+[ -f "$deadline_file" ] || exit 0
+deadline=$(cat "$deadline_file")
+now=$(date +%s)
+if [ "$now" -ge "$deadline" ]; then
+  logger "mockopin-safety-timer: deadline passed, shutting down (Decision 49 -- this does not release the Elastic IP, does not substitute for campaign_down.sh)"
+  shutdown -h now
+fi
+SCRIPT
+chmod +x /usr/local/bin/mockopin-safety-check.sh
+
+systemctl daemon-reload
+systemctl enable --now mockopin-safety-timer.timer

@@ -3,3 +3,31 @@
 # nao so thesis/results/v9/certs/.
 *.key
 *.pem
+id_ed25519*
+id_rsa*
+ssh/
+
+# Terraform do piloto (Decisao 46) -- mesmo padrao da v8 real
+# (thesis/results/v8/.gitignore): estado/cache locais, nunca
+# commitados (podem conter IDs de recurso reais e IPs). O
+# .terraform.lock.hcl fica versionado (sem segredo, so versoes de
+# provider).
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+tfplan.*
+tfdestroy
+tfdestroy.*
+*.auto.tfvars.json
+*.auto.tfvars
+
+# Copia local verificada de artefatos do piloto (Decisao 46/48) --
+# nunca commitada, mesmo padrao de campaign-data-pulled/ da v8.
+piloto-dados-pulled/
+
+# Cache de bytecode Python dos scripts do piloto.
+__pycache__/
+*.pyc
+.pytest_cache/

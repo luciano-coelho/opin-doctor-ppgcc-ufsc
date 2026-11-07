@@ -5469,3 +5469,148 @@ nem o guard do gerador; nao devem ser usados no piloto.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 46/47. Infraestrutura do piloto escrita e testada localmente -- Terraform multi-regiao (copia do modulo real da v8, 1 variavel aditiva nova), orquestrador das 60 execucoes com modo de simulacao, rele de PKI, coleta com SHA-256 por bloco, limpeza+EIP+deteccao de drift, pre-voo ir/nao-ir -- 38 testes automatizados (stub de aws/ssh/terraform, nenhuma chamada real), pelo menos uma mutacao por script; nenhum desvio do pre-registro v9-prereg
+
+**Decisao 46 (Terraform, `thesis/results/v9/terraform/`).** Copia
+VERBATIM do modulo real `v8/campaign/terraform/modules/
+campaign_instance` (nao referenciado por caminho relativo de
+proposito -- a v8 e uma sessao ja encerrada, nunca editada por esta
+sessao; copiar evita qualquer mudanca, mesmo aditiva, nos arquivos ja
+fechados dela). **UNICA diferenca de codigo em todo o modulo:** a
+variavel nova `instance_initiated_shutdown_behavior` (default `null`
+= mesmo comportamento implicito que a v8 real sempre teve, nunca
+setada la) + a linha que a conecta ao `aws_instance` -- necessaria
+porque a Decisao 23 item 5 decidiu que o piloto da v9 usa `terminate`
+(a v8 real nunca define esse atributo, ficando no default AWS
+"stop"). Tag `Project` mudada de `mockopin-pqc-aws` (v8) pra
+`mockopin-pqc-v9-piloto` -- identificador PROPRIO do piloto, pra
+`cleanup.py` nunca poder confundir (ou, pior, afetar) recursos reais
+da v8 se algum dia coexistirem na mesma conta.
+
+**Topologia exata das Decisoes 26/27/43/45:** servidor+L0+controle em
+`sa-east-1` (L0 na MESMA AZ ID do servidor), L219 em `eu-north-1`,
+L325 em `ap-southeast-1`; `m7i-flex.large` servidor/clientes,
+`t4g.micro` controle; autodesligamento `terminate` com N=4h
+(servidor/clientes, nunca o controle); gateway (443) so pros 3
+clientes (L0 por IP PRIVADO, L219/L325 por IP PUBLICO); SSH so do EIP
+do controle (servidor/clientes) ou do operador (controle). AMIs
+PINADAS, reaproveitando os MESMOS IDs reais ja usados e versionados
+pela v8 (publicos, nao-sensiveis -- qualquer conta na mesma regiao ve
+o mesmo ID).
+
+**Validado, sem AWS:** `terraform fmt -recursive` (limpo) e
+`terraform validate` (`Success!`) -- `terraform init -backend=false`
+so baixa os PROVIDERS do registry publico, nenhuma chamada AWS,
+nenhuma credencial. Nenhum `plan`/`apply` tentado.
+
+**Decisao 47 (orquestrador + 4 scripts + testes, `thesis/results/
+v9/campaign/`).** Fronteira unica de CLI (`scripts/cli.py`) por onde
+TODO script fala com `aws`/`ssh`/`scp`/`terraform` -- os testes
+substituem exatamente essa fronteira (`cli._run`, ou as funcoes
+`run_aws`/`run_aws_json`/`run_ssh`/`run_scp`/`run_terraform`
+individualmente), nunca uma chamada real. `redact()` e importada
+direto do arquivo real da v8 (`redact_aws_errors.py`), nunca
+duplicada.
+
+**1. Orquestrador (`orchestrator.py`), equivalente REDUZIDO ao
+`campaign_run.py` real** (sem a maquinaria de campanha multi-dia --
+janelas, latin square, orcamento de custo/tempo, chronyc -- que um
+piloto de 1 bloco/2h nunca precisa). Dois Executors, mesmo padrao
+SSHExecutor/LocalExecutor da v8 real:
+- `SSHExecutor`: disca TODO alvo pelo IP PUBLICO (Decisao 43/45),
+  nunca testado contra AWS de verdade.
+- `LocalExecutor`: **simulacao SINTETICA, nao sobe o stack Docker
+  real** -- gera contagens HTTP (44/28/4/4), CurveID/
+  DualAuthenticated por perfil e tamanhos de mensagem usando os
+  BASELINES MEDIDOS que `evaluate_criteria.py` ja usa (importados,
+  nunca reinventados). **Limitacao honesta, registrada explicitamente
+  aqui:** prova a logica de ORQUESTRACAO (cardinalidade, ordem,
+  marcadores, formato aceito pelo avaliador) -- NAO exercita nenhuma
+  rede/criptografia real, isso so a AWS pode confirmar (ver tabela de
+  prontidao no chat).
+
+Ordem de execucao (Decisao 23 item 2, blocos de perfil replicando a
+v8 real): pra CADA rota, UM `random.Random(seed)` sorteia a ordem dos
+4 blocos de perfil (seed sempre gravado no manifesto, reprodutivel).
+Marcadores `== EXECUCAO INICIO/FIM ==` exatamente no formato que o
+regex REAL de `evaluate_criteria.py` espera (testado contra ele, nao
+suposto). A sondagem de prontidao e emitida FORA de qualquer janela,
+por construcao.
+
+**Testado fim a fim contra o avaliador REAL** (`--mode simulate`,
+seed fixo): 60 execucoes, 12 capturas, criterios 1/4/5/6 (os que o
+orquestrador de fato produz) **PASS genuino** -- nao so "nao
+quebrou"; criterios 2/3/7 (produzidos pelos OUTROS produtores
+dedicados, Decisao 41, fora do escopo do orquestrador) **FAIL
+fail-closed**, como esperado, nenhuma excecao.
+
+**2. Rele de PKI (`pki_relay.py`)** -- 2 saltos exatamente como a
+Decisao 26 item 3 descreve: operador `scp` pro controle (chave do
+operador) -> controle `scp` pro destino final (chave EXCLUSIVA da
+campanha) -> `shred -u` no controle, SO depois do `scp` final ter
+sucesso (ordem garantida por `&&`, testada com mutante). Nenhum
+conteudo de chave aparece em nenhum argv (testado).
+
+**3. Coleta com SHA-256 por bloco (`collect_artifacts.py`)**,
+equivalente ao `campaign_pull.sh` real, mas POR PERFIL (4 blocos, nao
+um pull unico no fim) -- manifesto regenerado no controle, puxado,
+conferido de novo localmente com Python nativo (`hashlib`, nao
+depende do binario `sha256sum` existir na maquina do operador).
+`.pull-verified` so escrito depois da verificacao passar -- nunca
+antes (testado com corrupcao e com arquivo ausente, os dois
+detectados).
+
+**4. Limpeza + EIP + drift (`cleanup.py`)**, equivalente ao
+`campaign_down.sh` real (as MESMAS 5 chamadas -- instances/addresses/
+security-groups/key-pairs/volumes, 3 regioes) com dois acrescimos que
+a v8 real nao tinha, pedidos explicitamente (Decisao 43/45):
+- **Deteccao de drift por autodesligamento:** conta instancias
+  rodando ANTES do destroy: menos que as 5 esperadas (controle+
+  servidor+3 clientes) vira aviso explicito de que o autodesligamento
+  ja disparou nalguma -- nunca bloqueia o destroy (que segue
+  obrigatorio: so ele libera o `aws_eip`, Decisao 45).
+- **Liberacao de EIP orfao:** a verificacao final identifica qualquer
+  Elastic IP sem instancia associada; com `--release-eips`, libera de
+  verdade (`ec2:ReleaseAddress`); sem a flag, so reporta (mesma
+  politica de "deteccao antes de automacao nova" da Decisao 43).
+`.pull-verified` exigido antes de destruir (mesma trava de seguranca
+do `campaign_down.sh` real), com `--force` pra contornar
+explicitamente.
+
+**5. Pre-voo ir/nao-ir (`preflight.py`)**, os MESMOS comandos exatos
+ja descritos em prosa na Decisao 27 item 2, agora executaveis:
+identidade da credencial, cota de vCPU (3 regioes), disponibilidade
+de tipo de instancia (3 regioes), resolucao de AMI (3 regioes),
+alerta de orcamento. **Account ID: usado internamente SO pra montar
+`--account-id` da chamada de budgets (exigencia da propria API) --
+NUNCA devolvido nem logado**, com uma rede de seguranca redundante
+(`assert` dentro de `run_preflight` que reprova alto se qualquer ARN
+real escapasse) -- testada com um mutante que simula exatamente esse
+vazamento.
+
+**Achado real no caminho, corrigido:** `cli.run_aws()` acrescentava
+`--output json` mesmo quando o chamador ja pedia `--output text`
+(caso do Account ID via `--query Account --output text`) -- dois
+`--output` na mesma chamada faria a CLI real obedecer so o ultimo,
+silenciosamente ignorando o do chamador. Corrigido: so acrescenta
+`--output json` se o chamador NAO tiver pedido nenhum.
+
+**Testes, todos sem rede/credencial real:** 38 testes automatizados
+(`pytest`), cobrindo os 5 scripts + a fronteira de CLI, TODOS com
+`aws`/`ssh`/`scp`/`terraform` stubados (nunca uma chamada real) --
+**pelo menos uma mutacao por script**, cada uma confirmada
+reprovando o teste real correspondente (nao so existindo): ordem
+sem shuffle (orquestrador), shred antes do scp (rele), verificacao de
+hash desligada (coleta), `clean=True` ignorando instancia rodando
+(limpeza), `go` agregado por `any()` em vez de `all()` (pre-voo).
+
+**Nenhum desvio do pre-registro `v9-prereg` nesta rodada** -- nenhum
+limiar, baseline ou criterio de ir/nao-ir foi tocado; todo o trabalho
+desta Decisao e infraestrutura de EXECUCAO do piloto (Terraform,
+orquestracao, logistica de dados), nunca o METODO de medicao ja
+congelado. Se isso vier a mudar numa rodada futura, a emenda formal
+correspondente sera registrada separadamente, como sempre.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat. Nenhum push sem autorizacao explicita.
