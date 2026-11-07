@@ -39,21 +39,21 @@ EXPECTED_CURVE = {
 # perfis, porque comparava a Certificate isolada contra um numero
 # maior que nunca poderia bater).
 #
-# Decisao 28: baseline ATUALIZADO pro SAN final do piloto, nao mais o
-# default de loopback. O servidor do piloto precisa de DOIS IPs no
-# SAN (nao um) -- a v8 real confirmou (Decisao 52/53 da v8) que L0
-# alcanca o servidor pelo IP PRIVADO (co-localizado, mesma AZ) enquanto
-# L219/L325 so alcancam pelo IP PUBLICO/elastico (cross-region, unico
-# caminho) -- a v9 exige verificacao estrita do servidor pelo cliente
-# (T5, sem InsecureSkipVerify), entao o certificado precisa responder
-# aos dois enderecos. `-server-ips=<IP privado>,<EIP>` troca o default
-# `127.0.0.1,::1` (1x IPv4 + 1x IPv6 = 6B+18B = 24B de GeneralName) por
-# 2x IPv4 (6B+6B = 12B) -- IPs em SAN sao OCTET STRINGs de largura
-# FIXA (Decisao 20), entao esse delta (-12B) e exato, nao aproximado,
-# e vale pra qualquer IP real que a AWS atribuir (so depende da
-# CONTAGEM/TIPO de enderecos, nunca do valor). Baseline recalculado:
-# 913-12=901, 5632-12=5620, 6255-12=6243, 6582-12=6570.
-CERTIFICATE_BASELINE = {"classico": 901, "pqc": 5620, "hibrido-v8": 6243, "hibrido-and": 6570}
+# Decisao 28 (Emenda 1 ao criterio 1) + Decisao 29 (Emenda 2): o
+# servidor do piloto precisa de DOIS IPs no SAN (IP privado, pro L0
+# co-localizado; EIP, pro L219/L325 cross-region -- confirmado na v8
+# real, Decisao 52/53 dela) em vez do par loopback (127.0.0.1,::1)
+# usado nos testes locais. A Emenda 1 estimou o delta por aritmetica
+# de DER (-12B) -- a Emenda 2 MEDIU de verdade (dois builds reais de
+# certificado, mesmo pipeline, so variando SERVER_IPS) e achou -14B
+# pros perfis de certificado unico (a aritmetica errou por ~2B, efeito
+# de fronteira na codificacao de comprimento do DER, nao decomposto
+# byte a byte) e -28B pro Hibrido-AND especificamente -- CONFIRMADO no
+# codigo (`certs/main.go`, `sameSANs(andRSAServer, andMLDSAServer)`)
+# que esse perfil tem DOIS certificados-folha de servidor, cada um
+# carregando o mesmo SAN, dobrando o efeito. Valores adotados: os
+# MEDIDOS (Decisao 29), nao os aritmeticos (Decisao 28, superados).
+CERTIFICATE_BASELINE = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
 CERTIFICATE_TOLERANCE_B = 50
 CLIENTHELLO_TOLERANCE_B = 15
 ZERO_TOLERANCE_MESSAGES = {"ServerHello", "EncryptedExtensions", "CertificateRequest", "CertificateVerify", "Finished"}

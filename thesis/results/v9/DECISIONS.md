@@ -4022,7 +4022,34 @@ valendo ao pe da letra.
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
 
-## 28. SAN do servidor corrigido -- L0 alcanca por IP PRIVADO, L219/L325 por EIP (confirmado na v8 real, Decisao 52/53); escolhida a opcao (a), dois IPs no SAN; tolerancia do Certificate recalculada com delta exato (-12B) e evaluate_criteria.py atualizado
+## 28. EMENDA 1 AO CRITERIO 1 (T7, pos-tag `v9-prereg`) -- SAN do servidor corrigido -- L0 alcanca por IP PRIVADO, L219/L325 por EIP (confirmado na v8 real, Decisao 52/53); escolhida a opcao (a), dois IPs no SAN; tolerancia do Certificate recalculada com delta ARITMETICO (-12B, depois corrigido por medicao real na Decisao 29) e evaluate_criteria.py atualizado
+
+**Rotulo formal de emenda, conforme a politica da Decisao 21
+("Emenda de criterio, depois da tag `v9-prereg`: exige decisao nova,
+datada, com motivo -- nunca edicao do texto original"):**
+- **O que mudou:** o baseline da mensagem `Certificate` do servidor
+  usado pelo criterio 1 (Decisao 20/21, tolerancia ±50B), dentro de
+  `evaluate_criteria.py`'s `CERTIFICATE_BASELINE`. Valores ANTIGOS
+  (default de loopback, publicados na Decisao 15/20/21): Classico
+  913B, PQC 5.632B, Hibrido-v8 6.255B, Hibrido-AND 6.582B. Valores
+  NOVOS, propostos nesta emenda (estimativa ARITMETICA, ver corpo
+  abaixo): 901B/5.620B/6.243B/6.570B.
+- **Motivo:** o SAN do servidor precisa de DOIS enderecos IPv4 reais
+  (IP privado + EIP) em vez do par loopback (IPv4+IPv6) usado nos
+  testes locais ate aqui -- descoberto ao desenhar o endereco real do
+  servidor pro piloto (ver corpo desta decisao).
+- **Data:** 2026-11-07.
+- **A tag `v9-prereg` publicada permanece intacta** -- essa emenda
+  nao reescreve o texto original dos 7 criterios (Decisao 21), so
+  registra uma mudanca de PARAMETRO dentro do avaliador que implementa
+  o criterio 1, numa entrada nova e datada, exatamente como a politica
+  exige.
+- **Nota adicionada depois (ver Decisao 29): os valores "NOVOS"
+  acima, calculados por aritmetica de DER, NAO bateram com a medicao
+  real feita com o harness -- Decisao 29 e uma SEGUNDA emenda
+  (Emenda 2) que corrige esses numeros pros valores medidos.** O
+  texto abaixo (o raciocinio aritmetico original) fica intacto, nao
+  reescrito, pela mesma politica -- so marcado aqui como superado.
 
 **Como a v8 real fazia L0 alcancar o servidor -- pesquisado direto,
 nao assumido.** `v8/DECISIONS.md`, Decisao 52 (titulo: "L0's
@@ -4082,6 +4109,94 @@ comentario explicando a origem do -12B -- a mesma logica vale pra
 QUALQUER deploy real futuro, nao so este piloto especifico (o delta
 e deployment-independente, so depende da CONTAGEM de enderecos no
 SAN, fixada em 2 por decisao de arquitetura, nao por sorte de IP).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 29. EMENDA 2 AO CRITERIO 1 (T7, pos-tag `v9-prereg`) -- a aritmetica da Emenda 1 (Decisao 28) nao bateu com a medicao real; confirmado que o SAN do baseline de loopback tinha IPs (nao DNS tipo "localhost"); valores MEDIDOS adotados; achado extra explicado (Hibrido-AND dobra o delta por ter 2 certificados-folha de servidor)
+
+**Rotulo formal de emenda:**
+- **O que mudou:** o mesmo `CERTIFICATE_BASELINE` que a Decisao 28
+  (Emenda 1) ja tinha mudado -- agora pros valores MEDIDOS, nao a
+  estimativa aritmetica daquela emenda. Valores da Emenda 1
+  (aritmetica, SUPERADOS): 901B/5.620B/6.243B/6.570B. **Valores desta
+  emenda (medidos, ADOTADOS):** **899B/5.618B/6.241B/6.554B.**
+- **Motivo:** medi de verdade em vez de confiar na aritmetica (pedido
+  explicito do Luciano) -- a aritmetica errou.
+- **Data:** 2026-11-07 (mesmo dia da Emenda 1).
+- **A tag `v9-prereg` permanece intacta**, mesma razao da Emenda 1.
+
+**1. Confirmado: o SAN do baseline de loopback (Decisao 15/20/21)
+tinha SO IPs na parte que mudou, nao um nome tipo "localhost".**
+Confirmado lendo `certs/Makefile` direto: `SERVER_DNS ?=
+mtls,auth.local,...,keystore` (8 nomes, fixos, usados tanto no
+loopback quanto no piloto -- Host-header routing, nao DNS real) e
+`SERVER_IPS ?= 127.0.0.1,::1` (so isso mudou). Os 8 nomes DNS SAO os
+MESMOS nos dois cenarios -- a unica variavel entre loopback e piloto
+e exatamente a lista de IPs, confirmando que a comparacao isolada
+(so o efeito do IP) e valida.
+
+**2. Medido, nao calculado -- dois builds de certificado, mesmo
+pipeline, no mesmo dia.** Gerei os certificados do servidor duas
+vezes com `make certs` (`thesis/results/v9/certs`), variando SO
+`SERVER_IPS`: (a) default (`127.0.0.1,::1`) e (b) duas faixas de
+DOCUMENTACAO, NUNCA enderecos reais -- `203.0.113.10` (TEST-NET-3,
+RFC 5737) e `10.0.0.10` (RFC 1918) -- confirmado no SAN gerado via
+`openssl x509 -noout -ext subjectAltName`: `DNS:mtls,...,DNS:keystore,
+IP Address:203.0.113.10, IP Address:10.0.0.10`. Rodei o MESMO
+`measure.sh` (4 perfis, tickets desativados) pra cada um dos dois
+conjuntos de certificados, extraindo o tamanho da mensagem
+`Certificate` isolada (frame que TAMBEM contem ServerHello, mesma
+regra do criterio 1) dos dois jeitos:
+
+| Perfil | (a) Loopback, medido AGORA | (b) Doc-range, medido AGORA | Delta medido | Baseline antigo (Decisao 15) |
+|---|---|---|---|---|
+| Classico | 913B | 899B | **-14B** | 913B |
+| PQC | 5.632B | 5.618B | **-14B** | 5.632B |
+| Hibrido-v8 | 6.255B | 6.241B | **-14B** | 6.255B |
+| Hibrido-AND | 6.582B | 6.554B | **-28B** | 6.582B |
+
+**A coluna "Loopback, medido AGORA" bate EXATO com o baseline
+antigo publicado (913/5.632/6.255/6.582)** -- confirma que o
+pipeline de medicao nao teve nenhuma deriva desde a Decisao 15; a
+comparacao e direta e confiavel, nao contaminada por outra mudanca.
+
+**3. Divergencia da aritmetica, explicada em parte (nao um
+misterio).** A Emenda 1 previu -12B (2 GeneralName IPv4 de 6B cada
+substituindo 1 IPv4 6B + 1 IPv6 18B); a medicao deu **-14B** pros
+3 perfis de certificado unico. Os 2B extra nao foram decompostos
+byte a byte -- a hipotese mais provavel, nao confirmada
+individualmente, e um efeito de fronteira na codificacao DER de
+comprimento (um campo de tamanho em algum nivel aninhado -- a
+extensao SAN, a OCTET STRING que a envolve, ou a propria
+`Extensions SEQUENCE` -- muda de forma curta pra forma longa, ou
+vice-versa, perto do limiar de 128 bytes de conteudo, dependendo do
+tamanho total; essa mudanca de largura do campo de tamanho em si
+NUNCA e puramente aditiva no DER). **Isso nao invalida o resultado --
+exatamente o motivo de medir em vez de confiar na aritmetica.**
+
+**4. Achado extra, CONFIRMADO no codigo (nao so hipotese): o
+Hibrido-AND dobra o delta porque tem DOIS certificados-folha de
+servidor, nao um.** `certs/main.go`, linhas 525-538: o Hibrido-AND
+gera `andRSAServer` E `andMLDSAServer` como dois LEAFS DE SERVIDOR
+SEPARADOS (nao um so com uma extensao extra) -- com uma verificacao
+explicita no proprio gerador, `sameSANs(andRSAServer, andMLDSAServer)`,
+garantindo que os DOIS declarem o MESMO SAN. Por isso o efeito do
+SAN (-14B) se aplica DUAS VEZES nesse perfil especificamente -- 2 x
+(-14B) = -28B, batendo exatamente com o medido. Nao e uma anomalia,
+e uma consequencia direta e ja confirmada da arquitetura de dupla
+certificacao desse perfil.
+
+**Baseline FINAL, adotado (medido, nao aritmetico) -- substitui a
+Decisao 28 (Emenda 1):**
+```python
+CERTIFICATE_BASELINE = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
+```
+`evaluate_criteria.py` atualizado com esses valores e um comentario
+apontando pra esta decisao (29), nao mais pra Decisao 28 -- a
+Emenda 1 fica registrada como historico (seu raciocinio e seus
+numeros nao foram apagados, Decisao 28 permanece intacta), mas o
+avaliador usa os numeros desta emenda.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
