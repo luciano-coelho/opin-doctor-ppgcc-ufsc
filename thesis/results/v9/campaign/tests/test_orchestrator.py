@@ -143,15 +143,46 @@ _FAKE_IMAGE_IDS = {
     "measure": "sha256:" + "3" * 64,
     "pqc-signer": "sha256:" + "4" * 64,
 }
+_FAKE_DOCKER_IMAGE_NAMES = {
+    "gateway": "mockopin-v9-gateway", "proxy": "mockopin-v9-proxy",
+    "measure": "mockopin-v9-measure", "pqc-signer": "mockopin-pqc-signer",
+}
+# Decisao 68 (Emenda -- substitui a verificacao por Image ID):
+# conteudo FALSO, deterministico, por imagem -- o sha256 de cada um
+# e o `tar_sha256` que `_fake_pins()` usa, pra `_deliver_image` (que
+# agora confere o .tar local ANTES de qualquer scp) nunca abortar
+# por acidente nos testes que nao estao testando essa conferencia.
+_FAKE_TAR_BYTES = {key: f"tar falso de {key}, so para teste\n".encode() for key in _FAKE_DOCKER_IMAGE_NAMES}
+_FAKE_TAR_SHA256 = {key: hashlib.sha256(b).hexdigest() for key, b in _FAKE_TAR_BYTES.items()}
+_FAKE_LAYERS = {
+    "gateway": ["sha256:" + "a1" * 32, "sha256:" + "a2" * 32],
+    "proxy": ["sha256:" + "a1" * 32, "sha256:" + "b2" * 32],
+    "measure": ["sha256:" + "a1" * 32, "sha256:" + "c2" * 32],
+    "pqc-signer": ["sha256:" + "d1" * 32, "sha256:" + "d2" * 32],
+}
+_FAKE_CONFIG = {
+    "gateway": {"Entrypoint": ["/gateway"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": {"443/tcp": {}}},
+    "proxy": {"Entrypoint": ["/proxy"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
+    "measure": {"Entrypoint": ["/usr/local/bin/measure.sh"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
+    "pqc-signer": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["node", "sign.mjs"], "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
+}
+_FAKE_BINARY_PATH = {"gateway": "/gateway", "proxy": "/proxy", "measure": None, "pqc-signer": None}
+_FAKE_PROXY_BINARY_SHA256 = "b" * 64
 
 
-def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None):
+def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None, layers=None, config=None, tar_sha256=None):
     image_ids = image_ids or _FAKE_IMAGE_IDS
+    layers = layers or _FAKE_LAYERS
+    config = config or _FAKE_CONFIG
+    tar_sha256 = tar_sha256 or _FAKE_TAR_SHA256
+    binary_sha256_by_key = {"gateway": gateway_sha256, "proxy": _FAKE_PROXY_BINARY_SHA256, "measure": None, "pqc-signer": None}
     return {"images": {
-        "gateway": {"binary_sha256": gateway_sha256, "docker_image": "mockopin-v9-gateway", "image_id": image_ids["gateway"]},
-        "proxy": {"docker_image": "mockopin-v9-proxy", "image_id": image_ids["proxy"]},
-        "measure": {"docker_image": "mockopin-v9-measure", "image_id": image_ids["measure"]},
-        "pqc-signer": {"docker_image": "mockopin-pqc-signer", "image_id": image_ids["pqc-signer"]},
+        key: {
+            "docker_image": name, "image_id": image_ids[key],
+            "tar_sha256": tar_sha256[key], "rootfs_layers": layers[key], "config_subset": config[key],
+            "binary_path_in_image": _FAKE_BINARY_PATH[key], "binary_sha256": binary_sha256_by_key[key],
+        }
+        for key, name in _FAKE_DOCKER_IMAGE_NAMES.items()
     }}
 
 
@@ -169,8 +200,11 @@ def _staged_images_dir(tmp_path, monkeypatch):
     fake_home = tmp_path / "fake_home"
     images_dir = fake_home / "images"
     images_dir.mkdir(parents=True)
-    for key in ("gateway", "proxy", "measure", "pqc-signer"):
-        (images_dir / f"{key}.tar").write_bytes(b"tar falso, so para teste\n")
+    for key, tar_bytes in _FAKE_TAR_BYTES.items():
+        # Decisao 68: o conteudo tem que ser EXATAMENTE o que
+        # `_FAKE_TAR_SHA256`/`_fake_pins()` esperam -- `_deliver_image`
+        # agora confere o sha256 do .tar local ANTES de qualquer scp.
+        (images_dir / f"{key}.tar").write_bytes(tar_bytes)
     (images_dir / "gateway").write_bytes(_FAKE_GATEWAY_BINARY_BYTES)
     (images_dir / "gateway_binary_info.json").write_text(json.dumps({
         "sha256": _FAKE_GATEWAY_SHA256,
@@ -210,16 +244,32 @@ def _fake_sh_docker_save_load_call(argv):
     return None
 
 
-def _fake_image_id_for_remote_cmd(remote_cmd, image_ids=_FAKE_IMAGE_IDS):
-    """Resposta fake de `docker image inspect <imagem> --format
-    '{{.Id}}'` -- usada pelos dois fakes deste arquivo. Devolve None
-    se o comando nao for essa chamada."""
-    if "docker image inspect" not in remote_cmd:
+def _fake_image_id_for_remote_cmd(remote_cmd, image_ids=None, layers=None, config=None, binary_shas=None):
+    """Decisao 68 (Emenda): respostas fake pras 4 chamadas de
+    identidade que `_deliver_image` faz no HOST, pos `docker load`
+    -- `docker image inspect --format '{{.Id}}'` (informativo,
+    Decisao 68), `'{{json .RootFS.Layers}}'`, `'{{json .Config}}'`, e
+    `docker run --rm --entrypoint sha256sum <imagem> <binario>`.
+    Devolve None se o comando nao for nenhuma dessas."""
+    image_ids = image_ids or _FAKE_IMAGE_IDS
+    layers = layers or _FAKE_LAYERS
+    config = config or _FAKE_CONFIG
+    binary_shas = binary_shas or {"gateway": _FAKE_GATEWAY_SHA256, "proxy": _FAKE_PROXY_BINARY_SHA256}
+    key = next((k for k, name in _FAKE_DOCKER_IMAGE_NAMES.items() if name in remote_cmd), None)
+    if key is None:
         return None
-    for key, name in (("gateway", "mockopin-v9-gateway"), ("proxy", "mockopin-v9-proxy"),
-                      ("measure", "mockopin-v9-measure"), ("pqc-signer", "mockopin-pqc-signer")):
-        if name in remote_cmd:
-            return f"{image_ids[key]}\n"
+    if "RootFS.Layers" in remote_cmd:
+        return json.dumps(layers[key]) + "\n"
+    if "{{json .Config}}" in remote_cmd or "json .Config}}" in remote_cmd:
+        return json.dumps(config[key]) + "\n"
+    if "entrypoint sha256sum" in remote_cmd and "docker run" in remote_cmd:
+        bp = _FAKE_BINARY_PATH[key]
+        sha = binary_shas.get(key)
+        if bp and sha:
+            return f"{sha}  {bp}\n"
+        return None
+    if "docker image inspect" in remote_cmd:
+        return f"{image_ids[key]}\n"
     return None
 
 
@@ -777,7 +827,7 @@ def test_pin_divergente_aborta_antes_de_qualquer_execucao(monkeypatch):
     # PINS.json com um hash que NUNCA bate com o binario fake extraido.
     monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins(gateway_sha256="0" * 64))
     executor = orch.SSHExecutor(inventory, key_path="/fake/key")
-    with pytest.raises(RuntimeError, match="PINS.json"):
+    with pytest.raises(RuntimeError):
         executor.start_block("classico", "L0")
     flat = [" ".join(c) for c in calls]
     assert not any("docker run -d --name v9-mtls" in c for c in flat), (
@@ -818,41 +868,112 @@ def test_campanha_oficial_com_os_pins_do_piloto_passa(monkeypatch):
     assert campanha_oficial_executor.gateway_binary_verifications[0]["pin_matched"] is True
 
 
-def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monkeypatch):
-    """Decisao 55, item 2: `docker load` carrega uma imagem com um
-    Image ID diferente do que PINS.json espera (origem/build
-    diferente do artefato pinado) -- tem que abortar ANTES de
-    qualquer `docker run`/proxy/signer."""
-    inventory = {
-        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
-        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
-    }
+# --- Decisao 68 (Emenda -- substitui a verificacao por Image ID):
+# mutantes pedidos explicitamente -- tar adulterado reprova, camada
+# adulterada reprova, binario (dentro da imagem) adulterado reprova,
+# correto passa. Image ID nunca mais e motivo de aborto (so
+# informativo).
+
+def test_deliver_image_aborta_se_tar_local_adulterado(monkeypatch):
+    """O .tar ja estagiado no controle foi adulterado (sha256 nao
+    bate com `tar_sha256` pinado) -- tem que abortar ANTES de
+    qualquer scp pro host, nunca so depois do load."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    # adultera o .tar do gateway DEPOIS que a fixture autouse ja o
+    # escreveu certo -- simula corrupcao/adulteracao real.
+    (executor.images_staging_dir / "gateway.tar").write_bytes(b"tar ADULTERADO\n")
+    with pytest.raises(RuntimeError, match="sha256 do .tar"):
+        executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any(c[0] == "scp" for c in calls), "nenhum scp pode acontecer com o .tar local adulterado -- " + str(flat)
+    assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
+
+
+def test_deliver_image_aborta_se_camada_adulterada(monkeypatch):
+    """O host, pos `docker load`, devolve `RootFS.Layers` diferentes
+    das pinadas (imagem de origem diferente, mesmo com o .tar
+    passando a conferencia de transporte) -- tem que abortar ANTES
+    de proxy/signer."""
     calls = []
 
     def fake_run(argv, timeout=None):
-        calls.append(argv)
-        local_docker = _fake_local_docker_gateway_binary_call(argv)
-        if local_docker is not None:
-            return local_docker
-        sh_save_load = _fake_sh_docker_save_load_call(argv)
-        if sh_save_load is not None:
-            return sh_save_load
+        base = _fake_run_factory(calls)(argv, timeout)
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
-        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
-        if tcp_preflight is not None:
-            return tcp_preflight
-        if "docker image inspect" in remote_cmd:
-            return _SimpleProc(stdout="sha256:" + "9" * 64 + "\n")  # ID errado, de proposito
-        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+        if "RootFS.Layers" in remote_cmd and "mockopin-v9-gateway" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps(["sha256:" + "9" * 64]) + "\n")
+        return base
 
     monkeypatch.setattr(cli, "_run", fake_run)
-    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
-    with pytest.raises(RuntimeError, match="nao bate com PINS.json"):
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="identidade nao confere"):
         executor.start_block("classico", "L0")
     flat = [" ".join(c) for c in calls]
     assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
     assert not any("start_tls_kem_proxy" in c for c in flat), flat
-    assert executor.image_delivery_verifications[0]["ok"] is False
+    assert executor.image_delivery_verifications[0]["layers_ok"] is False
+
+
+def test_deliver_image_aborta_se_config_adulterada(monkeypatch):
+    """O host devolve um `.Config` (Entrypoint/Cmd/Env/ExposedPorts)
+    diferente do pinado -- tambem reprova, mesmo com camadas e tar
+    corretos."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        base = _fake_run_factory(calls)(argv, timeout)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "{{json .Config}}" in remote_cmd and "mockopin-v9-gateway" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps({"Entrypoint": ["/bin/sh"], "Cmd": None, "Env": [], "ExposedPorts": None}) + "\n")
+        return base
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="identidade nao confere"):
+        executor.start_block("classico", "L0")
+    assert executor.image_delivery_verifications[0]["config_ok"] is False
+
+
+def test_deliver_image_aborta_se_binario_na_imagem_adulterado(monkeypatch):
+    """O sha256 do binario DENTRO do container carregado no host
+    (proxy, que tem binary_path_in_image) nao bate com o pinado --
+    camadas/config/tar corretos, mas o binario real divergiu."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        base = _fake_run_factory(calls)(argv, timeout)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "entrypoint sha256sum" in remote_cmd and "mockopin-v9-proxy" in remote_cmd:
+            return _SimpleProc(stdout="9" * 64 + "  /proxy\n")
+        return base
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="identidade nao confere"):
+        executor.start_block("classico", "L0")
+    # a entrega do gateway (antes do proxy) tem que ter passado --
+    # so o proxy, com o binario adulterado, reprova.
+    delivered = {v["image_key"]: v for v in executor.image_delivery_verifications}
+    assert delivered["gateway"]["ok"] is True
+    assert delivered["proxy"]["binary_ok"] is False
+    assert delivered["proxy"]["ok"] is False
+
+
+def test_deliver_image_correto_passa_com_nova_verificacao(monkeypatch):
+    """Tar, camadas, config e binario todos corretos -- `_deliver_
+    image` tem que passar pras 3 imagens que `start_block` entrega
+    (gateway/proxy/pqc-signer), sem nenhum Image ID sendo conferido."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    assert len(executor.image_delivery_verifications) == 3
+    for v in executor.image_delivery_verifications:
+        assert v["ok"] is True, v
+        assert v["layers_ok"] is True and v["config_ok"] is True and v["binary_ok"] is True, v
+    flat = [" ".join(c) for c in calls]
+    assert any("docker run -d --name v9-mtls" in c for c in flat), flat
 
 
 def test_deliver_image_registra_tempo_e_tamanho_do_2o_salto(monkeypatch):

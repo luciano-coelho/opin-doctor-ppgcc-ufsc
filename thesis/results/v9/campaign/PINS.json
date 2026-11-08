@@ -1,7 +1,8 @@
 {
   "_policy": "Decisao 55, item 1. Alterar qualquer valor deste arquivo exige uma Emenda numerada explicita em DECISIONS.md (data, motivo, diff) -- NUNCA uma edicao automatica pelo orquestrador ou por qualquer script. O orquestrador so LE este arquivo; nenhum codigo deste projeto escreve nele.",
-  "_platform": "linux/amd64 -- as 3 imagens, sempre (ver Decisao 55, item 2: nenhuma instancia faz docker build; o controle, unico arm64 do piloto, nunca executa nenhuma das 3).",
-  "_reproducibility_note": "O BINARIO (sha256 abaixo) e reproduzivel byte a byte entre builds independentes, confirmado 2x pra gateway nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O ID DA IMAGEM Docker (docker image inspect .Id) NAO e reproduzivel entre builds -- mesmo binario identico produziu 2 Image IDs diferentes num teste direto (metadados de build/timestamp de camada variam, conteudo nao). Por isso o Image ID aqui e fixado a partir de UMA UNICA imagem construida (nunca recalculado por rebuild) e so e valido para o artefato distribuido via `docker save`/`docker load` (Decisao 55, item 2) -- nunca para uma reconstrucao local independente.",
+  "_platform": "linux/amd64 -- as 4 imagens, sempre (ver Decisao 55, item 2: nenhuma instancia faz docker build; o controle, unico arm64 do piloto, nunca executa nenhuma delas).",
+  "_reproducibility_note": "O BINARIO (sha256 abaixo, gateway/proxy) e reproduzivel byte a byte entre builds independentes, confirmado 2x nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O `.tar` de `docker save` do mesmo image id LOCAL (nunca reconstruido) tambem e byte a byte reproduzivel entre invocacoes independentes, confirmado (Decisao 68: 2 `docker save` seguidos do mesmo `mockopin-v9-gateway`, mesmo sha256 de arquivo).",
+  "_image_identity_note": "Decisao 68 (Emenda -- substitui a verificacao por Image ID que a Decisao 55 pre-registrou). Achado real, ao vivo, na execucao real do piloto (Decisao 67): `docker image inspect .Id` DIVERGE entre versoes diferentes de Docker, mesmo carregando o MESMO `.tar`, com conteudo comprovadamente identico -- confirmado rodando um `docker:25-dind` (Docker 25.0.5, proxy da versao real do AMI, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `.RootFS.Layers` e o subconjunto de `.Config` (Entrypoint/Cmd/Env/ExposedPorts) saem IDENTICOS nas duas versoes; so o `.Id` final diverge. O fail-closed de entrega NAO verifica mais Image ID -- passa a exigir, nesta ordem: (1) sha256 do `.tar` igual ao `tar_sha256` pinado aqui, conferido nos dois saltos (operador->controle, ja existia; controle->host, novo); (2) `RootFS.Layers` do host, pos `docker load`, identicas a `rootfs_layers` aqui; (3) o subconjunto de `.Config` do host identico a `config_subset` aqui; (4) pra `gateway`/`proxy` (tem binario Go proprio), o sha256 do binario DENTRO do container carregado no host identico a `binary_sha256`. `image_id` continua gravado, so como campo INFORMATIVO -- nunca comparado, nunca um motivo de aborto. Nenhum criterio pre-registrado do piloto (os 7 criterios/limiares da avaliacao) muda -- isso e so o MECANISMO de verificar que a imagem entregue e a esperada, nunca o que e medido.",
   "generated_at_utc": "2026-11-08T03:30:00Z",
   "go_toolchain": {
     "go_tag": "go1.27.3",
@@ -12,45 +13,109 @@
     "gateway": {
       "docker_image": "mockopin-v9-gateway",
       "platform": "linux/amd64",
+      "tar_sha256": "7720c54743cc3e03dcb60ae63f7713d05edde9ebb977920d1ecdba82d9721782",
+      "rootfs_layers": [
+        "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
+        "sha256:f8d29cd508d9504cc971d5ebd88dbd9918caa94aa763eca4337a4ac71fb4b6a7",
+        "sha256:616039b2db75287d97aa13fb080f2eaa74229ca8a0aed770a0341265a19cdcf1"
+      ],
+      "config_subset": {
+        "Entrypoint": ["/gateway"],
+        "Cmd": null,
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+        "ExposedPorts": {"443/tcp": {}}
+      },
       "binary_path_in_image": "/gateway",
       "binary_sha256": "a08ba8e31c4e6bdc865cd32164413169390eca6766359105d10ed0e7557ff47f",
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "ba8f857b5d868f2c9b0596e72b3089b9e6c678ceb6a911a90035596e2ceb9493",
       "go_version_m_text": "/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
       "image_id": "sha256:fadd40fc9bf98d018a0cda2c364e1d546ac8b51db80613bac96dee5690bc9d28",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
       "note": "Decisao 61 (Emenda): Image ID re-pinado -- a imagem original (625acc6b8838...) nao existe mais localmente (nem tagueada, nem dangling; confirmado via docker image inspect/docker images -a --no-trunc). Binario/go_version_m IDENTICOS ao pin anterior (sha256 conferido de novo); camada base e byte-a-byte igual a um pull fresco de alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a (mesmo digest de layer); as 2 camadas adicionais sao so COPY /gateway e COPY certs, nada mais, nenhuma configuracao de runtime diferente (ENTRYPOINT/EXPOSE inalterados). Imagem tagueada imutavelmente como mockopin-v9-gateway:pinned. Ver DECISIONS.md, Decisao 61, pro diff completo e a prova de conteudo dos certificados."
     },
     "proxy": {
       "docker_image": "mockopin-v9-proxy",
       "platform": "linux/amd64",
+      "tar_sha256": "a982d3e6110435bdc7fa204dd517b6361fe4a93db26aa9a561d8eb0dd2e8df52",
+      "rootfs_layers": [
+        "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
+        "sha256:66972ef54bf96f56ecac0371d60dcd519ad5a6ad1e98f25636e56f9bac909a6a",
+        "sha256:5ecd8660a0cdff27531cca13e57dbc0e0434b7021794b0295d310d0f2fcab2f1"
+      ],
+      "config_subset": {
+        "Entrypoint": ["/proxy"],
+        "Cmd": null,
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+        "ExposedPorts": null
+      },
       "binary_path_in_image": "/proxy",
       "binary_sha256": "86f1ef6087aa213b494deab74610fd80f3994e4e0900b54e65d6cb8e67bb0e71",
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "28e69c5dd6fd12b2685b02c22e18b6f3a0944a34f193913bff9ef5c75629c9f5",
       "go_version_m_text": "/proxy: go1.27.3\n\tpath\tmockopin-v9-proxy\n\tmod\tmockopin-v9-proxy\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:d106ee299605d38f073bd24829cef0f5a3d8778879240d369b9ba1c3a9edc163"
+      "image_id": "sha256:d106ee299605d38f073bd24829cef0f5a3d8778879240d369b9ba1c3a9edc163",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note)."
     },
     "measure": {
       "docker_image": "mockopin-v9-measure",
       "platform": "linux/amd64",
+      "tar_sha256": "75f208b7344b1156b56b3b327c4597a711e9209545225b25e6d6a35932784805",
+      "rootfs_layers": [
+        "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
+        "sha256:83ca9b2ed5a63f78f13fda7f13eea8be41f42be50edf3c6030df0694b8dc995e",
+        "sha256:a0eeff0354ba2609a4d391bf9c9190cbc2d25e5ce83efc3948d2ff1fa3eb81ae",
+        "sha256:f4c10c89cc9d4228137716e3c9889082ca3765c8ae05b7373052b5fdb1dff440",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:c2ac5374e10d1afa93b641f2f1202122991e556c1375285f59958320380dba8a"
+      ],
+      "config_subset": {
+        "Entrypoint": ["/usr/local/bin/measure.sh"],
+        "Cmd": null,
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+        "ExposedPorts": null
+      },
       "binary_path_in_image": null,
       "binary_sha256": null,
       "binary_sha256_reproducible": null,
       "go_version_m_sha256": null,
       "go_version_m_text": null,
       "image_id": "sha256:2274de77a3ade4c2cf12b8cfc0e88aceec13ddfb20fe8ccda669798b53d61e6d",
-      "note": "So tooling de captura (tcpdump+tshark) -- nunca decide aceitar/rejeitar conexao nenhuma (ver DECISIONS.md, risco residual). Pin so pelo Image ID, verificado apos docker load; nenhum binario unico proprio pra hashear (a imagem embute copias de gateway/proxy/bench so pro harness standalone de medicao, nunca usadas pelo piloto real)."
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "So tooling de captura (tcpdump+tshark) -- nunca decide aceitar/rejeitar conexao nenhuma (ver DECISIONS.md, risco residual). Sem binario unico proprio pra hashear (a imagem embute copias de gateway/proxy/bench so pro harness standalone de medicao, nunca usadas pelo piloto real) -- identidade conferida so por tar_sha256+rootfs_layers+config_subset (Decisao 68)."
     },
     "pqc-signer": {
       "docker_image": "mockopin-pqc-signer",
       "platform": "linux/amd64",
+      "tar_sha256": "4f1931361b8f024af080c82e69c13033549942c013a8dd435b53ab09332fc803",
+      "rootfs_layers": [
+        "sha256:34884abbe92863fce933ed7c39c0e045631af0ed86d5cc0dfbdf9fdca426ce3c",
+        "sha256:e1f5bc212f66ae7d84a2a7fe70a658e80ec21226c1fec757b86a5691cfd97683",
+        "sha256:2e92618b1d53428b5a4a2ae1b5c537ec63ef2a965946006b36c3027a8887e2ce",
+        "sha256:0948fc140bebfa482876a45c1dadcf79c3957b23cf5633006ec53a5dafc7b4a0",
+        "sha256:0f9f1c3a75a86780839b4ad37622a5f58096e8962dd515b56dfce4026e751051",
+        "sha256:85e58620c03643150883c40dfa9ece08ee02c8fd58028da84d29e6384f82db23",
+        "sha256:befcbe42d3b952d4e8aec43d707d19209e6a664e4a637f56a949a236d83b970f",
+        "sha256:1e92ca3bf125f78de1ae7f2e334ca0a8a2853d2845154bb93e08bc7d21cd96b6"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"],
+        "Cmd": ["node", "sign.mjs"],
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "NODE_VERSION=24.19.0",
+          "YARN_VERSION=1.22.22"
+        ],
+        "ExposedPorts": null
+      },
       "binary_path_in_image": null,
       "binary_sha256": null,
       "binary_sha256_reproducible": null,
       "go_version_m_sha256": null,
       "go_version_m_text": null,
       "image_id": "sha256:b141cc7831aacdc1369d6a3efefbad55e0c839dac83e25fed1728a6614923b01",
-      "note": "Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- pin so pelo Image ID, verificado apos docker load, mesmo padrao de 'measure'."
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- identidade conferida so por tar_sha256+rootfs_layers+config_subset (Decisao 68)."
     }
   }
 }

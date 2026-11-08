@@ -48,16 +48,21 @@ Os 4 foram reconfirmados com 0B de desvio em 480 conexões reais locais nesta se
 ## c) Pins de binário/imagem e como são entregues
 
 ### O que é pinado, e por quê
-`thesis/results/v9/campaign/PINS.json` (versionado) congela, para `gateway`, `proxy` e `measure`: o sha256 do binário extraído, a saída de `go version -m`, e o Image ID Docker — todos de **uma única imagem construída**, nunca recalculados automaticamente. Alterar o arquivo exige uma Emenda numerada em `DECISIONS.md`.
+`thesis/results/v9/campaign/PINS.json` (versionado) congela, para as 4 imagens: o sha256 do `.tar` (`tar_sha256`), as `RootFS.Layers`, um subconjunto do `.Config` (`Entrypoint`/`Cmd`/`Env`/`ExposedPorts`), e — só pra `gateway`/`proxy`, que têm binário Go próprio — o sha256 do binário extraído e a saída de `go version -m`. Tudo de **uma única imagem construída**, nunca recalculado automaticamente. Alterar o arquivo exige uma Emenda numerada em `DECISIONS.md`.
 
-**Reprodutibilidade, testada de verdade:** o binário do gateway e do proxy foi construído duas vezes, do zero (`--no-cache`), com `-trimpath` + `GOARCH=amd64` explícitos — sha256 **idêntico** nas duas vezes, nos dois binários. O **Image ID Docker não é reproduzível** entre builds independentes (confirmado: o mesmo binário, dois builds, dois Image IDs diferentes — metadados de camada/timestamp variam, conteúdo não). Por isso o Image ID em PINS.json só é válido para o artefato **distribuído por `docker save`/`docker load`** (determinístico — nunca para uma reconstrução local independente).
+**Reprodutibilidade, testada de verdade:** o binário do gateway e do proxy foi construído duas vezes, do zero (`--no-cache`), com `-trimpath` + `GOARCH=amd64` explícitos — sha256 **idêntico** nas duas vezes, nos dois binários. O `.tar` de `docker save` da mesma imagem local (nunca reconstruída) também é byte a byte reproduzível entre invocações independentes (confirmado, Decisão 68).
 
-### Como a imagem chega a cada instância — nunca por `docker build`, agora em 2 saltos reais (Decisão 59)
-Restaurado o modelo real da v8 (`deliver_images.sh`), porque `docker save <imagem> | ssh <host> docker load` (Decisão 55) exigia Docker na máquina que executa esse comando -- e essa máquina é o CONTROLE agora que `orchestrator.py` roda de lá, e o controle nunca tem Docker. Dois saltos, cada um na máquina certa:
-1. `deliver_images.py`, na máquina do OPERADOR (tem Docker): `docker save <imagem> > <imagem>.tar`, sha256, checagem de espaço em disco no controle, scp pro controle (`~/images/`). Pro gateway, também extrai o binário e confere o sha256 contra PINS.json aqui (nunca no controle).
-2. `SSHExecutor._deliver_image(image_key, host)`, rodando DO CONTROLE: scp do `.tar` já estagiado (arquivo LOCAL, nunca `docker save`) pro host, `ssh host docker load`, depois `docker image inspect --format '{{.Id}}'` no destino, comparado contra PINS.json. Fail-closed: aborta antes de qualquer execução se o ID carregado divergir.
+### Image ID — Decisão 68 (Emenda): descartado como critério de verificação
+**Achado real, ao vivo, na execução real do piloto (Decisão 67):** `docker image inspect .Id` **diverge entre versões diferentes de Docker**, mesmo carregando o MESMO `.tar`, com conteúdo comprovadamente idêntico — confirmado rodando um `docker:25-dind` (proxy local da versão real do servidor, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `RootFS.Layers` e o subconjunto de `.Config` saem **idênticos** nas duas versões; só o `.Id` final diverge. Isso quebrou o mecanismo da Decisão 55 na primeira execução real (gateway abortou com Image ID divergente, binário confirmado idêntico por baixo).
 
-Testado (binário/Image ID adulterado aborta; correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins; nenhuma chamada invoca `docker` localmente nem faz o pipe antigo `docker save | ssh ... docker load`).
+**Corrigido:** o fail-closed de entrega não verifica mais Image ID. Image ID continua gravado em PINS.json, só como campo **informativo** — nunca comparado, nunca motivo de aborto. Nenhum critério pré-registrado do piloto (os 7 critérios/limiares da avaliação) muda — isso é só o MECANISMO de verificar que a imagem entregue é a esperada, nunca o que é medido.
+
+### Como a imagem chega a cada instância — nunca por `docker build`, 2 saltos reais, identidade por conteúdo (Decisão 68)
+Modelo real da v8 (`deliver_images.sh`) restaurado na Decisão 59 — dois saltos, cada um na máquina certa:
+1. `deliver_images.py`, na máquina do OPERADOR (tem Docker): `docker save -o <imagem>.tar <imagem>`, sha256 do `.tar` **conferido contra `tar_sha256` pinado** (Decisão 68, ANTES de qualquer scp — pega uma imagem local errada/reconstruída, nunca só corrupção de transporte), checagem de espaço em disco no controle, scp pro controle (`~/images/`). Pro gateway, também extrai o binário e confere o sha256 contra PINS.json aqui.
+2. `SSHExecutor._deliver_image(image_key, host)`, rodando DO CONTROLE: scp do `.tar` já estagiado (arquivo LOCAL, nunca `docker save`) pro host, `ssh host docker load`. Fail-closed, nesta ordem: (a) `RootFS.Layers` do host idênticas às pinadas; (b) o subconjunto de `.Config` do host idêntico ao pinado; (c) pra `gateway`/`proxy`, o sha256 do binário DENTRO do container carregado, igual ao pinado. Image ID é lido/registrado, só informativo.
+
+Testado (tar adulterado reprova — antes de qualquer scp; camada adulterada reprova; config adulterado reprova; binário dentro da imagem adulterado reprova; tudo correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins; nenhuma chamada invoca `docker` localmente no controle).
 
 ### Arquitetura de cada instância — quem roda o quê
 **Correção à Decisão 56(a) (achado real da Decisão 59):** "o orquestrador e o build rodam na máquina do operador... NUNCA numa instância AWS" estava **errado** pra parte "o orquestrador". O *build* (docker build/save) continua, de fato, só na máquina do operador — mas `orchestrator.py` (`SSHExecutor`, a execução remota real) só alcança servidor/clientes de dentro do **controle** (Security Group do servidor/clientes só aceita SSH do EIP do próprio controle, `main.tf`) — `deliver_to_control()` (`deliver_source.py`, Decisão 59) entrega `orchestrator.py` + dependências pro controle, de onde ele roda de verdade. `pki_relay.py`/`collect_artifacts.py`/`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py` continuam rodando **no operador** (nunca no controle) — falam com o controle por SSH (`pki_relay.py`/`collect_artifacts.py`) ou nem isso (`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py`, só API AWS direta).
@@ -72,8 +77,8 @@ Testado (binário/Image ID adulterado aborta; correto passa; uma segunda instân
 
 Nenhuma variante ARM das 3 imagens existe nem é necessária.
 
-### `check_capture_prerequisites` — agora confere o ID, não só presença
-Corrigido (Decisão 53 só checava presença — uma imagem de origem/build diferente passaria sem ser pega): `check_capture_prerequisites(host, expected_measure_image_id=...)` reprova explicitamente se o Image ID de `mockopin-v9-measure` na instância não bater com PINS.json. Testado com ID errado (reprova) e correto (passa).
+### `check_capture_prerequisites` — agora confere camadas+config, não mais Image ID
+Corrigido na Decisão 53 (só checava presença — uma imagem de origem/build diferente passaria sem ser pega) e de novo na Decisão 68 (Image ID descartado como critério, pelo mesmo motivo do resto deste documento): `check_capture_prerequisites(host, expected_measure_layers=..., expected_measure_config=...)` reprova explicitamente se `RootFS.Layers`/o subconjunto de `.Config` de `mockopin-v9-measure` na instância não baterem com PINS.json. Testado com camadas erradas (reprova), config errado (reprova) e os dois certos (passa).
 
 ---
 
@@ -221,8 +226,8 @@ Já existe um alerta geral na conta (herdado da v8, valor nunca lido por este pr
 
 | # | Risco | Status | Decisão pendente |
 |---|---|---|---|
-| 1 | Imagem `mockopin-v9-measure` precisa existir em cada instância | **RESOLVIDO** (Decisão 55, item 2) — entregue por `docker save`/`docker load`, Image ID conferido contra PINS.json, nunca `docker build` na instância | Nenhuma |
-| 2 | Proxy e measure sem o mesmo mecanismo de verificação do gateway | **RESOLVIDO** (Decisão 55, itens 1-2) — os 3 agora tem pin de Image ID (gateway/proxy também tem pin de binário+`go version -m`) | Nenhuma |
+| 1 | Imagem `mockopin-v9-measure` precisa existir em cada instância | **RESOLVIDO** (Decisão 55, item 2; mecanismo de verificação corrigido na Decisão 68) — entregue por `docker save`/`docker load`, identidade conferida por `RootFS.Layers`+`.Config` contra PINS.json, nunca `docker build` na instância | Nenhuma |
+| 2 | Proxy e measure sem o mesmo mecanismo de verificação do gateway | **RESOLVIDO** (Decisão 55, itens 1-2; Decisão 68) — as 4 agora tem pin de `tar_sha256`+`RootFS.Layers`+`.Config` (gateway/proxy também tem pin de binário+`go version -m`, conferido dentro da imagem carregada) | Nenhuma |
 | 3 | Controle sem autodesligamento por tag/projeto separado | Aceito e mitigado (`self_terminate_hours=5`, `terminate`) | Nenhuma |
 | 4 | Alerta de orçamento geral, não específico do piloto | Reclassificado (item g) — ainda pendente de criação | Decidir o valor (US$3 sugerido) e criar o alerta |
 | 5 | AND cobre só TLS 1.3 | Limitação de design aceita desde o pré-registro | Nenhuma |

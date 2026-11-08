@@ -174,6 +174,21 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
 
         for key, tar_path in tar_paths.items():
             sha256 = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+            # Decisao 68 (Emenda -- substitui a verificacao por Image
+            # ID, que a Decisao 67 confirmou divergir entre versoes de
+            # Docker mesmo com conteudo identico): confere o .tar
+            # RECEM-CONSTRUIDO contra o `tar_sha256` pinado -- fail-
+            # closed ANTES de qualquer scp, pega tanto uma imagem
+            # local errada/reconstruida quanto corrupcao, nunca so
+            # confianca na propria consistencia interna do envio.
+            expected_tar_sha256 = pins["images"][key]["tar_sha256"]
+            if sha256 != expected_tar_sha256:
+                raise RuntimeError(
+                    f"deliver_images({key}): sha256 do .tar recem-construido ({sha256!r}) nao bate com "
+                    f"tar_sha256 em PINS.json ({expected_tar_sha256!r}) -- abortando ANTES de qualquer scp. "
+                    f"A imagem local pode ter sido reconstruida -- regra do piloto: nunca reconstruir "
+                    f"imagens pinadas antes do fim (ver DECISIONS.md)."
+                )
             sha_path = tar_path.parent / f"{tar_path.name}.sha256"
             # Decisao 64 (achado real, ao vivo, na propria Fase A --
             # mesma familia das Decisoes 62/63): write_text no Windows

@@ -196,6 +196,8 @@ set -u
 echo "TCPDUMP_PATH=$(command -v tcpdump || true)"
 if sudo -n true 2>/dev/null; then echo "SUDO_NOPASSWD=1"; else echo "SUDO_NOPASSWD=0"; fi
 echo "MEASURE_IMAGE_ID=$(docker image inspect mockopin-v9-measure --format '{{.Id}}' 2>/dev/null || true)"
+echo "MEASURE_LAYERS=$(docker image inspect mockopin-v9-measure --format '{{json .RootFS.Layers}}' 2>/dev/null || true)"
+echo "MEASURE_CONFIG=$(docker image inspect mockopin-v9-measure --format '{{json .Config}}' 2>/dev/null || true)"
 if touch /tmp/.v9_keylog_preflight_check 2>/dev/null; then
   rm -f /tmp/.v9_keylog_preflight_check
   echo "TMP_WRITABLE=1"
@@ -206,22 +208,24 @@ echo "PRIMARY_IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $
 """
 
 
-def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expected_measure_image_id=None) -> dict:
-    """Decisao 53, item 4a (corrigido na Decisao 55, item 2). Roda os
-    5 probes combinados numa UNICA chamada SSH e reprova com mensagem
-    clara se qualquer um faltar: `tcpdump` instalado, sudo sem senha
-    disponivel (exigido pelo `tcpdump` real dentro de
-    `dedicated_capture`, mesma convencao do `campaign_run.py` real da
-    v8), `/tmp` gravavel, a interface primaria identificavel pela
-    rota default (nunca loopback -- mesmo metodo de `SSHExecutor.
-    _primary_iface`) e a imagem `mockopin-v9-measure` com o Image ID
-    EXATO que PINS.json espera (Decisao 55: a imagem chega por `docker
-    save`/`docker load`, Decisao 55 item 2 -- nunca por `docker build`
-    na instancia, entao so a PRESENCA nunca bastou: uma imagem de
-    build ou origem diferente passaria sem ser pega). `expected_
-    measure_image_id` default `None` so pra chamada isolada/teste
-    sem PINS -- `run_capture_preflight` sempre passa o valor real de
-    PINS.json."""
+def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expected_measure_image_id=None,
+                                 expected_measure_layers=None, expected_measure_config=None) -> dict:
+    """Decisao 53, item 4a (corrigido na Decisao 55, item 2; corrigido
+    de novo na Decisao 68). Roda os probes combinados numa UNICA
+    chamada SSH e reprova com mensagem clara se qualquer um faltar:
+    `tcpdump` instalado, sudo sem senha disponivel (exigido pelo
+    `tcpdump` real dentro de `dedicated_capture`, mesma convencao do
+    `campaign_run.py` real da v8), `/tmp` gravavel, a interface
+    primaria identificavel pela rota default (nunca loopback -- mesmo
+    metodo de `SSHExecutor._primary_iface`) e a imagem `mockopin-v9-
+    measure` IDENTICA a pinada -- Decisao 68 (Emenda): Image ID
+    diverge entre versoes de Docker mesmo com conteudo identico
+    (confirmado ao vivo, Decisao 67/68) -- a conferencia agora e por
+    `RootFS.Layers` + subconjunto de `.Config`, nunca mais por Image
+    ID (que continua lido, so informativo). `expected_measure_layers`/
+    `expected_measure_config` default `None` so pra chamada isolada/
+    teste sem PINS -- `run_capture_preflight` sempre passa os valores
+    reais de PINS.json."""
     try:
         proc = cli.run_ssh(host, _CAPTURE_PROBE_SCRIPT, key_path=key_path, connect_timeout=connect_timeout)
     except Exception as e:  # noqa: BLE001 -- rede de seguranca: SSH indisponivel nunca estoura, so reprova
@@ -237,7 +241,20 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
     tcpdump_ok = bool(fields.get("TCPDUMP_PATH"))
     sudo_ok = fields.get("SUDO_NOPASSWD") == "1"
     measure_image_id = fields.get("MEASURE_IMAGE_ID") or None
-    measure_image_ok = bool(measure_image_id) and (expected_measure_image_id is None or measure_image_id == expected_measure_image_id)
+    try:
+        measure_layers = json.loads(fields["MEASURE_LAYERS"]) if fields.get("MEASURE_LAYERS") else None
+    except json.JSONDecodeError:
+        measure_layers = None
+    try:
+        measure_config = json.loads(fields["MEASURE_CONFIG"]) if fields.get("MEASURE_CONFIG") else None
+    except json.JSONDecodeError:
+        measure_config = None
+    measure_config_subset = (
+        {k: measure_config.get(k) for k in ("Entrypoint", "Cmd", "Env", "ExposedPorts")}
+        if isinstance(measure_config, dict) else None
+    )
+    layers_ok = bool(measure_layers) and (expected_measure_layers is None or measure_layers == expected_measure_layers)
+    config_ok = bool(measure_config_subset) and (expected_measure_config is None or measure_config_subset == expected_measure_config)
     tmp_writable_ok = fields.get("TMP_WRITABLE") == "1"
     iface = fields.get("PRIMARY_IFACE", "")
     iface_ok = bool(iface) and iface != "lo"
@@ -247,10 +264,12 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
         missing.append("tcpdump nao encontrado no PATH")
     if not sudo_ok:
         missing.append("sudo sem senha indisponivel (exigido pelo tcpdump real de dedicated_capture)")
-    if not measure_image_id:
+    if not measure_layers:
         missing.append("imagem docker mockopin-v9-measure ausente (entregue por docker save/load, Decisao 55 item 2 -- nunca docker build na instancia)")
-    elif expected_measure_image_id is not None and measure_image_id != expected_measure_image_id:
-        missing.append(f"Image ID de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_image_id!r}, achado {measure_image_id!r}")
+    elif expected_measure_layers is not None and measure_layers != expected_measure_layers:
+        missing.append(f"RootFS.Layers de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_layers!r}, achado {measure_layers!r}")
+    if measure_layers and expected_measure_config is not None and measure_config_subset != expected_measure_config:
+        missing.append(f"Config de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_config!r}, achado {measure_config_subset!r}")
     if not tmp_writable_ok:
         missing.append("/tmp nao gravavel")
     if not iface_ok:
@@ -259,8 +278,10 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
     return {
         "check": "pre-requisitos de captura (criterio 1)", "ok": not missing,
         "host": host, "tcpdump_path": fields.get("TCPDUMP_PATH") or None,
-        "sudo_nopasswd": sudo_ok, "measure_image_id": measure_image_id,
-        "expected_measure_image_id": expected_measure_image_id,
+        "sudo_nopasswd": sudo_ok,
+        "measure_image_id": measure_image_id, "measure_image_id_note": "informativo apenas, nunca verificado (Decisao 68)",
+        "measure_layers": measure_layers, "expected_measure_layers": expected_measure_layers, "layers_ok": layers_ok,
+        "measure_config_subset": measure_config_subset, "expected_measure_config": expected_measure_config, "config_ok": config_ok,
         "tmp_writable": tmp_writable_ok, "primary_iface": iface or None,
         "missing": missing,
     }
@@ -278,19 +299,26 @@ def run_capture_preflight(hosts, key_path=None, pins_path=_PINS_PATH_DEFAULT) ->
     pelo smoke gate (`run_smoke_gate`) antes das 12 execucoes, nunca
     depois.
 
-    Decisao 55, item 2: le PINS.json (leitura propria e pequena,
-    deliberadamente NUNCA importa `orchestrator.load_pins` -- evitaria
-    um import circular, ja que `orchestrator.py` importa este
-    modulo) pra exigir o Image ID EXATO de `mockopin-v9-measure`, nao
-    so presenca. `pins_path` e um parametro (nao hardcoded) so pra
+    Decisao 55, item 2 (corrigido na Decisao 68): le PINS.json (leitura
+    propria e pequena, deliberadamente NUNCA importa `orchestrator.
+    load_pins` -- evitaria um import circular, ja que `orchestrator.py`
+    importa este modulo) pra exigir `RootFS.Layers`/subconjunto de
+    `.Config` EXATOS de `mockopin-v9-measure`, nao so presenca --
+    Image ID NUNCA mais e o criterio (diverge entre versoes de Docker,
+    Decisao 67/68). `pins_path` e um parametro (nao hardcoded) so pra
     teste -- producao sempre usa o default real."""
-    expected_measure_id = None
+    expected_measure_layers = None
+    expected_measure_config = None
     if pins_path.is_file():
         try:
-            expected_measure_id = json.loads(pins_path.read_text(encoding="utf-8"))["images"]["measure"]["image_id"]
+            measure_pins = json.loads(pins_path.read_text(encoding="utf-8"))["images"]["measure"]
+            expected_measure_layers = measure_pins.get("rootfs_layers")
+            expected_measure_config = measure_pins.get("config_subset")
         except (json.JSONDecodeError, KeyError):
-            expected_measure_id = None
-    checks = [check_capture_prerequisites(h, key_path=key_path, expected_measure_image_id=expected_measure_id) for h in hosts]
+            expected_measure_layers = None
+            expected_measure_config = None
+    checks = [check_capture_prerequisites(h, key_path=key_path, expected_measure_layers=expected_measure_layers,
+                                           expected_measure_config=expected_measure_config) for h in hosts]
     go = all(c["ok"] for c in checks)
     return {"go": go, "checks": checks}
 

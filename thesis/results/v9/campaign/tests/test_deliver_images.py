@@ -19,15 +19,20 @@ class FakeProc:
 
 _FAKE_BIN_BYTES = b"binario fake do gateway, so para teste\n"
 _FAKE_BIN_SHA256 = hashlib.sha256(_FAKE_BIN_BYTES).hexdigest()
+# Decisao 68: `_run_factory`'s "docker save" branch sempre escreve o
+# MESMO conteudo fake, pra qualquer imagem -- um unico sha256 pinado
+# serve pras 4 (`tar_sha256`, agora conferido ANTES de qualquer scp).
+_FAKE_TAR_BYTES = b"tar fake, so para teste\n" * 1000
+_FAKE_TAR_SHA256 = hashlib.sha256(_FAKE_TAR_BYTES).hexdigest()
 
 
 @pytest.fixture(autouse=True)
 def _fake_pins(monkeypatch):
     monkeypatch.setattr(di, "load_pins", lambda: {"images": {
-        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": _FAKE_BIN_SHA256},
-        "proxy": {"docker_image": "mockopin-v9-proxy"},
-        "pqc-signer": {"docker_image": "mockopin-pqc-signer"},
-        "measure": {"docker_image": "mockopin-v9-measure"},
+        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": _FAKE_BIN_SHA256, "tar_sha256": _FAKE_TAR_SHA256},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": _FAKE_TAR_SHA256},
+        "pqc-signer": {"docker_image": "mockopin-pqc-signer", "tar_sha256": _FAKE_TAR_SHA256},
+        "measure": {"docker_image": "mockopin-v9-measure", "tar_sha256": _FAKE_TAR_SHA256},
     }})
 
 
@@ -49,7 +54,7 @@ def _run_factory(calls, df_avail_kb="999999999"):
             # .tar fake no caminho pedido, pro resto do pipeline
             # (sha256/scp) ter um arquivo de verdade pra ler.
             tar_path = argv[argv.index("-o") + 1]
-            Path(tar_path).write_bytes(b"tar fake, so para teste\n" * 1000)  # ~25KB, da pra exercitar a checagem de espaco
+            Path(tar_path).write_bytes(_FAKE_TAR_BYTES)  # ~25KB, da pra exercitar a checagem de espaco; sha256 bate com _fake_pins
             return FakeProc()
         if argv[0] == "docker":
             return FakeProc()  # docker create / docker rm -f
@@ -157,6 +162,22 @@ def test_deliver_images_checa_espaco_antes_de_enviar(monkeypatch):
         di.deliver_images("203.0.113.5", "/fake/operator_key", images=("gateway", "proxy"))
     flat = [" ".join(c) for c in calls]
     assert not any("scp" in c for c in flat), "nenhum scp pode acontecer se o espaco em disco for insuficiente"
+
+
+def test_deliver_images_aborta_se_tar_recem_construido_nao_bate_com_pin(monkeypatch):
+    """Decisao 68 (Emenda -- primeiro salto, ANTES do segundo que
+    `orchestrator._deliver_image` confere): a imagem local foi
+    reconstruida/e diferente da pinada -- o `.tar` recem-construido
+    NUNCA pode ser enviado pro controle sem bater com `tar_sha256`."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _run_factory(calls))
+    monkeypatch.setattr(di, "load_pins", lambda: {"images": {
+        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": "9" * 64},
+    }})
+    with pytest.raises(RuntimeError, match="nao bate com tar_sha256"):
+        di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
+    flat = [" ".join(c) for c in calls]
+    assert not any(c[0] == "scp" for c in calls), "nenhum scp pode acontecer com o .tar divergente do pin -- " + str(flat)
 
 
 def test_deliver_images_aborta_se_sha256sum_c_falha_no_controle(monkeypatch):

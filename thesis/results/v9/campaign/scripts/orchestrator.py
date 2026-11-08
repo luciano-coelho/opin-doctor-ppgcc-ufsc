@@ -42,6 +42,7 @@ INICIO -- fora de qualquer janela, por construcao.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -494,15 +495,31 @@ class SSHExecutor:
         via `deliver_images.py` (primeiro salto, operador -> controle,
         com Docker so do lado do operador) -- este metodo so faz scp
         do ARQUIVO LOCAL pro host e `ssh host docker load`, nunca
-        docker localmente. Depois do load, confere o Image ID
-        carregado contra PINS.json -- `docker load` e deterministico
-        (nunca um rebuild), entao o MESMO Image ID tem que aparecer
-        sempre, em qualquer instancia, pro mesmo `docker save` de
-        origem. Fail-closed: levanta ANTES de qualquer execucao se
-        divergir."""
+        docker localmente.
+
+        Decisao 68 (Emenda -- substitui a verificacao por Image ID):
+        achado real, ao vivo (Decisao 67), que `docker image inspect
+        .Id` diverge entre versoes diferentes de Docker mesmo pro
+        MESMO `.tar`, com conteudo comprovadamente identico
+        (confirmado com `docker:25-dind` -- ver PINS.json,
+        `_image_identity_note`). O fail-closed agora exige, nesta
+        ordem: (1) sha256 do `.tar` local igual a `tar_sha256`
+        pinado (ANTES de qualquer scp -- mais barato, pega corrupcao
+        antes de gastar a transferencia); (2) apos o load,
+        `RootFS.Layers` do host identicas a `rootfs_layers`; (3) o
+        subconjunto de `.Config` do host identico a `config_subset`;
+        (4) pra imagens com binario Go proprio (`gateway`/`proxy`),
+        o sha256 do binario DENTRO do container carregado, igual a
+        `binary_sha256`. Image ID continua lido/registrado, so como
+        campo INFORMATIVO -- nunca comparado, nunca motivo de aborto."""
         pins = load_pins()
-        docker_image = pins["images"][image_key]["docker_image"]
-        expected_id = pins["images"][image_key]["image_id"]
+        image_pins = pins["images"][image_key]
+        docker_image = image_pins["docker_image"]
+        expected_tar_sha256 = image_pins["tar_sha256"]
+        expected_layers = image_pins["rootfs_layers"]
+        expected_config = image_pins["config_subset"]
+        binary_path = image_pins.get("binary_path_in_image")
+        expected_binary_sha256 = image_pins.get("binary_sha256")
 
         local_tar_path = self.images_staging_dir / f"{image_key}.tar"
         if not local_tar_path.is_file():
@@ -510,14 +527,22 @@ class SSHExecutor:
                 f"_deliver_image({image_key}, {host}): {local_tar_path} nao encontrado no controle -- "
                 f"rode deliver_images.py primeiro (operador -> controle)"
             )
+        tar_bytes = local_tar_path.stat().st_size
+        actual_tar_sha256 = hashlib.sha256(local_tar_path.read_bytes()).hexdigest()
+        if actual_tar_sha256 != expected_tar_sha256:
+            raise RuntimeError(
+                f"_deliver_image({image_key}, {host}): sha256 do .tar estagiado no controle "
+                f"({actual_tar_sha256!r}) nao bate com PINS.json ({expected_tar_sha256!r}) -- "
+                f"abortando ANTES de qualquer scp"
+            )
+
         # Decisao 60, item 4 (pedido independente): tempo real do 2o
         # salto (controle -> host) -- scp do .tar + docker load +
-        # conferencia de Image ID, pra reportar no ensaio por host/
+        # conferencia de identidade, pra reportar no ensaio por host/
         # imagem (nunca uma estimativa). `DELIVERY_SLOW_THRESHOLD_
         # SECONDS` e so um limiar de RELATORIO (marca `"slow": true`)
         # -- a decisao de abortar por demora e sempre do Luciano,
         # lendo o relatorio, nunca automatica.
-        tar_bytes = local_tar_path.stat().st_size
         t0 = time.monotonic()
         remote_tar = f"~/{image_key}.tar"
         scp_proc = cli.run_scp(str(local_tar_path), f"ec2-user@{host}:{remote_tar}", key_path=self.key_path)
@@ -529,20 +554,39 @@ class SSHExecutor:
             raise RuntimeError(f"_deliver_image({image_key}, {host}): docker load no host falhou: {load_proc.stderr}")
 
         id_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{.Id}}}}'", key_path=self.key_path)
-        elapsed_seconds = time.monotonic() - t0
         loaded_id = id_proc.stdout.strip()
-        ok = id_proc.returncode == 0 and loaded_id == expected_id
+
+        layers_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{json .RootFS.Layers}}}}'", key_path=self.key_path)
+        actual_layers = json.loads(layers_proc.stdout.strip()) if layers_proc.returncode == 0 and layers_proc.stdout.strip() else None
+        layers_ok = actual_layers == expected_layers
+
+        config_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{json .Config}}}}'", key_path=self.key_path)
+        full_config = json.loads(config_proc.stdout.strip()) if config_proc.returncode == 0 and config_proc.stdout.strip() else {}
+        actual_config = {k: full_config.get(k) for k in ("Entrypoint", "Cmd", "Env", "ExposedPorts")}
+        config_ok = actual_config == expected_config
+
+        binary_ok = True
+        actual_binary_sha256 = None
+        if binary_path:
+            bin_proc = cli.run_ssh(host, f"docker run --rm --entrypoint sha256sum {docker_image} {binary_path}", key_path=self.key_path)
+            actual_binary_sha256 = bin_proc.stdout.split()[0] if bin_proc.returncode == 0 and bin_proc.stdout.strip() else None
+            binary_ok = actual_binary_sha256 == expected_binary_sha256
+
+        elapsed_seconds = time.monotonic() - t0
+        ok = layers_ok and config_ok and binary_ok
         self.image_delivery_verifications.append({
             "image_key": image_key, "docker_image": docker_image, "host": host,
-            "expected_image_id": expected_id, "loaded_image_id": loaded_id, "ok": ok,
+            "loaded_image_id": loaded_id, "ok": ok,
+            "layers_ok": layers_ok, "config_ok": config_ok, "binary_ok": binary_ok,
+            "actual_binary_sha256": actual_binary_sha256, "expected_binary_sha256": expected_binary_sha256,
             "tar_bytes": tar_bytes, "elapsed_seconds": round(elapsed_seconds, 1),
             "slow": elapsed_seconds > DELIVERY_SLOW_THRESHOLD_SECONDS,
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),
         })
         if not ok:
             raise RuntimeError(
-                f"_deliver_image({image_key}, {host}): Image ID carregado ({loaded_id!r}) nao bate com "
-                f"PINS.json ({expected_id!r}) -- abortando ANTES de qualquer execucao"
+                f"_deliver_image({image_key}, {host}): identidade nao confere (layers_ok={layers_ok}, "
+                f"config_ok={config_ok}, binary_ok={binary_ok}) -- abortando ANTES de qualquer execucao"
             )
 
     def _launch_gateway(self, profile, keylog=False):

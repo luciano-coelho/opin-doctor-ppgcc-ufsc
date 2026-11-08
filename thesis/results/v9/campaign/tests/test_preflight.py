@@ -1,6 +1,7 @@
 """Testes do pre-voo -- `aws` stubado (cli.run_aws_json/cli.run_aws
 monkeypatchados), nenhuma chamada real, nenhuma credencial. Confirma
 em especial que o Account ID NUNCA aparece em nenhum resultado."""
+import json
 import sys
 from pathlib import Path
 
@@ -200,10 +201,15 @@ def test_versao_desalinhada_do_pin_e_detectada(monkeypatch, tmp_path):
 # monkeypatchado diretamente (preflight.py chama essa funcao, nao
 # `cli._run`).
 
+_FAKE_MEASURE_LAYERS = ["sha256:" + "a1" * 32, "sha256:" + "b2" * 32]
+_FAKE_MEASURE_CONFIG = {"Entrypoint": ["/usr/local/bin/measure.sh"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": None}
+
 _CAPTURE_PROBE_OK = (
     "TCPDUMP_PATH=/usr/sbin/tcpdump\n"
     "SUDO_NOPASSWD=1\n"
     "MEASURE_IMAGE_ID=sha256:deadbeef\n"
+    f"MEASURE_LAYERS={json.dumps(_FAKE_MEASURE_LAYERS)}\n"
+    f"MEASURE_CONFIG={json.dumps(_FAKE_MEASURE_CONFIG)}\n"
     "TMP_WRITABLE=1\n"
     "PRIMARY_IFACE=ens5\n"
 )
@@ -231,26 +237,40 @@ def test_tcpdump_ausente_reprova_com_mensagem_clara(monkeypatch):
 
 
 def test_imagem_measure_ausente_reprova(monkeypatch):
-    broken = _CAPTURE_PROBE_OK.replace("MEASURE_IMAGE_ID=sha256:deadbeef\n", "MEASURE_IMAGE_ID=\n")
+    broken = _CAPTURE_PROBE_OK.replace(f"MEASURE_LAYERS={json.dumps(_FAKE_MEASURE_LAYERS)}\n", "MEASURE_LAYERS=\n")
     monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(broken))
     result = preflight.check_capture_prerequisites("203.0.113.9")
     assert result["ok"] is False
     assert any("mockopin-v9-measure" in m for m in result["missing"]), result
 
 
-def test_imagem_measure_com_id_errado_reprova(monkeypatch):
-    """Decisao 55, item 2: a imagem EXISTE (Image ID presente), mas
-    NAO e o Image ID que PINS.json espera -- tem que reprovar com
-    mensagem clara, nao so checar presenca."""
+def test_imagem_measure_com_camadas_erradas_reprova(monkeypatch):
+    """Decisao 68 (Emenda -- substitui a verificacao por Image ID,
+    que diverge entre versoes de Docker): a imagem EXISTE
+    (RootFS.Layers presentes), mas NAO sao as camadas que PINS.json
+    espera -- tem que reprovar com mensagem clara, nao so checar
+    presenca."""
     monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
-    result = preflight.check_capture_prerequisites("203.0.113.9", expected_measure_image_id="sha256:esperado123")
+    result = preflight.check_capture_prerequisites("203.0.113.9", expected_measure_layers=["sha256:" + "9" * 64])
     assert result["ok"] is False
     assert any("PINS.json" in m for m in result["missing"]), result
 
 
-def test_imagem_measure_com_id_certo_passa(monkeypatch):
+def test_imagem_measure_com_config_errado_reprova(monkeypatch):
     monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
-    result = preflight.check_capture_prerequisites("203.0.113.9", expected_measure_image_id="sha256:deadbeef")
+    result = preflight.check_capture_prerequisites(
+        "203.0.113.9", expected_measure_layers=_FAKE_MEASURE_LAYERS,
+        expected_measure_config={"Entrypoint": ["/bin/sh"], "Cmd": None, "Env": [], "ExposedPorts": None},
+    )
+    assert result["ok"] is False
+    assert any("Config" in m for m in result["missing"]), result
+
+
+def test_imagem_measure_com_camadas_e_config_certos_passa(monkeypatch):
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
+    result = preflight.check_capture_prerequisites(
+        "203.0.113.9", expected_measure_layers=_FAKE_MEASURE_LAYERS, expected_measure_config=_FAKE_MEASURE_CONFIG,
+    )
     assert result["ok"] is True
     assert result["missing"] == []
 

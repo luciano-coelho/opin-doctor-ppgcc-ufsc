@@ -1,5 +1,15 @@
 # Ensaio de infraestrutura — ~35 minutos, sem experimento
 
+**Decisão 68 (achado real, execução real): Image ID NUNCA é mais
+conferido em lugar nenhum deste roteiro** — `docker image inspect
+.Id` diverge entre versões diferentes de Docker (operador vs.
+instância real), mesmo com conteúdo idêntico, achado ao vivo na
+Decisão 67 e reproduzido localmente com `docker:25-dind`. A
+identidade de cada imagem agora é `tar_sha256` (Passo 7, antes de
+qualquer scp) + `RootFS.Layers`/`.Config`/binário dentro do container
+(Passo 9, 2º salto) — Image ID continua lido, só como campo
+informativo nos relatórios.
+
 Decisão 60 (correção do roteiro da Decisão 59 — 5 ajustes pedidos +
 1 achado adicional da mesma classe, encontrado corrigindo o item 2):
 geração do `inventory.json` antecipada e verificada contra o formato
@@ -7,7 +17,7 @@ real que os scripts leem; endereço do servidor no handshake lido do
 inventário (nunca digitado — L0 é co-localizado e disca o IP
 PRIVADO, não o EIP); o laço de "Docker pronto" agora falha alto com o
 host no erro; a entrega de imagem (2º salto) agora reporta tempo e
-Image ID por host, com critério de abortar por demora; passo novo
+identidade por host, com critério de abortar por demora; passo novo
 antes do exercício remoto, confirmando que `orchestrator.py` importa
 de verdade no controle. **Cada passo abaixo diz explicitamente EM QUE
 MÁQUINA roda** — "OPERADOR" (o laptop do Luciano) ou "CONTROLE" (a
@@ -239,12 +249,23 @@ Passos 8/9/10 abaixo leem endereços, nunca do operador.
 ```
 time python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador>
 ```
-**O que este passo faz, na ordem:** `docker save` de cada imagem em
-`.tar` (local, no operador) → extrai o binário do gateway e confere
-sha256 contra `PINS.json` (local, no operador) → checa espaço em
-disco no controle (`df`, real — volume `gp3` de 30GB, folga enorme
-pros ~140MB totais medidos nesta sessão: gateway ~10MB, proxy ~9MB,
-pqc-signer ~59MB, measure ~58MB) → scp pro controle → `sha256sum -c` lá.
+**O que este passo faz, na ordem:** `docker save -o` de cada imagem
+em `.tar` (local, no operador) → sha256 do `.tar` conferido contra
+`tar_sha256` pinado (Decisão 68 — ANTES de qualquer scp, pega uma
+imagem local errada/reconstruída) → extrai o binário do gateway e
+confere sha256 contra `PINS.json` (local, no operador) → checa
+espaço em disco no controle (`df`, real — volume `gp3` de 30GB, folga
+enorme pros ~140MB totais medidos nesta sessão: gateway ~10MB, proxy
+~9MB, pqc-signer ~59MB, measure ~58MB) → scp pro controle →
+`sha256sum -c` lá (transporte).
+
+**Achado real desta rodada (Decisão 68): Image ID NÃO é mais
+conferido em lugar nenhum** — `docker image inspect .Id` diverge
+entre versões diferentes de Docker (operador vs. instância real),
+mesmo com conteúdo idêntico, confirmado ao vivo na Decisão 67 e
+reproduzido localmente com `docker:25-dind`. A identidade agora é
+`tar_sha256` (aqui) + `RootFS.Layers`/`.Config`/binário (Passo 9,
+2º salto) — Image ID continua lido, só como campo informativo.
 
 **Saída esperada:** JSON com `disk_check`, `images` (4 entradas, `sha256_ok: true`), `gateway_binary_info_delivered: true`.
 **Critério de abortar:** qualquer `RuntimeError`.
@@ -291,8 +312,10 @@ funcionaria mesmo assim).
 **Por que isto prova o 2º salto também:** `SSHExecutor._deliver_image`
 (dentro de `start_block`, chamado por este exercício) faz o resto —
 scp do `.tar` já estagiado no controle (Passo 7) pro HOST, `ssh host
-docker load`, `docker image inspect` comparado contra `PINS.json`
-(fail-closed). Prova as 3 imagens com pin (`gateway`/`proxy`/
+docker load`, depois confere `RootFS.Layers`/`.Config` do host
+contra PINS.json e, pra `gateway`/`proxy`, o sha256 do binário DENTRO
+do container carregado (Decisão 68 — **Image ID nunca é comparado**,
+só lido/registrado). Prova as 3 imagens com pin (`gateway`/`proxy`/
 `pqc-signer`) de uma vez, mais a sondagem TCP (achado 18) e o
 binário do gateway (Decisão 54), sem nenhuma execução cronometrada.
 
@@ -303,22 +326,26 @@ python3 orchestrator.py --mode ssh \
   --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
   --exercise-start-stop --exercise-profile classico --exercise-route L0 > /tmp/exercise_report.json
 cat /tmp/exercise_report.json
-echo "--- tempo/Image ID de entrega por imagem (2o salto, controle->host) ---"
+echo "--- tempo/identidade de entrega por imagem (2o salto, controle->host) ---"
 python3 -c "
 import json
 r = json.load(open('/tmp/exercise_report.json'))
 for v in r['image_delivery_verifications']:
     print(f\"{v['image_key']:12s} host={v['host']:16s} elapsed={v['elapsed_seconds']:>7.1f}s \"
           f\"tar={v['tar_bytes']} bytes ok={v['ok']} slow={v['slow']} \"
-          f\"image_id_ok={v['loaded_image_id'] == v['expected_image_id']}\")"
+          f\"layers_ok={v['layers_ok']} config_ok={v['config_ok']} binary_ok={v['binary_ok']} \"
+          f\"image_id_INFORMATIVO={v['loaded_image_id']}\")"
 REMOTE
 ```
 **Saída esperada:** JSON com `"start_block_ok": true`, `"stop_block_ok": true`,
 `gateway_binary_verifications` (1 entrada, `pin_matched: true`,
 `running_container_sha256_ok: true`), seguido da listagem de tempo/
-Image ID por imagem (gateway/proxy/pqc-signer), nenhuma com
-`slow: true`, todas com `ok: true`/`image_id_ok: true`, e
-`tcp_preflight_results` (1 entrada, `"ok": true`).
+identidade por imagem (gateway/proxy/pqc-signer), nenhuma com
+`slow: true`, todas com `ok: true`/`layers_ok: true`/`config_ok:
+true`/`binary_ok: true` (o `image_id` impresso é só informativo —
+pode divergir do que `PINS.json` lista, isso é esperado e não é
+motivo de alarme, Decisão 68), e `tcp_preflight_results` (1 entrada,
+`"ok": true`).
 
 Confirme manualmente, numa segunda sessão **[CONTROLE]** durante a
 chamada acima, que os 3 containers existem enquanto o comando roda:

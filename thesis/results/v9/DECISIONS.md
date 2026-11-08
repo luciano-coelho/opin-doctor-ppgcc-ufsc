@@ -8096,3 +8096,185 @@ piloto/estado.json`, `thesis/results/v9/piloto/ensaio_infra/logs/*`
 Nenhuma Fase B tentada -- a Fase A nao fechou verde. Aguardando
 decisao do Luciano sobre o mecanismo de verificacao de Image ID
 antes de qualquer nova tentativa.
+
+## 68. Emenda -- mecanismo de verificacao de entrega trocado de Image ID por conteudo (tar sha256 + RootFS.Layers + Config subset + sha256 do binario dentro do container), confirmado estavel entre versoes de Docker por teste local com docker:25-dind; nenhum criterio pre-registrado nem o que e medido muda
+
+Branch `v9/fase1-local`, commit e push. Decisao do Luciano, resposta
+direta ao achado da Decisao 67: "nada e decidido a mais, siga assim"
++ instrucao detalhada do item 1 do prompt.
+
+**Motivo.** A Decisao 67 parou a Fase A real porque o Image ID
+(`.Id`) do gateway, pos `docker load` no servidor real, divergia do
+pinado em PINS.json -- mesmo com o binario dentro do container
+byte-identico ao pin. A causa raiz (Docker 29.9.1 do operador vs.
+25.0.16 do servidor real) e estrutural: qualquer EC2 real tende a
+rodar um Docker mais antigo (pacote de distribuicao) que o do
+operador, entao o mecanismo fail-closed por Image ID pre-registrado
+na Decisao 55 nunca sobreviveria a uma execucao real, em nenhuma
+tentativa futura.
+
+**Investigacao local, sem AWS, antes de qualquer mudanca.** Subi um
+`docker:25-dind` (resolveu Docker 25.0.5, a mesma familia de versao
+do AMI real, 25.0.16) ao lado do Docker do operador (29.9.1). Para
+cada uma das 4 imagens pinadas, dei `docker load` do MESMO `.tar`
+nos dois daemons e comparei `docker image inspect`:
+
+- `.RootFS.Layers` (lista de digests de camada, content-addressable):
+  IDENTICO nas duas versoes, nas 4 imagens.
+- `.Config` (subconjunto Entrypoint/Cmd/Env/ExposedPorts): IDENTICO
+  nas duas versoes, nas 4 imagens.
+- `.Id` (Image ID final): DIVERGE entre as duas versoes, reproduzindo
+  exatamente o que foi visto ao vivo no servidor real (Decisao 67).
+- Para gateway/proxy: sha256 do binario DENTRO do container carregado
+  no DinD bateu exatamente com o pinado em PINS.json nos dois casos.
+- `docker save` do mesmo image id local (nunca reconstruido), duas
+  invocacoes independentes: mesmo sha256 de arquivo as duas vezes
+  (prova que o `.tar` em si e reproduzivel, nao so o binario dentro
+  dele).
+
+Conclusao: camadas e config SAO estaveis entre versoes de Docker para
+um `.tar` byte-identico; so o Image ID nao e. Aplica-se o primeiro
+ramo do item 1 do Luciano (pinar por `.tar` sha256 + RootFS.Layers +
+Config subset; Image ID cai a informativo).
+
+**Mecanismo novo, nesta ordem (todo abort ocorre ANTES de qualquer
+execucao real na imagem):**
+1. sha256 do `.tar` local, recem-construido, confere com
+   `tar_sha256` pinado (`deliver_images.py`, 1o salto,
+   operador->controle) -- se a imagem local foi reconstruida, aborta
+   aqui, nunca chega a fazer scp.
+2. sha256 do `.tar` estagiado no controle confere com o mesmo
+   `tar_sha256` (`orchestrator._deliver_image`, antes do 2o salto).
+3. Pos `docker load` no host (servidor/cliente), `RootFS.Layers`
+   confere com `rootfs_layers` pinado.
+4. `Config` (Entrypoint/Cmd/Env/ExposedPorts) confere com
+   `config_subset` pinado.
+5. Para gateway/proxy (tem binario Go proprio): sha256 do binario
+   DENTRO do container carregado no host (nunca do `.tar` isolado)
+   confere com `binary_sha256` pinado -- a mesma garantia de
+   conteudo que a Decisao 55 ja exigia, so que agora verificada
+   depois do `docker load` real no host, nao so no `.tar`.
+
+O Image ID (`.Id`) continua sendo lido e gravado em PINS.json, mas
+**so como campo informativo** -- nunca comparado, nunca motivo de
+abort.
+
+**Diff de PINS.json (schema, por imagem; 4 imagens, mesma mudanca em
+todas):**
+```
+- "image_id": "sha256:...",                    # unico campo de identidade, fail-closed
++ "tar_sha256": "<sha256 do .tar>",             # NOVO -- fail-closed, 2 saltos
++ "rootfs_layers": ["sha256:...", ...],         # NOVO -- fail-closed, pos docker load no host
++ "config_subset": {                             # NOVO -- fail-closed, pos docker load no host
++     "Entrypoint": [...], "Cmd": ..., "Env": [...], "ExposedPorts": ...
++ },
++ "image_id": "sha256:...",                     # MANTIDO, agora so informativo
++ "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note)."
+```
+Mais um campo novo em nivel de topo, `_image_identity_note`,
+explicando o achado e a nova ordem de verificacao. Gateway re-pinado
+na Decisao 61 ja tinha `binary_sha256`/`binary_path_in_image`
+inalterados -- esta Emenda so adiciona os 3 campos de conteudo acima,
+nunca toca binario/certificados/sha256 ja pinados.
+
+**Declaracao explicita (regra 6/7e do Luciano):** esta Emenda altera
+SO o mecanismo de verificacao de que a imagem entregue e a esperada
+(uma checagem de integridade de infraestrutura). Nenhum dos 7
+criterios pre-registrados nem seus limiares muda; nenhuma medicao
+(latencia, bytes, qualquer metrica do piloto) depende de Image ID ou
+passa a depender de qualquer um dos campos novos -- eles so decidem
+se a execucao PODE comecar, nunca o que e medido durante ela. Nenhum
+binario, certificado ou configuracao de runtime foi alterado ou
+reconstruido para esta Decisao.
+
+**Codigo:** `orchestrator._deliver_image` reescrito (le `tar_sha256`/
+`rootfs_layers`/`config_subset`/`binary_path_in_image`/
+`binary_sha256` de PINS.json; aborta no sha256 do `.tar` ANTES de
+qualquer scp; depois do `docker load`, confere layers/config/binario
+e so ai decide `ok`). `deliver_images.py` ganha a mesma checagem de
+`tar_sha256` no 1o salto. `preflight.check_capture_prerequisites`/
+`run_capture_preflight` trocam a conferencia do Image ID da imagem
+`measure` por `RootFS.Layers`+`Config` subset.
+
+**Testes (mutantes pedidos pelo Luciano, todos novos ou reescritos):**
+tar local adulterado reprova ANTES de qualquer scp; camada adulterada
+reprova; config adulterada reprova; binario adulterado dentro do
+container reprova (so a imagem com o binario trocado, as outras
+passam); caso correto passa com `layers_ok=config_ok=binary_ok=true`
+nas 3 imagens com binario/conteudo verificavel. 151/151 depois desta
+rodada (145 antes + 6 novos/reescritos, menos 1 teste obsoleto de
+Image ID removido).
+
+**Documentacao:** `PILOT_READINESS.md` (secao de pins reescrita +
+nova subsecao "Image ID -- Decisao 68") e `INFRA_REHEARSAL.md`
+(Passos 7 e 9 atualizados, saida esperada mostra os campos novos)
+atualizados pra refletir o mecanismo novo.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PINS.json`, `thesis/results/v9/campaign/scripts/orchestrator.py`,
+`thesis/results/v9/campaign/scripts/deliver_images.py`,
+`thesis/results/v9/campaign/scripts/preflight.py`,
+`thesis/results/v9/campaign/tests/test_orchestrator.py`,
+`thesis/results/v9/campaign/tests/test_deliver_images.py`,
+`thesis/results/v9/campaign/tests/test_preflight.py`,
+`thesis/results/v9/campaign/PILOT_READINESS.md`,
+`thesis/results/v9/campaign/INFRA_REHEARSAL.md`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 69. Varredura completa de CRLF/caminho do Windows no caminho remoto; .gitattributes ganha `*.tftpl`; teste novo (`test_no_crlf_sweep.py`) varre de verdade, em disco, todo arquivo que viaja pro Linux (listas de `deliver_source.py` + templates terraform + pacote campaign) -- nenhum achado novo alem dos ja corrigidos nas Decisoes 62/64
+
+Branch `v9/fase1-local`, commit e push. Item 2 do mesmo prompt do
+Luciano que originou a Decisao 68.
+
+**Varredura manual, antes do teste:** revisados todos os scripts
+`.sh`/`.tftpl` do terraform (`safety_timer.sh.tftpl`, user_data),
+todos os scripts entregues via `deliver_source.py`
+(`COMMON_FILES`/`CLIENT_ONLY_FILES`/`CONTROL_FILES`) e todo o pacote
+`campaign/scripts`+`campaign/tests`, procurando: CRLF, caminho com
+barra invertida, expansao de `~` do lado errado (operador em vez de
+remoto) e permissao de chave SSH. Nenhum achado novo -- toda
+expansao de `~` restante e feita por um shell REMOTO (nunca local) ou
+e um destino de `scp` resolvido no servidor; nenhum caminho com barra
+invertida chega a um comando que roda no lado Linux. Os 2 pontos
+reais de CRLF (CRLF em `pki_relay`/Decisao 62 e em
+`deliver_images.py`/Decisao 64) ja tinham sido corrigidos nesta mesma
+Fase A real -- esta varredura so confirma que nao ha um terceiro.
+
+**`.gitattributes` (raiz do repo):** ja tinha `eol=lf` pra
+`*.sh`/`*.py`/`*.json`/`*.key`/`*.pem`/`*.crt` e outros -- faltava so
+`*.tftpl`. Adicionada a linha `*.tftpl text eol=lf`.
+
+**Teste novo, `thesis/results/v9/campaign/tests/
+test_no_crlf_sweep.py`:** varre em disco, de verdade (nunca so confia
+no `.gitattributes`, que so normaliza o que e commitado, nunca o que
+e gerado em runtime), toda extensao `.sh`/`.tftpl`/`.py`/`.json`
+dentro de: as 3 listas de `deliver_source.py` (fonte unica de
+verdade, importada direto -- nunca duplicada, pra nunca ficar
+desatualizada), os templates do terraform, e o pacote `campaign/
+scripts`+`campaign/tests`. Falha se qualquer arquivo contiver `\r`.
+Rodada inicial achou 5 arquivos com CRLF -- investigados, nenhum
+pertence ao caminho remoto (`thesis/scripts/audit_v7_from_raw.py`,
+`compute_v7_report_data.py`, `generate_v8_final_report.py`,
+`render_v8_final_report.py`, `report_build/build_v7_reports.py` --
+geradores LOCAIS de relatorio final v7/v8, nunca entregues a nenhuma
+instancia, confirmado por grep: nenhuma referencia a eles em
+`thesis/results/v9`). Varredura restrita ao escopo real do caminho
+remoto (acima); resultado final: 0 achados.
+
+**Testes:** 154/154 (151 antes + 3 novos deste arquivo: o teste
+principal da varredura, um teste de sanidade que confirma que a
+varredura encontra arquivos de verdade, e um teste mutante que
+confirma que a deteccao de `\r` funciona).
+
+**Declaracao:** nenhum criterio pre-registrado nem o que e medido
+muda -- isso e so uma rede de seguranca de infraestrutura (formato de
+arquivo), igual a Decisao 68.
+
+**Commit e push** (`v9/fase1-local`): `.gitattributes`,
+`thesis/results/v9/campaign/tests/test_no_crlf_sweep.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Com isso, os itens 1 e 2 do prompt do Luciano estao completos. Segue
+para o item 3: suite de testes verde -> Fase A do zero (nova fleet,
+passos 0 a 14, `self_terminate_hours=1`) -> se fechar verde, Fase B
+sem pedir confirmacao.
