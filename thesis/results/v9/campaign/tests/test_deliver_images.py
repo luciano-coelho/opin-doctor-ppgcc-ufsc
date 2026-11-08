@@ -43,15 +43,16 @@ def _run_factory(calls, df_avail_kb="999999999"):
             return FakeProc(stdout="/verify/gateway: go1.27.3\n")
         if argv[0] == "docker" and "cat" in argv:
             return FakeProc(stdout='{"go_tag": "go1.27.3"}')
-        if argv[0] == "docker":
-            return FakeProc()  # docker create / docker rm -f
-        if argv[0] == "sh" and "docker save" in argv[2]:
-            # escreve um .tar fake no caminho pedido pelo comando real
-            # (`docker save <img> > <tar_path>`), pro resto do pipeline
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "save":
+            # `docker save -o <tar_path> <imagem>` (argv puro, Decisao
+            # 62/63 -- nunca mais `sh -c "... > <path>"`) -- escreve um
+            # .tar fake no caminho pedido, pro resto do pipeline
             # (sha256/scp) ter um arquivo de verdade pra ler.
-            tar_path = argv[2].split(">")[-1].strip()
+            tar_path = argv[argv.index("-o") + 1]
             Path(tar_path).write_bytes(b"tar fake, so para teste\n" * 1000)  # ~25KB, da pra exercitar a checagem de espaco
             return FakeProc()
+        if argv[0] == "docker":
+            return FakeProc()  # docker create / docker rm -f
         if argv[0] == "ssh" and "df --output=avail" in argv[-1]:
             return FakeProc(stdout=f"{df_avail_kb}\n")
         if argv[0] == "ssh" and "sha256sum -c" in argv[-1]:

@@ -102,10 +102,20 @@ def extract_gateway_binary_info(workdir: Path) -> dict:
 
 
 def save_image_tarball(image_key: str, docker_image: str, out_dir: Path) -> Path:
+    """Achado real (execucao real desta rodada): `sh -c "docker save
+    ... > <path>"` com um PATH DO WINDOWS (barras invertidas) dentro
+    de uma string de shell corrompe o redirecionamento -- `docker
+    save` ainda devolvia rc=0 (o comando em si nao falhava), mas o
+    arquivo nunca aparecia no caminho esperado. Corrigido: `docker
+    save -o <path>` como argv PURO (lista, nunca string de shell) --
+    o proprio Docker recebe o caminho, sem nenhum shell no meio pra
+    interpretar barra invertida como escape."""
     tar_path = out_dir / f"{image_key}.tar"
-    proc = cli._run(["sh", "-c", f"docker save {docker_image} > {tar_path}"], timeout=180)
+    proc = cli._run(["docker", "save", "-o", str(tar_path), docker_image], timeout=180)
     if proc.returncode != 0:
         raise RuntimeError(f"save_image_tarball({image_key}): docker save falhou: {proc.stderr}")
+    if not tar_path.is_file():
+        raise RuntimeError(f"save_image_tarball({image_key}): docker save retornou OK mas {tar_path} nao existe")
     return tar_path
 
 

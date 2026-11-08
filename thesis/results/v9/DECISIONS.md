@@ -7859,3 +7859,42 @@ o fix.
 scripts/pki_relay.py` (fix), `thesis/results/v9/campaign/tests/
 test_pki_relay.py` (2 testes novos), `thesis/results/v9/DECISIONS.md`
 (esta Decisao).
+
+## 63. Segundo achado real na mesma Fase A real -- `deliver_images.py` usava `sh -c "docker save ... > <path-do-windows>"`, que corrompe o redirecionamento com um caminho de barras invertidas; corrigido pra `docker save -o <path>` (argv puro, nenhum shell no meio)
+
+Branch `v9/fase1-local`, commit e push. Retentativa 2/3 pro mesmo
+"problema de caminho no Windows" (mesma familia do achado da Decisao
+62, mas em arquivo/comando diferentes -- contado como um problema
+novo pra regra 3, nao uma repeticao do mesmo).
+
+**Achado, ao vivo, no Passo 7 (`deliver_images.py`):** `docker save`
+devolvia `returncode=0` (sucesso) mas o `.tar` nunca existia no
+caminho esperado -- `FileNotFoundError` na chamada `tar_path.stat()`
+imediatamente depois. Causa: `cli._run(["sh", "-c", f"docker save
+{imagem} > {tar_path}"])` com `tar_path` um caminho do WINDOWS
+(`C:\Users\...\gateway.tar`) interpolado DENTRO de uma string de
+shell -- as barras invertidas quebram o parsing do redirecionamento
+pro `sh` real (git-bash), que aceita o comando (exit 0) mas nunca
+escreve no lugar certo.
+
+**Corrigido:** `docker save` tem sua PROPRIA flag `-o <arquivo>` --
+trocado pra `cli._run(["docker", "save", "-o", str(tar_path),
+docker_image])`, argv puro (lista), nenhum shell interpretando o
+caminho. Acrescentada tambem uma checagem explicita
+(`tar_path.is_file()`) depois do `docker save` -- nunca mais confiar
+so no `returncode`, mesmo que ele diga sucesso.
+
+**Confirmado localmente antes de tentar de novo na AWS** (nunca so
+nos testes, que stubam `cli._run` inteiro e nao teriam pego isso):
+`save_image_tarball("gateway", ...)` rodado de verdade,
+`gateway.tar` de 10.441.728 bytes criado no caminho certo.
+
+**Testes:** fake de `test_deliver_images.py` atualizado pro novo
+formato de argv (`docker save -o <path> <imagem>`, nao mais `sh -c`)
+-- 142/142, inalterado em contagem (so o fake mudou, nenhum teste
+novo).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_images.py` (fix), `thesis/results/v9/campaign/tests/
+test_deliver_images.py` (fake atualizado), `thesis/results/v9/
+DECISIONS.md` (esta Decisao).
