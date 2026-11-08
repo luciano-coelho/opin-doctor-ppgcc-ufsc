@@ -7133,3 +7133,85 @@ desenho), o item 3 e diagnostico explicitamente NAO aplicado ao
 gate oficial, os itens 4-5 sao documentacao/ferramenta nova, nunca
 tocando os 7 criterios. Continuo sem autorizar push nem recursos na
 AWS. A data do piloto fica pra depois deste relatorio.
+
+## 56. Tres pontos reduzidos: PINS.json impresso + 2 respostas sobre a maquina de build e o pin do measure; tecnica de SAN (IP real + ::1 preservado) zera o desvio contra o BASELINE (nao so contra o previsto) em 20 rebuilds reais, 80/80 combinacoes; roteiro do ensaio de infraestrutura de 15 minutos (nunca executado)
+
+Nada de AWS, sem push, branch `v9/fase1-local`, `v9-prereg`/`main`
+intocadas. Commit local.
+
+**1. PINS.json e as 2 respostas.** Conteudo impresso na integra no
+chat (nao repetido aqui). **(a)** O orquestrador e o build rodam na
+maquina do operador (este ambiente hoje; no dia do piloto, a maquina
+do Luciano) -- NUNCA numa instancia AWS (confirmado, Decisao 55, item
+2). O hash do binario deveria se reproduzir la tambem (a reprodutibilidade
+testada so prova que o build e deterministico DENTRO de containers
+com base/toolchain pinados por digest/tag -- a arquitetura do host
+(Windows/Mac/Linux) nunca entra no binario final, GOOS/GOARCH sao
+fixados explicitamente), mas isso NUNCA foi testado numa segunda
+maquina fisica de verdade -- registrado honesto, nao assumido. **(b)**
+Pra `measure`, so o Image ID e pinado (`binary_sha256`/`go_version_m`
+ficam `null` em PINS.json) -- a imagem so empacota tooling de captura
+(tcpdump/tshark) mais copias internas de gateway/proxy/bench usadas
+SO pelo harness standalone de medicao do T6, nunca pelo piloto real,
+entao nao ha um unico binario proprio que faca sentido hashear.
+
+**2. SAN e gate da Certificate -- tecnica viavel, validada contra o BASELINE de verdade.**
+
+Achado: `make certs SERVER_IPS="<IP real>,::1"` (mantendo a VIRGULA e
+o `::1`, so trocando o VALOR do IPv4) preserva a MESMA contagem/tipo
+de entrada SAN que o baseline (`127.0.0.1,::1`) -- uma entrada IPv4
+sempre ocupa 4 bytes, uma IPv6 sempre 16 bytes em ASN.1 DER,
+INDEPENDENTE do valor. Confirmado rodando `make certs` 20 vezes (10
+IPs estilo privado, 10 estilo EIP publico, um valor diferente a cada
+build), medindo o DER real de cada certificado contra
+`BASELINE_CERT_DER_SIZES`:
+
+```
+all_zero: True, n_builds: 20, n_rows: 80, nonzero rows: 0
+```
+
+**80/80 combinacoes (20 builds x 4 perfis), delta ZERO contra o
+BASELINE -- nao so contra o proprio previsto -- nos 2 sentidos.**
+
+**Alternativa tentada e descartada:** preenchimento por nome DNS
+(adicionar um nome de comprimento calculado pra compensar o `::1`
+que seria removido). Testado com 15, 17 e 18 caracteres -- desvios
+de -2B, +1B e +3B respectivamente (por folha-servidor; dobra no
+Hibrido-AND) -- NAO escala linearmente com o comprimento do nome
+(efeito de borda na codificacao ASN.1 do comprimento da extensao,
+nunca calibrado pra 0B exato em 3 tentativas). A tecnica do IP+`::1`
+e mais simples, exata por construcao (nao depende de calibrar
+comprimento nenhum) e comprovadamente 0B -- preferida, sem reservas.
+
+**Nenhuma Emenda necessaria** -- a tecnica e viavel (confirmado, nao
+o contrario) e nao muda nenhum codigo deste projeto, so o VALOR de
+`SERVER_IPS` passado em `make certs` no dia do piloto (uma escolha
+operacional, documentada em `PILOT_READINESS.md`, secao d).
+
+**3. Roteiro do ensaio de infraestrutura -- 15 minutos, nunca executado.**
+
+`thesis/results/v9/campaign/INFRA_REHEARSAL.md` (novo): usa as MESMAS
+credenciais/profile da v8 (`mockopin-pqc`). 6 passos -- `terraform
+apply` real com `self_terminate_hours=1` (reduzido so pro ensaio);
+conferencia das 5 instancias via `describe-instances` por regiao;
+`docker save`/`load` com conferencia do Image ID contra `PINS.json`
+(nenhum `docker run`, nenhuma conexao mTLS, nenhum perfil ativado);
+`emergency_stop.py` em modo dry (confirma listas vazias de acao);
+`emergency_stop.py --execute` sobre os recursos do proprio ensaio;
+verificacao final (12 chamadas `describe-*`, 4 tipos x 3 regioes,
+todas vazias) + `terraform destroy`. Cada passo tem comando exato,
+saida esperada e criterio de abortar explicitos. Custo estimado:
+≈US$0,14 (15-20min reais), ≈US$0,28 no dobro do tempo, ≈US$0,56 se o
+self_terminate de 1h disparar por algum erro na limpeza manual.
+
+**Testes:** sem mudanca -- nenhum codigo novo nesta rodada (item 2 e
+so uma descoberta operacional, item 3 e documentacao). 108 em
+`thesis/results/v9/campaign/tests/` + 7 em `thesis/scripts/tests/`,
+inalterados, todos passando.
+
+**Commit local** (sem push): `thesis/results/v9/campaign/
+PILOT_READINESS.md` (secao d ganha o achado do item 2),
+`thesis/results/v9/campaign/INFRA_REHEARSAL.md` (novo).
+
+Nenhum item exigiu emenda ao pre-registro. Continuo sem autorizar
+push nem recursos na AWS.
