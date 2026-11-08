@@ -8,10 +8,12 @@ conferência de Image ID, e a parada de emergência (`emergency_stop.py`)
 contra recursos REAIS — nunca uma execução de experimento (nenhum
 perfil medido, nenhuma conexão mTLS real contada).
 
-**Duração alvo: 15 minutos de janela medida.** `self_terminate_hours`
-reduzido pra **1h** só pro ensaio (rede de segurança — nunca
-pretendido pra durar isso; a limpeza manual do passo 6 é o teardown
-real, obrigatório mesmo que o ensaio termine antes do autodesligamento).
+**Duração alvo: 15 minutos de janela medida (passos 0-6) + ~5 minutos
+pro passo 7 (prova de handshake, proposto nesta rodada) = ~20 minutos
+no total.** `self_terminate_hours` reduzido pra **1h** só pro ensaio
+(rede de segurança — nunca pretendido pra durar isso; a limpeza
+manual do passo 6 é o teardown real, obrigatório mesmo que o ensaio
+termine antes do autodesligamento).
 
 ---
 
@@ -99,11 +101,59 @@ terraform destroy -auto-approve
 ```
 (fecha o state do Terraform, mesmo que `emergency_stop.py` já tenha limpo os recursos reais — mantém o state consistente com a conta)
 
+## Passo 7 — prova de handshake real por perfil (4, sem experimento)
+
+**Numerado 7 porque foi proposto nesta rodada, DEPOIS dos passos 0-6
+originais — mas roda CRONOLOGICAMENTE entre o passo 3 e o passo 4**
+(depois do `docker load` confirmado, antes de qualquer
+`emergency_stop.py`; nunca depois do passo 6, que já destruiu tudo).
+Não existia no roteiro original — proposto agora porque nenhum passo
+anterior liga o gateway, disca de verdade, ou confere o delta de
+bytes contra o EIP real. Usa a MESMA imagem já pinada (passo 3,
+construída com certificados de SAN placeholder, formato
+`<IP>,::1`) — nunca reconstrói nem repina nada, porque o valor do IP
+no SAN nunca precisa bater com o EIP de verdade (Decisão 30 do
+pré-registro: a verificação do certificado checa só o DNS "mtls" via
+hostname, nunca o endereço IP do SAN — confirmado no código,
+`cert.VerifyHostname("mtls")`). Este passo demonstra isso ao vivo,
+não só cita a decisão.
+
+```
+EIP_SERVIDOR=$(terraform output -json inventory | python -c "import json,sys; print(json.load(sys.stdin)['server']['public_ip'])")
+
+# confere o que esta de fato gravado no SAN do certificado JA EMBUTIDO
+# na imagem pinada -- nunca precisa bater com $EIP_SERVIDOR.
+docker run --rm --entrypoint sh mockopin-v9-gateway -c \
+  "cat /certs/classico_server.crt" | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"
+
+ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR \
+  "docker run -d --name v9-mtls-ensaio -p 443:443 -e HTTP_MODE=business -e CRYPTO_PROFILE=classico mockopin-v9-gateway"
+
+for PERFIL in classico pqc hibrido-v8 hibrido-and; do
+  ssh -i <chave-da-campanha> ec2-user@<IP-do-cliente-L0> \
+    "docker run --rm --network host mockopin-v9-negtest -scenario matrix -client-mode $PERFIL -server-mode $PERFIL -target $EIP_SERVIDOR:443 -cert-dir /certs"
+  ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR "docker logs v9-mtls-ensaio 2>&1 | tail -1"
+done
+
+ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR "docker rm -f v9-mtls-ensaio"
+```
+(repetir o `docker run -d` do gateway trocando `CRYPTO_PROFILE` antes de cada perfil, igual ao `_launch_gateway` real — simplificado aqui numa única linha por brevidade do roteiro)
+
+**Saída esperada, por perfil:**
+- O SAN impresso no início do passo mostra um IP que **não precisa, e normalmente não vai, ser igual a `$EIP_SERVIDOR`** — registrar os dois valores lado a lado no relatório do ensaio, exatamente para mostrar a diferença, não para forçar que batam.
+- `RESULT matrix client=<perfil> server=<perfil> outcome=SUCCESS curve=... dualAuthenticated=...` — a conexão TEM que fechar com sucesso MESMO com o SAN do certificado apontando para um IP diferente do EIP real que o `-target` discou.
+- A linha `connection OK` do gateway mostra `handshakeBytesIn=X handshakeBytesOut=Y` — comparar os 4 pares contra `BASELINE_HANDSHAKE_BYTES` (`evaluate_criteria.py`): **delta esperado 0B nos 4 perfis, nos 2 sentidos** (a mesma evidência da Decisão 55/56, agora numa rede e numa instância reais, não loopback local).
+
+**Critério de abortar:** qualquer `outcome=FAIL`, ou qualquer delta != 0B contra o baseline — não é motivo de destruir às pressas (não é um erro de infraestrutura, é um achado sobre o mecanismo que precisa de investigação antes do piloto de verdade rodar), mas o ensaio deve ser marcado como **reprovado neste ponto**, registrado explicitamente no relatório, antes de seguir para o passo 4.
+
+**O que este passo NÃO faz:** não conta como nenhuma das 60 execuções oficiais nem como nenhuma das 12 capturas do critério 1 — é só prova de mecanismo, 4 conexões soltas, nunca um bloco cronometrado.
+
 ---
 
 ## Custo estimado do ensaio
 
-~15-20 minutos de frota (5 instâncias: 4× `m7i-flex.large` + 1× `t4g.micro`) + 5 EIPs:
+~20 minutos de frota (passos 0-7, incluindo o novo passo 7) — 5
+instâncias: 4× `m7i-flex.large` + 1× `t4g.micro` — + 5 EIPs:
 - Compute: (4 × US$0,0958 + US$0,0084) × (20/60)h ≈ US$0,131
 - EIP: 5 × US$0,005 × (20/60)h ≈ US$0,008
 - EBS: negligível nessa janela (apagado junto no destroy/termination)
