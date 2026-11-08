@@ -370,9 +370,8 @@ def test_mutante_sem_excluir_internal_caller_conta_errado():
 # --- Decisao 51 (item 3): as 12 capturas dedicadas do criterio 1 --
 # isolamento estrutural, nome/hash dos artefatos, leitura pelo
 # avaliador real. A captura de REDE em si (tcpdump+tshark contra
-# trafego real do SSHExecutor) fica PENDENTE -- reportado honesto no
-# relatorio, nao implementada nesta rodada (precisa identificar a
-# interface de rede certa do bridge Docker, achado ao vivo tentando).
+# trafego real do SSHExecutor) -- IMPLEMENTADA na Decisao 52 (item 4),
+# ver testes de `SSHExecutor.dedicated_capture` mais abaixo.
 
 def test_capturas_dedicadas_rodam_fora_de_qualquer_janela_cronometrada(tmp_path):
     """Isolamento estrutural: nenhuma das 12 capturas pode aparecer
@@ -449,3 +448,163 @@ def test_capturas_dedicadas_tem_nome_e_hash_esperados_e_o_avaliador_le(tmp_path)
     r1 = ec.criterion_1_message_sizes(log_text="", aws_dir=str(tmp_path))
     assert r1["pass"] is True, r1
     assert r1["missing_captures"] == []
+
+
+# --- Decisao 52 (pedido independente, item 4): SSHExecutor.dedicated_
+# capture real -- interface PRIMARIA do servidor (nunca loopback),
+# KEYLOG_PATH lido do proprio container do gateway, tshark via
+# `mockopin-v9-measure`. `cli._run` monkeypatchado por CONTEUDO do
+# remote_cmd (cada etapa SSH tem um comando distinto, precisa de
+# stdout diferente por etapa -- o fake generico de calls/call_count
+# das outras suites nao serve aqui).
+
+_TSHARK_FAKE_OUTPUT = (
+    "1\t1\t332\n"
+    "2\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
+    "3\t11,15,20\t6352,3571,32\n"
+)
+
+
+def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark_output=_TSHARK_FAKE_OUTPUT):
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+
+        class FakeProc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        proc = FakeProc()
+        if "ip -o -4 route show to default" in remote_cmd:
+            proc.stdout = f"{iface}\n"
+        elif "nohup tcpdump" in remote_cmd:
+            proc.stdout = f"{tcpdump_pid}\n"
+        elif "campaign_client_runner.py" in remote_cmd:
+            proc.stdout = '{"calls": [], "call_count": 0, "retries": []}'
+        elif "tls.handshake.type" in remote_cmd:
+            proc.stdout = tshark_output
+        return proc
+    return fake_run
+
+
+def _inventory_l0():
+    return {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+
+
+def test_dedicated_capture_usa_interface_primaria_nunca_loopback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    block = executor.dedicated_capture("hibrido-and", "L0")
+    flat = [" ".join(c) for c in calls]
+
+    assert any("ip -o -4 route show to default" in c for c in flat), flat
+    tcpdump_calls = [c for c in flat if "tcpdump" in c]
+    assert tcpdump_calls, "nenhuma chamada de tcpdump encontrada"
+    assert all("-i eth0" in c for c in tcpdump_calls), tcpdump_calls
+    assert all("-i lo " not in c and not c.endswith("-i lo") for c in tcpdump_calls), (
+        "a captura NUNCA pode rodar na interface loopback"
+    )
+    assert any("tcp port 443" in c for c in tcpdump_calls)
+    assert block.startswith("== Perfil: hibrido-and ==")
+    assert block.endswith("== fim ==")
+
+
+def test_dedicated_capture_mata_tcpdump_pelo_pid_descoberto(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls, tcpdump_pid="98765"))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert any("kill 98765" in c for c in flat), flat
+
+
+def test_dedicated_capture_dispara_execucao_real_no_cliente_antes_de_parar(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("pqc", "L0")
+    remote_cmds = [c[-1] for c in calls if c and c[0] == "ssh"]
+    idx_start = next(i for i, c in enumerate(remote_cmds) if "nohup tcpdump" in c)
+    idx_trigger = next(i for i, c in enumerate(remote_cmds) if "campaign_client_runner.py" in c)
+    idx_kill = next(i for i, c in enumerate(remote_cmds) if "kill" in c)
+    assert idx_start < idx_trigger < idx_kill, remote_cmds
+    assert "criterio1_capture_pqc_L0" in remote_cmds[idx_trigger]
+    assert "CRYPTO_PROFILE=pqc" in remote_cmds[idx_trigger]
+
+
+def test_dedicated_capture_le_keylog_do_proprio_container_e_roda_tshark_via_measure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key", gateway_container="v9-mtls")
+    executor.dedicated_capture("hibrido-v8", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert any("docker exec v9-mtls cat /tmp/v9_keylog.txt" in c for c in flat), flat
+    tshark_calls = [c for c in flat if "tshark" in c]
+    assert tshark_calls, flat
+    assert all("mockopin-v9-measure" in c for c in tshark_calls)
+    assert all("tls.handshake.type" in c and "tls.handshake.length" in c for c in tshark_calls)
+
+
+def test_dedicated_capture_extrai_tamanhos_que_o_avaliador_aceita(monkeypatch):
+    """Fim a fim do PARSING (nao so das chamadas): o bloco devolvido
+    tem que bater com o Certificate/ClientHello baseline REAL do
+    hibrido-v8 (ec.CERTIFICATE_BASELINE/CLIENTHELLO_BASELINE) quando o
+    tshark fake devolve exatamente os tamanhos esperados desse
+    perfil -- confirma que o parsing de `-E aggregator=,` e o "+4B de
+    cabecalho" do avaliador se encaixam sem ajuste nenhum aqui."""
+    hb = ec.HANDSHAKE_MESSAGE_BASELINE["hibrido-v8"]
+    ch = ec.CLIENTHELLO_BASELINE["hibrido-v8"] - 4
+    cert = ec.CERTIFICATE_BASELINE["hibrido-v8"] - 4
+    tshark_output = (
+        f"1\t1\t{ch}\n"
+        f"2\t2,8,13,11,15,20\t"
+        f"{hb['ServerHello']-4},{hb['EncryptedExtensions']-4},{hb['CertificateRequest']-4},"
+        f"{cert},{hb['CertificateVerify_servidor']-4},{hb['Finished_servidor']-4}\n"
+        f"3\t11,15,20\t{hb['Certificate_cliente']-4},{hb['CertificateVerify_cliente']-4},{hb['Finished_cliente']-4}\n"
+    )
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls, tshark_output=tshark_output))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    block = executor.dedicated_capture("hibrido-v8", "L0")
+    row = ec._message_sizes_for_profile(block, "hibrido-v8")
+    assert row["ok"] is True, row
+
+
+def test_dedicated_capture_falha_alto_se_interface_nao_e_encontrada(monkeypatch):
+    """Fail-closed: `_primary_iface` nunca pode inventar uma interface
+    -- saida vazia (host sem rota default, comando falhou) tem que
+    levantar, nunca silenciosamente cair pra loopback ou pra uma
+    string vazia dentro do comando de tcpdump."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls, iface=""))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="interface primaria"):
+        executor.dedicated_capture("classico", "L0")
+
+
+def test_mutante_dedicated_capture_sem_checar_iface_vazia_e_pego(monkeypatch):
+    """Mutacao direta: `_primary_iface` que aceita string vazia sem
+    levantar -- o teste acima tem que reprovar com essa mutacao."""
+    def mutant_primary_iface(self, host):
+        return ""  # mutante: nunca valida, devolve vazio direto
+
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls, iface=""))
+    monkeypatch.setattr(orch.SSHExecutor, "_primary_iface", mutant_primary_iface)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    # Com o mutante, a chamada de tcpdump sai com "-i " (interface
+    # vazia) em vez de levantar -- confirma que o teste real acima
+    # depende de fato da validacao, nao passa por acidente.
+    try:
+        executor.dedicated_capture("classico", "L0")
+        mutant_raised = False
+    except RuntimeError:
+        mutant_raised = True
+    assert mutant_raised is False
+    with pytest.raises(AssertionError):
+        assert mutant_raised is True

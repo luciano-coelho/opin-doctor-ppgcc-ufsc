@@ -6252,3 +6252,232 @@ perfil pro hibrido-and ja coberta pelos testes existentes da Decisao
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat. Nenhum push sem autorizacao explicita.
+## 52. Quatro itens antes da data do piloto: pre-registro confirmado preservado (AND e so camada TLS, por desenho), dois testes negativos reais provam o gate AND, 0xFE65 confirmado no fio, auditoria de grep acha e corrige 2 bugs reais (mortos no piloto, vivos em outros caminhos), captura de rede do criterio 1 implementada de verdade com pcap real por perfil
+
+Resposta aos 4 itens pedidos. Nada de AWS, sem push, branch
+`v9/fase1-local` intocada quanto a `v9-prereg`/`main`.
+
+**1. A Emenda 13 preserva o desenho pre-registrado? SIM -- citacao literal.**
+
+Do `DECISIONS.md` congelado em `v9-prereg` (Decisao 17, T6b, secao "Por
+que o backend fica em `classic` para o Hibrido-AND"):
+
+> "o mecanismo AND e inteiramente da camada de transporte (prova de
+> posse dupla no handshake TLS) -- nao muda nada sobre como o AS
+> assina JWTs ou como o RS assina respostas. Deixar `auth`/`mockapi`
+> em `classic` pra esse perfil e uma escolha deliberada, nao uma
+> omissao: nao existe (nem deveria existir) um
+> `CRYPTO_PROFILE=hibrido-and` no `mock_as`/`insurance-server-lambdas`
+> reais, porque nada ali precisa saber que o mecanismo AND esta em
+> uso."
+
+E da Decisao 4c (mesmo arquivo, origem do mecanismo): o AND "so
+funciona em TLS 1.3 (o `signature_algorithms`/`CertificateRequest`
+estendido com o codigo 0xFE65 e o desenho do `CertificateVerify` dual)"
+-- nenhuma mencao a JWT/assinatura de aplicacao em nenhuma das duas
+origens. Decisao 1 (D3): "modo estrito" e definido como
+`RequireAndVerifyClientCert` no servidor -- de novo, puramente TLS.
+
+**Conclusao: o pre-registro NUNCA exigiu AND no JWT -- exige
+explicitamente SO na camada TLS.** A Emenda 13 (que fez `hibrido-and`
+assinar o JWT exatamente como `hibrido-v8`/"hybrid", RS256 + claim
+`pqc` embutida) e a correcao PREVISTA pelo proprio pre-registro, nao um
+desvio dele. Confirmado tambem do lado do orquestrador
+(`orchestrator.py`, linha ~193): `BACKEND_CRYPTO_PROFILE_ENV["hibrido-
+and"] = "hybrid"`, com o mesmo raciocinio documentado ali. Os dois
+perfis, depois da Emenda 13, diferem EXATAMENTE como pre-registrado:
+identicos em tudo (JWT, JWKS, backend) exceto a camada TLS, onde
+`hibrido-and` exige o par duplo (`Dual.Require=true`) e `hibrido-v8`
+nao oferece Dual algum. **Nao parei nem consultei -- a pre-condicao do
+pedido (pre-registro exigindo AND no JWT) e falsa, confirmado por
+citacao direta.**
+
+**2. Prova de que o Hibrido-AND realmente aplica o AND.**
+
+*(a) Teste negativo no handshake, par duplo intacto, uma metade
+invalida por vez.* Adicionados `and-bad-classical`/`and-bad-pqc` a
+`thesis/results/v9/integration/negtest/main.go` (`tryANDBadClassical`/
+`tryANDBadPQC`, reaproveitando `attackerRSACert()`/`attackerMLDSACert()`
+ja existentes) -- ao contrario do `and-single-chain` ja existente (que
+OMITE o Dual inteiro), estes mantem `cfg.Dual` setado com
+`Require=true` e so trocam UMA das duas cadeias por uma de um atacante
+sem relacao com as CAs reais. Rodados contra o `v9-mtls` real,
+`CRYPTO_PROFILE=hibrido-and`:
+
+```
+DEBUG raw-handshake-succeeded curve=SecP384r1MLKEM1024 dualAuthenticated=true tlsVersion=TLS 1.3
+RESULT scenario=and-bad-classical profile=hibrido-and outcome=REJECTED error="handshake reported success but a server-side rejection followed: remote error: tls: certificate required"
+
+DEBUG raw-handshake-succeeded curve=SecP384r1MLKEM1024 dualAuthenticated=true tlsVersion=TLS 1.3
+RESULT scenario=and-bad-pqc profile=hibrido-and outcome=REJECTED error="handshake reported success but a server-side rejection followed: remote error: tls: bad certificate"
+```
+
+Os dois REJEITADOS -- o par duplo com uma metade de atacante nunca
+passa, confirmando que o gate exige as DUAS cadeias validas e batendo
+na mesma identidade, nao so "alguma cadeia classica presente".
+
+*(b) Evidencia do handshake real -- 0xFE65 no fio + flight observado
+vs esperado.* Capturado localmente (namespace de rede do PROPRIO
+container do gateway, nunca loopback -- mesmo ponto de captura do item
+4 abaixo), decifrado com o keylog real do gateway, via tshark:
+
+ClientHello + CertificateRequest, campo `sig_hash_alg` (lista de
+`SignatureScheme` oferecidos/aceitos):
+- **Hibrido-AND:** `0xfe65,0x0904,0x0905,...` -- 0xFE65 presente, PRIMEIRO da lista, nos dois lados (ClientHello do cliente E CertificateRequest do servidor).
+- **Hibrido-v8 / PQC / Classico:** 0xFE65 AUSENTE nas tres capturas -- confirmado por grep direto na saida do tshark, zero ocorrencias.
+
+`DualAuthenticated` (log real do gateway, mesma conexao):
+```
+hibrido-v8:  curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client"    handshakeBytesIn=8425  handshakeBytesOut=8552
+hibrido-and: curve=SecP384r1MLKEM1024 dualAuthenticated=true  clientCert="hibrido_and_rsa_client" handshakeBytesIn=11924 handshakeBytesOut=12177
+```
+
+| Perfil | Bytes esperados (in/out) | Bytes observados (in/out) | Desvio |
+|---|---|---|---|
+| Hibrido-v8 | 8.397 / 8.552 | 8.425 / 8.552 | **+28B** no `in`, 0 no `out` |
+| Hibrido-AND | 11.902 / 12.177 | 11.924 / 12.177 | **+22B** no `in`, 0 no `out` |
+
+`handshakeBytesOut` (o flight do SERVIDOR, que nunca muda com o cliente
+usado) bate EXATO nos dois perfis. `handshakeBytesIn` (o flight do
+CLIENTE) desvia +22/+28B nos dois -- mesma ordem de grandeza, mesmo
+sinal, nos dois perfis, o que aponta pra uma causa METODOLOGICA comum
+(a conexao de disparo usada aqui foi o harness `negtest -scenario
+matrix`, que monta seu `tls.Config` a mao em Go, nao o cliente real
+`opin_flow.py`/proxy do piloto -- pequenas diferencas de extensoes TLS
+default entre os dois stacks, nao um problema do mecanismo AND em si).
+Registrado honesto: o desvio e pequeno (<0,3%), consistente entre os
+dois perfis, e nunca muda a conclusao (AND presente, 0xFE65 negociado,
+flight ~1,4x maior que Hibrido-v8 como esperado) -- mas e real, nao
+escondido.
+
+*(c) Nenhuma das duas provas falhou -- Hibrido-AND NAO esta degradado
+para v8.* 0xFE65 presente, `DualAuthenticated=true`, os dois testes
+negativos rejeitados, flight ~1,4x maior exatamente onde esperado.
+
+**3. Auditoria da classe de bug -- grep completo, tabela + 2 correcoes reais.**
+
+Escopo: cliente (`opin_flow.py`), orquestrador (`orchestrator.py`),
+avaliador (`evaluate_criteria.py`), gateway/proxy (Go), backend
+(`mock_as`/`mongo-seed`). V8 (frozen, 3 perfis, sem conceito de
+`hibrido-and`) excluido do escopo por construcao.
+
+| Arquivo:linha | O que decide | hibrido-and |
+|---|---|---|
+| `opin_flow.py:242` `_USE_TLS_KEM_PROXY` | se usa o proxy | explicito na tupla -- OK |
+| `opin_flow.py:263` `V9_PROFILE_NAME` | traducao p/ nome de exibicao | chave explicita -- OK |
+| `opin_flow.py:406` `get_client_cert_paths` | qual cert/key o cliente carrega | **caia no `else` -> cert CLASSICO. CORRIGIDO** (Decisao 52): `elif` agora inclui `hibrido-and`, mesmo cert que "hybrid" |
+| `opin_flow.py:422` `get_local_leg_cert_paths` | cert cosmetico da perna local | **caia no default (que chamava a funcao acima, ja errada). CORRIGIDO**: adicionado a tupla, mesmo placeholder que "hybrid" |
+| `opin_flow.py:595` `load_client_signing_key` | alg/claim do JWT | corrigido na Decisao 51 (Emenda 13) -- confirmado continua correto |
+| `opin_flow.py:874` `load_client_encryption_key` | chave "enc" do id_token | cai no `else` -> `client_one.jwks`, **correto por desenho** (mesmo doc explicito: "pqc/hybrid still use classic_one's own plain-RSA enc key" -- hibrido-and herda a mesma razao, so RSA nesta camada) -- justificado, sem correcao de codigo |
+| `opin_flow.py:971` `verify_ca_chain` | contra qual CA validar root/issuer-ca.pem | cai no `else` -> `ca.crt`, **correto por desenho** (doc explicito: "classic/hybrid... both signed directly by this project's own real mTLS trust anchor") -- justificado |
+| `opin_flow.py:1004` `TLS_KEM_PROXY_CURVE_BY_PROFILE` | curva do proxy legado (so caminho SEM V9_HARNESS) | sem chave -- se alcancado, `KeyError` imediato (falha alta, nunca resposta errada silenciosa); caminho morto no piloto real (V9_HARNESS=1 sempre, pula este dict inteiro) -- **justificado, nao e falha silenciosa** |
+| `opin_flow.py:1090` guarda de early-return do proxy legado | se pula o proxy inteiro | `and crypto_profile != "hibrido-and"` explicito -- OK |
+| `opin_flow.py:1416` `dispatch` (telemetria de assinatura) | rotulo de log | chaveado por `alg` (sempre "hybrid" p/ hibrido-and, por construcao da Decisao 51) -- OK, nunca "unknown" na pratica |
+| `orchestrator.py` `PROFILES`/`CLIENT_CRYPTO_PROFILE_ENV`/`BACKEND_CRYPTO_PROFILE_ENV` | traducao cliente/backend | todas as 4 chaves explicitas -- OK |
+| `evaluate_criteria.py` `EXPECTED_CURVE`/`CERTIFICATE_BASELINE`/`CLIENTHELLO_BASELINE`/`HANDSHAKE_MESSAGE_BASELINE` | curva/baselines esperados | todas as 4 chaves explicitas -- OK |
+| `gateway/main.go:33,259` `expectedCurve`/switch | curva esperada, qual TLS config montar | `case "hibrido-and"` explicito -- OK |
+| `gateway/main.go:150`, `business_server.go:107` | exige `DualAuthenticated` | `profile == "hibrido-and"` explicito -- OK |
+| `business_server.go:186` | amplia CA pool do chamador interno p/ pqc | `else` cobre hibrido-and, **correto** (mesmo tratamento que hibrido-v8, que tambem nao precisa da ampliacao -- os dois usam o mesmo `op_hybrid.crt` real do chamador interno) |
+| `business_server.go:233` `realCAFilesForProfile` | qual par de CA servir em /root-ca.pem | `default` cobre classico+hibrido-and, **justificado no proprio comentario do codigo** (opin_flow so distingue pqc vs resto) |
+| `proxy/main.go:223` `buildClientTLSConfig` | qual config TLS o proxy carrega | `case "hibrido-and"` explicito, `default` e fail-closed (`error`) -- OK, ja era o padrao certo |
+| `mock_as/configuration.js:25`, `mongo-seed/start.sh` | qual `crypto-profiles/*.json`/JWKS o backend carrega | `hibrido-and` NUNCA chega aqui (traduzido p/ "hybrid" antes, por desenho -- Decisao 17) -- N/A, nao e uma lacuna deste arquivo |
+
+**Diff das 2 correcoes** (`thesis/scripts/opin_flow.py`):
+```diff
+-    elif crypto_profile == "hybrid":
++    elif crypto_profile in ("hybrid", "hibrido-and"):
+         crt, key = CERTS_DIR / "client_one_hybrid.crt", CERTS_DIR / "client_one_hybrid.key"
+...
+-    if crypto_profile in ("pqc", "hybrid"):
++    if crypto_profile in ("pqc", "hybrid", "hibrido-and"):
+         return get_client_cert_paths("classic")
+```
+Nenhuma das duas e exercitada pelo piloto real hoje (`V9_HARNESS=1`
+pula as duas funcoes inteiras -- o proxy Go carrega o cert do AND
+nativamente, `proxy/main.go`'s `dualClientConfig`, ja correto e
+fail-closed). Corrigidas mesmo assim, por correcao e nao so por
+consequencia -- podem ser alcancadas por qualquer uso futuro de
+`opin_flow.py` fora do V9_HARNESS (diagnostico manual, v8-style
+execucao direta). 4 testes novos, puros, sem Docker: `thesis/scripts/
+tests/test_profile_cert_dispatch.py`.
+
+**4. Captura de rede do criterio 1 -- implementada de verdade, pcap real por perfil.**
+
+**Ponto de captura definido:** a interface PRIMARIA do SERVIDOR (nunca
+loopback) -- mesmo no cenario L0 co-localizado o cliente sempre disca
+o IP PRIVADO real do servidor (`_server_gateway_ip`, Decisao 49/Emenda
+13), nunca 127.0.0.1, entao todo trafego mTLS cliente-facing cruza essa
+interface de verdade. `SSHExecutor._primary_iface` descobre via `ip -o
+-4 route show to default` (nunca hardcoded -- varia `ens5`/`eth0` entre
+familias EC2). Decifragem via `KEYLOG_PATH`, lido do proprio
+filesystem do container do gateway (`docker exec cat`) depois da
+captura. Extracao via tshark, reaproveitando a imagem `mockopin-v9-
+measure` ja construida pro T6 (so leitura de pcap, nenhuma captura
+nova dentro do container).
+
+**Bug real encontrado e corrigido no caminho:** `KEYLOG_PATH` so era
+lido em `main()` -- `runBusinessMode` (o UNICO modo que o piloto real
+usa, `HTTP_MODE=business`) passava `nil` hardcoded pro `KeyLogWriter`,
+silenciosamente nunca gravando nada. Corrigido em `business_server.go`
+(le `KEYLOG_PATH` tambem dentro de `runBusinessMode`) -- correcao pura
+de implementacao (fiacao de instrumentacao), nunca mudou nenhum
+comportamento de handshake/rede, nunca precisou de emenda.
+
+`SSHExecutor.dedicated_capture` reescrito (substitui o placeholder da
+Decisao 49): descobre a interface, inicia `tcpdump` em background no
+servidor, dispara UMA execucao real de settling no cliente (mesma
+garantia de isolamento do `readiness_probe` -- nunca entra nas
+contagens dos criterios 4/6), para o tcpdump, le o keylog do container,
+roda tshark, devolve o bloco no MESMO formato que `measure.sh`/o
+avaliador ja usam. 7 testes novos (`test_orchestrator.py`): interface
+nunca loopback, kill por PID, ordem start->trigger->kill, keylog+tshark
+via `mockopin-v9-measure`, parsing aceito pelo avaliador real (baselines
+`hibrido-v8` batendo exato), falha alta se a interface vier vazia +
+mutante.
+
+**Validacao LOCAL (nao a AWS), real, nao simulada:** script em
+`thesis/results/v9/campaign/local_validation_criterio1/` (gitignored,
+nunca commitado -- pcap/keylog sao segredo de sessao TLS). Pra cada um
+dos 4 perfis: sobe `v9-mtls` com `KEYLOG_PATH`, captura na interface
+PRIMARIA do PROPRIO namespace de rede do container (`eth0`, nunca
+loopback -- via sidecar `--net container:v9-mtls`), dispara uma conexao
+real e bem-sucedida (`negtest -scenario matrix`), extrai com tshark.
+**Um pcap real por perfil, decifrado, com o flight extraido:**
+
+| Perfil | ClientHello | Certificate (servidor) | Flight total observado | 0xFE65? |
+|---|---|---|---|---|
+| Classico | 332B | 909B | ~1.4KB | nao |
+| PQC | 1.803B | 5.628B | ~8.4KB | nao |
+| Hibrido-v8 | 1.900B | 6.251B | ~8.5KB | nao |
+| Hibrido-AND | 1.876B | 6.578B | ~12.1KB | **sim** |
+
+Bate com a ordem de grandeza esperada (AND maior que v8, v8/PQC maiores
+que Classico) nos 4. **O que fica so pra AWS confirmar:** a interface
+real (`ens5` ou equivalente, nao `eth0` do bridge Docker), o trafego
+cruzando DUAS instancias de verdade (nao dois containers no mesmo
+host), e a tolerancia de bytes exata do piloto (SAN com EIP real,
+Decisao 29) -- a MECANICA da captura (ponto certo, decifragem,
+extracao, formato aceito pelo avaliador) esta validada localmente com
+dados reais, nao simulados.
+
+**Testes:** 68 no total entre os dois pacotes tocados nesta rodada --
+64 em `thesis/results/v9/campaign/tests/` (57 antes + 7 novos de
+`dedicated_capture`), mais 4 novos e isolados em `thesis/scripts/
+tests/test_profile_cert_dispatch.py`. Todos passando.
+
+**Commit local desta rodada** (sem push): branch `v9/fase1-local`,
+arquivos tocados -- `thesis/results/v9/integration/negtest/main.go`
+(cenarios `and-bad-classical`/`and-bad-pqc`), `thesis/results/v9/
+integration/gateway/business_server.go` (fix do KEYLOG_PATH),
+`thesis/scripts/opin_flow.py` (2 correcoes do item 3), `thesis/
+results/v9/campaign/scripts/orchestrator.py` (`dedicated_capture`
+real + `KEYLOG_PATH` no `start_block`), `thesis/results/v9/campaign/
+tests/test_orchestrator.py` (+7), `thesis/scripts/tests/
+test_profile_cert_dispatch.py` (novo, +4), `thesis/results/v9/
+.gitignore` (+1 linha, pasta de validacao local).
+
+Nenhum item desta rodada exigiu emenda ao pre-registro -- o item 1
+confirmou que o pre-registro ja previa exatamente o que foi
+implementado, e os itens 2-4 foram prova/correcao de implementacao,
+nunca mudanca de desenho. Continuo sem autorizar push nem recursos na
+AWS.

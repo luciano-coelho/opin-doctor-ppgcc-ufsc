@@ -64,6 +64,16 @@ func main() {
 			log.Fatalf("negtest: and-single-chain only applies to hibrido-and")
 		}
 		err = tryANDSingleChain(*certDir, *target)
+	case "and-bad-classical":
+		if *profile != "hibrido-and" {
+			log.Fatalf("negtest: and-bad-classical only applies to hibrido-and")
+		}
+		err = tryANDBadClassical(*certDir, *target)
+	case "and-bad-pqc":
+		if *profile != "hibrido-and" {
+			log.Fatalf("negtest: and-bad-pqc only applies to hibrido-and")
+		}
+		err = tryANDBadPQC(*certDir, *target)
 	default:
 		log.Fatalf("negtest: unknown -scenario %q", *scenario)
 	}
@@ -291,6 +301,26 @@ func tryWrongSAN(profile, certDir, target string) error {
 func tryANDSingleChain(certDir, target string) error {
 	cfg := baseConfig("hibrido-and", certDir)
 	cfg.Dual = nil
+	return dial(cfg, target)
+}
+
+// (v) Decisao 52 (pedido independente, item 2a): o par duplo esta
+// PRESENTE (Dual continua setado, Require=true) mas a metade
+// CLASSICA e de um atacante sem nenhuma relacao com as CAs reais da
+// v9 -- a metade PQC continua genuina. O gate AND precisa recusar
+// mesmo assim (as DUAS metades tem que verificar E bater na mesma
+// identidade, nao so "ambas presentes").
+func tryANDBadClassical(certDir, target string) error {
+	cfg := baseConfig("hibrido-and", certDir)
+	cfg.Certificates = []tls.Certificate{attackerRSACert()}
+	return dial(cfg, target)
+}
+
+// (vi) espelho de (v): metade PQC de um atacante, metade classica
+// genuina.
+func tryANDBadPQC(certDir, target string) error {
+	cfg := baseConfig("hibrido-and", certDir)
+	cfg.Dual.Certificates = []tls.Certificate{attackerMLDSACert()}
 	return dial(cfg, target)
 }
 

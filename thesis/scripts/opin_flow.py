@@ -405,7 +405,7 @@ PERSON_AUTHORIZATION_SCOPES = "openid insurance-person"
 def get_client_cert_paths(crypto_profile: str):
     if crypto_profile == "pqc":
         crt, key = CERTS_DIR / "client_one_pqc.crt", CERTS_DIR / "client_one_pqc.key"
-    elif crypto_profile == "hybrid":
+    elif crypto_profile in ("hybrid", "hibrido-and"):
         # client_one_hybrid.crt/.key (Etapa 6): an ordinary RSA cert/key pair
         # as far as this script's TLS stack is concerned -- the ML-DSA-65
         # material rides along as three inert X.509 extensions the gateway's
@@ -413,6 +413,17 @@ def get_client_cert_paths(crypto_profile: str):
         # No urllib3/pyopenssl special-casing needed for this profile (that
         # workaround exists only for presenting a *native* ML-DSA-65 leaf
         # key, which this cert's own TLS-facing key never is).
+        #
+        # Decisao 52 (pedido independente, item 3): "hibrido-and" era
+        # pego pelo `else` abaixo, devolvendo o cert CLASSICO em vez do
+        # hybrid -- achado numa auditoria de grep, nunca exercitado pelo
+        # piloto real (V9_HARNESS=1 pula esta funcao inteiramente, ver
+        # start_tls_kem_proxy's own V9_HARNESS branch, que carrega o
+        # cert do dual AND nativamente dentro do proxy Go). Corrigido
+        # de qualquer forma, pela MESMA razao que "hybrid" ja esta aqui:
+        # hibrido-and reusa a identidade de aplicacao do hybrid
+        # INTEGRALMENTE (Decisao 17 do v9-prereg -- AND e so a camada de
+        # transporte), entao o valor certo aqui e identico ao de hybrid.
         crt, key = CERTS_DIR / "client_one_hybrid.crt", CERTS_DIR / "client_one_hybrid.key"
     else:
         crt, key = CERTS_DIR / "client_one.crt", CERTS_DIR / "client_one.key"
@@ -466,7 +477,12 @@ def get_local_leg_cert_paths(crypto_profile: str):
     2026-09-14, after v7's raw run files were already generated on
     2026-09-12).
     """
-    if crypto_profile in ("pqc", "hybrid"):
+    # Decisao 52 (pedido independente, item 3): "hibrido-and" adicionado
+    # aqui pela MESMA razao que "hybrid" ja estava -- precisa do mesmo
+    # placeholder de separacao de pool (ver docstring acima), nunca pela
+    # razao original do pqc (parse nativo de ML-DSA, que nunca se aplicou
+    # a hybrid nem a hibrido-and, os dois so RSA nesta camada).
+    if crypto_profile in ("pqc", "hybrid", "hibrido-and"):
         return get_client_cert_paths("classic")
     return get_client_cert_paths(crypto_profile)
 

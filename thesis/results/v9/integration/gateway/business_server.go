@@ -26,7 +26,25 @@ func runBusinessMode(profile, certDir, listen string) {
 		log.Fatalf("gateway: unknown CRYPTO_PROFILE %q (want classico, pqc, hibrido-v8, hibrido-and)", profile)
 	}
 
-	cfg, err := buildServerTLSConfig(profile, certDir, true, nil)
+	// Decisao 52 (pedido independente, item 4): KEYLOG_PATH so era lido
+	// em main() -- nunca chegava aqui, o unico modo que o piloto de
+	// verdade usa (HTTP_MODE=business, start_block real do
+	// orquestrador). Achado ao vivo tentando usar a captura dedicada:
+	// o `nil` hardcoded abaixo fazia qualquer captura decifrada vir
+	// vazia, sem erro nenhum sinalizado. Correcao puramente de
+	// implementacao (nao muda nenhum comportamento de rede/handshake,
+	// so se o keylog e gravado ou nao) -- nunca altera o pre-registro.
+	var keylog *os.File
+	if keylogPath := os.Getenv("KEYLOG_PATH"); keylogPath != "" {
+		var err error
+		keylog, err = os.Create(keylogPath)
+		if err != nil {
+			log.Fatalf("gateway: create keylog %s: %v", keylogPath, err)
+		}
+		defer keylog.Close()
+	}
+
+	cfg, err := buildServerTLSConfig(profile, certDir, true, keylog)
 	if err != nil {
 		log.Fatalf("gateway: %s: building TLS config: %v", profile, err)
 	}

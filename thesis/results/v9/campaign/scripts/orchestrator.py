@@ -369,6 +369,18 @@ class SSHExecutor:
                     f"--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
                     f"--network-alias matls-api.local --network-alias api.local --network-alias directory "
                     f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
+                    # Decisao 52 (item 4): KEYLOG_PATH sempre ligado, em
+                    # TODO bloco (nao so quando dedicated_capture vai
+                    # rodar) -- aditivo, nao muda nenhum comportamento
+                    # do gateway em si (so grava um arquivo extra que
+                    # mais ninguem le se dedicated_capture nao for
+                    # chamado). E o MESMO arquivo que dedicated_capture
+                    # vai ler depois, via `docker exec`, pra decifrar o
+                    # pcap com tshark -- sem precisar de volume
+                    # compartilhado nenhum (o arquivo nunca sai do
+                    # filesystem do proprio container do gateway antes
+                    # de ser copiado por `docker cp`/`docker exec cat`).
+                    f"-e KEYLOG_PATH=/tmp/v9_keylog.txt "
                     f"-v $(pwd)/../../mock-service-os/certs:/real-certs:ro mockopin-v9-gateway",
                     key_path=self.key_path)
         # Espera o gateway de verdade terminar de subir (carregar os
@@ -473,16 +485,106 @@ class SSHExecutor:
             "curveID": curve_id, "dualAuthenticated": dual_auth,
         }
 
+    def _primary_iface(self, host):
+        """Decisao 52 (pedido independente, item 4): a interface
+        PRIMARIA do host, via a propria rota default dele -- nunca
+        hardcoded (varia entre familias de instancia EC2: `ens5` com
+        driver ENA nas familias atuais, `eth0` em AMIs/familias mais
+        antigas) e, por construcao, nunca loopback (a rota default
+        nunca aponta pra `lo`)."""
+        proc = cli.run_ssh(host, "ip -o -4 route show to default | awk '{print $5}' | head -1", key_path=self.key_path)
+        iface = proc.stdout.strip()
+        if not iface:
+            raise RuntimeError(f"_primary_iface({host}): nao consegui descobrir a interface primaria (saida vazia, stderr={proc.stderr!r})")
+        return iface
+
     def dedicated_capture(self, profile, route):
-        """NAO coberto por esta rodada (Decisao 49, item 1 pedia so a
-        invocacao do CLIENTE) -- as 12 capturas do criterio 1 sao
-        responsabilidade separada dos produtores dedicados (Decisao
-        41, `criterio2_probe.py`/`criterio7_rtt.py`-like), nunca
-        chamado pela porta de fumaca (`skip_dedicated_captures=True`)
-        nem pelo teste de bloco unico desta validacao."""
+        """Decisao 52 (pedido independente, item 4) -- substitui o
+        placeholder da Decisao 49 (que so lia um arquivo que nunca era
+        escrito).
+
+        **Ponto de captura, definido e justificado:** a interface
+        PRIMARIA do SERVIDOR (`_primary_iface`), porta 443 -- NUNCA a
+        loopback. Isso vale inclusive no cenario L0 co-localizado:
+        `_server_gateway_ip` (Decisao 49/Emenda 13) faz o cliente
+        discar sempre o IP PRIVADO real do servidor, nunca 127.0.0.1
+        -- logo TODO trafego mTLS cliente-facing, nos 3 roteiros,
+        cruza essa interface de verdade, nunca so a loopback da
+        propria maquina.
+
+        **Decifragem:** `KEYLOG_PATH=/tmp/v9_keylog.txt`, ligado em
+        TODO bloco desde `start_block` (aditivo, Decisao 52) -- lido
+        do PROPRIO filesystem do container do gateway via `docker exec
+        cat` depois da captura, sem precisar de volume compartilhado
+        nenhum.
+
+        **Extracao:** tshark via a imagem `mockopin-v9-measure` ja
+        construida pro T6 (tem tcpdump+tshark instalados, Decisao
+        14) -- aqui so LEITURA de arquivo (`-r pcap`), nenhuma captura
+        de rede nova dentro do container; mesmos campos/formato que
+        `measure.sh` ja usa (`tls.handshake.type`/`.length`), pro
+        avaliador (`_message_sizes_for_profile`) ler sem mudanca.
+
+        **Conexao capturada:** UMA execucao de 'settling' dedicada
+        (mesmo padrao e mesma garantia de `readiness_probe` -- roda
+        FORA de qualquer marcador INICIO/FIM, nunca entra nas
+        contagens dos criterios 4/6), disparada do CLIENTE enquanto o
+        tcpdump do servidor esta rodando."""
         server_ip = self._server_ip()
-        proc = cli.run_ssh(server_ip, f"cat /tmp/criterio1_{profile}_{route}.log", key_path=self.key_path)
-        return proc.stdout
+        pcap_path = f"/tmp/criterio1_{profile}_{route}.pcap"
+        keylog_path = f"/tmp/criterio1_keylog_{profile}_{route}.txt"
+        tcpdump_log = f"/tmp/criterio1_tcpdump_{profile}_{route}.log"
+
+        iface = self._primary_iface(server_ip)
+
+        start_proc = cli.run_ssh(
+            server_ip,
+            f"sudo sh -c 'nohup tcpdump -i {iface} -s 0 -w {pcap_path} \"tcp port 443\" "
+            f"> {tcpdump_log} 2>&1 & echo $!'",
+            key_path=self.key_path,
+        )
+        tcpdump_pid = start_proc.stdout.strip().splitlines()[-1] if start_proc.stdout.strip() else ""
+        if not tcpdump_pid.isdigit():
+            raise RuntimeError(
+                f"dedicated_capture {profile}/{route}: tcpdump nao iniciou "
+                f"(stdout={start_proc.stdout!r} stderr={start_proc.stderr!r})"
+            )
+
+        try:
+            gw_ip = self._server_gateway_ip(route)
+            env = self._client_env(profile, gw_ip)
+            remote_argv = f"campaign_client_runner.py --label criterio1_capture_{profile}_{route}"
+            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(env)} python3 {remote_argv}"
+            trigger = cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
+            if trigger.returncode != 0:
+                raise RuntimeError(f"dedicated_capture {profile}/{route}: conexao de disparo falhou: {trigger.stderr}")
+        finally:
+            # sleep antes do kill: da tempo da conexao de disparo
+            # terminar de verdade antes de cortar a captura no meio.
+            cli.run_ssh(server_ip, f"sleep 1; sudo kill {tcpdump_pid} 2>/dev/null; sleep 1; true", key_path=self.key_path)
+
+        cli.run_ssh(server_ip, f"docker exec {self.gateway_container} cat /tmp/v9_keylog.txt > {keylog_path}", key_path=self.key_path)
+
+        tshark_proc = cli.run_ssh(
+            server_ip,
+            f"docker run --rm -v {pcap_path}:{pcap_path}:ro -v {keylog_path}:{keylog_path}:ro "
+            f"--entrypoint tshark mockopin-v9-measure "
+            f'-r {pcap_path} -o "tls.keylog_file: {keylog_path}" -Y tls.handshake '
+            f"-T fields -e frame.number -e tls.handshake.type -e tls.handshake.length -E aggregator=,",
+            key_path=self.key_path,
+        )
+        lines = ["tamanho POR MENSAGEM (frame, tipos, tamanhos)"]
+        for raw_line in tshark_proc.stdout.strip().splitlines():
+            cols = raw_line.split("\t")
+            if len(cols) < 3 or not cols[1] or not cols[2]:
+                continue
+            lines.append(f"{cols[0]}\t{cols[1]}\t{cols[2]}")
+        if len(lines) == 1:
+            raise RuntimeError(
+                f"dedicated_capture {profile}/{route}: tshark nao extraiu nenhuma mensagem de handshake "
+                f"(pcap vazio ou keylog nao decifrou) -- stdout={tshark_proc.stdout!r} stderr={tshark_proc.stderr!r}"
+            )
+        return f"== Perfil: {profile} ==\n" + "\n".join(lines) + "\n== fim =="
 
 
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
