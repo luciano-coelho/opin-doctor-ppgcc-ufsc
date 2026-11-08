@@ -210,9 +210,14 @@
         "Env": [
           "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           "GOSU_VERSION=1.19",
+          "JSYAML_VERSION=3.13.1",
+          "JSYAML_CHECKSUM=662e32319bdd378e91f67578e56a34954b0a2e33aca11d70ab9f4826af24b941",
           "MONGO_PACKAGE=mongodb-org",
+          "MONGO_REPO=repo.mongodb.org",
           "MONGO_MAJOR=9.0",
-          "MONGO_VERSION=9.0.4"
+          "MONGO_VERSION=9.0.4",
+          "HOME=/data/db",
+          "GLIBC_TUNABLES=glibc.pthread.rseq=0"
         ],
         "ExposedPorts": {
           "27017/tcp": {}
@@ -225,7 +230,7 @@
       "go_version_m_text": null,
       "image_id": "sha256:922d02cc5780c88db34b7d2dba58f84d1fd058adb5bf0371871e127cdb69eacb",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): RECONSTRUIDA nesta rodada a partir do source ATUAL (`mock-service-os/mock_as/mongo-seed`, mesmo build, 2026-11-08, working tree limpo confirmado). `Cmd` reflete a imagem base, nunca o `command:` real do compose (`/start.sh mongodb:27017`), que e passado em runtime pelo `docker run`, nao gravado na imagem."
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA; Env corrigido na Decisao 88, estava truncado): RECONSTRUIDA nesta rodada a partir do source ATUAL (`mock-service-os/mock_as/mongo-seed`, mesmo build, 2026-11-08, working tree limpo confirmado). `Cmd` reflete a imagem base, nunca o `command:` real do compose (`/start.sh mongodb:27017`), que e passado em runtime pelo `docker run`, nao gravado na imagem."
     },
     "mockapi": {
       "docker_image": "raidiam-insurance-lambdas:latest",
@@ -253,6 +258,9 @@
         "Env": [
           "PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           "JAVA_HOME=/opt/java/openjdk",
+          "LANG=en_US.UTF-8",
+          "LANGUAGE=en_US:en",
+          "LC_ALL=en_US.UTF-8",
           "JAVA_VERSION=jdk-17.0.19+10"
         ],
         "ExposedPorts": {
@@ -266,7 +274,7 @@
       "go_version_m_text": null,
       "image_id": "sha256:1c83ab8648288d5ecbc6430e5c9af64e8297d3d8108a1809c527f6874a9f900a",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Luciano decide se isso e aceitavel ou se o build precisa ser desencravado numa rodada futura."
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA; Env corrigido na Decisao 88, estava truncado): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Luciano decide se isso e aceitavel ou se o build precisa ser desencravado numa rodada futura."
     }
   }
 }

@@ -9563,3 +9563,57 @@ PINS.json`, `thesis/results/v9/campaign/scripts/
 Reentregando so o CODIGO (orchestrator.py/deliver_images.py/PINS.json
 -- as imagens CUSTOM ja estao no controle, verificadas) e repetindo
 o Passo 10.
+
+## 88. Achado real, ao vivo, executando a Fase B de novo (Passo 10, ainda) -- Env de mongo_seed/mockapi em PINS.json estava TRUNCADO (erro de transcricao desta propria sessao, nunca um bug de sistema)
+
+Branch `v9/fase1-local`. Corrigida a Decisao 87, o Passo 10 reprovou
+de novo, agora em `mongo_seed`:
+
+```
+RuntimeError: _deliver_image(mongo_seed, <servidor>): identidade nao
+confere (layers_ok=True, config_ok=False, binary_ok=True) --
+abortando ANTES de qualquer execucao
+```
+
+**Investigado ao vivo, nunca suposto:** `layers_ok=True` (conteudo
+da imagem chegou certo -- nao e um bug do mecanismo de entrega,
+Decisao 68, que continua funcionando). `docker image inspect
+insurance-server-lambdas-mongo_seed --format '{{json .Config}}'`
+direto no servidor real devolve `Env` com 10 entradas
+(`JSYAML_VERSION`/`JSYAML_CHECKSUM`/`MONGO_REPO`/`HOME`/
+`GLIBC_TUNABLES` entre elas) -- o `Env` pinado em `PINS.json`
+(Decisao 83) so tinha 5, faltando exatamente essas 5. Conferido
+tambem `mockapi`: pinado com 3 entradas, real tem 6 (faltava `LANG`/
+`LANGUAGE`/`LC_ALL`). `auth` conferido -- esse estava correto (3 de
+3, nunca truncado).
+
+**Causa raiz:** erro de TRANSCRICAO desta propria sessao, escrevendo
+`PINS.json` na Decisao 83 -- o `Env` completo de cada imagem ja
+tinha sido capturado corretamente em arquivos locais (`docker image
+inspect ... --format '{{json .Config}}'`, salvos antes de escrever
+o PINS.json), mas, na hora de transcrever pra JSON, as listas de
+`mongo_seed`/`mockapi` foram encurtadas por engano (nunca um
+problema de Docker, rede, ou do mecanismo de identidade em si --
+`auth`, transcrito certo, nunca falhou).
+
+**Corrigido:** `PINS.json.images.{mongo_seed,mockapi}.config_subset.
+Env` reescritos com a lista COMPLETA, copiada diretamente dos
+arquivos de inspecao ja salvos localmente (nunca re-digitada) --
+`mongo_seed` 5->10 entradas, `mockapi` 3->6 entradas.
+
+**Por que e uma correcao segura, nunca um STOP:** o CONTEUDO real das
+imagens nunca mudou -- so o PIN estava errado (subconjunto do que a
+imagem real sempre teve). Corrigir o pin pra bater com a imagem REAL
+e exatamente a funcao de uma Emenda (Decisao 55, item 1) -- nunca
+afrouxa a verificacao, so a torna EXATA em vez de incompleta.
+
+**Testes:** suite inteira roda inalterada (nenhuma fixture de teste
+hardcoda esses valores de Env especificos). 202 testes no total
+(inalterado).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PINS.json`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Reentregando so o CODIGO (PINS.json corrigido -- nenhuma imagem
+precisa ser reentregue, o conteudo real nunca mudou) e repetindo o
+Passo 10.
