@@ -8936,3 +8936,37 @@ scripts/consolidate_v9_pilot.py`,
 `thesis/results/v9/campaign/tests/test_consolidate_v9_pilot.py`,
 `thesis/results/v9/piloto/dados_oficiais/validacao-local-fase-b/`
 (evidencia), `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 80. PILOT_RUNBOOK.md (novo) -- roteiro completo da Fase B, mesmo nivel de detalhe do INFRA_REHEARSAL.md, cobrindo exatamente a sequencia do item 6 do pedido do Luciano
+
+Decisao do Luciano, segunda parte do item 4: escrever o roteiro da
+Fase B (sequencia, comandos, em que maquina roda cada passo, saida
+esperada, criterio de abortar), no mesmo nivel de detalhe do
+`INFRA_REHEARSAL.md`, e segui-lo.
+
+**Escrito:** `thesis/results/v9/campaign/PILOT_RUNBOOK.md` -- 16
+passos (0-15), mesma convencao [OPERADOR]/[CONTROLE] do roteiro de
+infraestrutura, cobrindo exatamente a sequencia que o Luciano
+enumerou no item 6 (apply self_terminate_hours=4, PKI/entrega,
+preflight de captura, porta de fumaca, 60 execucoes, 12 capturas,
+coleta, cleanup, consolidacao, verificacao final) mais dois passos
+novos desta mesma rodada: a pre-checagem do IP do operador (Decisao
+77, marcada 🔁 nos pontos onde deve ser repetida -- apos o apply e
+antes dos dois blocos mais longos, Passos 10/11) e a entrega de
+`certs/generated` ao controle (Decisao 76, Passo 7). Documenta
+explicitamente, no cabecalho, o gap conhecido dos criterios 2/3/7
+(Decisao 79) -- nunca escondido, nunca tratado como se estivesse
+resolvido.
+
+**Por que e seguro seguir este roteiro:** cada passo reaproveita
+scripts ja existentes e testados (`deliver_source.py`, `deliver_
+images.py`, `pki_relay.py`, `orchestrator.py`, `collect_artifacts.py`,
+`consolidate_v9_pilot.py`, `cleanup.py`, `emergency_stop.py`) --
+nenhum comando novo inventado so pro roteiro; a contagem de recursos
+Terraform (28) e identica ao ensaio de infraestrutura, so o
+parametro `self_terminate_hours` muda (1h -> 4h).
+
+**Testes:** nenhum novo (documento, nao e codigo).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PILOT_RUNBOOK.md`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
