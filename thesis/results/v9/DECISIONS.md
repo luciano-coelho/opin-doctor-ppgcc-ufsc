@@ -9617,3 +9617,67 @@ PINS.json`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
 Reentregando so o CODIGO (PINS.json corrigido -- nenhuma imagem
 precisa ser reentregue, o conteudo real nunca mudou) e repetindo o
 Passo 10.
+
+## 89. Achado real, ao vivo, executando a Fase B de novo (Passo 10, backend sobe pela primeira vez de ponta a ponta) -- setup_ssm.sh perdia o bit executavel no caminho remoto, so no Windows
+
+Branch `v9/fase1-local`. Corrigida a Decisao 88, o Passo 10 avancou
+MUITO mais -- as 4 imagens do backend subiram, `localstack` foi
+pulado pelo compose com sucesso (confirma a Decisao 87 ao vivo), mas
+`auth` nunca subiu: `Container insurance-server-lambdas-localstack-1
+Error dependency localstack failed to start: dependency failed to
+start: container insurance-server-lambdas-localstack-1 is
+unhealthy`.
+
+**Investigado ao vivo, nunca suposto:** `docker logs insurance-
+server-lambdas-localstack-1` no servidor real mostra a causa exata:
+
+```
+PermissionError: [Errno 13] Permission denied:
+'/etc/localstack/init/ready.d/init-aws.sh'
+```
+
+**Causa raiz:** esse caminho e `mock-service-os/setup_ssm.sh`
+MONTADO (`docker-compose.yml`, servico `localstack`) -- `localstack`
+executa esse script DIRETO via `subprocess.call` (nunca `sh script.
+sh`), exigindo o proprio bit executavel do arquivo. `git ls-files -s`
+confirma que o git rastreia esse arquivo como `100755` (executavel)
+-- mas `deliver_source.py.build_tarball` usa `tar.add(src,
+arcname=rel)` SEM filtro, que usa o `os.stat()` do arquivo LOCAL
+(Windows, onde o operador roda) pro modo Unix do tar -- e o Windows
+NUNCA preserva o bit 755 que o git rastreia no checkout. O tarball
+entregue ao servidor sempre tinha esse script SEM o +x, mesmo
+vindo de um repositorio onde ele sempre foi marcado executavel.
+
+**Por que nunca foi pego antes:** nenhum outro `.sh` entregue por
+este caminho precisa do proprio bit +x -- `rehearsal_handshake.sh`
+sempre e invocado como `bash rehearsal_handshake.sh` (o bit nunca
+importa, `bash` le o conteudo independente de permissao de
+execucao). `setup_ssm.sh` e o PRIMEIRO arquivo `.sh` entregue por
+este caminho que precisa ser executavel por si so (`localstack` o
+chama direto) -- e so comecou a ser entregue nesta mesma rodada
+(Decisao 83/85, `SERVER_ONLY_FILES`).
+
+**Corrigido:** `deliver_source.py.build_tarball` ganha `_fix_
+permissions_filter` (novo, passado como `filter=` pro `tar.add()`)
+-- forca 0o755 pra qualquer `.sh` e diretorios, 0o644 pro resto,
+NUNCA confiando no que o SO local (Windows) reportou.
+
+**Por que e uma correcao segura, nunca um STOP:** nao toca nenhum
+conteudo de arquivo, so a permissao Unix no tar -- torna a entrega
+CORRETA (o que o git sempre pretendeu), nunca uma mudanca de
+comportamento alem de corrigir um bug de transporte.
+
+**Testes (novos, com mutante):** `test_build_tarball_forca_bit_
+executavel_em_arquivos_sh` + `test_build_tarball_arquivo_nao_sh_
+fica_so_leitura` + `test_mutante_tarball_sem_filtro_de_permissao_e_
+pego` (zera o +x local deliberadamente, confirma que SEM o filtro o
+tar perde o bit, e que o `build_tarball` real sempre forca). 205
+testes no total (202 + 3).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_source.py`,
+`thesis/results/v9/campaign/tests/test_deliver_source.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Reentregando `deliver_source.py` (Passo 6, servidor+clientes -- o
+`setup_ssm.sh` corrigido so chega assim) e repetindo o Passo 10.

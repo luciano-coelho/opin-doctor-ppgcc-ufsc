@@ -54,6 +54,51 @@ def test_build_tarball_falha_se_arquivo_ausente(tmp_path):
         ds.build_tarball(ds.COMMON_FILES, tmp_path / "out.tar.gz", repo_root=repo_vazio)
 
 
+# --- Decisao 89 (achado real, ao vivo): `tar.add()` sem filtro usava
+# o modo Unix do `os.stat()` LOCAL -- no Windows (onde o operador
+# roda), isso nunca preserva o bit executavel que o git rastreia pra
+# `.sh`. `localstack` executa `setup_ssm.sh` (montado como `init-aws.
+# sh`) DIRETO via `subprocess.call`, sem `sh` no meio -- sem o bit +x,
+# `PermissionError: [Errno 13] Permission denied` real.
+
+def test_build_tarball_forca_bit_executavel_em_arquivos_sh(fake_repo, tmp_path):
+    out = ds.build_tarball(ds.SERVER_ONLY_FILES, tmp_path / "out.tar.gz", repo_root=fake_repo)
+    with tarfile.open(out, "r:gz") as tar:
+        setup_ssm = tar.getmember("mock-service-os/setup_ssm.sh")
+    assert setup_ssm.mode & 0o111, f".sh tem que ter o bit executavel -- mode={oct(setup_ssm.mode)}"
+
+
+def test_build_tarball_arquivo_nao_sh_fica_so_leitura(fake_repo, tmp_path):
+    out = ds.build_tarball(ds.SERVER_ONLY_FILES, tmp_path / "out.tar.gz", repo_root=fake_repo)
+    with tarfile.open(out, "r:gz") as tar:
+        compose_yml = tar.getmember("insurance-server-lambdas/docker-compose.yml")
+    assert compose_yml.mode == 0o644, f"arquivo nao-executavel deveria ser 0o644 -- mode={oct(compose_yml.mode)}"
+
+
+def test_mutante_tarball_sem_filtro_de_permissao_e_pego(fake_repo, tmp_path):
+    """Mutante: `tar.add()` SEM o filtro herda o modo local do
+    arquivo -- zera o bit +x local deliberadamente (simula o que o
+    Windows real sempre reporta pra um arquivo git-tracked 100755) e
+    confirma que, SEM o filtro, o tar perderia o +x; o build_tarball
+    REAL (com filtro) tem que forcar 0o755 independente disso."""
+    import os
+    import tarfile as tf
+    src = fake_repo / "mock-service-os" / "setup_ssm.sh"
+    os.chmod(src, 0o644)  # simula o que o Windows real sempre reporta
+
+    mutant_out = tmp_path / "mutant.tar.gz"
+    with tf.open(mutant_out, "w:gz") as tar:
+        tar.add(src, arcname="mock-service-os/setup_ssm.sh")  # mutante: sem filter=
+    with tf.open(mutant_out, "r:gz") as tar:
+        mutant_member = tar.getmember("mock-service-os/setup_ssm.sh")
+    assert not (mutant_member.mode & 0o111), "mutante deveria ter perdido o bit +x -- prova que dependia do filtro"
+
+    out = ds.build_tarball(ds.SERVER_ONLY_FILES, tmp_path / "real.tar.gz", repo_root=fake_repo)
+    with tf.open(out, "r:gz") as tar:
+        real_member = tar.getmember("mock-service-os/setup_ssm.sh")
+    assert real_member.mode & 0o111, "build_tarball real tem que forcar o +x, nunca depender do SO local"
+
+
 def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch, fake_repo):
     calls = []
 

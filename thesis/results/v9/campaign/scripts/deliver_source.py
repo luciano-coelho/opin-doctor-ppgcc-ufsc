@@ -139,18 +139,41 @@ REMOTE_CONTROL_TARBALL_PATH = "/tmp/mockopin-v9-control.tar.gz"
 REMOTE_INVENTORY_PATH = "~/thesis/results/v9/campaign/scripts/inventory.json"
 
 
+def _fix_permissions_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Decisao 89 (achado real, ao vivo): `tar.add()` sem filtro usa
+    `os.stat()` do arquivo LOCAL pro modo Unix -- no Windows (onde o
+    operador roda), isso NUNCA reflete o bit executavel que o git
+    rastreia (`git ls-files -s` mostra `100755` pra `setup_ssm.sh`,
+    mas o Windows nunca preserva isso no checkout). `localstack`
+    executa `init-aws.sh` (== `setup_ssm.sh`, montado por esse nome)
+    DIRETO via `subprocess.call` (nunca `sh script.sh`) -- sem o bit
+    +x, `PermissionError: [Errno 13] Permission denied` real, achado
+    ao vivo rodando o backend de verdade no servidor. Forca 0o755
+    (rwxr-xr-x) pra qualquer `.sh`, 0o755 pra diretorios, 0o644
+    (rw-r--r--) pro resto -- nunca confia no que o Windows reportou."""
+    if tarinfo.isdir():
+        tarinfo.mode = 0o755
+    elif tarinfo.name.endswith(".sh"):
+        tarinfo.mode = 0o755
+    else:
+        tarinfo.mode = 0o644
+    return tarinfo
+
+
 def build_tarball(rel_paths: list[str], out_path: Path, repo_root: Path = _REPO_ROOT) -> Path:
     """Tarball LOCAL (tarfile puro, sem depender de um binario `tar`
     no PATH do operador) -- cada entrada guarda o caminho RELATIVO ao
     repositorio (`arcname=rel`), pra extrair em `~/` no destino
     reproduzir exatamente o mesmo layout relativo que `opin_flow.py`
-    (BASE_DIR) ja presume."""
+    (BASE_DIR) ja presume. Permissoes Unix sempre forcadas (Decisao
+    89), nunca herdadas do `os.stat()` local -- ver `_fix_permissions_
+    filter`."""
     with tarfile.open(out_path, "w:gz") as tar:
         for rel in rel_paths:
             src = repo_root / rel
             if not src.exists():
                 raise RuntimeError(f"build_tarball: {src} nao existe -- nada pra empacotar")
-            tar.add(src, arcname=rel)
+            tar.add(src, arcname=rel, filter=_fix_permissions_filter)
     return out_path
 
 
