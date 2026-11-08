@@ -8599,3 +8599,340 @@ scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
 (esta Decisao).
 
 Seguindo pros Passos 11-14 do roteiro (mesma fleet, sem reaplicar).
+
+## 75. Emenda -- SAN real (SERVER_IPS="<EIP real>,::1") descartada pro piloto, nunca aplicada; conferido por conteudo que os certificados entregues (certs/generated, mock-service-os/certs) sao os mesmos ja embutidos nas imagens pinadas
+
+Decisao do Luciano, respondendo ao relatorio da retomada da Fase A:
+a tecnica de SAN real (PILOT_READINESS.md, secao d/j-6) fica
+descartada pro piloto -- nenhum rebuild de imagem, nenhum `make
+certs`. O piloto usa os certificados tal como ja estao, embutidos
+nas imagens pinadas. Antes de seguir, exigida uma prova por
+conteudo (nunca por suposicao) de que os certificados REALMENTE
+entregues as instancias nesta rodada (certs/generated, mock-
+service-os/certs) sao os mesmos que estao embutidos -- investigacao
+read-only, sem nenhum rebuild, sem nenhuma chamada AWS.
+
+**(a) certs/generated (disco) == certificados embutidos nas imagens
+pinadas.** Extraidos os 16 arquivos (`.crt`, 5 por perfil + CA de
+cada) de dentro de `mockopin-v9-gateway:pinned` (`docker run
+--entrypoint cat`) e comparados por sha256 contra
+`thesis/results/v9/certs/generated/`: 16/16 identicos byte a byte.
+`mockopin-v9-proxy:latest` confirmado com os mesmos 5 certificados
+de servidor que o gateway (sha256 identico). Nenhum arquivo
+reconstruido pra esta checagem.
+
+**(b) mock-service-os/certs -- consistencia interna.** Nada deste
+diretorio e embutido em imagem nenhuma por desenho
+(`business_server.go`: REAL_CERTS_DIR e sempre MONTADO, nunca
+copiado pra dentro de uma imagem) -- a checagem possivel aqui e
+consistencia da cadeia, nao comparacao contra um baked-in. `ca.crt`
+e a ancora de confianca unica; `root_ca.crt`, `issuer_ca.crt`,
+`op.crt`, `mtls.crt`, `client_one.crt`, `client_two.crt` verificam
+OK contra `ca.crt` (`openssl verify -CAfile ca.crt`). Diretorio sem
+mudanca desde 2026-09-29, anterior a esta campanha inteira.
+
+**(c) por que o SAN real nunca foi necessario.** O SAN de todo
+certificado servidor embutido e `DNS:mtls, IP Address:127.0.0.1, IP
+Address:0:0:0:0:0:0:0:1` -- loopback, nunca o EIP real; o "<IP>" da
+frase do Luciano e sempre esse placeholder generico, nunca o IP
+publico do piloto. `negtest/main.go.baseConfig()` fixa `ServerName:
+"mtls"` -- a verificacao de hostname do client sempre confere
+contra esse rotulo fixo (presente no SAN de todo certificado),
+nunca contra o IP discado. Por isso o Passo 10 (Decisoes 72/73/74)
+fechou delta 0B numa rede real sem o SAN conter o EIP: nem a
+verificacao de hostname nem a paridade de bytes (Decisao 56: o
+VALOR do IPv4 no SAN nunca afeta o tamanho DER) dependem dele.
+Reconstruir a imagem pra mudar o SAN nunca teria efeito sobre
+nenhum dos dois mecanismos que realmente importam -- proposta
+corretamente descartada.
+
+**Por que e uma Emenda, nunca um STOP:** nenhum arquivo foi
+alterado por esta investigacao (so leitura/comparacao); nenhum
+criterio pre-registrado muda; o piloto segue usando exatamente os
+certificados que ja estavam la, sem nenhuma mudanca de mecanismo.
+
+**Testes:** nenhum novo (investigacao read-only, nao e codigo).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/DECISIONS.md`
+(esta Decisao).
+
+## 76. Smoke gate (run_smoke_gate) nunca mais quebra no controle: diagnostico de bytes trocado pra stdlib, certs/generated entregue ao controle, qualquer excecao no diagnostico so marca needs_decision
+
+Decisao do Luciano, item 2 do mesmo pedido: `run_smoke_gate` roda a
+partir do CONTROLE (Decisao 59 -- SSHExecutor so funciona de
+verdade dali) e o diagnostico de bytes
+(`_bytes_diagnostic_for_profile` -> `ec.expected_handshake_bytes` ->
+`ec._cert_der_size`) ate agora dependia de dois pressupostos nunca
+verdadeiros la: a biblioteca `cryptography` instalada, e
+`certs/generated` presente no disco. Sem os dois, o diagnostico
+(so isso, nunca o gate oficial) quebraria o smoke gate inteiro com
+`ModuleNotFoundError`/`FileNotFoundError` antes mesmo de chegar aos
+criterios que realmente decidem.
+
+**Corrigido, dois pontos independentes:**
+
+1. `evaluate_criteria.py._cert_der_size` trocado de
+   `cryptography.x509.load_pem_x509_certificate(...).public_bytes
+   (Encoding.DER)` pra `ssl.PEM_cert_to_DER_cert(pem_text)` (stdlib
+   -- um PEM e so o DER em base64, decodificar nunca reserializa,
+   mesmo tamanho byte a byte; o teste
+   `test_bytes_diagnostic_zero_desvio_com_certs_reais_e_log_real`,
+   que ja exercitava esse caminho inteiro com certs reais, continua
+   passando inalterado, provando a equivalencia).
+2. `deliver_source.py.CONTROL_FILES` ganha
+   `thesis/results/v9/certs/generated` (mesma convencao de
+   diretorio que `CLIENT_ONLY_FILES` ja usava pros clientes) --
+   agora o controle recebe os certificados de verdade antes de
+   qualquer smoke gate rodar.
+3. `orchestrator.py.run_smoke_gate`: o loop que monta
+   `bytes_diagnostic_rows` agora envolve cada chamada a
+   `_bytes_diagnostic_for_profile` num try/except -- qualquer
+   excecao (residual, caso 1/2 acima nao bastem por algum motivo
+   imprevisto) produz `{"ok": False, "note": "<excecao>"}` pra
+   aquele perfil, que automaticamente marca
+   `bytes_diagnostic_needs_decision = True` pela formula ja
+   existente (`any(not r["ok"] ...)`) -- nunca propaga e quebra a
+   funcao. `smoke_ok` continua calculado SO por
+   `total_execucoes`/`failures`/`capture_proof_ok` (formula
+   inalterada) -- o diagnostico nunca entra nessa conta, com ou sem
+   excecao.
+
+**Por que e uma correcao segura:** nenhum criterio pre-registrado
+muda; o diagnostico de bytes sempre foi so isso, um diagnostico
+(Decisao 55, item 3) -- nunca o gate oficial do criterio 1.
+
+**Testes, incluindo o pedido explicito do Luciano ("erro no
+diagnostico pausa e nao altera smoke_ok; o diagnostico correto com
+delta 0 passa"):**
+`test_bytes_diagnostic_excecao_pausa_mas_nunca_quebra_o_smoke_gate`
+(novo) -- forca `_bytes_diagnostic_for_profile` a levantar
+`FileNotFoundError` pro perfil `pqc`, confere que `run_smoke_gate`
+NUNCA propaga (se propagasse, o teste nem chegaria aos asserts),
+que a linha daquele perfil fica `ok: False` com a excecao no
+`note`, que `bytes_diagnostic_needs_decision` fica `True`, e que
+`smoke_ok` continua `True` (criterios oficiais intactos). Os testes
+pre-existentes `test_bytes_diagnostic_zero_desvio_com_certs_reais_e
+_log_real`/`test_porta_de_fumaca_sinaliza_decisao_pendente_sem_
+bloquear_smoke_ok_quando_desvio_detectado` continuam cobrindo o
+caminho correto (delta 0 passa; desvio detectado sem excecao
+tambem so pausa, nunca quebra). `test_control_files_inclui_certs_
+generated` + `test_deliver_to_control_tarball_inclui_certs_
+generated` (novos) cobrem o item 2. 161 testes no total (158 + 3
+novos: 1 em test_orchestrator.py, 2 em test_deliver_source.py).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/integration/
+evaluate_criteria.py`, `thesis/results/v9/campaign/scripts/
+{orchestrator.py,deliver_source.py}`,
+`thesis/results/v9/campaign/tests/{test_orchestrator.py,
+test_deliver_source.py}`, `thesis/results/v9/DECISIONS.md` (esta
+Decisao).
+
+## 77. Pre-checagem do IP publico do operador contra a regra de ingress SSH (check_operator_ip.py) -- acrescentada apos o bloqueio real de 8 minutos da Decisao 72, causa raiz nunca confirmavel retroativamente
+
+Decisao do Luciano, item 5 do mesmo pedido: investigar se o bloqueio
+real de 8 minutos (porta 22/443, Decisao 72, "nota de
+infraestrutura") podia ser explicado por uma mudanca no IP publico
+do operador NAO refletida na regra de ingress SSH do controle
+(`module.control.aws_vpc_security_group_ingress_rule.ssh["operator"]`,
+`terraform/main.tf:131`, `ssh_ingress_cidrs =
+{"operator": var.operator_ip_cidr}` -- regra DIFERENTE da
+controle->servidor/clientes, que usa o EIP do controle e ja estava
+correta por design).
+
+**Investigado, honestamente ate onde e possivel:** a regra cobre SO
+a porta 22 (nao existe nenhuma regra dando ao operador acesso
+direto a porta 443 em instancia nenhuma -- qualquer
+inalcancabilidade de 443 observada a partir do operador nunca seria
+evidencia de regra caida, e sim de uma porta que NUNCA foi aberta
+pra ele por desenho). O IP e capturado uma vez por `terraform
+apply` (variavel de ambiente `TF_VAR_operator_ip_cidr`, nunca
+persistido em arquivo) e nunca mais conferido depois -- o script
+scratch que gerava esse valor (`env.sh`) sempre recalcula na hora,
+nunca grava o valor historico que estava em vigor no momento exato
+do incidente. Conclusao honesta: nao e possivel reconstruir,
+retroativamente, qual era o IP do operador no momento do bloqueio
+real -- o mecanismo (captura unica, nunca reconferida) e
+plausivel, mas NUNCA comprovado como a causa raiz daquele incidente
+especifico.
+
+**Por que a pre-checagem entra mesmo assim:** seguranca barata,
+independente de provar aquela causa especifica -- um bloqueio de 8
+minutos custou uma fleet inteira (teardown+reaplicacao). Reconferir
+o IP antes de cada fase custa uma chamada HTTP e, no caso raro de
+mudanca, um `terraform apply -target` escopado a UM recurso.
+
+**Implementado:** `check_operator_ip.py` (novo,
+`thesis/results/v9/campaign/scripts/`), rodado pelo OPERADOR (nunca
+pelo controle) antes de cada fase que dependa de SSH funcionar.
+`ensure_operator_ip_current(tf_dir)`: le o IP atual
+(`curl https://checkip.amazonaws.com`, via `cli._run`, mesma
+fronteira de teste de todo o pacote), le o `cidr_ipv4` gravado hoje
+no state (`terraform show -json`, via `cli.run_terraform`,
+localizando
+`module.control.aws_vpc_security_group_ingress_rule.ssh["operator"]`
+na arvore de `child_modules`); se iguais, nao faz nada
+(`{"changed": False}`); se diferentes, reaplica SO essa regra
+(`terraform apply -auto-approve
+-target='module.control.aws_vpc_security_group_ingress_rule.ssh
+["operator"]' -var="operator_ip_cidr=<novo>/32"`, nunca um apply
+completo da fleet) e falha alto (`RuntimeError`) se a reaplicacao
+em si falhar -- nunca segue uma fase com uma regra possivelmente
+desatualizada.
+
+**Testes (novos, `test_check_operator_ip.py`, cli._run/cli.run_
+terraform stubados, nenhuma chamada real):** leitura do IP atual
+(sucesso/falha alta se o curl falhar); leitura do cidr do state
+(sucesso/falha alta se `terraform show` falhar ou o recurso nao
+existir no state); `ensure_operator_ip_current` nao reaplica quando
+o IP bate (confere que nenhuma chamada `apply` e disparada);
+reaplica quando o IP difere (confere `-target`/`-var` exatos no
+comando real); falha alto se a reaplicacao falhar. 8 testes novos.
+
+**169 testes no total** (161 da Decisao 76 + 8 aqui -- numero final
+confirmado rodando a suite inteira depois desta Decisao).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/check_operator_ip.py`,
+`thesis/results/v9/campaign/tests/test_check_operator_ip.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 78. collect_artifacts.py reescrito pra estrutura FLAT real de run_pilot -- a versao anterior presumia um diretorio por perfil que nunca existiu de verdade
+
+Decisao do Luciano, item 3 do mesmo pedido: a pesquisa de codigo da
+retomada anterior (antes da Decisao 75) ja tinha achado que
+`collect_artifacts.py` esperava uma estrutura
+`<remote_base_dir>/<profile>/` + `<profile>.sha256` por perfil, mas
+`orchestrator.py.run_pilot` SEMPRE escreveu num unico diretorio
+FLAT (`piloto_combined.log`, `piloto_calls.json`, `criterio6_
+execucoes.json`, `manifest.json`, `criterio1_capturas/*.log`, tudo
+junto, nunca dividido por perfil) -- essa funcao nunca teria
+funcionado contra a saida real do piloto, so contra a premissa
+errada dos proprios testes antigos.
+
+**Corrigido:** `collect_block()` (por perfil) removido; `collect_
+pilot_data(control_ip, key_path, remote_dir, local_dir)` (novo)
+regenera o manifesto sha256 no controle sobre O DIRETORIO INTEIRO
+(`find . -type f | xargs sha256sum`, mesma chamada de sempre, so sem
+o sufixo `/<profile>`), puxa tudo com `scp -r` num unico passo, e
+confere o manifesto de novo localmente -- EXATAMENTE a mesma
+garantia de sempre (nenhuma mudanca na logica de verificacao em si,
+so no que ela aponta). CLI: `--remote-dir` (era `--remote-base-dir`
++ `--profiles`) -- o mesmo `--out` ja passado a `orchestrator.py
+run_pilot`/`run_smoke_gate`.
+
+**Por que e uma correcao segura:** nao toca `run_pilot`/`run_smoke_
+gate` (pedido explicito do Luciano) nem nenhum criterio
+pre-registrado -- so corrige o lado da COLETA pra apontar pro
+formato que sempre existiu de verdade.
+
+**Testes:** `test_collect_artifacts.py` inteiro reescrito -- fixture
+`_setup_fake_remote` agora monta um diretorio remoto fake FLAT (com
+um subdiretorio `criterio1_capturas/`, igual ao real, mas nunca um
+por perfil), mesmos 4 casos de sempre (hash correto, arquivo
+corrompido detectado, arquivo ausente detectado, mutante da
+verificacao desligada pego pelos dois testes de corrupcao/ausencia).
+169 testes no total (inalterado -- 4 testes substituindo 4 testes).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/collect_artifacts.py`,
+`thesis/results/v9/campaign/tests/test_collect_artifacts.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 79. consolidate_v9_pilot.py (novo) -- consolidacao final no padrao estrutural da v8 (fonte json + relatorio md, diretorio limpo); caminho de dados completo provado localmente ANTES de qualquer AWS, como o Luciano pediu (item 4)
+
+Decisao do Luciano, item 4 do mesmo pedido: antes de tocar a AWS de
+novo, rodar localmente (executor local, N minimo) o caminho COMPLETO
+de dados -- `run_pilot`, coleta, manifesto, avaliacao dos 7
+criterios, consolidacao -- e provar que o consolidado sai coerente.
+
+**Consolidacao escrita:** `consolidate_v9_pilot.py` (novo,
+`thesis/results/v9/campaign/scripts/`). Reaproveita `evaluate_
+criteria.py` em processo (as MESMAS 7 chamadas que `main()` ja faz,
+nunca reimplementadas), e escreve o PAR fonte+derivado no mesmo
+padrao ESTRUTURAL que `consolidate_v8.py` ja usa (um JSON fonte +
+um Markdown derivado, num diretorio final limpo, separado do
+scratch de campanha) -- nao os MESMOS calculos: a v8 e uma campanha
+continua de semanas/3 regioes com estatistica distribucional
+(mediana/CI bootstrap entre muitas execucoes); o piloto v9 e um
+sanity-check unico de passagem/reprovacao, ja resolvido por completo
+pelos limiares pre-registrados de `evaluate_criteria.py` -- nenhuma
+estatistica adicional genuina a herdar dali, so a forma. Escreve,
+por `--out-dir`: `raw/` (copia intacta do diretorio ja coletado e
+verificado por `collect_artifacts.py`, nunca movida),
+`criteria_evaluation.json` (saida crua dos 7 criterios),
+`RELATORIO_PILOTO.md` (tabela pass/fail + notas de reprovacao).
+
+**Caminho de dados completo, provado AO VIVO, localmente (`--mode
+simulate`, LocalExecutor, seed 20261108, grade oficial completa --
+nunca reduzida):** `orchestrator.py --mode simulate --out
+/tmp/v9_local_dry_run_piloto` fechou 60/60 execucoes + 12/12
+capturas; `consolidate_v9_pilot.py --collected-dir
+/tmp/v9_local_dry_run_piloto --out-dir thesis/results/v9/piloto/
+dados_oficiais/validacao-local-fase-b --run-label validacao-local-
+fase-b` consolidou e saiu **coerente**: criterios 1/4/5/6 (os
+localmente avaliaveis, PILOT_READINESS.md) fecharam PASS de verdade
+sobre dados locais reais; criterios 2/3/7 (so AWS) reprovaram com
+nota clara de arquivo ausente, nunca quebraram nem passaram por
+omissao -- exatamente o comportamento fail-closed esperado (Decisao
+33), nunca um resultado inflado. Evidencia arquivada em
+`thesis/results/v9/piloto/dados_oficiais/validacao-local-fase-b/`.
+
+**Achado real, nao um bug deste pedido -- gap pre-existente, nunca
+fechado antes desta investigacao:** `thesis/results/v9/integration/
+producers/{criterio2_probe,criterio3_collector,criterio7_rtt}.py`
+(os 3 arquivos dedicados que os criterios 2/3/7 leem de `--aws-dir`)
+NUNCA foram ligados a `orchestrator.py`/`deliver_source.py`/`PILOT_
+READINESS.md` -- confirmado por grep no repositorio inteiro, zero
+referencias fora de si mesmos e de `evaluate_criteria.py`. Investigado
+(read-only, sem nenhuma mudanca de arquivo):
+- **criterio2_probe.py** roda no SERVIDOR, abre um listener numa
+  porta NOVA (nunca 443/22, as unicas abertas hoje no Security
+  Group) -- precisaria de uma regra de ingress nova, nunca
+  autorizada por nenhuma Decisao ate aqui.
+- **criterio3_collector.py** e um agregador puramente local, mas
+  espera um arquivo JSON POR EXECUCAO (`{"profile","route","ok"}`)
+  que nada no pipeline real jamais produz -- `run_pilot` so escreve
+  UM `piloto_calls.json` combinado, formato diferente, sem o campo
+  `"ok"`; precisaria de um adaptador novo, nunca escrito.
+- **criterio7_rtt.py** (`probe`) roda de qualquer CLIENTE contra a
+  porta 443 ja aberta (sem gap de SG); (`pcap`) precisa do `.pcap` de
+  uma captura dedicada (essas, `_launch_gateway` ja grava em `/tmp`
+  no servidor, nunca copiadas pra lugar nenhum) + `tshark`
+  disponivel la (so confirmado dentro da imagem `mockopin-v9-
+  measure`, nunca no host bare).
+
+Nenhum dos 3 tem teste automatizado (confirmado por grep -- nenhum
+arquivo em `campaign/tests/` importa nenhum dos tres).
+
+**Por que este piloto segue SEM wire-los agora:** o item 6 do mesmo
+pedido do Luciano enumera a sequencia exata da Fase B -- apply, PKI/
+entrega, preflight de captura, porta de fumaca, 60 execucoes, 12
+capturas, coleta, cleanup, consolidacao, verificacao final -- e essa
+lista NUNCA menciona os produtores dedicados de criterio 2/3/7.
+Wire-los de verdade exigiria abrir uma porta nova de ingress numa
+conta AWS real (mudanca de infraestrutura fora do escopo pedido),
+escrever um adaptador nunca pedido, e confiar em testes nunca
+escritos -- tudo isso dentro da MESMA sessao que vai rodar a AWS de
+verdade, exatamente o tipo de mudanca "duvida sobre se altera o que
+e medido" (regra 7(e)) que esta autorizacao pede pra tratar com
+cautela redobrada. Fica registrado aqui como gap CONHECIDO e
+pre-existente (nunca escondido) -- o piloto desta rodada fecha os
+criterios 1/4/5/6 por completo (os unicos que `run_pilot`/`run_
+smoke_gate`/`collect_artifacts.py` ja alimentam de verdade) e reporta
+2/3/7 honestamente como sem evidencia, nunca como PASS por omissao.
+Decisao de wire-los (e abrir a porta nova) fica pendente do Luciano.
+
+**Testes:** `test_consolidate_v9_pilot.py` (novo, 4 testes) -- usa a
+saida REAL de `run_pilot(LocalExecutor(), ...)` como fixture (nunca
+dados fake construidos a mao): as 7 chamadas sao reaproveitadas na
+ordem certa; criterios 2/3/7 reprovam com nota clara sem quebrar;
+`raw/`+`criteria_evaluation.json`+`RELATORIO_PILOTO.md` saem
+corretos; falha alto se `piloto_combined.log` estiver ausente;
+resultado geral reflete corretamente que 1/4/5/6 passam e 2/3/7 nao.
+173 testes no total (169 + 4).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/consolidate_v9_pilot.py`,
+`thesis/results/v9/campaign/tests/test_consolidate_v9_pilot.py`,
+`thesis/results/v9/piloto/dados_oficiais/validacao-local-fase-b/`
+(evidencia), `thesis/results/v9/DECISIONS.md` (esta Decisao).

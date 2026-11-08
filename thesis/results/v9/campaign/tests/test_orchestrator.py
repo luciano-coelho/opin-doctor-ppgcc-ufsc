@@ -541,6 +541,31 @@ def test_mutante_bytes_diagnostic_ignora_desvio_e_pego():
         assert mutant_ok_so_out is False
 
 
+# --- Decisao 75, item 2 (pedido do Luciano): qualquer excecao DENTRO
+# do diagnostico (ex: certs_dir ausente, cryptography/arquivo faltando)
+# nunca pode derrubar o smoke gate inteiro -- so marca a linha daquele
+# perfil como needs_decision, igual a um desvio != 0 normal, e
+# smoke_ok continua decidido SO pelos criterios oficiais.
+
+def test_bytes_diagnostic_excecao_pausa_mas_nunca_quebra_o_smoke_gate(tmp_path, monkeypatch):
+    def broken_diagnostic(log_text, profile, certs_dir):
+        if profile == "pqc":
+            raise FileNotFoundError(f"certs_dir ausente: {certs_dir}")
+        return {"profile": profile, "ok": True}
+
+    monkeypatch.setattr(orch, "_bytes_diagnostic_for_profile", broken_diagnostic)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    broken_row = next(r for r in manifest["bytes_diagnostic_rows"] if r["profile"] == "pqc")
+    assert broken_row["ok"] is False
+    assert "FileNotFoundError" in broken_row["note"]
+    assert manifest["bytes_diagnostic_needs_decision"] is True
+    # o mutante real: se a excecao propagasse, este teste nunca chegaria
+    # aqui (run_smoke_gate teria estourado) -- smoke_ok so cai se os
+    # criterios OFICIAIS (total_execucoes/failures/capture_proof_ok)
+    # falharem, nunca por conta do diagnostico.
+    assert manifest["smoke_ok"] is True
+
+
 def test_mutante_smoke_ok_ignora_capture_proof_e_pego(tmp_path, monkeypatch):
     """Mutacao: `smoke_ok` calculado sem o `capture_proof_ok` -- o
     teste acima (smoke_ok False quando a prova de captura falha) tem

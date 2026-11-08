@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
 from collections import Counter
 
@@ -196,10 +197,15 @@ BASELINE_CERT_DER_SIZES = {
 
 
 def _cert_der_size(cert_path) -> int:
-    from cryptography import x509
-    from cryptography.hazmat.primitives.serialization import Encoding
-    cert = x509.load_pem_x509_certificate(open(cert_path, "rb").read())
-    return len(cert.public_bytes(Encoding.DER))
+    """Decisao 75, item 2 (pedido do Luciano): usa so a stdlib
+    (`ssl.PEM_cert_to_DER_cert`, base64-decodifica o corpo do PEM --
+    nunca reserializa o certificado) em vez de `cryptography`, que o
+    controle real nao tem instalado por padrao. Mesmo tamanho DER que
+    a implementacao anterior (PEM E base64 do DER, sem diferenca de
+    enconding possivel) -- comportamento idêntico, so a dependencia
+    muda."""
+    pem_text = open(cert_path, "r", encoding="ascii").read()
+    return len(ssl.PEM_cert_to_DER_cert(pem_text))
 
 
 def deployed_cert_der_sizes(profile: str, certs_dir) -> dict:

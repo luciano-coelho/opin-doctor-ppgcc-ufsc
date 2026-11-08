@@ -1252,9 +1252,17 @@ def run_smoke_gate(executor, seed: int, out_dir: Path, certs_dir=_DEFAULT_CERTS_
     # Desvio != 0 PAUSA e pergunta, igual ao smoke gate -- nunca
     # aborta por conta propria, nunca e ignorado em silencio.
     combined_log_text = Path(manifest["combined_log"]).read_text(encoding="utf-8")
-    bytes_diagnostic_rows = [
-        _bytes_diagnostic_for_profile(combined_log_text, profile, certs_dir) for profile in PROFILES
-    ]
+    bytes_diagnostic_rows = []
+    for profile in PROFILES:
+        try:
+            row = _bytes_diagnostic_for_profile(combined_log_text, profile, certs_dir)
+        except Exception as e:  # noqa: BLE001 -- Decisao 75, item 2: diagnostico e so isso, um
+            # DIAGNOSTICO -- qualquer excecao (ex: certs_dir ausente no
+            # controle) nunca pode derrubar o smoke gate inteiro; so
+            # marca esta linha como needs_decision, igual a um desvio
+            # != 0 detectado normalmente (Decisao 55/48).
+            row = {"profile": profile, "ok": False, "note": f"{type(e).__name__}: {e}"}
+        bytes_diagnostic_rows.append(row)
     bytes_diagnostic_needs_decision = any(not r["ok"] for r in bytes_diagnostic_rows)
 
     manifest["capture_preflight"] = capture_preflight

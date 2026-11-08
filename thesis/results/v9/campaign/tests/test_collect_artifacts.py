@@ -2,7 +2,13 @@
 (cli.run_scp/cli.run_ssh monkeypatchados), nenhuma rede real. O stub
 de scp simula o efeito real (copiar arquivo) a partir de um
 diretorio "remoto" fake local, pra exercitar a verificacao de hash de
-verdade, nao so a orquestracao de chamadas."""
+verdade, nao so a orquestracao de chamadas.
+
+Decisao 75, item 3: o diretorio remoto fake aqui e FLAT (mesmo
+formato que `orchestrator.py run_pilot` realmente produz --
+piloto_combined.log, piloto_calls.json, criterio1_capturas/*.log,
+etc., tudo num unico diretorio) -- nunca mais dividido por perfil,
+que nunca foi o formato real."""
 import hashlib
 import shutil
 import sys
@@ -22,29 +28,34 @@ class FakeProc:
         self.stderr = stderr
 
 
-def _setup_fake_remote(tmp_path, profile, contents):
-    remote_root = tmp_path / "fake_remote"
-    block_dir = remote_root / profile
-    block_dir.mkdir(parents=True)
+def _setup_fake_remote(tmp_path, contents):
+    """Monta um diretorio remoto FAKE, flat -- igual ao que run_pilot
+    produz de verdade (alguns arquivos na raiz, alguns num
+    subdiretorio como criterio1_capturas/, mas NUNCA um subdiretorio
+    por perfil)."""
+    remote_dir = tmp_path / "fake_remote" / "piloto"
+    remote_dir.mkdir(parents=True)
     for name, data in contents.items():
-        (block_dir / name).write_bytes(data)
+        dest = remote_dir / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
     manifest_lines = []
     for name, data in contents.items():
         h = hashlib.sha256(data).hexdigest()
         manifest_lines.append(f"{h}  ./{name}")
-    (remote_root / f"{profile}.sha256").write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
-    return remote_root, block_dir
+    manifest_path = remote_dir.parent / "piloto.sha256"
+    manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+    return remote_dir, manifest_path
 
 
-def _patch_scp_ssh(monkeypatch, remote_root: Path):
+def _patch_scp_ssh(monkeypatch, remote_dir: Path, manifest_path: Path):
     def fake_run_ssh(host, remote_cmd, **kwargs):
         return FakeProc(returncode=0)  # "gerar manifesto" ja esta pronto no fixture
 
     def fake_run_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
         # src e algo como "ec2-user@IP:<remote_path>[/.]" -- <remote_path>
-        # e sempre um caminho real em disco nestes testes (remote_base_dir
-        # foi passado como str(remote_root)), so precisa do que vem
-        # depois do PRIMEIRO ":".
+        # e sempre um caminho real em disco nestes testes, so precisa do
+        # que vem depois do PRIMEIRO ":".
         remote_path_str = src.split(":", 1)[1]
         if remote_path_str.endswith("/."):
             remote_path_str = remote_path_str[:-2]
@@ -52,9 +63,12 @@ def _patch_scp_ssh(monkeypatch, remote_root: Path):
         if recursive:
             dest_dir = Path(dst)
             dest_dir.mkdir(parents=True, exist_ok=True)
-            for f in source.glob("*"):
+            for f in source.rglob("*"):
                 if f.is_file():
-                    shutil.copy(f, dest_dir / f.name)
+                    rel = f.relative_to(source)
+                    out = dest_dir / rel
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(f, out)
         else:
             shutil.copy(source, Path(dst))
         return FakeProc(returncode=0)
@@ -63,53 +77,55 @@ def _patch_scp_ssh(monkeypatch, remote_root: Path):
     monkeypatch.setattr(ca.cli, "run_scp", fake_run_scp)
 
 
-def test_coleta_um_bloco_com_hash_correto(tmp_path, monkeypatch):
-    remote_root, _ = _setup_fake_remote(tmp_path, "classico", {
-        "run01.json": b'{"ok": true}', "run02.json": b'{"ok": true}',
+def test_coleta_diretorio_flat_com_hash_correto(tmp_path, monkeypatch):
+    remote_dir, manifest_path = _setup_fake_remote(tmp_path, {
+        "piloto_combined.log": b"log de verdade\n",
+        "piloto_calls.json": b'[{"ok": true}]',
+        "manifest.json": b'{"smoke": false}',
+        "criterio1_capturas/classico_L0.log": b"captura 1",
     })
-    _patch_scp_ssh(monkeypatch, remote_root)
+    _patch_scp_ssh(monkeypatch, remote_dir, manifest_path)
 
-    local_base = tmp_path / "local"
-    result = ca.collect_block("203.0.113.5", "/fake/key", "classico",
-                               remote_base_dir=str(remote_root), local_base_dir=local_base)
-    assert result["files_verified"] == 2
-    assert (local_base / "classico" / ".pull-verified").is_file()
+    local_dir = tmp_path / "local"
+    result = ca.collect_pilot_data("203.0.113.5", "/fake/key",
+                                    remote_dir=str(remote_dir), local_dir=local_dir)
+    assert result["files_verified"] == 4
+    assert (local_dir / ".pull-verified").is_file()
+    assert (local_dir / "criterio1_capturas" / "classico_L0.log").is_file()
 
 
 def test_arquivo_corrompido_na_transferencia_e_detectado(tmp_path, monkeypatch):
-    remote_root, block_dir = _setup_fake_remote(tmp_path, "pqc", {"run01.json": b'{"ok": true}'})
-    _patch_scp_ssh(monkeypatch, remote_root)
+    remote_dir, manifest_path = _setup_fake_remote(tmp_path, {"piloto_combined.log": b"original"})
+    _patch_scp_ssh(monkeypatch, remote_dir, manifest_path)
 
     # Corrompe o arquivo remoto DEPOIS do manifesto ja ter sido
     # calculado sobre o conteudo original -- simula uma transferencia
     # que mudou o byte no meio do caminho.
-    (block_dir / "run01.json").write_bytes(b'{"ok": false}')
+    (remote_dir / "piloto_combined.log").write_bytes(b"corrompido")
 
-    local_base = tmp_path / "local"
+    local_dir = tmp_path / "local"
     with pytest.raises(RuntimeError, match="nao bate"):
-        ca.collect_block("203.0.113.5", "/fake/key", "pqc",
-                          remote_base_dir=str(remote_root), local_base_dir=local_base)
-    assert not (local_base / "pqc" / ".pull-verified").exists(), "nunca deveria marcar como verificado apos um hash incorreto"
+        ca.collect_pilot_data("203.0.113.5", "/fake/key", remote_dir=str(remote_dir), local_dir=local_dir)
+    assert not (local_dir / ".pull-verified").exists(), "nunca deveria marcar como verificado apos um hash incorreto"
 
 
 def test_arquivo_ausente_apos_pull_e_detectado(tmp_path, monkeypatch):
-    remote_root, block_dir = _setup_fake_remote(tmp_path, "hibrido-v8", {"run01.json": b"x", "run02.json": b"y"})
-    _patch_scp_ssh(monkeypatch, remote_root)
-    local_base = tmp_path / "local"
+    remote_dir, manifest_path = _setup_fake_remote(
+        tmp_path, {"piloto_combined.log": b"x", "piloto_calls.json": b"y"})
+    _patch_scp_ssh(monkeypatch, remote_dir, manifest_path)
+    local_dir = tmp_path / "local"
 
-    # Mutante: simula uma transferencia parcial -- apaga run02.json
-    # do lado remoto DEPOIS do pull ter copiado so o que existia na
-    # hora (aqui simulamos removendo do destino local apos o pull).
-    original_pull_block = ca.pull_block
+    # Mutante: simula uma transferencia parcial -- o pull copiou os
+    # dois arquivos, mas um deles some do destino local depois.
+    original_pull_dir = ca.pull_dir
 
-    def partial_pull(control_ip, key_path, remote_block_dir, remote_manifest_path, local_dest_dir):
-        original_pull_block(control_ip, key_path, remote_block_dir, remote_manifest_path, local_dest_dir)
-        (local_dest_dir / "run02.json").unlink()
+    def partial_pull(control_ip, key_path, remote_dir_, remote_manifest_path, local_dest_dir):
+        original_pull_dir(control_ip, key_path, remote_dir_, remote_manifest_path, local_dest_dir)
+        (local_dest_dir / "piloto_calls.json").unlink()
 
-    monkeypatch.setattr(ca, "pull_block", partial_pull)
+    monkeypatch.setattr(ca, "pull_dir", partial_pull)
     with pytest.raises(RuntimeError, match="ausente"):
-        ca.collect_block("203.0.113.5", "/fake/key", "hibrido-v8",
-                          remote_base_dir=str(remote_root), local_base_dir=local_base)
+        ca.collect_pilot_data("203.0.113.5", "/fake/key", remote_dir=str(remote_dir), local_dir=local_dir)
 
 
 def test_mutante_verificacao_desligada_e_pega_pelo_teste_de_corrupcao(monkeypatch, tmp_path):
@@ -117,14 +133,12 @@ def test_mutante_verificacao_desligada_e_pega_pelo_teste_de_corrupcao(monkeypatc
     -- os dois testes de corrupcao/ausencia acima tem que reprovar
     com essa mutacao, provando que dependem de verdade da verificacao."""
     monkeypatch.setattr(ca, "verify_local_manifest", lambda local_dest_dir: [])
-    remote_root, block_dir = _setup_fake_remote(tmp_path, "pqc", {"run01.json": b'{"ok": true}'})
-    _patch_scp_ssh_local = _patch_scp_ssh
-    _patch_scp_ssh_local(monkeypatch, remote_root)
-    (block_dir / "run01.json").write_bytes(b'{"ok": false}')  # corrompido
-    local_base = tmp_path / "local"
+    remote_dir, manifest_path = _setup_fake_remote(tmp_path, {"piloto_combined.log": b"original"})
+    _patch_scp_ssh(monkeypatch, remote_dir, manifest_path)
+    (remote_dir / "piloto_combined.log").write_bytes(b"corrompido")
+    local_dir = tmp_path / "local"
     # com a mutacao, NAO levanta mais -- confirma que o teste real
     # (acima) de fato dependia da verificacao real, nao passava por
     # acidente.
-    result = ca.collect_block("203.0.113.5", "/fake/key", "pqc",
-                               remote_base_dir=str(remote_root), local_base_dir=local_base)
+    result = ca.collect_pilot_data("203.0.113.5", "/fake/key", remote_dir=str(remote_dir), local_dir=local_dir)
     assert result["files_verified"] == 0

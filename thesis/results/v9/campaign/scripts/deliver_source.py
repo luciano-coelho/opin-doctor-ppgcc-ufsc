@@ -38,8 +38,9 @@ E so pra cada CLIENTE, alem disso, `CLIENT_ONLY_FILES`:
     `-cert-dir /certs` do proxy, so no ramo V9_HARNESS)
 E so pro CONTROLE (um salto so, `deliver_to_control`), `CONTROL_FILES`:
   - campaign/scripts/{orchestrator,cli,preflight}.py, campaign/PINS.json,
-    integration/evaluate_criteria.py (+ inventory.json, copiado em
-    separado -- nao e um arquivo do repositorio)
+    integration/evaluate_criteria.py, certs/generated (Decisao 75, item
+    2 -- precisa pro diagnostico de bytes do smoke gate) (+ inventory.json,
+    copiado em separado -- nao e um arquivo do repositorio)
 
 Extrai em `~/` em cada destino, espelhando o layout relativo do
 repositorio sob `~` -- EXATAMENTE a mesma convencao que `deliver_
@@ -79,6 +80,14 @@ CONTROL_FILES = [
     "thesis/results/v9/campaign/scripts/rehearsal_handshake.sh",
     "thesis/results/v9/campaign/PINS.json",
     "thesis/results/v9/integration/evaluate_criteria.py",
+    # Decisao 75, item 2 (pedido do Luciano): run_smoke_gate roda no
+    # CONTROLE (SSHExecutor so funciona de verdade a partir dali, ver
+    # Decisao 59) e seu diagnostico de bytes (_bytes_diagnostic_for_
+    # profile -> ec.expected_handshake_bytes) le certificados reais de
+    # `certs_dir` -- sem isto, _DEFAULT_CERTS_DIR nunca existe no
+    # controle (FileNotFoundError, antes so evitado por sorte, nunca
+    # tratado).
+    "thesis/results/v9/certs/generated",
     # Decisao 65 (achado real, ao vivo, no Passo 8 do ensaio real):
     # cli.py importa redact_aws_errors via sys.path relativo
     # (Path(__file__).resolve().parents[3] / "v8" / "campaign" /

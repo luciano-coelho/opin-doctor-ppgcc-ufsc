@@ -268,6 +268,22 @@ def test_deliver_to_control_extrai_antes_de_remover_o_tarball(monkeypatch, fake_
     assert extract_cmd.index("tar -xzf") < extract_cmd.rindex("rm -f"), extract_cmd
 
 
+# --- Decisao 75, item 2 (pedido do Luciano): o diagnostico de bytes
+# do smoke gate roda no controle e precisa de certs/generated de
+# verdade -- sem isso, _DEFAULT_CERTS_DIR nunca existe la.
+
+def test_control_files_inclui_certs_generated():
+    assert "thesis/results/v9/certs/generated" in ds.CONTROL_FILES
+
+
+def test_deliver_to_control_tarball_inclui_certs_generated(fake_repo, tmp_path):
+    out = ds.build_tarball(ds.CONTROL_FILES, tmp_path / "control.tar.gz", repo_root=fake_repo)
+    with tarfile.open(out, "r:gz") as tar:
+        names = set(tar.getnames())
+    rel = "thesis/results/v9/certs/generated"
+    assert any(n == rel or n.startswith(rel + "/") for n in names), f"{rel} nao esta no tarball ({names})"
+
+
 def test_deliver_to_control_falha_no_scp_do_inventory_nunca_e_engolida(monkeypatch, fake_repo, tmp_path):
     def fake_run(argv, timeout=None):
         if argv[0] == "scp" and "inventory.json" in argv[-1]:
