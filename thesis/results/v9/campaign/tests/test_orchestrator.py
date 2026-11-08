@@ -1,6 +1,7 @@
 """Testes do orquestrador do piloto -- sem SSH real, sem AWS, sem
 credenciais. SSHExecutor e testado com `cli._run` monkeypatchado
 (stub da CLI real, nunca uma chamada de verdade)."""
+import hashlib
 import json
 import re
 import sys
@@ -132,14 +133,56 @@ def test_mutante_cardinalidade_errada_e_pega_pelo_avaliador(tmp_path):
     assert r4["pass"] is False, "avaliador deveria reprovar cardinalidade 48 != 60"
 
 
+_FAKE_GATEWAY_BINARY_BYTES = b"fake gateway elf binary -- so para testes, nunca executado"
+_FAKE_GATEWAY_SHA256 = hashlib.sha256(_FAKE_GATEWAY_BINARY_BYTES).hexdigest()
+
+
+class _SimpleProc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _fake_local_docker_gateway_binary_call(argv):
+    """Decisao 54, item 1: respostas fake pras chamadas LOCAIS (nao-
+    SSH) que `_local_gateway_binary_info` faz via `cli._run` --
+    compartilhada pelos dois fakes deste arquivo (`_fake_run_factory`/
+    `_fake_run_dedicated_capture`), pra nunca duplicar a logica.
+    Devolve None se `argv` nao e uma dessas chamadas (o chamador cai
+    pro proprio fallback dele)."""
+    if not argv or argv[0] != "docker":
+        return None
+    if len(argv) > 1 and argv[1] == "cp":
+        Path(argv[3]).write_bytes(_FAKE_GATEWAY_BINARY_BYTES)
+        return _SimpleProc()
+    if len(argv) > 1 and argv[1] == "run" and "version" in argv and "-m" in argv:
+        return _SimpleProc(stdout="/verify/gateway: go1.27.3\n")
+    if len(argv) > 1 and argv[1] == "run" and "cat" in argv:
+        return _SimpleProc(stdout='{"go_tag": "go1.27.3"}')
+    return _SimpleProc()  # docker create / docker rm -f
+
+
 def _fake_run_factory(calls):
+    """Decisao 54, item 1: `_local_gateway_binary_info` roda `docker
+    create`/`docker cp`/`docker run ... go version`/`docker run ...
+    cat build_metadata.json` via `cli._run` (a MESMA fronteira que
+    `cli.run_ssh` usa por baixo) -- precisa de respostas plausiveis
+    aqui tambem, nao so pras chamadas SSH. `docker cp` em especial
+    PRECISA escrever um arquivo de verdade no destino (3º argumento),
+    porque o codigo real faz `bin_path.read_bytes()` depois -- sem
+    isso todo teste que chama `start_block`/`dedicated_capture`
+    quebraria com `FileNotFoundError`, nunca por causa do que o teste
+    queria exercitar."""
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        class FakeProc:
-            returncode = 0
-            stdout = '{"calls": [], "call_count": 0, "retries": []}'
-            stderr = ""
-        return FakeProc()
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout=f"gateway: OK\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
     return fake_run
 
 
@@ -401,6 +444,148 @@ def test_start_block_troca_perfil_do_gateway_e_sobe_proxy_signer(monkeypatch):
     assert any("start_tls_kem_proxy" in c and "start_pqc_signer_service" in c for c in flat), flat
 
 
+# --- Decisao 54 (pedido independente, item 1): verificacao scp+
+# sha256sum -c do binario do gateway, mecanismo ja pre-registrado
+# (v9-prereg, "Entrega do binario"), implementado agora no
+# SSHExecutor real. Binario CORRETO tem que passar (verde); binario
+# ADULTERADO (divergencia no transporte OU no container ja rodando)
+# tem que abortar ANTES de qualquer execucao (vermelho).
+
+def test_start_block_verifica_binario_correto_e_passa(monkeypatch):
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    executor.start_block("classico", "L0")
+
+    assert len(executor.gateway_binary_verifications) == 1
+    v = executor.gateway_binary_verifications[0]
+    assert v["sha256_expected"] == _FAKE_GATEWAY_SHA256
+    assert v["transfer_sha256sum_c_ok"] is True
+    assert v["running_container_sha256_ok"] is True
+    assert v["go_build_version"] == "go1.27.3"
+    assert v["toolchain_build_metadata"] == {"go_tag": "go1.27.3"}
+    # execucao normal prosseguiu (proxy/signer subiram) -- a
+    # verificacao passando nunca bloqueia o fluxo normal.
+    flat = [" ".join(c) for c in calls]
+    assert any("start_tls_kem_proxy" in c for c in flat), flat
+
+
+def test_start_block_aborta_antes_de_qualquer_execucao_se_binario_adulterado_no_transporte(monkeypatch):
+    """Binario ADULTERADO: `sha256sum -c` no destino reprova (o
+    arquivo que chegou nao bate com o hash calculado na origem) --
+    tem que abortar ANTES de subir o gateway/proxy/signer, nunca
+    depois."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(returncode=1, stdout="gateway: FAILED\n", stderr="sha256sum: WARNING: 1 computed checksum did NOT match\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="sha256sum -c FALHOU"):
+        executor.start_block("classico", "L0")
+
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker run -d --name v9-mtls" in c for c in flat), (
+        "o gateway NUNCA pode subir depois de uma verificacao de binario reprovada -- " + str(flat)
+    )
+    assert not any("start_tls_kem_proxy" in c for c in flat), (
+        "proxy/signer NUNCA podem subir depois de uma verificacao de binario reprovada -- " + str(flat)
+    )
+    assert len(executor.gateway_binary_verifications) == 1
+    assert executor.gateway_binary_verifications[0]["transfer_sha256sum_c_ok"] is False
+
+
+def test_start_block_aborta_se_binario_do_container_rodando_diverge(monkeypatch):
+    """Transporte bate (sha256sum -c OK), mas o binario DENTRO do
+    container que efetivamente sobe nao bate com o verificado --
+    tambem tem que abortar, ANTES de qualquer execucao (proxy/signer
+    nunca sobem)."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout="gateway: OK\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout="0000000000000000000000000000000000000000000000000000000000000000  /gateway\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="nao bate com o verificado"):
+        executor.start_block("classico", "L0")
+
+    flat = [" ".join(c) for c in calls]
+    assert not any("start_tls_kem_proxy" in c for c in flat), flat
+    assert executor.gateway_binary_verifications[0]["transfer_sha256sum_c_ok"] is True
+    assert executor.gateway_binary_verifications[0]["running_container_sha256_ok"] is False
+
+
+def test_mutante_start_block_ignora_resultado_da_verificacao_e_pego(monkeypatch):
+    """Mutacao: `start_block` chama `_verify_gateway_binary` mas
+    IGNORA a excecao (engole-a) -- os dois testes de aborto acima tem
+    que reprovar com essa mutacao (proxy/signer subiriam mesmo com o
+    binario adulterado)."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(returncode=1, stdout="gateway: FAILED\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    real_verify = orch.SSHExecutor._verify_gateway_binary
+
+    def mutant_start_block_swallows_exception(self, profile, route):
+        try:
+            real_verify(self, profile, route)
+        except RuntimeError:
+            pass  # mutante: engole o erro, nunca aborta
+        self._launch_gateway(profile)
+
+    monkeypatch.setattr(orch.SSHExecutor, "start_block", mutant_start_block_swallows_exception)
+    executor.start_block("classico", "L0")  # nao levanta, com o mutante
+    flat = [" ".join(c) for c in calls]
+    mutant_gateway_subiu = any("docker run -d --name v9-mtls" in c for c in flat)
+    assert mutant_gateway_subiu is True  # mutante deixou subir mesmo adulterado
+    with pytest.raises(AssertionError):
+        assert mutant_gateway_subiu is False
+
+
 def test_stop_block_para_os_dois_containers_fixos(monkeypatch):
     inventory = {
         "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
@@ -553,14 +738,12 @@ _TSHARK_FAKE_OUTPUT = (
 def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark_output=_TSHARK_FAKE_OUTPUT):
     def fake_run(argv, timeout=None):
         calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
 
-        class FakeProc:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        proc = FakeProc()
+        proc = _SimpleProc()
         if "ip -o -4 route show to default" in remote_cmd:
             proc.stdout = f"{iface}\n"
         elif "nohup tcpdump" in remote_cmd:
@@ -569,6 +752,10 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
             proc.stdout = '{"calls": [], "call_count": 0, "retries": []}'
         elif "tls.handshake.type" in remote_cmd:
             proc.stdout = tshark_output
+        elif "sha256sum -c" in remote_cmd:
+            proc.stdout = "gateway: OK\n"
+        elif "sha256sum /gateway" in remote_cmd:
+            proc.stdout = f"{_FAKE_GATEWAY_SHA256}  /gateway\n"
         return proc
     return fake_run
 

@@ -31,6 +31,27 @@ var expectedCurve = map[string]tls.CurveID{
 	"hibrido-and": tls.SecP384r1MLKEM1024,
 }
 
+// minVersionForProfile: Decisao 54, item 2 -- fecha a hipotese
+// isolada na Decisao 53 (desvio de +22/+28B no ClientHello, 100%
+// concentrado nessa UNICA mensagem). Causa real: este arquivo usava
+// `MinVersion: tls.VersionTLS12` para TODOS os perfis, genericamente,
+// enquanto o cliente REAL do piloto (`proxy/main.go`'s
+// `singleChainClientConfig`/`dualClientConfig`) pina `MinVersion` POR
+// PERFIL -- so `classico` precisa de TLS 1.2, os outros 3 sao
+// TLS-1.3-only (confirmado: MLKEM1024/SecP384r1MLKEM1024 nem existem
+// como grupos validos em TLS 1.2, entao a versao NEGOCIADA ja era
+// sempre 1.3 de qualquer forma -- so o ClientHello anunciava cipher
+// suites/signature_algorithms extras, legados, de 1.2, que nunca
+// chegavam a ser usados). Nunca muda qual versao e de fato negociada,
+// so alinha o que o ClientHello ANUNCIA com o que o cliente real
+// anuncia.
+var minVersionForProfile = map[string]uint16{
+	"classico":    tls.VersionTLS12,
+	"pqc":         tls.VersionTLS13,
+	"hibrido-v8":  tls.VersionTLS13,
+	"hibrido-and": tls.VersionTLS13,
+}
+
 func main() {
 	scenario := flag.String("scenario", "", "no-client-cert|untrusted-client-ca|untrusted-server-ca|wrong-san|and-single-chain|matrix")
 	profile := flag.String("profile", "", "classico|pqc|hibrido-v8|hibrido-and")
@@ -192,7 +213,7 @@ func baseConfig(profile, certDir string) *tls.Config {
 		Certificates:     []tls.Certificate{cert},
 		RootCAs:          loadCAPool(p(certDir, caFile)),
 		ServerName:       "mtls",
-		MinVersion:       tls.VersionTLS12,
+		MinVersion:       minVersionForProfile[profile],
 		MaxVersion:       tls.VersionTLS13,
 		CurvePreferences: []tls.CurveID{expectedCurve[profile]},
 	}

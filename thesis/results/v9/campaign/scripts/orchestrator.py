@@ -32,9 +32,13 @@ daquele perfil rodam em sequencia. A sondagem de prontidao (Decisao
 INICIO -- fora de qualquer janela, por construcao.
 """
 import argparse
+import hashlib
 import json
+import os
 import random
+import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -239,12 +243,19 @@ class SSHExecutor:
 
     TLS_KEM_PROXY_CONTAINER = "tls_kem_proxy_run"
     PQC_SIGNER_CONTAINER = "pqc_signer_service_run"
+    GATEWAY_IMAGE = "mockopin-v9-gateway"
+    TOOLCHAIN_IMAGE = "mockopin-v9-toolchain"
 
     def __init__(self, inventory, key_path=None, gateway_container="v9-mtls", local_shim_bridge_join=False):
         self.inventory = inventory
         self.key_path = key_path
         self.gateway_container = gateway_container
         self._block_start_utc = {}
+        # Decisao 54, item 1: verificacao scp+sha256sum -c do binario
+        # do gateway -- cacheado (o binario local nao muda entre
+        # blocos), acumulado pra entrar no manifesto de cada bloco.
+        self._gateway_binary_info = None
+        self.gateway_binary_verifications = []
         # Decisao 49: SO pra validacao local via shim -- quando
         # REMOTE_GATEWAY_HOST esta setado, opin_flow.start_tls_kem_proxy
         # NUNCA junta `--network insurance-server-lambdas_default`
@@ -308,6 +319,136 @@ class SSHExecutor:
                 raw_lines.append(line.strip())
                 parsed.append(m.groupdict())
         return raw_lines, parsed
+
+    def _local_gateway_binary_info(self):
+        """Decisao 54, item 1: extrai o binario `/gateway` da imagem
+        Docker JA construida LOCALMENTE (`docker create`+`docker cp`,
+        mesmo padrao de `thesis/results/v9/certs/Makefile`), calcula
+        o sha256 de verdade e inspeciona com `go version -m` (via a
+        imagem `mockopin-v9-toolchain`, que tem o binario `go` -- so
+        LEITURA estatica do binario, nunca o executa) mais os
+        metadados de build que o PROPRIO toolchain ja registra
+        (`/build_metadata.json`: tag/commit do Go, hash do patch AND).
+        Cacheado -- o binario local nao muda entre blocos do mesmo
+        orquestrador, recalcular a cada bloco seria trabalho
+        repetido sem nenhum ganho de seguranca (o `docker image` so
+        muda se alguem rodar `docker build` de novo, fora do processo
+        do orquestrador)."""
+        if self._gateway_binary_info is not None:
+            return self._gateway_binary_info
+        # cli._run (nunca subprocess direto) -- mesma fronteira unica
+        # que TODO o resto deste pacote usa, pros testes conseguirem
+        # substituir exatamente este ponto, sem docker real.
+        verify_dir = Path(tempfile.mkdtemp(prefix="v9_gateway_verify_"))
+        bin_path = verify_dir / "gateway"
+        container = f"v9-gateway-extract-{os.getpid()}"
+        cli._run(["docker", "rm", "-f", container], timeout=30)
+        create = cli._run(["docker", "create", "--name", container, self.GATEWAY_IMAGE], timeout=30)
+        if create.returncode != 0:
+            raise RuntimeError(f"_local_gateway_binary_info: docker create falhou: {create.stderr}")
+        try:
+            cp = cli._run(["docker", "cp", f"{container}:/gateway", str(bin_path)], timeout=30)
+        finally:
+            cli._run(["docker", "rm", "-f", container], timeout=30)
+        if cp.returncode != 0:
+            raise RuntimeError(f"_local_gateway_binary_info: docker cp falhou: {cp.stderr}")
+
+        sha256 = hashlib.sha256(bin_path.read_bytes()).hexdigest()
+
+        gv = cli._run(
+            ["docker", "run", "--rm", "-v", f"{verify_dir}:/verify:ro",
+             "--entrypoint", "/go-src/bin/go", self.TOOLCHAIN_IMAGE, "version", "-m", "/verify/gateway"],
+            timeout=30,
+        )
+        go_version_m = gv.stdout.strip() if gv.returncode == 0 else f"ERRO ({gv.returncode}): {gv.stderr.strip()}"
+        first_line = go_version_m.splitlines()[0] if go_version_m else ""
+        go_build_version = first_line.split(":", 1)[1].strip() if ":" in first_line else None
+
+        meta_proc = cli._run(["docker", "run", "--rm", "--entrypoint", "cat", self.TOOLCHAIN_IMAGE, "/build_metadata.json"], timeout=30)
+        toolchain_build_metadata = None
+        if meta_proc.returncode == 0:
+            try:
+                toolchain_build_metadata = json.loads(meta_proc.stdout)
+            except json.JSONDecodeError:
+                toolchain_build_metadata = {"raw": meta_proc.stdout.strip()}
+
+        self._gateway_binary_info = {
+            "sha256": sha256, "local_bin_path": str(bin_path),
+            "go_version_m": go_version_m, "go_build_version": go_build_version,
+            "toolchain_build_metadata": toolchain_build_metadata,
+        }
+        return self._gateway_binary_info
+
+    def _verify_gateway_binary(self, profile, route):
+        """Decisao 54, item 1 -- implementa o mecanismo JA PRE-
+        REGISTRADO (`v9-prereg`, secao "Entrega do binario": "operador
+        `scp` o `gateway`/`proxy` (mais o `.sha256`) pro controle,
+        controle `scp` pra cada instancia de destino... cada instancia
+        roda `sha256sum -c` antes de usar") -- nunca implementado no
+        `SSHExecutor` real antes desta rodada (gap honesto registrado
+        na Decisao 53, item 2c). Fail-closed: levanta ANTES de
+        `_launch_gateway` rodar, entao antes de qualquer execucao.
+
+        Fecha o laco completo (nao so o transporte): depois de
+        confirmar que o binario chegou intacto, `start_block` ainda
+        confere que o binario DENTRO do container que vai de fato
+        rodar (`docker exec ... sha256sum /gateway`) bate com o MESMO
+        hash -- senao a verificacao do transporte provaria pouco (a
+        imagem Docker podia ter sido construida de um binario
+        diferente do que foi copiado aqui)."""
+        info = self._local_gateway_binary_info()
+        server_ip = self._server_ip()
+        remote_dir = "~/pki/gateway_verify"
+        remote_bin = f"{remote_dir}/gateway"
+        remote_sha = f"{remote_dir}/gateway.sha256"
+
+        cli.run_ssh(server_ip, f"mkdir -p {remote_dir}", key_path=self.key_path)
+        scp_proc = cli.run_scp(info["local_bin_path"], f"ec2-user@{server_ip}:{remote_bin}", key_path=self.key_path)
+        if scp_proc.returncode != 0:
+            raise RuntimeError(f"_verify_gateway_binary {profile}/{route}: scp do binario falhou: {scp_proc.stderr}")
+
+        # sha256sum -c exige o formato "<hash>  <nome>" -- escrito
+        # remotamente (nunca local) pra nao precisar de um segundo
+        # scp so pra um arquivo de uma linha.
+        cli.run_ssh(server_ip, f'echo "{info["sha256"]}  gateway" > {remote_sha}', key_path=self.key_path)
+        verify_proc = cli.run_ssh(server_ip, f"cd {remote_dir} && sha256sum -c gateway.sha256", key_path=self.key_path)
+
+        verification = {
+            "profile": profile, "route": route,
+            "sha256_expected": info["sha256"],
+            "go_version_m": info["go_version_m"], "go_build_version": info["go_build_version"],
+            "toolchain_build_metadata": info["toolchain_build_metadata"],
+            "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+            "transfer_sha256sum_c_ok": verify_proc.returncode == 0,
+            "transfer_sha256sum_c_output": (verify_proc.stdout + verify_proc.stderr).strip(),
+            "running_container_sha256_ok": None, "running_container_sha256_output": None,
+        }
+        self.gateway_binary_verifications.append(verification)
+        if verify_proc.returncode != 0:
+            raise RuntimeError(
+                f"_verify_gateway_binary {profile}/{route}: sha256sum -c FALHOU no transporte -- binario "
+                f"adulterado ou corrompido, abortando ANTES de qualquer execucao: {verification['transfer_sha256sum_c_output']}"
+            )
+        return verification
+
+    def _verify_running_gateway_binary(self, verification):
+        """Segunda metade do laco (ver docstring de
+        `_verify_gateway_binary`) -- chamada DEPOIS que
+        `_launch_gateway` sobe o container, ainda antes de qualquer
+        execucao cronometrada."""
+        server_ip = self._server_ip()
+        proc = cli.run_ssh(server_ip, f"docker exec {self.gateway_container} sha256sum /gateway", key_path=self.key_path)
+        output = (proc.stdout + proc.stderr).strip()
+        running_sha = output.split()[0] if output.split() else ""
+        ok = proc.returncode == 0 and running_sha == verification["sha256_expected"]
+        verification["running_container_sha256_ok"] = ok
+        verification["running_container_sha256_output"] = output
+        if not ok:
+            raise RuntimeError(
+                f"_verify_running_gateway_binary {verification['profile']}/{verification['route']}: "
+                f"o binario DENTRO do container {self.gateway_container} nao bate com o verificado no "
+                f"transporte -- abortando antes de qualquer execucao (saida: {output!r})"
+            )
 
     def _launch_gateway(self, profile, keylog=False):
         """Decisao 52 (Emenda 14): fatorado de `start_block` pra ser
@@ -403,7 +544,9 @@ class SSHExecutor:
                         f"docker logs insurance-server-lambdas-mockapi-1 2>&1 | grep -q 'Startup completed' && break; "
                         f"sleep 1; done",
                         key_path=self.key_path, connect_timeout=90)
+        verification = self._verify_gateway_binary(profile, route)
         self._launch_gateway(profile)
+        self._verify_running_gateway_binary(verification)
         if self.local_shim_bridge_join:
             cli.run_ssh(self._server_ip(), f"docker network connect bridge {self.gateway_container}", key_path=self.key_path)
             ip_proc = cli.run_ssh(
@@ -567,6 +710,12 @@ class SSHExecutor:
         gravado antes deste laco comecar) e alterado por elas."""
         self.start_block(profile, route)
         self._launch_gateway(profile, keylog=True)
+        # `start_block` ja verificou o transporte e o container
+        # anterior -- esta e so a MESMA imagem reiniciada (keylog=True
+        # nunca muda o binario), mas confere de novo porque e um
+        # container NOVO (reconfere o running_container_sha256, nunca
+        # reconfere o transporte -- o binario local nao mudou).
+        self._verify_running_gateway_binary(self.gateway_binary_verifications[-1])
 
         server_ip = self._server_ip()
         pcap_path = f"/tmp/criterio1_{profile}_{route}.pcap"
@@ -712,6 +861,11 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         "total_capturas": EXPECTED_CAPTURES,
         "combined_log": str(combined_log_path), "calls_json": str(calls_path),
         "criterio6_json": str(criterio6_path), "capturas_dir": str(capturas_dir),
+        # Decisao 54, item 1: verificacao scp+sha256sum -c do binario
+        # do gateway, uma entrada por bloco (start_block) -- lista
+        # vazia pro LocalExecutor (nunca tem binario real pra
+        # verificar).
+        "gateway_binary_verifications": getattr(executor, "gateway_binary_verifications", []),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest

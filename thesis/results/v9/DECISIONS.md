@@ -6773,3 +6773,174 @@ alegacao da Decisao 52 (nunca mudou desenho), item 4 acrescentou
 checagem/prova (aditivo, nunca mudou um criterio existente), item 5
 e diagnostico + proposta NAO aplicada. Continuo sem autorizar push
 nem recursos na AWS.
+
+## 54. Quatro pontos antes da data do piloto: verificacao scp+sha256sum -c do binario do gateway implementada e testada (adulterado aborta, correto passa), hipotese do desvio de bytes FECHADA (0B em 480 conexoes reais, 4 perfis), tolerancia proposta a partir de variancia medida, dossie de prontidao autonomo (7 criterios, pre-requisitos do Luciano, custo/emergencia, riscos residuais, runbook)
+
+Resposta aos 4 pontos pedidos. Nada de AWS, sem push, branch
+`v9/fase1-local`.
+
+**1. Verificacao do binario do gateway no SSHExecutor real -- implementada.**
+
+Mecanismo JA PRE-REGISTRADO (`v9-prereg`, secao "Entrega do binario":
+"operador `scp` o `gateway`/`proxy`... cada instancia roda
+`sha256sum -c` antes de usar"), nunca implementado antes desta
+rodada (gap honesto da Decisao 53, item 2c) -- implementado agora em
+`SSHExecutor`:
+
+- `_local_gateway_binary_info()`: extrai `/gateway` da imagem Docker
+  local JA construida (`docker create`+`docker cp`, mesmo padrao do
+  `certs/Makefile`), calcula sha256 de verdade, roda `go version -m`
+  via `mockopin-v9-toolchain` (leitura estatica, nunca executa o
+  binario) e le `/build_metadata.json` que o PROPRIO toolchain ja
+  registra (`go_tag`, `go_commit`, hash do patch AND) -- confirmado
+  rodando de verdade nesta sessao: `go1.27.3`, path
+  `mockopin-v9-gateway`, `CGO_ENABLED=0 GOARCH=amd64 GOOS=linux`.
+- `_verify_gateway_binary(profile, route)`: `scp` o binario pro
+  servidor, escreve o `.sha256` remotamente, roda `sha256sum -c` LA
+  -- levanta `RuntimeError` ANTES de `_launch_gateway` rodar se
+  divergir.
+- `_verify_running_gateway_binary(verification)`: fecha o laco
+  completo -- depois que o container sobe, confere que o binario
+  DENTRO dele (`docker exec ... sha256sum /gateway`) bate com o
+  MESMO hash verificado no transporte (senao a verificacao do
+  transporte provaria pouco, a imagem Docker podia ter sido
+  construida de um binario diferente).
+- `start_block` chama as duas, nesta ordem, ANTES de qualquer
+  execucao. `dedicated_capture` reconfere o container (nao o
+  transporte, que nao muda) depois de reiniciar com `KEYLOG_PATH`.
+- Manifesto de cada bloco (`run_pilot`/`run_smoke_gate`) ganha
+  `gateway_binary_verifications`: uma entrada por bloco, com sha256,
+  `go_version_m`, `go_build_version`, metadados do toolchain, e os
+  dois resultados de verificacao (transporte + container rodando).
+
+**Teste com binario adulterado -- aborta ANTES de qualquer execucao
+(confirmado):**
+```
+test_start_block_aborta_antes_de_qualquer_execucao_se_binario_adulterado_no_transporte -- PASS
+  RuntimeError("sha256sum -c FALHOU no transporte...") levantado
+  ANTES de qualquer "docker run -d --name v9-mtls" ou
+  "start_tls_kem_proxy" aparecer nas chamadas -- confirmado
+  explicitamente (assert not any(...)).
+test_start_block_aborta_se_binario_do_container_rodando_diverge -- PASS
+  mesma garantia pro segundo laco (container ja rodando com um
+  binario diferente do verificado).
+```
+**Teste com binario correto -- passa:**
+```
+test_start_block_verifica_binario_correto_e_passa -- PASS
+  gateway_binary_verifications[0] = {transfer_sha256sum_c_ok: true,
+  running_container_sha256_ok: true, go_build_version: "go1.27.3",
+  toolchain_build_metadata: {...}} -- e a execucao prossegue
+  normalmente (proxy/signer sobem).
+```
+Mutante (`test_mutante_start_block_ignora_resultado_da_verificacao_e_pego`)
+confirma que os dois testes de aborto dependem de fato da excecao
+sendo propagada, nao passam por acidente.
+
+**2. Hipotese do desvio de bytes -- FECHADA, 0B nos 4 perfis.**
+
+Causa raiz (Decisao 53): `negtest`'s `baseConfig()` usava
+`MinVersion: tls.VersionTLS12` genericamente pra todos os perfis,
+enquanto o cliente real (`proxy/main.go`) pina `MinVersion` por
+perfil (`TLS13` pra pqc/hibrido-v8/hibrido-and). Corrigido em
+`negtest/main.go` (`minVersionForProfile`, mapa novo, mesma logica do
+`expectedCurve` ja existente) -- repeti a captura local pros 4
+perfis, keylog real, pcap real:
+
+| Perfil | handshakeBytesIn observado | historico citado | Δ | handshakeBytesOut observado | historico citado | Δ |
+|---|---|---|---|---|---|---|
+| Classico | 1.513 | (nunca citado antes) | -- | 1.640 | (nunca citado antes) | -- |
+| PQC | 10.728 | (nunca citado antes) | -- | 10.878 | (nunca citado antes) | -- |
+| Hibrido-v8 | **8.397** | 8.397 | **0** | **8.552** | 8.552 | **0** |
+| Hibrido-AND | **11.902** | 11.902 | **0** | **12.177** | 12.177 | **0** |
+
+**A hipotese esta provada: 0B de desvio nos dois perfis que o
+Luciano citou com valor historico.** ClientHello raw tambem bate
+exato contra `CLIENTHELLO_BASELINE` nos 4 perfis (ex.: hibrido-v8
+1.872 observado vs 1.872 esperado). Classico/PQC nunca tiveram um
+valor historico citado antes desta rodada -- os numeros acima ficam
+registrados como a PRIMEIRA referencia real pra esses dois no v9.
+
+**3. Tolerancia derivada da variacao medida -- 480 amostras reais, 0B de variacao.**
+
+Medido com o CLIENTE REAL do piloto (`SSHExecutor.run_execution`,
+mesma invocacao exata de `campaign_client_runner.py`, via shim local
+-- script descartavel, nunca commitado), N=20 execucoes por perfil,
+6 conexoes client-facing por execucao = **120 amostras por perfil,
+480 no total**:
+
+| Perfil | N amostras | min (in/out) | max (in/out) | desvio |
+|---|---|---|---|---|
+| Classico | 120 | 1.513 / 1.640 | 1.513 / 1.640 | **0B** |
+| PQC | 120 | 10.728 / 10.878 | 10.728 / 10.878 | **0B** |
+| Hibrido-v8 | 120 | 8.397 / 8.552 | 8.397 / 8.552 | **0B** |
+| Hibrido-AND | 120 | 11.902 / 12.177 | 11.902 / 12.177 | **0B** |
+
+**Zero variacao em TODAS as 480 amostras, nos 4 perfis.** Ambiente
+local (containers Docker no mesmo host) e totalmente deterministico
+pra esta medida.
+
+**Fontes de variacao possiveis, separadas por onde PODEM diferir na AWS:**
+
+| Fonte | Pode diferir na AWS? | Por que |
+|---|---|---|
+| SAN do certificado (IP privado/EIP real vs loopback) | **SIM** | Ja medido e compensado (Decisao 28/29): -14B (perfis de 1 certificado-folha) ou -28B (Hibrido-AND, 2 folhas) -- diferenca FIXA e conhecida, nao aleatoria |
+| Serial number ASN.1 do certificado (padding de 1 byte se o byte mais significativo tiver o bit alto) | **SIM, mas limitado** | Variavel por BUILD do certificado (`make certs`), nunca por execucao -- ±2B por folha, ±4B pro Hibrido-AND (2 folhas); JA e a base do `CERTIFICATE_TOLERANCE_B=4B` do criterio 1 |
+| SNI ("mtls", fixo) | **NAO** | Confirmado pela Decisao 30: byte a byte identico independente do alvo real -- nunca depende do IP/DNS do destino |
+| Session tickets (`TICKETS_DISABLED`) | **NAO, se a config for igual** | Sempre `true` em todo lancamento deste projeto -- se algum dia divergisse, acrescentaria `NewSessionTicket` ao handshakeBytesOut (nunca testado aqui porque sempre esteve desligado) |
+| Versao minima TLS do cliente (`MinVersion`) | **NAO, se o binario for o mesmo** | Causa EXATA do desvio fechado no item 2 -- controlado pela verificacao de binario do item 1 |
+| Campos aleatorios do TLS 1.3 (Random de 32B, key_share) | **NAO** | Tamanho FIXO por especificacao -- so o CONTEUDO e aleatorio, nunca o comprimento |
+
+**Tolerancia proposta** (pra aprovacao do Luciano, NAO aplicada a
+nenhum criterio existente nesta rodada): **0B pra`handshakeBytesOut`
+nos 3 perfis de certificado unico, ±4B pro `handshakeBytesIn` do
+Hibrido-AND (2 certificados-folha, dobra a folga do serial number) --
+e, quando medido num ambiente com SAN diferente do loopback (a AWS
+real), somar o offset FIXO e ja medido (-14B/-28B) ao baseline antes
+de aplicar essa mesma tolerancia, nunca tratar esse offset como
+"variancia desconhecida".** Justificativa: 480 amostras reais locais
+deram 0B de variacao; a UNICA fonte de variacao legitima que resta
+(serial number) e a mesma que o criterio 1 ja tolera pra mensagens
+individuais. Proposta registrada, nao aplicada -- precisa da
+aprovacao do Luciano antes de valer pra qualquer criterio.
+
+**4. Dossie de prontidao -- documento autonomo.**
+
+`thesis/results/v9/campaign/PILOT_READINESS.md` (novo, committed) --
+cobre os 5 pontos pedidos (a-e): tabela dos 7 criterios com status
+real (nenhum 100% fechado sem AWS, por desenho -- a mecanica de
+todos esta implementada e testada onde a medida e local), os
+pre-requisitos de AWS que sao do Luciano (quotas por regiao, par de
+chaves, politica IAM de menor privilegio PROPOSTA -- nunca criada na
+AWS --, alerta de orcamento com valor sugerido), teto de custo
+(~US$1,15 com margem, ancorado no custo real medido da v8) e o
+comando exato de parada de emergencia (`cleanup.py --release-eips
+--force`, o que destroi e o que pode sobrar cobrando), 7 riscos
+residuais com mitigacao ou decisao explicita pendente do Luciano, e
+confirmacao de que o runbook (apply -> PKI -> preflight de captura ->
+porta de fumaca -> 60 execucoes -> coleta -> cleanup) cabe na janela
+de 3-4h com 3 pontos de pausa/decisao explicitos, sempre do Luciano,
+nunca automaticos.
+
+**Testes:** 92 no total entre os pacotes tocados -- 85 em
+`thesis/results/v9/campaign/tests/` (81 antes + 4 novos da
+verificacao do binario), mais 7 (inalterados) em `thesis/scripts/
+tests/test_profile_cert_dispatch.py`. Todos passando.
+
+**Commit local** (sem push), branch `v9/fase1-local`: `thesis/
+results/v9/campaign/scripts/orchestrator.py` (`_local_gateway_binary_
+info`, `_verify_gateway_binary`, `_verify_running_gateway_binary`,
+wiring em `start_block`/`dedicated_capture`, manifesto), `thesis/
+results/v9/campaign/tests/test_orchestrator.py` (+4, fakes
+estendidos pra chamadas `docker` locais), `thesis/results/v9/
+integration/negtest/main.go` (`minVersionForProfile`, fecha a
+hipotese do item 2), `thesis/results/v9/campaign/PILOT_READINESS.md`
+(novo).
+
+Nenhum item desta rodada exigiu emenda ao pre-registro -- item 1
+implementa um mecanismo JA pre-registrado (nunca mudou desenho),
+item 2 e correcao+confirmacao de uma causa ja isolada, item 3 e
+medicao + proposta explicitamente NAO aplicada, item 4 e
+documentacao. Continuo sem autorizar push nem recursos na AWS. A
+data do piloto fica pra depois deste relatorio, a criterio do
+Luciano.
