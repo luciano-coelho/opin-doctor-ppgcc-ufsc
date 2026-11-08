@@ -8970,3 +8970,64 @@ parametro `self_terminate_hours` muda (1h -> 4h).
 
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
 PILOT_RUNBOOK.md`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 81. Achado real, ao vivo, executando a Fase B de verdade (Passo 10, primeira vez que run_smoke_gate roda contra uma fleet real) -- capture_ready_check() reprovava sempre numa fleet nova, por faltar uma imagem que ele mesmo nunca entregava
+
+Branch `v9/fase1-local`. Apply real (`self_terminate_hours=4`, 28
+recursos), Passos 0-9 do `PILOT_RUNBOOK.md` todos verdes (fleet nova,
+IP do operador conferido pela Decisao 77 ao vivo pela primeira vez --
+`{"ok": true, "changed": false}`; 4 imagens entregues e sha256
+conferido; `certs/generated` confirmado chegando ao controle pela
+primeira vez, Decisao 76). Passo 10 (porta de fumaca) rodou e
+REPROVOU **antes de qualquer execucao**:
+
+```
+"capture_preflight": {"go": false, "checks": [{"host": "<servidor>",
+  "missing": ["imagem docker mockopin-v9-measure ausente (entregue
+  por docker save/load, Decisao 55 item 2 -- nunca docker build na
+  instancia)"]}]}
+```
+
+**Causa raiz:** `preflight.run_capture_preflight` (chamado por
+`SSHExecutor.capture_ready_check()`, Decisao 53/4c) so LE se
+`mockopin-v9-measure` ja existe no servidor (`docker image inspect`)
+-- nunca entrega. `dedicated_capture()` (Decisao 55, item 2) entrega
+essa imagem, mas so LAZILY, na primeira vez que ELE roda -- e
+`dedicated_capture` so roda DEPOIS da porta de fumaca passar (dentro
+do proprio `run_smoke_gate`, nos 4 `smoke_capture_proof`). Numa fleet
+nova, nada jamais tinha entregue `measure` antes deste ponto --
+`capture_ready_check()` reprovava sempre, por falta de uma imagem
+que ele mesmo nunca tenta entregar. Nunca pego antes porque
+`run_smoke_gate`/`capture_ready_check` NUNCA tinham rodado contra uma
+fleet real nesta historia -- `INFRA_REHEARSAL.md` so exercita
+`--exercise-start-stop`/`rehearsal_handshake.sh`, nenhum dos dois
+toca captura.
+
+**Por que e uma correcao segura, nunca um STOP (regra 7(a) desta
+autorizacao nao se aplica -- isto e um bug de codigo, nunca um
+criterio pre-registrado reprovando com codigo ja correto):**
+`_deliver_image` e idempotente (sha256 conferido nos dois saltos,
+Decisao 68) e e exatamente o mesmo mecanismo que `dedicated_capture`
+ja usa pra essa MESMA imagem -- so adianta a entrega pro momento do
+preflight em vez de esperar o primeiro uso real. Nenhum criterio
+pre-registrado muda, nenhuma medicao e afetada.
+
+**Corrigido:** `SSHExecutor.capture_ready_check()` agora chama
+`self._deliver_image("measure", self._server_ip())` ANTES de rodar
+`preflight.run_capture_preflight(...)` -- preflight passa a ser
+auto-suficiente (garante o que checa), nunca so passivo.
+
+**Testes (novos):**
+`test_capture_ready_check_entrega_measure_antes_de_rodar_o_probe`
+(confere a ORDEM exata: entrega antes do probe, com o host certo) +
+`test_mutante_capture_ready_check_nunca_entrega_measure_e_pego`
+(mutante que reverte pro comportamento antigo, confirmando que o
+teste real dependia da entrega). 175 testes no total (173 + 2).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/orchestrator.py`,
+`thesis/results/v9/campaign/tests/test_orchestrator.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Reentregando `orchestrator.py` pro controle (mesma fleet, sem
+reaplicar) e repetindo o Passo 10.

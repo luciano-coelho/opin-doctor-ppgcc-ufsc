@@ -933,7 +933,20 @@ class SSHExecutor:
         """Decisao 53, item 4c: fail-closed, chamado pelo smoke gate
         ANTES de qualquer execucao -- hoje, so o servidor roda tcpdump/
         docker exec/tshark de verdade (ver `dedicated_capture`), entao
-        a lista de hosts e so `[self._server_ip()]`."""
+        a lista de hosts e so `[self._server_ip()]`.
+
+        Decisao 81 (achado real, ao vivo, numa fleet nova): o probe
+        (`preflight.run_capture_preflight`) so LE se `mockopin-v9-
+        measure` ja existe no servidor -- nunca entrega. Numa fleet
+        recem-provisionada, nada jamais entregou essa imagem antes
+        deste ponto (`dedicated_capture` so a entrega lazily, e so
+        roda DEPOIS da porta de fumaca passar) -- o preflight
+        reprovava sempre, por falta de uma imagem que ele mesmo nunca
+        tenta entregar. Corrigido: entrega aqui primeiro (mesmo
+        `_deliver_image` idempotente que `dedicated_capture` ja usa --
+        sha256 conferido nos dois saltos, nunca um `docker build`),
+        so entao roda o probe."""
+        self._deliver_image("measure", self._server_ip())
         return preflight.run_capture_preflight([self._server_ip()], key_path=self.key_path)
 
     def dedicated_capture(self, profile, route):

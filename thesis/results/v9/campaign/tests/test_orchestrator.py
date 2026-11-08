@@ -1184,6 +1184,57 @@ def test_deliver_image_falha_alto_se_tar_nao_esta_estagiado(monkeypatch, tmp_pat
     assert calls == [], "nenhuma chamada scp/ssh pode acontecer sem o .tar estagiado -- " + str(calls)
 
 
+# --- Decisao 81 (achado real, ao vivo, numa fleet nova): capture_
+# ready_check() so LIA se mockopin-v9-measure ja existia no servidor
+# -- nunca entregava. Numa fleet recem-provisionada, nada jamais
+# tinha entregue essa imagem antes do primeiro dedicated_capture (que
+# so roda DEPOIS da porta de fumaca passar) -- preflight reprovava
+# sempre, por falta de uma imagem que ele mesmo nunca tentava
+# entregar.
+
+def test_capture_ready_check_entrega_measure_antes_de_rodar_o_probe(monkeypatch):
+    order = []
+    inventory = _inventory_l0()
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+
+    def fake_deliver_image(self, image_key, host):
+        order.append(("deliver", image_key, host))
+
+    def fake_run_capture_preflight(hosts, key_path=None):
+        order.append(("probe", tuple(hosts)))
+        return {"go": True, "checks": []}
+
+    monkeypatch.setattr(orch.SSHExecutor, "_deliver_image", fake_deliver_image)
+    monkeypatch.setattr(orch.preflight, "run_capture_preflight", fake_run_capture_preflight)
+
+    result = executor.capture_ready_check()
+    assert result == {"go": True, "checks": []}
+    assert order == [("deliver", "measure", executor._server_ip()),
+                      ("probe", (executor._server_ip(),))], (
+        "a entrega de 'measure' tem que acontecer ANTES do probe -- " + str(order)
+    )
+
+
+def test_mutante_capture_ready_check_nunca_entrega_measure_e_pego(monkeypatch):
+    """Mutacao: capture_ready_check() volta a so rodar o probe, sem
+    entregar 'measure' primeiro -- o teste acima tem que reprovar com
+    essa mutacao, provando que depende de fato da entrega."""
+    inventory = _inventory_l0()
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    calls = []
+    monkeypatch.setattr(orch.SSHExecutor, "_deliver_image",
+                         lambda self, image_key, host: calls.append((image_key, host)))
+    monkeypatch.setattr(orch.preflight, "run_capture_preflight", lambda hosts, key_path=None: {"go": True, "checks": []})
+
+    def mutant_capture_ready_check(self):
+        # mutante: nunca chama _deliver_image, vai direto pro probe
+        return orch.preflight.run_capture_preflight([self._server_ip()], key_path=self.key_path)
+
+    monkeypatch.setattr(orch.SSHExecutor, "capture_ready_check", mutant_capture_ready_check)
+    executor.capture_ready_check()
+    assert calls == [], "mutante nunca deveria ter entregado measure -- confirma que o teste real dependia disso"
+
+
 # --- Decisao 58, achado 18: sondagem TCP pura (preflight_tcp.py real
 # da v8), restaurada -- uma vez por rota, DE DENTRO do cliente, ANTES
 # de qualquer entrega/execucao cara.
