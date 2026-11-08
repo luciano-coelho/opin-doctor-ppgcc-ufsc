@@ -6944,3 +6944,192 @@ medicao + proposta explicitamente NAO aplicada, item 4 e
 documentacao. Continuo sem autorizar push nem recursos na AWS. A
 data do piloto fica pra depois deste relatorio, a criterio do
 Luciano.
+
+## 55. Tres correcoes a Decisao 54 (fonte do baseline Classico/PQC, tolerancia assimetrica, 480 amostras de um unico build) e seis entregas: PINS.json + verificacao fail-closed no SSHExecutor, entrega por docker save/load (nunca build na instancia), tolerancia derivada validada em 20 rebuilds reais (0B em todos), politica IAM restrita + dry-run check, parada de emergencia independente do Terraform, PILOT_READINESS.md reescrito
+
+Resposta as 3 correcoes + 6 pontos pedidos. Nada de AWS, sem push,
+branch `v9/fase1-local`, `v9-prereg`/`main` intocadas.
+
+**Correcoes aceitas, confirmadas com citacao/evidencia:**
+(i) Classico (1.640/1.513) e PQC (10.878/10.728) JA estavam no
+pre-registro -- Decisao 14 (T6), `DECISIONS.md` linhas 1511-1519 e
+1750-1751. A alegacao "nunca citado antes" da Decisao 54 estava
+errada -- corrigida, citada agora em `PILOT_READINESS.md`, secao b.
+(ii) A tolerancia da Decisao 54 era assimetrica sem justificativa --
+corrigida pelo mecanismo derivado do item 3 abaixo, que trata os 4
+perfis e os 2 sentidos uniformemente (nunca mais uma regra especial
+so pro Hibrido-AND).
+(iii) As 480 amostras vinham de UM UNICO build de certificado --
+corrigido com 20 rebuilds reais, 4 variantes de SAN, item 3 abaixo.
+
+**1. Pins de binario e imagens -- implementado e testado.**
+
+**Reprodutibilidade, testada de verdade (nao suposta):** gateway
+construido 2x do zero (`--no-cache`), com `-trimpath`+`GOARCH=amd64`
+explicitos (acrescentados nos 3 Dockerfiles) -- sha256 do binario
+**identico** nos dois builds (`a08ba8e3...`). Proxy testado igual,
+mesmo resultado (`86f1ef60...`). **O Image ID Docker NAO e
+reproduzivel** entre builds independentes -- confirmado: o MESMO
+binario produziu 2 Image IDs diferentes (`74eb54fa...` vs
+`ce797b5e...` num primeiro teste sem trimpath; `184ddeb6...` vs
+`71105be1...` com trimpath) -- metadados de camada variam, conteudo
+nao. Por isso `PINS.json` (novo, versionado,
+`thesis/results/v9/campaign/PINS.json`) fixa o sha256 do BINARIO
+(reproduzivel, pode ser conferido contra um rebuild futuro) e o
+Image ID de UMA UNICA imagem construida (so valido junto com a
+entrega por save/load do item 2 -- nunca junto com um rebuild local).
+Tambem registra `go version -m` (texto + sha256 da saida) e os
+metadados de build do toolchain (`go_tag`, `go_commit`,
+`and_patch_sha256`, ja gravados pelo PROPRIO `mockopin-v9-toolchain`
+em `/build_metadata.json`).
+
+`_local_gateway_binary_info()` (SSHExecutor) agora confere o sha256
+recem-extraido contra `PINS.json["images"]["gateway"]["binary_
+sha256"]` -- fail-closed, levanta ANTES de `_launch_gateway` rodar se
+divergir. `load_pins()` nunca escreve o arquivo, so le -- alterar
+`PINS.json` exige Emenda numerada explicita (campo `_policy` dentro
+do proprio arquivo documenta isso).
+
+**Testes:** `test_pin_divergente_aborta_antes_de_qualquer_execucao`
+(hash errado -- aborta, nenhum `docker run`/proxy sobe),
+`test_pin_correto_passa` (hash certo -- passa, `pin_matched: true` no
+manifesto), `test_campanha_oficial_com_os_pins_do_piloto_passa` (uma
+SEGUNDA instancia de `SSHExecutor`, perfil/rota fora da grade do
+piloto -- `load_pins()` e funcao pura do arquivo, nunca depende de
+"ser o piloto", passa igual).
+
+**2. Entrega das imagens -- docker save/load, nunca build na instancia.**
+
+`SSHExecutor._deliver_image(image_key, host)`: `docker save <imagem>
+| ssh <host> docker load`, seguido de `docker image inspect --format
+'{{.Id}}'` no destino, comparado contra `PINS.json`. Fail-closed,
+chamado em `start_block` (gateway, servidor; proxy, cliente) e
+`dedicated_capture` (measure, servidor) -- ANTES de qualquer
+verificacao/execucao.
+
+**Arquitetura de cada instancia, confirmada no codigo (nenhum script
+de controle -- `pki_relay.py`/`collect_artifacts.py`/`cleanup.py` --
+chama `docker` em lugar nenhum):**
+| Instancia | Tipo | Arquitetura | Roda gateway/proxy/measure? |
+|---|---|---|---|
+| Controle | t4g.micro | **ARM64** | **Nao** -- confirmado, nenhuma imagem chega nele |
+| Servidor | m7i-flex.large | x86_64 | gateway + measure |
+| Clientes (3) | m7i-flex.large | x86_64 | proxy |
+
+`check_capture_prerequisites` corrigido pra exigir o Image ID EXATO
+de `mockopin-v9-measure` (nao so presenca) -- `expected_measure_
+image_id`, lido de `PINS.json` por `run_capture_preflight`. Testado
+(`test_imagem_measure_com_id_errado_reprova`/`..._com_id_certo_
+passa`). **11 testes novos no total** entre os itens 1 e 2.
+
+**3. Tolerancia derivada -- validada em 20 rebuilds reais, 0B em todos.**
+
+`evaluate_criteria.expected_handshake_bytes(perfil, certs_dir)`:
+baseline MEDIDO (Decisao 14, tabela da secao b acima) + (soma dos
+tamanhos DER dos certificados IMPLANTADOS menos a soma dos
+certificados do BASELINE), por sentido. `CERT_FILES_BY_PROFILE`/
+`BASELINE_CERT_DER_SIZES` (novos) -- os tamanhos DER do build que
+produziu o baseline, medidos de verdade nos arquivos reais desta
+sessao, confirmando a Decisao 9 (`DECISIONS.md` linhas 896-901:
+servidor RSA 914, ML-DSA 5.647; cliente RSA 801, ML-DSA 5.534).
+
+**Validacao: `make certs` rodado 20 vezes**, 4 variantes de SAN (5
+builds cada) -- loopback (padrao), IP privado (10.0.1.50), IP publico
+tipo EIP (203.0.113.50), nome DNS adicional -- cobrindo os 4 perfis,
+gateway RECONSTRUIDO e MEDIDO de verdade a cada rebuild (nunca
+simulado):
+
+| Build | Variante | Perfil | Previsto (in/out) | Medido (in/out) | Desvio |
+|---|---|---|---|---|---|
+| 1-5 | loopback | 4 perfis + classico | baseline exato | baseline exato | **0/0** |
+| 6-10 | ip_privado | 4 perfis + classico | ex.: classico 1513/1620 | 1513/1620 | **0/0** |
+| 11-15 | ip_publico_eip | 4 perfis + classico | ex.: classico 1513/1620 | 1513/1620 | **0/0** |
+| 16-20 | nome_dns | 4 perfis + classico | ex.: classico 1513/1673 | 1513/1673 | **0/0** |
+
+**20/20 builds, 0B de desvio em TODOS -- nenhuma exceção.** Exemplo
+concreto (build 6, classico, loopback->IP privado): certificado do
+servidor cai de 900B pra 880B DER (SAN mais curto) -- previsto
+`out=1620`, medido `out=1620`.
+
+**Regra final, proposta pre-piloto, NAO aplicada retroativamente:**
+os limiares pre-registrados continuam o gate oficial do criterio 1
+(0B ClientHello, ±4B Certificate, 0B demais -- Decisao 20/29/30,
+intocados). `expected_handshake_bytes` entra como DIAGNOSTICO --
+implementado (`orchestrator._bytes_diagnostic_for_profile`, chamado
+pelo smoke gate): desvio != 0 marca `bytes_diagnostic_needs_
+decision=True` no manifesto, **PAUSA e pede decisao do Luciano**,
+igual ao smoke gate -- nunca aborta nem e ignorado em silencio, nunca
+bloqueia `smoke_ok` por conta propria (testado, incluindo mutante).
+
+**4. IAM -- lista completa de acoes, politica restrita, dry-run check.**
+
+Tabela completa das acoes EC2 que o Terraform faz (plan/apply/
+destroy) pros recursos de `main.tf` -- `PILOT_READINESS.md`, secao
+e. Politica restrita reescrita: `aws:RequestedRegion` (as 3 regioes)
+em TODA statement; `aws:RequestTag`/`ec2:CreateAction` nas 4 acoes de
+CRIACAO (nao suportam `aws:ResourceTag` ainda nao existente);
+`aws:ResourceTag` nas acoes de MODIFICACAO/DESTRUICAO (`Terminate
+Instances`, `ReleaseAddress`, `DeleteKeyPair`, etc.).
+
+`thesis/results/v9/campaign/scripts/iam_dryrun_check.py` (novo): cada
+acao mutavel com `--dry-run`, por regiao -- autorizado
+(`DryRunOperation`) vs negado (`UnauthorizedOperation`), nunca cria
+nada de verdade. Acoes que precisam de um recurso real (`Terminate
+Instances`/`ModifyInstanceAttribute`/`ReleaseAddress`/`DeleteKeyPair`/
+`RevokeSecurityGroupIngress`) ficam "nao testado" explicitamente sem
+um ID real passado -- nunca inventado como PASS. **7 testes, mock
+completo -- este processo nunca executou o script contra a AWS, so
+escreveu e testou.** O Luciano roda de verdade.
+
+**5. Parada de emergencia independente do state -- `emergency_stop.py`, novo.**
+
+Por tag `Project=mockopin-pqc-v9-piloto`, direto pela API, nas 3
+regioes -- cada acao destrutiva confere a tag (via `describe-*`
+filtrada) IMEDIATAMENTE antes de agir, nunca sobre um ID solto.
+Ordem: instancias (termina, espera ate 2min) -> EIPs (desassocia,
+libera) -> security groups (so depois das instancias) -> key pairs.
+Modo dry (padrao, sem `--execute`) nunca chama nenhuma acao mutavel
+-- testado explicitamente. **6 testes, mock completo.**
+
+**Pior caso de custo, so com autodesligamento (nenhuma acao
+adicional):** compute limitado em ~US$1,575 (4h clientes/servidor +
+5h controle, confirmado que `terminate` realmente encerra o
+compute); EBS some junto (delete_on_termination e o default, nunca
+sobrescrito). **Os 5 EIPs NUNCA sao liberados pelo autodesligamento**
+(Decisao 45, reconfirmado) -- US$0,025/hora INDEFINIDAMENTE, ≈US$18
+num mes esquecido. Exatamente o cenario que a camada 2
+(`emergency_stop.py`) cobre mesmo sem o Terraform.
+
+**6. `PILOT_READINESS.md` reescrito** com os 4 baselines citados
+(secao b), os itens 1-5 acima (secoes c-f), risco 1/2 marcados
+RESOLVIDO, risco 6/7 atualizados com o mecanismo real, o alerta de
+orcamento reclassificado como notificacao com atraso de cobranca
+(nunca um freio automatico -- sugestao revisada pra US$3), e uma
+lista curta final do que falta do lado do Luciano.
+
+**Testes:** 115 no total entre os pacotes tocados -- 108 em
+`thesis/results/v9/campaign/tests/` (91 antes + 4 PINS/entrega de
+imagem + 2 Image ID errado/certo + 7 IAM dry-run + 6 emergency stop +
+4 diagnostico de bytes -- alguns cobrem mais de um ponto, a conta
+exata esta nos nomes dos testes), mais 7 (inalterados) em
+`thesis/scripts/tests/`. Todos passando.
+
+**Commit local** (sem push), branch `v9/fase1-local`: `thesis/
+results/v9/campaign/PINS.json` (novo), `thesis/results/v9/campaign/
+scripts/orchestrator.py` (`load_pins`, `_deliver_image`, `_bytes_
+diagnostic_for_profile`, wiring), `thesis/results/v9/campaign/
+scripts/preflight.py` (Image ID em `check_capture_prerequisites`),
+`thesis/results/v9/campaign/scripts/iam_dryrun_check.py` (novo),
+`thesis/results/v9/campaign/scripts/emergency_stop.py` (novo),
+`thesis/results/v9/integration/evaluate_criteria.py` (`expected_
+handshake_bytes`), `thesis/results/v9/integration/{gateway,proxy,
+measure}/Dockerfile` (`-trimpath`+`GOARCH=amd64`), `thesis/results/
+v9/campaign/PILOT_READINESS.md` (reescrito), mais os 5 arquivos de
+teste novos/estendidos.
+
+Nenhum item exigiu emenda ao pre-registro -- os itens 1-2
+implementam um mecanismo ja pre-registrado + aditivo (nunca mudam
+desenho), o item 3 e diagnostico explicitamente NAO aplicado ao
+gate oficial, os itens 4-5 sao documentacao/ferramenta nova, nunca
+tocando os 7 criterios. Continuo sem autorizar push nem recursos na
+AWS. A data do piloto fica pra depois deste relatorio.

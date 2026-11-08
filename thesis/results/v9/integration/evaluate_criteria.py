@@ -148,6 +148,87 @@ HANDSHAKE_MESSAGE_TOLERANCE_B = 0
 PROFILES_ALL = ("classico", "pqc", "hibrido-v8", "hibrido-and")
 PILOT_ROUTES = ("L0", "L219", "L325")
 
+# Decisao 55 (pedido independente, item 3): handshakeBytesIn/Out
+# totais medidos no BUILD de certificado que produziu o historico
+# citado (loopback, certs/generated default -- Decisao 14/17/18,
+# DECISIONS.md linhas 1511-1519/1750-1751). "in" = bytes que o
+# SERVIDOR recebe (cadeia do CLIENTE); "out" = bytes que o servidor
+# manda (cadeia do SERVIDOR).
+BASELINE_HANDSHAKE_BYTES = {
+    "classico": {"in": 1513, "out": 1640},
+    "pqc": {"in": 10728, "out": 10878},
+    "hibrido-v8": {"in": 8397, "out": 8552},
+    "hibrido-and": {"in": 11902, "out": 12177},
+}
+
+# Arquivos de certificado (relativos a certs/generated/) que compoem
+# a cadeia de CADA lado, por perfil -- hibrido-and manda DUAS folhas
+# (RSA+ML-DSA) em cada direcao, os outros 3 so uma.
+CERT_FILES_BY_PROFILE = {
+    "classico": {"client": ("classico_client.crt",), "server": ("classico_server.crt",)},
+    "pqc": {"client": ("pqc_client.crt",), "server": ("pqc_server.crt",)},
+    "hibrido-v8": {"client": ("hibrido_v8_client.crt",), "server": ("hibrido_v8_server.crt",)},
+    "hibrido-and": {
+        "client": ("hibrido_and_rsa_client.crt", "hibrido_and_mldsa_client.crt"),
+        "server": ("hibrido_and_rsa_server.crt", "hibrido_and_mldsa_server.crt"),
+    },
+}
+
+# DER, bytes -- do MESMO build (loopback, SERVER_IPS/SERVER_DNS
+# default do certs/Makefile) que produziu BASELINE_HANDSHAKE_BYTES
+# acima. Medido direto nos arquivos reais desta sessao (cryptography,
+# x509.load_pem_x509_certificate(...).public_bytes(Encoding.DER)) --
+# confere exatamente com a tabela da Decisao 9 (DECISIONS.md linhas
+# 896-901: servidor RSA 914, servidor ML-DSA 5.647, cliente RSA 801,
+# cliente ML-DSA 5.534).
+BASELINE_CERT_DER_SIZES = {
+    "classico": {"in": 787, "out": 900},
+    "pqc": {"in": 5506, "out": 5619},
+    "hibrido-v8": {"in": 6131, "out": 6242},
+    "hibrido-and": {"in": 801 + 5534, "out": 914 + 5647},
+}
+
+
+def _cert_der_size(cert_path) -> int:
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    cert = x509.load_pem_x509_certificate(open(cert_path, "rb").read())
+    return len(cert.public_bytes(Encoding.DER))
+
+
+def deployed_cert_der_sizes(profile: str, certs_dir) -> dict:
+    """Soma, por direcao, o tamanho DER real dos certificados que vao
+    ser efetivamente apresentados nesta implantacao (`certs_dir` --
+    tipicamente `certs/generated/` apos um `make certs` com SAN
+    diferente do baseline)."""
+    files = CERT_FILES_BY_PROFILE[profile]
+    client_sum = sum(_cert_der_size(os.path.join(certs_dir, f)) for f in files["client"])
+    server_sum = sum(_cert_der_size(os.path.join(certs_dir, f)) for f in files["server"])
+    return {"in": client_sum, "out": server_sum}
+
+
+def expected_handshake_bytes(profile: str, certs_dir) -> dict:
+    """Decisao 55, item 3: baseline MEDIDO (Decisao 14) mais a
+    diferenca entre a soma dos tamanhos DER dos certificados
+    IMPLANTADOS agora e a dos certificados do BASELINE, por sentido --
+    nao reestima do zero, so propaga a diferenca de certificado (a
+    UNICA fonte de variacao legitima identificada na Decisao 54, item
+    3, fora de SNI/tickets/MinVersion, todos ja controlados ou ja
+    verificados por outro mecanismo). Diagnostico, NUNCA o gate --
+    os limiares pre-registrados (0B ClientHello, +-4B Certificate, 0B
+    demais) continuam sendo o criterio 1 oficial; isto so informa um
+    desvio pra decisao humana (ver `run_smoke_gate`-like pausa,
+    PILOT_READINESS.md)."""
+    baseline = BASELINE_HANDSHAKE_BYTES[profile]
+    baseline_der = BASELINE_CERT_DER_SIZES[profile]
+    deployed_der = deployed_cert_der_sizes(profile, certs_dir)
+    return {
+        "profile": profile,
+        "in": baseline["in"] + (deployed_der["in"] - baseline_der["in"]),
+        "out": baseline["out"] + (deployed_der["out"] - baseline_der["out"]),
+        "baseline": baseline, "baseline_der": baseline_der, "deployed_der": deployed_der,
+    }
+
 
 def _as_fail(criterion: int, name: str, note: str, **extra) -> dict:
     """Decisao 40 (revisao independente, item B.7, "entrada malformada

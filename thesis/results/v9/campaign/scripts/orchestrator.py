@@ -36,7 +36,6 @@ import hashlib
 import json
 import os
 import random
-import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -49,6 +48,29 @@ import preflight  # noqa: E402  -- Decisao 53, item 4: pre-requisitos de captura
 _INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "integration"
 sys.path.insert(0, str(_INTEGRATION_DIR))
 import evaluate_criteria as ec  # noqa: E402  -- reaproveita os baselines/constantes reais, nunca reinventa
+
+# Decisao 55, item 1: PINS.json e o UNICO lugar onde o hash/Image ID
+# esperado de cada imagem fica registrado -- NUNCA escrito por
+# nenhum codigo deste modulo (so lido). Alterar o arquivo exige
+# Emenda numerada explicita em DECISIONS.md (ver o proprio campo
+# "_policy" dentro dele) -- nunca uma gravacao automatica.
+PINS_PATH = Path(__file__).resolve().parents[1] / "PINS.json"
+_PINS_CACHE = None
+
+
+def load_pins(pins_path=PINS_PATH):
+    """Le PINS.json -- cacheado no MODULO (nao por instancia de
+    Executor), ja que o arquivo e compartilhado por qualquer
+    orquestrador que rode no mesmo processo (piloto ou a futura
+    campanha oficial, Decisao 55 item 1: "a oficial com os pins do
+    piloto passa")."""
+    global _PINS_CACHE
+    if _PINS_CACHE is not None:
+        return _PINS_CACHE
+    if not Path(pins_path).is_file():
+        raise RuntimeError(f"load_pins: {pins_path} nao encontrado -- PINS.json e obrigatorio, nunca opcional")
+    _PINS_CACHE = json.loads(Path(pins_path).read_text(encoding="utf-8"))
+    return _PINS_CACHE
 
 PROFILES = ["classico", "pqc", "hibrido-v8", "hibrido-and"]
 ROUTES = ["L0", "L219", "L325"]
@@ -256,6 +278,9 @@ class SSHExecutor:
         # blocos), acumulado pra entrar no manifesto de cada bloco.
         self._gateway_binary_info = None
         self.gateway_binary_verifications = []
+        # Decisao 55, item 2: docker save|ssh docker load -- uma
+        # entrada por entrega de imagem (gateway/proxy/measure).
+        self.image_delivery_verifications = []
         # Decisao 49: SO pra validacao local via shim -- quando
         # REMOTE_GATEWAY_HOST esta setado, opin_flow.start_tls_kem_proxy
         # NUNCA junta `--network insurance-server-lambdas_default`
@@ -372,10 +397,28 @@ class SSHExecutor:
             except json.JSONDecodeError:
                 toolchain_build_metadata = {"raw": meta_proc.stdout.strip()}
 
+        # Decisao 55, item 1: confere o binario recem-extraido contra
+        # PINS.json -- fail-closed, ANTES de qualquer execucao. So o
+        # sha256 do BINARIO e comparado aqui (reproduzivel, confirmado
+        # em build duplo nesta rodada) -- o Image ID NUNCA e
+        # comparado no lado LOCAL (um rebuild local legitimo produz um
+        # Image ID diferente por desenho do Docker, mesmo com binario
+        # identico -- so o lado REMOTO, apos `docker load`, compara
+        # Image ID, porque load e deterministico, rebuild nao).
+        pins = load_pins()
+        pin_sha256 = pins["images"]["gateway"]["binary_sha256"]
+        if sha256 != pin_sha256:
+            raise RuntimeError(
+                f"_local_gateway_binary_info: sha256 do binario do gateway NAO bate com PINS.json -- "
+                f"esperado {pin_sha256}, obtido {sha256}. Alterar PINS.json exige Emenda numerada "
+                f"explicita em DECISIONS.md, nunca uma atualizacao automatica."
+            )
+
         self._gateway_binary_info = {
             "sha256": sha256, "local_bin_path": str(bin_path),
             "go_version_m": go_version_m, "go_build_version": go_build_version,
             "toolchain_build_metadata": toolchain_build_metadata,
+            "pin_matched": True, "pins_path": str(PINS_PATH),
         }
         return self._gateway_binary_info
 
@@ -418,6 +461,7 @@ class SSHExecutor:
             "sha256_expected": info["sha256"],
             "go_version_m": info["go_version_m"], "go_build_version": info["go_build_version"],
             "toolchain_build_metadata": info["toolchain_build_metadata"],
+            "pin_matched": info["pin_matched"], "pins_path": info["pins_path"],
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),
             "transfer_sha256sum_c_ok": verify_proc.returncode == 0,
             "transfer_sha256sum_c_output": (verify_proc.stdout + verify_proc.stderr).strip(),
@@ -448,6 +492,48 @@ class SSHExecutor:
                 f"_verify_running_gateway_binary {verification['profile']}/{verification['route']}: "
                 f"o binario DENTRO do container {self.gateway_container} nao bate com o verificado no "
                 f"transporte -- abortando antes de qualquer execucao (saida: {output!r})"
+            )
+
+    def _deliver_image(self, image_key, host):
+        """Decisao 55, item 2: `docker save | ssh ... docker load` --
+        NENHUMA instancia roda `docker build` (achado da Decisao 53,
+        item 4a, agora resolvido: a imagem e construida SO localmente,
+        uma vez, e entregue como artefato binario). Depois do load,
+        confere o Image ID carregado contra PINS.json -- `docker load`
+        e deterministico (nunca um rebuild), entao o MESMO Image ID
+        tem que aparecer sempre, em qualquer instancia, pro mesmo
+        `docker save` de origem. Fail-closed: levanta ANTES de
+        qualquer execucao se divergir."""
+        pins = load_pins()
+        docker_image = pins["images"][image_key]["docker_image"]
+        expected_id = pins["images"][image_key]["image_id"]
+
+        # docker save|ssh docker load num UNICO comando de shell local
+        # (cli._run, mesma fronteira de sempre) -- evita escrever um
+        # tar intermediario em disco.
+        ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        if self.key_path:
+            ssh_cmd += f" -i {self.key_path}"
+        ssh_cmd += f" ec2-user@{host} docker load"
+        save_load_proc = cli._run(["sh", "-c", f"docker save {docker_image} | {ssh_cmd}"], timeout=180)
+        if save_load_proc.returncode != 0:
+            raise RuntimeError(
+                f"_deliver_image({image_key}, {host}): docker save|ssh docker load falhou: "
+                f"{save_load_proc.stderr}"
+            )
+
+        id_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{.Id}}}}'", key_path=self.key_path)
+        loaded_id = id_proc.stdout.strip()
+        ok = id_proc.returncode == 0 and loaded_id == expected_id
+        self.image_delivery_verifications.append({
+            "image_key": image_key, "docker_image": docker_image, "host": host,
+            "expected_image_id": expected_id, "loaded_image_id": loaded_id, "ok": ok,
+            "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+        })
+        if not ok:
+            raise RuntimeError(
+                f"_deliver_image({image_key}, {host}): Image ID carregado ({loaded_id!r}) nao bate com "
+                f"PINS.json ({expected_id!r}) -- abortando ANTES de qualquer execucao"
             )
 
     def _launch_gateway(self, profile, keylog=False):
@@ -544,6 +630,9 @@ class SSHExecutor:
                         f"docker logs insurance-server-lambdas-mockapi-1 2>&1 | grep -q 'Startup completed' && break; "
                         f"sleep 1; done",
                         key_path=self.key_path, connect_timeout=90)
+        # Decisao 55, item 2: entrega por save/load, NUNCA build na
+        # instancia -- ANTES de qualquer verificacao/execucao.
+        self._deliver_image("gateway", self._server_ip())
         verification = self._verify_gateway_binary(profile, route)
         self._launch_gateway(profile)
         self._verify_running_gateway_binary(verification)
@@ -559,6 +648,10 @@ class SSHExecutor:
                 raise RuntimeError(f"start_block {profile}/{route}: nao consegui descobrir o IP de {self.gateway_container} na rede bridge")
             self.inventory["server"]["private_ip"] = bridge_ip
             self.inventory["server"]["public_ip"] = bridge_ip
+        # Decisao 55, item 2: o proxy roda no CLIENTE, via save/load
+        # tambem -- nunca `docker build` la (opin_flow.start_tls_kem_
+        # proxy so faz `docker run`, presume a imagem ja presente).
+        self._deliver_image("proxy", self._client_ip(route))
         gw_ip = self._server_gateway_ip(route)
         env = self._client_env(profile, gw_ip)
         py_code = ("import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True); "
@@ -718,6 +811,9 @@ class SSHExecutor:
         self._verify_running_gateway_binary(self.gateway_binary_verifications[-1])
 
         server_ip = self._server_ip()
+        # Decisao 55, item 2: mockopin-v9-measure (tshark) tambem por
+        # save/load -- nunca `docker build` na instancia.
+        self._deliver_image("measure", server_ip)
         pcap_path = f"/tmp/criterio1_{profile}_{route}.pcap"
         keylog_path = f"/tmp/criterio1_keylog_{profile}_{route}.txt"
         tcpdump_log = f"/tmp/criterio1_tcpdump_{profile}_{route}.log"
@@ -875,7 +971,39 @@ SMOKE_N_PER_PROFILE = 1
 SMOKE_EXPECTED_TOTAL = len(PROFILES) * len(ROUTES) * SMOKE_N_PER_PROFILE  # 12
 
 
-def run_smoke_gate(executor, seed: int, out_dir: Path) -> dict:
+_DEFAULT_CERTS_DIR = Path(__file__).resolve().parents[2] / "certs" / "generated"
+_BYTES_DIAGNOSTIC_LOG_RE_TEMPLATE = (
+    r'gateway: {profile} connection OK remoteAddr=\S+ sni="mtls"[^\n]*?'
+    r'handshakeBytesIn=(\d+) handshakeBytesOut=(\d+)'
+)
+
+
+def _bytes_diagnostic_for_profile(log_text: str, profile: str, certs_dir) -> dict:
+    """Decisao 55, item 3: compara `ec.expected_handshake_bytes`
+    (baseline MEDIDO + diferenca de DER dos certificados implantados)
+    contra UMA conexao client-facing real deste perfil no log dado.
+    DIAGNOSTICO -- nunca o criterio 1 oficial (0B/±4B/0B continuam
+    sendo o gate real, Decisao 20/29/30). Desvio != 0 aqui nunca
+    aborta por conta propria -- so marca `bytes_diagnostic_needs_
+    decision`, pra o Luciano decidir, mesma logica do smoke gate
+    (Decisao 48)."""
+    expected = ec.expected_handshake_bytes(profile, str(certs_dir))
+    pattern = _BYTES_DIAGNOSTIC_LOG_RE_TEMPLATE.format(profile=_re.escape(profile))
+    m = _re.search(pattern, log_text)
+    if not m:
+        return {"profile": profile, "ok": False, "expected": expected,
+                "note": "nenhuma linha 'connection OK' client-facing encontrada pra este perfil no log"}
+    measured_in, measured_out = int(m.group(1)), int(m.group(2))
+    delta_in, delta_out = measured_in - expected["in"], measured_out - expected["out"]
+    return {
+        "profile": profile, "expected": expected,
+        "measured_in": measured_in, "measured_out": measured_out,
+        "delta_in": delta_in, "delta_out": delta_out,
+        "ok": delta_in == 0 and delta_out == 0,
+    }
+
+
+def run_smoke_gate(executor, seed: int, out_dir: Path, certs_dir=_DEFAULT_CERTS_DIR) -> dict:
     """Decisao 48 (Emenda 12 ao pre-registro v9-prereg): 1 execucao
     por perfil x rota (12 no total, NUNCA contadas nas 60 oficiais) --
     roda ANTES do bloco cronometrado, so com `SSHExecutor` real,
@@ -937,10 +1065,22 @@ def run_smoke_gate(executor, seed: int, out_dir: Path) -> dict:
             capture_proof_rows.append({"profile": profile, "ok": False, "note": f"{type(e).__name__}: {e}"})
     capture_proof_ok = all(r["ok"] for r in capture_proof_rows)
 
+    # Decisao 55, item 3: diagnostico (NUNCA o gate oficial -- os
+    # limiares pre-registrados do criterio 1 continuam sendo isso).
+    # Desvio != 0 PAUSA e pergunta, igual ao smoke gate -- nunca
+    # aborta por conta propria, nunca e ignorado em silencio.
+    combined_log_text = Path(manifest["combined_log"]).read_text(encoding="utf-8")
+    bytes_diagnostic_rows = [
+        _bytes_diagnostic_for_profile(combined_log_text, profile, certs_dir) for profile in PROFILES
+    ]
+    bytes_diagnostic_needs_decision = any(not r["ok"] for r in bytes_diagnostic_rows)
+
     manifest["capture_preflight"] = capture_preflight
     manifest["capture_proof_dir"] = str(capture_proof_dir)
     manifest["capture_proof_rows"] = capture_proof_rows
     manifest["capture_proof_ok"] = capture_proof_ok
+    manifest["bytes_diagnostic_rows"] = bytes_diagnostic_rows
+    manifest["bytes_diagnostic_needs_decision"] = bytes_diagnostic_needs_decision
     manifest["smoke_ok"] = (manifest["total_execucoes"] == SMOKE_EXPECTED_TOTAL and not failures and capture_proof_ok)
     manifest["smoke_failures"] = failures
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")

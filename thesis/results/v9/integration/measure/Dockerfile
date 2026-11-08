@@ -14,9 +14,11 @@ WORKDIR /src
 COPY gateway ./gateway
 COPY proxy ./proxy
 COPY bench ./bench
-RUN cd gateway && CGO_ENABLED=0 GOOS=linux go build -o /out/gateway .
-RUN cd proxy && CGO_ENABLED=0 GOOS=linux go build -o /out/proxy .
-RUN cd bench && CGO_ENABLED=0 GOOS=linux go build -o /out/bench .
+# Decisao 55, item 1: -trimpath + GOARCH explicito -- ver mesmo
+# comentario em gateway/Dockerfile.
+RUN cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/gateway .
+RUN cd proxy && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/proxy .
+RUN cd bench && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/bench .
 
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache tcpdump tshark bash gawk

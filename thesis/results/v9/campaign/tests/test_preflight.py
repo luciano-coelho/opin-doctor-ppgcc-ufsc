@@ -238,6 +238,23 @@ def test_imagem_measure_ausente_reprova(monkeypatch):
     assert any("mockopin-v9-measure" in m for m in result["missing"]), result
 
 
+def test_imagem_measure_com_id_errado_reprova(monkeypatch):
+    """Decisao 55, item 2: a imagem EXISTE (Image ID presente), mas
+    NAO e o Image ID que PINS.json espera -- tem que reprovar com
+    mensagem clara, nao so checar presenca."""
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
+    result = preflight.check_capture_prerequisites("203.0.113.9", expected_measure_image_id="sha256:esperado123")
+    assert result["ok"] is False
+    assert any("PINS.json" in m for m in result["missing"]), result
+
+
+def test_imagem_measure_com_id_certo_passa(monkeypatch):
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
+    result = preflight.check_capture_prerequisites("203.0.113.9", expected_measure_image_id="sha256:deadbeef")
+    assert result["ok"] is True
+    assert result["missing"] == []
+
+
 def test_interface_loopback_reprova():
     """`lo` NUNCA pode passar como interface primaria -- mesma regra
     de `_primary_iface` do orquestrador."""
@@ -269,7 +286,10 @@ def test_ssh_indisponivel_reprova_sem_estourar_excecao(monkeypatch):
 def test_run_capture_preflight_falha_se_qualquer_host_falhar(monkeypatch):
     responses = {"203.0.113.9": _CAPTURE_PROBE_OK, "203.0.113.10": _CAPTURE_PROBE_OK.replace("TCPDUMP_PATH=/usr/sbin/tcpdump\n", "TCPDUMP_PATH=\n")}
     monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(responses[host]))
-    result = preflight.run_capture_preflight(["203.0.113.9", "203.0.113.10"])
+    # Decisao 55, item 2: `pins_path` inexistente -- este teste e sobre
+    # a AGREGACAO por host, nao sobre o Image ID (ver testes dedicados
+    # abaixo), entao desliga a exigencia de Image ID de proposito.
+    result = preflight.run_capture_preflight(["203.0.113.9", "203.0.113.10"], pins_path=Path("/caminho/que/nao/existe/PINS.json"))
     assert result["go"] is False
     assert result["checks"][0]["ok"] is True
     assert result["checks"][1]["ok"] is False

@@ -1,0 +1,44 @@
+{
+  "_policy": "Decisao 55, item 1. Alterar qualquer valor deste arquivo exige uma Emenda numerada explicita em DECISIONS.md (data, motivo, diff) -- NUNCA uma edicao automatica pelo orquestrador ou por qualquer script. O orquestrador so LE este arquivo; nenhum codigo deste projeto escreve nele.",
+  "_platform": "linux/amd64 -- as 3 imagens, sempre (ver Decisao 55, item 2: nenhuma instancia faz docker build; o controle, unico arm64 do piloto, nunca executa nenhuma das 3).",
+  "_reproducibility_note": "O BINARIO (sha256 abaixo) e reproduzivel byte a byte entre builds independentes, confirmado 2x pra gateway nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O ID DA IMAGEM Docker (docker image inspect .Id) NAO e reproduzivel entre builds -- mesmo binario identico produziu 2 Image IDs diferentes num teste direto (metadados de build/timestamp de camada variam, conteudo nao). Por isso o Image ID aqui e fixado a partir de UMA UNICA imagem construida (nunca recalculado por rebuild) e so e valido para o artefato distribuido via `docker save`/`docker load` (Decisao 55, item 2) -- nunca para uma reconstrucao local independente.",
+  "generated_at_utc": "2026-11-08T03:30:00Z",
+  "go_toolchain": {
+    "go_tag": "go1.27.3",
+    "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+    "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b"
+  },
+  "images": {
+    "gateway": {
+      "docker_image": "mockopin-v9-gateway",
+      "platform": "linux/amd64",
+      "binary_path_in_image": "/gateway",
+      "binary_sha256": "a08ba8e31c4e6bdc865cd32164413169390eca6766359105d10ed0e7557ff47f",
+      "binary_sha256_reproducible": true,
+      "go_version_m_sha256": "ba8f857b5d868f2c9b0596e72b3089b9e6c678ceb6a911a90035596e2ceb9493",
+      "go_version_m_text": "/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "image_id": "sha256:625acc6b8838725265e2f66a52feaa00d87cac513713836d2bb7cc4af816f9ff"
+    },
+    "proxy": {
+      "docker_image": "mockopin-v9-proxy",
+      "platform": "linux/amd64",
+      "binary_path_in_image": "/proxy",
+      "binary_sha256": "86f1ef6087aa213b494deab74610fd80f3994e4e0900b54e65d6cb8e67bb0e71",
+      "binary_sha256_reproducible": true,
+      "go_version_m_sha256": "28e69c5dd6fd12b2685b02c22e18b6f3a0944a34f193913bff9ef5c75629c9f5",
+      "go_version_m_text": "/proxy: go1.27.3\n\tpath\tmockopin-v9-proxy\n\tmod\tmockopin-v9-proxy\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "image_id": "sha256:d106ee299605d38f073bd24829cef0f5a3d8778879240d369b9ba1c3a9edc163"
+    },
+    "measure": {
+      "docker_image": "mockopin-v9-measure",
+      "platform": "linux/amd64",
+      "binary_path_in_image": null,
+      "binary_sha256": null,
+      "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null,
+      "go_version_m_text": null,
+      "image_id": "sha256:2274de77a3ade4c2cf12b8cfc0e88aceec13ddfb20fe8ccda669798b53d61e6d",
+      "note": "So tooling de captura (tcpdump+tshark) -- nunca decide aceitar/rejeitar conexao nenhuma (ver DECISIONS.md, risco residual). Pin so pelo Image ID, verificado apos docker load; nenhum binario unico proprio pra hashear (a imagem embute copias de gateway/proxy/bench so pro harness standalone de medicao, nunca usadas pelo piloto real)."
+    }
+  }
+}

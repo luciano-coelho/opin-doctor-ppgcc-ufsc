@@ -137,9 +137,60 @@ _FAKE_GATEWAY_BINARY_BYTES = b"fake gateway elf binary -- so para testes, nunca 
 _FAKE_GATEWAY_SHA256 = hashlib.sha256(_FAKE_GATEWAY_BINARY_BYTES).hexdigest()
 
 
+_FAKE_IMAGE_IDS = {
+    "gateway": "sha256:" + "1" * 64,
+    "proxy": "sha256:" + "2" * 64,
+    "measure": "sha256:" + "3" * 64,
+}
+
+
+def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None):
+    image_ids = image_ids or _FAKE_IMAGE_IDS
+    return {"images": {
+        "gateway": {"binary_sha256": gateway_sha256, "docker_image": "mockopin-v9-gateway", "image_id": image_ids["gateway"]},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "image_id": image_ids["proxy"]},
+        "measure": {"docker_image": "mockopin-v9-measure", "image_id": image_ids["measure"]},
+    }}
+
+
+@pytest.fixture(autouse=True)
+def _default_fake_pins(monkeypatch):
+    """Decisao 55, item 1: `_local_gateway_binary_info` agora confere
+    o sha256 extraido contra PINS.json de verdade -- todo teste deste
+    arquivo usa um binario FAKE (`_FAKE_GATEWAY_BINARY_BYTES`), que
+    nunca bateria contra o PINS.json real do repositorio. Autouse:
+    aplica o PINS fake (combinando com o binario fake) em TODO teste
+    por padrao -- os poucos testes que querem testar divergencia de
+    pin de proposito sobrescrevem `orch.load_pins` eles mesmos."""
+    monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins())
+
+
 class _SimpleProc:
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _fake_sh_docker_save_load_call(argv):
+    """Decisao 55, item 2: `_deliver_image` roda `docker save | ssh
+    ... docker load` como um UNICO comando `sh -c` via `cli._run` --
+    fake generico, sempre sucesso (o teste de ID errado sobrescreve
+    so a resposta do `docker image inspect` que vem depois, nunca
+    este passo)."""
+    if argv and argv[0] == "sh" and len(argv) > 1 and argv[1] == "-c" and "docker save" in argv[2]:
+        return _SimpleProc()
+    return None
+
+
+def _fake_image_id_for_remote_cmd(remote_cmd, image_ids=_FAKE_IMAGE_IDS):
+    """Resposta fake de `docker image inspect <imagem> --format
+    '{{.Id}}'` -- usada pelos dois fakes deste arquivo. Devolve None
+    se o comando nao for essa chamada."""
+    if "docker image inspect" not in remote_cmd:
+        return None
+    for key, name in (("gateway", "mockopin-v9-gateway"), ("proxy", "mockopin-v9-proxy"), ("measure", "mockopin-v9-measure")):
+        if name in remote_cmd:
+            return f"{image_ids[key]}\n"
+    return None
 
 
 def _fake_local_docker_gateway_binary_call(argv):
@@ -177,11 +228,17 @@ def _fake_run_factory(calls):
         local_docker = _fake_local_docker_gateway_binary_call(argv)
         if local_docker is not None:
             return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(stdout=f"gateway: OK\n")
         if "sha256sum /gateway" in remote_cmd:
             return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
     return fake_run
 
@@ -323,6 +380,64 @@ def test_porta_de_fumaca_capture_proof_falha_se_qualquer_perfil_falhar(tmp_path,
     broken_row = next(r for r in manifest["capture_proof_rows"] if r["profile"] == "hibrido-and")
     assert broken_row["ok"] is False
     assert "tshark" in broken_row["note"]
+
+
+# --- Decisao 55, item 3: `_bytes_diagnostic_for_profile` -- DIAGNOSTICO
+# (nunca o gate oficial do criterio 1), desvio != 0 PAUSA e pede
+# decisao, nunca aborta por conta propria.
+
+def test_bytes_diagnostic_zero_desvio_com_certs_reais_e_log_real():
+    certs_dir = orch._DEFAULT_CERTS_DIR
+    log = (
+        '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
+        'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
+        'handshakeBytesIn=8397 handshakeBytesOut=8552\n'
+    )
+    row = orch._bytes_diagnostic_for_profile(log, "hibrido-v8", certs_dir)
+    assert row["ok"] is True, row
+    assert row["delta_in"] == 0 and row["delta_out"] == 0
+
+
+def test_bytes_diagnostic_detecta_desvio():
+    certs_dir = orch._DEFAULT_CERTS_DIR
+    log = (
+        '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
+        'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
+        'handshakeBytesIn=8397 handshakeBytesOut=9999\n'
+    )
+    row = orch._bytes_diagnostic_for_profile(log, "hibrido-v8", certs_dir)
+    assert row["ok"] is False
+    assert row["delta_out"] == 9999 - 8552
+
+
+def test_porta_de_fumaca_sinaliza_decisao_pendente_sem_bloquear_smoke_ok_quando_desvio_detectado(tmp_path, monkeypatch):
+    """Diagnostico PAUSA e pede decisao (bytes_diagnostic_needs_decision),
+    nunca bloqueia smoke_ok por conta propria -- a mesma logica do
+    smoke gate de verdade (abortar sempre e decisao do Luciano, nunca
+    automatica demais)."""
+    monkeypatch.setattr(orch, "_bytes_diagnostic_for_profile",
+                         lambda log_text, profile, certs_dir: {"profile": profile, "ok": profile != "hibrido-and"})
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["bytes_diagnostic_needs_decision"] is True
+    assert manifest["smoke_ok"] is True  # diagnostico nunca bloqueia o gate oficial por conta propria
+
+
+def test_mutante_bytes_diagnostic_ignora_desvio_e_pego():
+    """Mutacao: compara so handshakeBytesOut, nunca In -- um teste que
+    dependesse de detectar desvio SO em In reprovaria com essa
+    mutacao."""
+    certs_dir = orch._DEFAULT_CERTS_DIR
+    log = (
+        '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
+        'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
+        'handshakeBytesIn=1 handshakeBytesOut=8552\n'
+    )
+    row = orch._bytes_diagnostic_for_profile(log, "hibrido-v8", certs_dir)
+    assert row["ok"] is False  # delta_in enorme -- o real detecta
+    mutant_ok_so_out = row["delta_out"] == 0  # mutante: ignoraria In
+    assert mutant_ok_so_out is True
+    with pytest.raises(AssertionError):
+        assert mutant_ok_so_out is False
 
 
 def test_mutante_smoke_ok_ignora_capture_proof_e_pego(tmp_path, monkeypatch):
@@ -490,9 +605,15 @@ def test_start_block_aborta_antes_de_qualquer_execucao_se_binario_adulterado_no_
         local_docker = _fake_local_docker_gateway_binary_call(argv)
         if local_docker is not None:
             return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(returncode=1, stdout="gateway: FAILED\n", stderr="sha256sum: WARNING: 1 computed checksum did NOT match\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
 
     monkeypatch.setattr(cli, "_run", fake_run)
@@ -527,11 +648,17 @@ def test_start_block_aborta_se_binario_do_container_rodando_diverge(monkeypatch)
         local_docker = _fake_local_docker_gateway_binary_call(argv)
         if local_docker is not None:
             return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(stdout="gateway: OK\n")
         if "sha256sum /gateway" in remote_cmd:
             return _SimpleProc(stdout="0000000000000000000000000000000000000000000000000000000000000000  /gateway\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
 
     monkeypatch.setattr(cli, "_run", fake_run)
@@ -584,6 +711,95 @@ def test_mutante_start_block_ignora_resultado_da_verificacao_e_pego(monkeypatch)
     assert mutant_gateway_subiu is True  # mutante deixou subir mesmo adulterado
     with pytest.raises(AssertionError):
         assert mutant_gateway_subiu is False
+
+
+# --- Decisao 55, item 1: PINS.json -- pin divergente aborta ANTES de
+# qualquer execucao; pin correto passa; a "oficial" (uma segunda
+# instancia de SSHExecutor, mesmo PINS.json) passa igual.
+
+def test_pin_divergente_aborta_antes_de_qualquer_execucao(monkeypatch):
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    # PINS.json com um hash que NUNCA bate com o binario fake extraido.
+    monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins(gateway_sha256="0" * 64))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="PINS.json"):
+        executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker run -d --name v9-mtls" in c for c in flat), (
+        "o gateway NUNCA pode subir com um pin divergente -- " + str(flat)
+    )
+    assert not any("start_tls_kem_proxy" in c for c in flat), flat
+
+
+def test_pin_correto_passa(monkeypatch):
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")  # usa o PINS fake (autouse) que bate
+    executor.start_block("classico", "L0")
+    assert executor.gateway_binary_verifications[0]["pin_matched"] is True
+    flat = [" ".join(c) for c in calls]
+    assert any("docker run -d --name v9-mtls" in c for c in flat), flat
+
+
+def test_campanha_oficial_com_os_pins_do_piloto_passa(monkeypatch):
+    """`load_pins()` e uma funcao pura do conteudo de PINS.json --
+    nunca depende de ser "o piloto" ou "a oficial" chamando. Uma
+    SEGUNDA instancia de SSHExecutor (simulando uma campanha oficial
+    futura, mesmo arquivo PINS.json, perfil/rota fora da grade do
+    piloto) passa pela MESMA verificacao sem nenhuma mudanca de
+    codigo nem de pin."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L219": {"public_ip": "203.0.113.70", "private_ip": "10.0.2.70", "colocated": False}},
+    }
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    campanha_oficial_executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    campanha_oficial_executor.start_block("pqc", "L219")
+    assert campanha_oficial_executor.gateway_binary_verifications[0]["pin_matched"] is True
+
+
+def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monkeypatch):
+    """Decisao 55, item 2: `docker load` carrega uma imagem com um
+    Image ID diferente do que PINS.json espera (origem/build
+    diferente do artefato pinado) -- tem que abortar ANTES de
+    qualquer `docker run`/proxy/signer."""
+    inventory = {
+        "server": {"public_ip": "203.0.113.50", "private_ip": "10.0.1.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60", "private_ip": "10.0.1.60", "colocated": True}},
+    }
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "docker image inspect" in remote_cmd:
+            return _SimpleProc(stdout="sha256:" + "9" * 64 + "\n")  # ID errado, de proposito
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="nao bate com PINS.json"):
+        executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
+    assert not any("start_tls_kem_proxy" in c for c in flat), flat
+    assert executor.image_delivery_verifications[0]["ok"] is False
 
 
 def test_stop_block_para_os_dois_containers_fixos(monkeypatch):
@@ -741,6 +957,9 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
         local_docker = _fake_local_docker_gateway_binary_call(argv)
         if local_docker is not None:
             return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
 
         proc = _SimpleProc()
@@ -756,6 +975,10 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
             proc.stdout = "gateway: OK\n"
         elif "sha256sum /gateway" in remote_cmd:
             proc.stdout = f"{_FAKE_GATEWAY_SHA256}  /gateway\n"
+        else:
+            image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+            if image_id_stdout is not None:
+                proc.stdout = image_id_stdout
         return proc
     return fake_run
 

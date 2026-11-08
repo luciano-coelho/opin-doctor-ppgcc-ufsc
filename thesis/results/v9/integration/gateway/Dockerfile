@@ -11,7 +11,12 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 WORKDIR /app
 COPY go.mod ./
 COPY *.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway
+# Decisao 55, item 1: -trimpath (remove caminhos absolutos do host
+# do binario -- defesa em profundidade pra reprodutibilidade, mesmo
+# que o build dentro do container ja tenha se mostrado reproduzivel
+# sem ele, Decisao 55) + GOARCH explicito (nunca depende do default
+# do host que roda o build -- linux/amd64 sempre, as 3 imagens).
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /gateway
 
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 # certs/: populated by ../Makefile before this build from thesis/results/

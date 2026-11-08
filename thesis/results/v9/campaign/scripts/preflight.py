@@ -206,22 +206,22 @@ echo "PRIMARY_IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $
 """
 
 
-def check_capture_prerequisites(host, key_path=None, connect_timeout=20) -> dict:
-    """Decisao 53, item 4a. Roda os 5 probes combinados numa UNICA
-    chamada SSH (eficiencia -- 1 round-trip em vez de 5) e reprova com
-    mensagem clara se qualquer um faltar: `tcpdump` instalado, sudo
-    sem senha disponivel (exigido pelo `tcpdump` real dentro de
+def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expected_measure_image_id=None) -> dict:
+    """Decisao 53, item 4a (corrigido na Decisao 55, item 2). Roda os
+    5 probes combinados numa UNICA chamada SSH e reprova com mensagem
+    clara se qualquer um faltar: `tcpdump` instalado, sudo sem senha
+    disponivel (exigido pelo `tcpdump` real dentro de
     `dedicated_capture`, mesma convencao do `campaign_run.py` real da
-    v8 -- unico lugar deste projeto que precisa de `sudo`), a imagem
-    `mockopin-v9-measure` presente (construida a partir do codigo
-    fonte deste repositorio, nunca baixada de um registry -- precisa
-    que o repositorio ja tenha sido sincronizado pra instancia antes
-    deste check, mesma dependencia que todo outro `docker build`
-    deste projeto; NAO verificado aqui, so a PRESENCA final), `/tmp`
-    gravavel (mesma pasta onde o pcap/keylog temporarios do host
-    seriam escritos) e a interface primaria identificavel pela rota
-    default (nunca loopback -- mesmo metodo de
-    `SSHExecutor._primary_iface`)."""
+    v8), `/tmp` gravavel, a interface primaria identificavel pela
+    rota default (nunca loopback -- mesmo metodo de `SSHExecutor.
+    _primary_iface`) e a imagem `mockopin-v9-measure` com o Image ID
+    EXATO que PINS.json espera (Decisao 55: a imagem chega por `docker
+    save`/`docker load`, Decisao 55 item 2 -- nunca por `docker build`
+    na instancia, entao so a PRESENCA nunca bastou: uma imagem de
+    build ou origem diferente passaria sem ser pega). `expected_
+    measure_image_id` default `None` so pra chamada isolada/teste
+    sem PINS -- `run_capture_preflight` sempre passa o valor real de
+    PINS.json."""
     try:
         proc = cli.run_ssh(host, _CAPTURE_PROBE_SCRIPT, key_path=key_path, connect_timeout=connect_timeout)
     except Exception as e:  # noqa: BLE001 -- rede de seguranca: SSH indisponivel nunca estoura, so reprova
@@ -236,7 +236,8 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20) -> dict
 
     tcpdump_ok = bool(fields.get("TCPDUMP_PATH"))
     sudo_ok = fields.get("SUDO_NOPASSWD") == "1"
-    measure_image_ok = bool(fields.get("MEASURE_IMAGE_ID"))
+    measure_image_id = fields.get("MEASURE_IMAGE_ID") or None
+    measure_image_ok = bool(measure_image_id) and (expected_measure_image_id is None or measure_image_id == expected_measure_image_id)
     tmp_writable_ok = fields.get("TMP_WRITABLE") == "1"
     iface = fields.get("PRIMARY_IFACE", "")
     iface_ok = bool(iface) and iface != "lo"
@@ -246,8 +247,10 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20) -> dict
         missing.append("tcpdump nao encontrado no PATH")
     if not sudo_ok:
         missing.append("sudo sem senha indisponivel (exigido pelo tcpdump real de dedicated_capture)")
-    if not measure_image_ok:
-        missing.append("imagem docker mockopin-v9-measure ausente (precisa ser construida a partir do codigo fonte sincronizado nesta instancia)")
+    if not measure_image_id:
+        missing.append("imagem docker mockopin-v9-measure ausente (entregue por docker save/load, Decisao 55 item 2 -- nunca docker build na instancia)")
+    elif expected_measure_image_id is not None and measure_image_id != expected_measure_image_id:
+        missing.append(f"Image ID de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_image_id!r}, achado {measure_image_id!r}")
     if not tmp_writable_ok:
         missing.append("/tmp nao gravavel")
     if not iface_ok:
@@ -256,21 +259,38 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20) -> dict
     return {
         "check": "pre-requisitos de captura (criterio 1)", "ok": not missing,
         "host": host, "tcpdump_path": fields.get("TCPDUMP_PATH") or None,
-        "sudo_nopasswd": sudo_ok, "measure_image_id": fields.get("MEASURE_IMAGE_ID") or None,
+        "sudo_nopasswd": sudo_ok, "measure_image_id": measure_image_id,
+        "expected_measure_image_id": expected_measure_image_id,
         "tmp_writable": tmp_writable_ok, "primary_iface": iface or None,
         "missing": missing,
     }
 
 
-def run_capture_preflight(hosts, key_path=None) -> dict:
+_PINS_PATH_DEFAULT = Path(__file__).resolve().parents[1] / "PINS.json"
+
+
+def run_capture_preflight(hosts, key_path=None, pins_path=_PINS_PATH_DEFAULT) -> dict:
     """Decisao 53, item 4c: fail-closed, mensagem clara, ANTES de
     qualquer execucao -- `hosts` e a lista de instancias que vao
     rodar `dedicated_capture` de verdade (hoje, so o servidor -- um
     por rota, mas o servidor e compartilhado entre rotas no piloto
     L0/L219/L325 de hoje, entao normalmente uma lista de 1). Chamado
     pelo smoke gate (`run_smoke_gate`) antes das 12 execucoes, nunca
-    depois."""
-    checks = [check_capture_prerequisites(h, key_path=key_path) for h in hosts]
+    depois.
+
+    Decisao 55, item 2: le PINS.json (leitura propria e pequena,
+    deliberadamente NUNCA importa `orchestrator.load_pins` -- evitaria
+    um import circular, ja que `orchestrator.py` importa este
+    modulo) pra exigir o Image ID EXATO de `mockopin-v9-measure`, nao
+    so presenca. `pins_path` e um parametro (nao hardcoded) so pra
+    teste -- producao sempre usa o default real."""
+    expected_measure_id = None
+    if pins_path.is_file():
+        try:
+            expected_measure_id = json.loads(pins_path.read_text(encoding="utf-8"))["images"]["measure"]["image_id"]
+        except (json.JSONDecodeError, KeyError):
+            expected_measure_id = None
+    checks = [check_capture_prerequisites(h, key_path=key_path, expected_measure_image_id=expected_measure_id) for h in hosts]
     go = all(c["ok"] for c in checks)
     return {"go": go, "checks": checks}
 

@@ -1,16 +1,16 @@
 # Dossiê de prontidão do piloto v9 — PQC/híbrido/AND, AWS
 
-Documento autônomo (Decisão 54, item 4). Não exige ter acompanhado as
-53 decisões anteriores. Cobre: status real dos 7 critérios do piloto,
-os pré-requisitos de AWS que só Luciano pode fazer, o teto de custo e
-o procedimento de parada de emergência, os riscos residuais conhecidos
-e a confirmação de que o runbook cobre a janela de 3-4h com Luciano
-presente.
+Documento autônomo (Decisão 54, revisado na Decisão 55). Não exige
+ter acompanhado as decisões anteriores. Cobre: status real dos 7
+critérios do piloto, os pins de binário/imagem e como são entregues,
+a tolerância derivada de bytes de handshake, a política IAM restrita
+e o script de verificação, a parada de emergência independente do
+Terraform, o teto de custo (incluindo o pior caso), e o que falta do
+lado do Luciano.
 
 Escopo: piloto de 60 execuções (4 perfis × 3 rotas × N=5), nunca a
 campanha oficial de 960. Branch `v9/fase1-local`. Nenhuma ação de AWS
-foi tomada para produzir este documento — é leitura de código e
-Terraform, mais os dados já medidos localmente nas rodadas anteriores.
+foi tomada para produzir este documento.
 
 ---
 
@@ -18,247 +18,223 @@ Terraform, mais os dados já medidos localmente nas rodadas anteriores.
 
 | # | Critério (limiar) | Status | Evidência / o que falta |
 |---|---|---|---|
-| 1 | Tamanhos por mensagem — 0B no ClientHello, ±4B na Certificate, 0B nas demais, nas 12 capturas (4 perfis × 3 rotas) | **Validado localmente (mecânica completa)** | pcap real decifrado por perfil, flight extraído via tshark, bate exato com os baselines nos 4 perfis (Decisão 52/54). `SSHExecutor.dedicated_capture` implementado e testado. **Só a AWS confirma:** interface real (`ens5`, não `eth0` do bridge Docker), tráfego cruzando 2 instâncias de verdade, e a tolerância de bytes com o SAN real (EIP) em vez do loopback. |
-| 2 | initcwnd real ≥ 10 segmentos | **Só validável na AWS** | O método (`criterio2_probe.py`) está escrito e testado mecanicamente (JSON válido), mas só é significativo com RTT > 0 — em loopback local o MSS nunca segmenta de verdade (reconhecido no próprio script). Nunca rodado contra uma rota real. |
-| 3 | Zero erros em 20/20 execuções na rota mais distante (`sa-east-1/L325`) | **Só validável na AWS** | Depende da rota L325 existir de verdade (instância em `ap-southeast-1`). |
-| 4 | 44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA, exatos, em 60/60 | **Parcialmente validado localmente** | A contagem exata (`{"http":44,"jwts":28,"jwks":4,"ca":4,"mtls":6}`) foi confirmada em dezenas de execuções reais via shim local (Decisões 50-54) para os 4 perfis. **Só a AWS confirma** que a mesma contagem se mantém sob rede real (latência/perda não simuladas aqui) e nas 60 execuções completas. |
-| 5 | Zero erros em 60/60 execuções combinadas | **Parcialmente validado localmente** | Mesma evidência do item 4 — zero erros em toda execução real feita localmente até aqui (nenhuma das ~500+ conexões reais produzidas nesta sessão falhou). Cardinalidade de 60 só a AWS fecha. |
-| 6 | CurveID + DualAuthenticated em 100% das execuções, keylog+captura+tamanhos extraídos com sucesso | **Validado localmente (mecânica)** | `dualAuthenticated=true`/`curve` corretos confirmados nos 4 perfis via log real do gateway, em ~500 conexões reais desta sessão (0 falhas). Keylog real decifra via tshark (Decisão 52/54). **Só a AWS confirma** a cardinalidade 60/60. |
-| 7 | RTT de cada rota dentro de ±10% do nominal, dois canais concordando | **Não validado** | Método definido (`criterio7_rtt.py`), nunca executado — depende de rotas reais existirem. |
+| 1 | Tamanhos por mensagem — 0B no ClientHello, ±4B na Certificate, 0B nas demais, nas 12 capturas (4 perfis × 3 rotas) | **Validado localmente (mecânica completa)** | pcap real decifrado por perfil, flight extraído via tshark, bate exato com os baselines nos 4 perfis. `SSHExecutor.dedicated_capture` implementado e testado. **Só a AWS confirma:** interface real (`ens5`), tráfego cruzando 2 instâncias de verdade, tolerância com SAN real (EIP). |
+| 2 | initcwnd real ≥ 10 segmentos | **Só validável na AWS** | Método escrito e testado mecanicamente, só significativo com RTT > 0. |
+| 3 | Zero erros em 20/20 execuções na rota mais distante (`sa-east-1/L325`) | **Só validável na AWS** | Depende da rota L325 real. |
+| 4 | 44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA, exatos, em 60/60 | **Parcialmente validado localmente** | Contagem exata confirmada em centenas de execuções reais locais, 4 perfis, 0 erros. Cardinalidade 60/60 sob rede real só a AWS fecha. |
+| 5 | Zero erros em 60/60 execuções combinadas | **Parcialmente validado localmente** | Mesma evidência do item 4. |
+| 6 | CurveID + DualAuthenticated em 100% das execuções, keylog+captura+tamanhos extraídos | **Validado localmente (mecânica)** | Confirmado nos 4 perfis, centenas de conexões reais, 0 falhas. |
+| 7 | RTT de cada rota dentro de ±10% do nominal, dois canais concordando | **Não validado** | Método definido, depende de rotas reais. |
 
-**Leitura honesta:** nenhum dos 7 critérios está 100% fechado sem AWS — isso é esperado e correto (são critérios sobre uma rede real). O que este documento garante é que a MECÂNICA de cada critério (como medir, como extrair, como decidir pass/fail) está implementada, testada com dados reais onde isso é possível localmente, e nunca presa num bug conhecido.
+**Leitura honesta:** nenhum dos 7 critérios está 100% fechado sem AWS — esperado, são critérios sobre rede real. Este documento garante que a MECÂNICA de cada um está implementada e testada com dados reais onde isso é possível localmente.
 
 ---
 
-## b) Pré-requisitos de AWS que são do Luciano (passos concretos)
+## b) Baselines de handshake — os 4 valores, com a fonte
 
-Nenhum destes pode ser feito por este processo — exigem acesso à
-conta/console que este ambiente não tem.
+**Correção desta rodada:** uma rodada anterior classificou os valores de Classico e PQC como "nunca citados antes" — falso. Os 4 já estavam no pré-registro, Decisão 14 (T6, instrumentação), `DECISIONS.md` linhas 1511-1519 e 1750-1751 (tabela consolidada "Total medido na fronteira do Handshake()").
 
-### 1. Service Quotas por região
-Regiões do piloto: `sa-east-1` (controle + servidor + cliente L0, 3
-instâncias), `eu-north-1` (cliente L219, 1 instância), `ap-southeast-1`
-(cliente L325, 1 instância).
+| Perfil | handshakeBytesIn (cliente→servidor) | handshakeBytesOut (servidor→cliente) | Fonte |
+|---|---|---|---|
+| Classico | 1.513 | 1.640 | Decisão 14, `DECISIONS.md` L1517/L1750-1751 |
+| PQC | 10.728 | 10.878 | Decisão 14, `DECISIONS.md` L1518/L1750-1751 |
+| Hibrido-v8 | 8.397 | 8.552 | Decisão 14, `DECISIONS.md` L1519/L1750-1751 |
+| Hibrido-AND | 11.902 | 12.177 | Decisão 14, `DECISIONS.md` L1520/L1750-1751 |
 
-- **vCPU — quota "Running On-Demand Standard (A,C,D,H,I,M,R,T,Z)"**
-  (código `L-1216C47A`). Tipos usados: `m7i-flex.large` (servidor e
-  3 clientes, família M) e `t4g.micro` (controle, família T) — os
-  dois caem na MESMA quota "Standard".
-  - `sa-east-1`: precisa de pelo menos **8 vCPU** (3× m7i-flex.large
-    ≈ 6 + 1× t4g.micro ≈ 2 — confirme o vCPU exato de cada tipo no
-    console, pode variar).
-  - `eu-north-1` / `ap-southeast-1`: pelo menos **2 vCPU** cada.
-  - **Como verificar:** console AWS → Service Quotas → EC2 → "Running
-    On-Demand Standard..." → confirmar o valor atual em CADA uma das
-    3 regiões (o default de conta nova costuma já cobrir isso, mas
-    precisa ser confirmado, nunca assumido).
-- **Elastic IPs por região.** Este piloto aloca **1 EIP por
-  instância** (5 no total: 3 em `sa-east-1`, 1 em `eu-north-1`, 1 em
-  `ap-southeast-1`). O limite padrão de conta é geralmente 5 por
-  região — `sa-east-1` precisa de 3, dentro do padrão, mas **confirme
-  quantos EIPs a conta já tem alocados em uso por OUTROS projetos**
-  antes do piloto, para não estourar o limite por acúmulo.
+Os 4 foram reconfirmados com 0B de desvio em 480 conexões reais locais nesta sessão (Decisão 54) e de novo em 20 rebuilds de certificado com 4 variações de SAN (Decisão 55, item 3, abaixo).
 
-### 2. Par de chaves por região
-O Terraform (`thesis/results/v9/terraform/main.tf`) já cria as chaves
-da CAMPANHA via `tls_private_key`/`aws_key_pair` nas 3 regiões
-automaticamente — **isso não exige ação manual do Luciano**. O que
-exige ação dele: a chave do CONTROLE usa a chave SSH PESSOAL dele
-(`var.operator_ssh_public_key`, `aws_key_pair.operator_sa_east_1`) —
-ele precisa ter um par de chaves SSH próprio e passar a metade
-pública via `TF_VAR_operator_ssh_public_key` (variável de ambiente,
-nunca arquivo versionado) antes do `terraform apply`.
+---
 
-### 3. Política IAM de menor privilégio para o orquestrador
-Nenhuma política foi criada na AWS — proposta abaixo, para o Luciano
-revisar e aplicar ao usuário/role que o Terraform e os scripts Python
-vão usar. Compilada a partir do uso REAL do código (`terraform`, mais
-`preflight.py`/`cleanup.py`), não de uma lista genérica:
+## c) Pins de binário/imagem e como são entregues
 
+### O que é pinado, e por quê
+`thesis/results/v9/campaign/PINS.json` (versionado) congela, para `gateway`, `proxy` e `measure`: o sha256 do binário extraído, a saída de `go version -m`, e o Image ID Docker — todos de **uma única imagem construída**, nunca recalculados automaticamente. Alterar o arquivo exige uma Emenda numerada em `DECISIONS.md`.
+
+**Reprodutibilidade, testada de verdade:** o binário do gateway e do proxy foi construído duas vezes, do zero (`--no-cache`), com `-trimpath` + `GOARCH=amd64` explícitos — sha256 **idêntico** nas duas vezes, nos dois binários. O **Image ID Docker não é reproduzível** entre builds independentes (confirmado: o mesmo binário, dois builds, dois Image IDs diferentes — metadados de camada/timestamp variam, conteúdo não). Por isso o Image ID em PINS.json só é válido para o artefato **distribuído por `docker save`/`docker load`** (determinístico — nunca para uma reconstrução local independente).
+
+### Como a imagem chega a cada instância — nunca por `docker build`
+`SSHExecutor._deliver_image(image_key, host)`: `docker save <imagem> | ssh <host> docker load`, seguido de `docker image inspect --format '{{.Id}}'` no destino, comparado contra PINS.json. Fail-closed: aborta antes de qualquer execução se o ID carregado divergir. Testado (binário/Image ID adulterado aborta; correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins).
+
+### Arquitetura de cada instância — quem roda o quê
+| Instância | Tipo | Arquitetura | Roda gateway/proxy/measure? |
+|---|---|---|---|
+| Controle | `t4g.micro` | **ARM64** | **Não — confirmado no código.** `pki_relay.py`/`collect_artifacts.py`/`cleanup.py` (os 3 scripts que rodam no controle) nunca invocam `docker`. Nenhuma das 3 imagens (todas linux/amd64) chega a ser carregada ou executada no controle. |
+| Servidor (L0, sa-east-1) | `m7i-flex.large` | x86_64 | gateway + measure (ambos amd64, batem com a arquitetura real) |
+| Cliente L0 (co-localizado) | `m7i-flex.large` | x86_64 | proxy (amd64) |
+| Cliente L219 (eu-north-1) | `m7i-flex.large` | x86_64 | proxy |
+| Cliente L325 (ap-southeast-1) | `m7i-flex.large` | x86_64 | proxy |
+
+Nenhuma variante ARM das 3 imagens existe nem é necessária.
+
+### `check_capture_prerequisites` — agora confere o ID, não só presença
+Corrigido (Decisão 53 só checava presença — uma imagem de origem/build diferente passaria sem ser pega): `check_capture_prerequisites(host, expected_measure_image_id=...)` reprova explicitamente se o Image ID de `mockopin-v9-measure` na instância não bater com PINS.json. Testado com ID errado (reprova) e correto (passa).
+
+---
+
+## d) Tolerância de bytes de handshake — derivada, validada em 20 rebuilds
+
+**Correções desta rodada:** (1) a proposta anterior era assimétrica sem justificativa — o serial number do certificado afeta `In` E `Out`, nos 4 perfis, não só `In` do Hibrido-AND. (2) as 480 amostras anteriores vinham de um único build de certificado, nunca amostrando variação entre builds. As duas estão resolvidas pelo mecanismo abaixo, que substitui a proposta anterior inteira.
+
+### `expected_handshake_bytes(perfil, certs_dir)`
+`thesis/results/v9/integration/evaluate_criteria.py`: `esperado = baseline_medido + (soma_DER_certificados_implantados − soma_DER_certificados_do_baseline)`, por sentido (`in` = cadeia do cliente, `out` = cadeia do servidor). Nunca reestima do zero — só propaga a diferença de certificado, a única fonte de variação legítima identificada (Decisão 54, item 3) fora de SNI/tickets/MinVersion (todos já controlados ou verificados por outro mecanismo, incluindo o pin de binário do item c acima).
+
+### Validação real: 20 rebuilds, 4 variações de SAN, 4 perfis
+`make certs` rodado 20 vezes (loopback, IP privado, IP público tipo EIP, nome DNS — 5 builds cada), cobrindo os 4 perfis, gateway reconstruído e medido de verdade a cada rebuild (nunca simulado):
+
+| Variante de SAN | Builds | Desvio (previsto − medido), todos os perfis/sentidos |
+|---|---|---|
+| Loopback (padrão) | 5 | **0B, todos** |
+| IP privado (10.0.1.50) | 5 | **0B, todos** |
+| IP público tipo EIP (203.0.113.50) | 5 | **0B, todos** |
+| Nome DNS adicional | 5 | **0B, todos** |
+
+**20/20 builds, 0B de desvio em TODOS.** Exemplo real (classico, SAN trocado de loopback para IP privado): certificado do servidor cai de 900B para 880B DER (-20B) — previsto `out=1620`, medido `out=1620`. Exato.
+
+### Regra final proposta (pré-piloto, para aprovação — não aplicada retroativamente)
+- **Os limiares pré-registrados continuam sendo o gate oficial** do critério 1: 0B no ClientHello, ±4B na Certificate, 0B nas demais mensagens (Decisão 20/29/30, nunca alterados).
+- **`expected_handshake_bytes` entra como diagnóstico adicional**, nunca substituindo o gate acima. Implementado (`orchestrator._bytes_diagnostic_for_profile`, chamado pelo smoke gate): desvio previsto vs. medido ≠ 0 define `bytes_diagnostic_needs_decision=True` no manifesto — **PAUSA e pede decisão do Luciano, exatamente como o smoke gate** (nunca aborta nem ignora por conta própria). Testado (zero desvio passa; desvio detectado sinaliza a decisão pendente sem bloquear `smoke_ok`, que continua sendo decidido só pelos critérios já oficiais; mutante confirmado).
+
+---
+
+## e) Política IAM e verificação por dry-run
+
+### Toda chamada EC2 que o Terraform faz (plan/apply/destroy), para os recursos de `main.tf`
+| Recurso | plan (refresh) | apply (criação/alteração) | destroy |
+|---|---|---|---|
+| `aws_instance` | `DescribeInstances`, `DescribeInstanceAttribute`, `DescribeVolumes`, `DescribeTags` | `RunInstances`, `CreateTags`, `ModifyInstanceMetadataOptions` (IMDSv2), `ModifyInstanceAttribute` (shutdown behavior) | `TerminateInstances` |
+| `aws_eip` | `DescribeAddresses` | `AllocateAddress`, `AssociateAddress`, `CreateTags` | `DisassociateAddress`, `ReleaseAddress` |
+| `aws_key_pair` | `DescribeKeyPairs` | `ImportKeyPair` (a chave é fornecida via `tls_private_key`, nunca gerada pela AWS — por isso `ImportKeyPair`, não `CreateKeyPair`) | `DeleteKeyPair` |
+| `aws_security_group` | `DescribeSecurityGroups` | `CreateSecurityGroup`, `CreateTags` (inclui a regra de egress, inline no recurso) | `DeleteSecurityGroup` |
+| `aws_vpc_security_group_ingress_rule` (SSH + gateway) | `DescribeSecurityGroupRules` | `AuthorizeSecurityGroupIngress`, `CreateTags` | `RevokeSecurityGroupIngress` |
+| `data.aws_vpc`/`data.aws_subnets` | `DescribeVpcs`, `DescribeSubnets` | — | — |
+| Provider (toda operação) | `sts:GetCallerIdentity` | — | — |
+
+### Política restrita (3 regiões + condições de tag onde o IAM permite)
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "LeituraGeral",
+      "Sid": "LeituraGeralTresRegioes",
       "Effect": "Allow",
       "Action": [
-        "ec2:Describe*",
-        "sts:GetCallerIdentity",
-        "servicequotas:GetServiceQuota",
-        "budgets:ViewBudget",
-        "budgets:DescribeBudgets"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "CicloDeVidaDeInstancia",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:RunInstances",
-        "ec2:TerminateInstances",
-        "ec2:CreateTags"
+        "ec2:Describe*", "sts:GetCallerIdentity",
+        "servicequotas:GetServiceQuota", "budgets:ViewBudget", "budgets:DescribeBudgets"
       ],
       "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["sa-east-1", "eu-north-1", "ap-southeast-1"] } }
+    },
+    {
+      "Sid": "CriarSemCondicaoDeTagPossivel",
+      "Effect": "Allow",
+      "Action": ["ec2:RunInstances", "ec2:AllocateAddress", "ec2:ImportKeyPair", "ec2:CreateSecurityGroup"],
+      "Resource": "*",
       "Condition": {
-        "StringEquals": { "aws:RequestTag/Project": "mockopin-pqc-v9-piloto" }
+        "StringEquals": {
+          "aws:RequestedRegion": ["sa-east-1", "eu-north-1", "ap-southeast-1"],
+          "aws:RequestTag/Project": "mockopin-pqc-v9-piloto"
+        }
       }
     },
     {
-      "Sid": "TerminarSoDoProjeto",
+      "Sid": "CreateTagsSoNaCriacaoDesteProjeto",
       "Effect": "Allow",
-      "Action": "ec2:TerminateInstances",
+      "Action": "ec2:CreateTags",
       "Resource": "*",
       "Condition": {
-        "StringEquals": { "aws:ResourceTag/Project": "mockopin-pqc-v9-piloto" }
+        "StringEquals": {
+          "aws:RequestedRegion": ["sa-east-1", "eu-north-1", "ap-southeast-1"],
+          "ec2:CreateAction": ["RunInstances", "AllocateAddress", "ImportKeyPair", "CreateSecurityGroup"]
+        }
       }
     },
     {
-      "Sid": "RedeEChaves",
+      "Sid": "ModificarSoRecursoJaTagueado",
       "Effect": "Allow",
       "Action": [
-        "ec2:CreateKeyPair", "ec2:DeleteKeyPair",
-        "ec2:AllocateAddress", "ec2:ReleaseAddress",
-        "ec2:AssociateAddress", "ec2:DisassociateAddress",
-        "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-        "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"
+        "ec2:ModifyInstanceMetadataOptions", "ec2:ModifyInstanceAttribute", "ec2:TerminateInstances",
+        "ec2:AssociateAddress", "ec2:DisassociateAddress", "ec2:ReleaseAddress", "ec2:DeleteKeyPair",
+        "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress", "ec2:DeleteSecurityGroup"
       ],
-      "Resource": "*"
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": ["sa-east-1", "eu-north-1", "ap-southeast-1"],
+          "aws:ResourceTag/Project": "mockopin-pqc-v9-piloto"
+        }
+      }
     }
   ]
 }
 ```
 
-**Limitação honesta, registrada, não escondida:** `ec2:CreateKeyPair`/
-`ec2:CreateSecurityGroup`/`ec2:AllocateAddress` **não suportam
-condição por tag no momento da criação** (o recurso não existe
-ainda) — por isso o bloco "RedeEChaves" acima é mais largo que o
-ideal (não pode ser restrito só ao projeto nesse ponto). Mitigação:
-o `cleanup.py` já confere por tag (`Project=mockopin-pqc-v9-piloto`)
-antes de qualquer `ec2:ReleaseAddress`/etc. real, então o RISCO
-prático (apagar recurso de outro projeto por acidente) é baixo, mas
-a permissão EM SI é mais ampla do que um purista de least-privilege
-aceitaria. Decisão do Luciano se isso é aceitável ou se prefere
-revisar manualmente antes de aplicar.
+**Limitação honesta, sem mudança possível:** `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup` não suportam condição por `aws:ResourceTag` no momento da criação (o recurso não existe ainda) — usam `aws:RequestTag` (o que SERIA aplicado), que é o máximo que o IAM permite nesse ponto. `ec2:CreateTags` é restrito por `ec2:CreateAction` (só tageia o que acabou de ser criado por uma das 4 ações do projeto) em vez de por recurso, pela mesma razão.
 
-### 4. Alerta de orçamento
-Já existe um alerta de orçamento configurado na conta (herdado da
-campanha v8, confirmado via `check_budget_alert_exists` — o VALOR
-exato nunca é lido nem logado por este projeto, por política,
-Decisão 27). O valor de referência histórico citado em
-`DECISIONS.md` (linha ~3459) é **US$27,72**, mas nunca confirmado
-contra a API real nesta sessão (regra permanente: nenhuma leitura de
-valor de orçamento). **Sugestão:** criar (ou confirmar que já existe)
-um alerta ESPECÍFICO para o piloto v9, com valor bem menor que o
-alerta geral da conta — por exemplo **US$5** (4-5× a estimativa de
-custo do item c abaixo, margem suficiente para pegar qualquer anomalia
-rápido, sem ser tão apertado que dispare por flutuação normal de
-preço). Decisão final do valor é do Luciano.
+### `iam_dryrun_check.py` — testado com mock, nunca executado por este processo
+Chama cada ação acima com `--dry-run`, por região, usando parâmetros reais (AMIs pinadas, tipo de instância) para as ações sem recurso pré-existente; para as que exigem um recurso real (`TerminateInstances`, `ModifyInstanceAttribute`, `ReleaseAddress`, `DeleteKeyPair`, `RevokeSecurityGroupIngress`), aceita o ID como argumento opcional e marca `"nao testado"` explicitamente sem ele — nunca inventa um PASS. Testado (7 testes, `DryRunOperation`→autorizado, `UnauthorizedOperation`→reprovado, agregação por região). **O Luciano roda, com as credenciais reais, antes do piloto** (`python iam_dryrun_check.py --profile mockopin-pqc [--instance-id ... --key-name ... --sg-id ... --allocation-id ... --rule-id ...]`).
 
 ---
 
-## c) Teto de custo e parada de emergência
+## f) Parada de emergência — duas camadas
 
-### Estimativa de custo (aritmética, fontes datadas, sem chamada à AWS)
-Do `DECISIONS.md` (linha ~3440-3453), ancorada no custo REAL medido
-da campanha v8 (US$29,34 / 22,45h de frota, 720 execuções):
-
-- 5 instâncias no ar (~1,5-2h de frota): 4× `m7i-flex.large` +
-  1× `t4g.micro` + 5× IP público + 5× EBS gp3 30GB + transferência
-  entre regiões.
-- **Subtotal ≈ US$0,89. Com margem de 30%: ≈ US$1,15.**
-- Cabe com folga grande em qualquer alerta de orçamento razoável
-  (mesmo o antigo US$27,72 da v8 — usaria ~4-7% dele).
-
-### Procedimento de parada de emergência
-Comando exato (roda do controle ou de onde o Terraform tem acesso):
-
+### Camada 1 (normal): `cleanup.py`, depende do state do Terraform
 ```
 python cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force
 ```
+Ver detalhe na seção g. Depende do `terraform destroy` funcionar (state intacto e acessível).
 
-- **`--force`**: necessário numa emergência porque o fluxo normal
-  exige `collect_artifacts.py` já ter rodado (`--pull-verified-marker`)
-  antes do destroy — numa parada de emergência pode não ter dado
-  tempo de coletar nada, e isso é aceitável (dados de execução > dados
-  perdidos por não desligar a tempo).
-- **`--release-eips`**: sem esta flag, EIPs órfãos (sem instância
-  associada — por exemplo, se um autodesligamento por tempo já tiver
-  disparado em alguma instância antes do destroy) só são REPORTADOS,
-  nunca liberados de verdade. Numa emergência, sempre passar esta
-  flag.
+### Camada 2 (independente do state): `emergency_stop.py`, novo
+Para o caso em que o state do Terraform está perdido, corrompido ou inacessível, mas os recursos ainda existem na conta. Age por **tag `Project=mockopin-pqc-v9-piloto`**, direto pela API, nas 3 regiões — cada ação destrutiva confere a tag (via uma chamada `describe-*` filtrada) imediatamente antes de agir, nunca sobre um ID solto.
 
-**O que o comando destrói:** as 5 instâncias (controle + servidor +
-3 clientes), seus grupos de segurança, as chaves SSH exclusivas da
-campanha (não a chave pessoal do Luciano, que é usada só no controle
-via `key_name`, nunca criada por este Terraform), os volumes EBS, e
-os 5 Elastic IPs (liberados pela destruição do próprio recurso
-`aws_eip`, que o Terraform já trata como dependente da instância —
-Decisão 45: "um `aws_eip` é liberado pela sua PRÓPRIA destruição, não
-pela da instância associada", por isso o `terraform destroy` cobre
-isso corretamente).
+```
+python emergency_stop.py --profile mockopin-pqc --execute
+```
+Sem `--execute`, só lista o que seria feito (modo padrão, nunca destrutivo por acidente). Ordem: instâncias (termina, espera até 2 min antes de seguir) → EIPs (desassocia, depois libera) → grupos de segurança (só depois das instâncias realmente terminarem) → key pairs. Testado com mock (6 testes: modo dry nunca chama nada mutável; cada ação só roda sobre o ID que veio da tag; desassocia antes de liberar EIP; mutante confirmado).
 
-**O que pode sobrar cobrando, e por quê:** EIPs que ficaram órfãos
-ANTES deste comando rodar (por exemplo, autodesligamento por tempo já
-tendo terminado uma instância fora do ciclo do Terraform) — cobertos
-pelo `--release-eips`, mas só se o Luciano passar a flag. Sem
-`--release-eips` e sem rodar de novo, um EIP órfão continua cobrando
-(~US$0,005/h) indefinidamente até ser liberado manualmente ou via
-este script. **Nenhum outro recurso deste piloto sobrevive ao
-`terraform destroy` por padrão** (confirmado: todos os 5 blocos de
-instância usam o mesmo módulo, mesmo padrão de tags, sem exceção).
+### Pior caso de custo se nada for feito além do autodesligamento
+Autodesligamento (`terminate`, não `stop`) sempre limita o COMPUTE — mas **nunca libera o EIP** (Decisão 45, confirmado direto no código real da v8: nenhum caminho de autodesligamento libera Elastic IP).
+
+- **Compute, limitado pelo autodesligamento:** 4× `m7i-flex.large` por 4h + 1× `t4g.micro` por 5h ≈ (4 × US$0,0958 × 4h) + (US$0,0084 × 5h) ≈ **US$1,575**, e então para (instâncias terminadas).
+- **EBS:** `delete_on_termination` é o default do provider (nunca definido como `false` em `main.tf`) — apagado junto com a instância, sem custo residual.
+- **5 EIPs órfãos, SEM NENHUM LIMITE DE TEMPO:** US$0,005/h cada × 5 = **US$0,025/hora, indefinidamente**, até alguém rodar `emergency_stop.py`/`cleanup.py --release-eips` ou liberar manualmente. Em um mês esquecido: ≈ **US$18**. Pequeno, mas não-zero e sem teto — exatamente o cenário que `emergency_stop.py` (camada 2) existe para cobrir mesmo sem o Terraform.
 
 ---
 
-## d) Riscos residuais conhecidos
+## g) Alerta de orçamento — reclassificado
 
-| # | Risco | Mitigação existente | Decisão que falta do Luciano |
+**Correção desta rodada:** um alerta de orçamento da AWS é uma **notificação com atraso de cobrança** (os Budgets da AWS são recalculados ~a cada 8-24h, nunca em tempo real) — nunca um limite automático que interrompe gastos. Tratá-lo como "proteção" seria otimista demais; é um alarme que avisa depois do fato, não um freio.
+
+Já existe um alerta geral na conta (herdado da v8, valor nunca lido por este projeto, por política — Decisão 27; referência histórica em `DECISIONS.md`: US$27,72). **Sugestão revisada: US$3** (abaixo da sugestão anterior de US$5) — ainda ~2,6× a estimativa normal do piloto (US$1,15 com margem), baixo o bastante para soar o alarme rápido mesmo contra o cenário do EIP órfão (US$0,60/dia) antes que acumule muito, mas longe o bastante da estimativa normal para não disparar por flutuação de preço. Decisão final do valor é do Luciano.
+
+---
+
+## h) Riscos residuais — atualizados
+
+| # | Risco | Status | Decisão pendente |
 |---|---|---|---|
-| 1 | Imagem `mockopin-v9-measure` (tcpdump+tshark, usada por `dedicated_capture`) precisa existir em cada instância, mas o pipeline de sincronizar+`docker build` o código-fonte nela ainda não está implementado no deploy real | `check_capture_prerequisites` (Decisão 53) detecta a AUSÊNCIA e aborta com mensagem clara, antes de qualquer execução — nunca falha silenciosamente | Decidir COMO essa imagem chega à instância: (a) implementar o passo de scp+build no deploy, ou (b) aceitar rodar o `docker build` manualmente no controle antes do piloto, uma vez |
-| 2 | O binário do gateway é verificado por `sha256sum -c` (Decisão 54, item 1), mas o PROXY (`mockopin-v9-proxy`) e a imagem `mockopin-v9-measure` ainda não têm o mesmo mecanismo | Nenhuma ainda | Decidir se o mesmo mecanismo de verificação deve ser estendido a esses dois antes do piloto, ou se o risco é aceitável para esta rodada (nenhum dos dois decide aceitar/rejeitar uma conexão — o proxy só retransmite, a imagem measure só captura) |
-| 3 | Instância de controle não tem autodesligamento por tag/projeto separado do mecanismo de tempo (5h) — se o operador rodar `terraform apply` duas vezes sem destruir a primeira, pode haver controles duplicados cobrando | `self_terminate_hours=5` com `terminate` (não `stop`) já limita o tempo máximo de exposição | Nenhuma — risco já aceito e mitigado (Decisão 50), listado aqui por completude |
-| 4 | O alerta de orçamento ativo na conta é o geral (herdado da v8, ~US$27,72 nunca confirmado), não um alerta específico e mais sensível para o piloto | Nenhuma | Decidir se cria um alerta específico (sugestão: US$5, item b.4) antes do piloto |
-| 5 | O mecanismo AND cobre só TLS 1.3 — conexões que negociassem TLS 1.2 nunca seriam protegidas pelo AND (limitação de design já registrada, Decisão 4c do pré-registro) | Registrado como limitação explícita do escopo medido — nunca escondida | Nenhuma — aceito desde o pré-registro, listado aqui por completude |
-| 6 | `handshakeBytesIn/Out` não tem tolerância pré-registrada formal (Decisão 54, item 3) — só uma proposta | Proposta derivada de 480 amostras reais locais (0B de variação) + a tolerância já existente do critério 1 | Aprovar ou ajustar a tolerância proposta no item 3 deste relatório, antes do piloto rodar de verdade na AWS |
-| 7 | A política IAM do item b.3 tem permissões mais largas que o ideal em 3 ações específicas (CreateKeyPair/CreateSecurityGroup/AllocateAddress), por limitação do próprio IAM (sem condição de tag no momento de criação) | `cleanup.py` confere por tag antes de qualquer ação destrutiva real | Aceitar a política proposta como está, ou revisar manualmente antes de aplicar |
+| 1 | Imagem `mockopin-v9-measure` precisa existir em cada instância | **RESOLVIDO** (Decisão 55, item 2) — entregue por `docker save`/`docker load`, Image ID conferido contra PINS.json, nunca `docker build` na instância | Nenhuma |
+| 2 | Proxy e measure sem o mesmo mecanismo de verificação do gateway | **RESOLVIDO** (Decisão 55, itens 1-2) — os 3 agora tem pin de Image ID (gateway/proxy também tem pin de binário+`go version -m`) | Nenhuma |
+| 3 | Controle sem autodesligamento por tag/projeto separado | Aceito e mitigado (`self_terminate_hours=5`, `terminate`) | Nenhuma |
+| 4 | Alerta de orçamento geral, não específico do piloto | Reclassificado (item g) — ainda pendente de criação | Decidir o valor (US$3 sugerido) e criar o alerta |
+| 5 | AND cobre só TLS 1.3 | Limitação de design aceita desde o pré-registro | Nenhuma |
+| 6 | `handshakeBytesIn/Out` sem tolerância pré-registrada formal | **RESOLVIDO quanto ao mecanismo** (Decisão 55, item 3) — `expected_handshake_bytes` validado em 20 rebuilds reais, 0B de desvio; vira diagnóstico que pausa, nunca o gate oficial | Aprovar o mecanismo como diagnóstico permanente (não é uma mudança de critério, só uma camada nova) |
+| 7 | Política IAM mais larga que o ideal em algumas ações de criação | **Documentado com justificativa técnica precisa** (item e) — é um limite real do IAM, não uma folga evitável | Aceitar como está (não há alternativa mais restrita dentro do IAM) |
+| 8 (novo) | `emergency_stop.py` nunca foi executado contra a AWS real (só testado com mock) | Registrado honesto | O Luciano testa em modo dry (`sem --execute`) contra a conta real antes de confiar nele numa emergência real |
 
 ---
 
-## e) O runbook cobre a janela de 3-4h com o Luciano presente?
+## i) O runbook cobre a janela de 3-4h com o Luciano presente?
 
-**Sim, confirmado pela sequência real do código, com os pontos de
-pausa/decisão explícitos:**
+Sim — sequência inalterada desta revisão (apply → PKI → preflight de captura → porta de fumaça, agora com diagnóstico de bytes → 60 execuções → coleta → cleanup), ~45min-1h20 de execução ativa dentro da janela de 4h/5h de autodesligamento, com 3 pontos de pausa/decisão explícitos (preflight de captura, porta de fumaça incluindo o novo diagnóstico de bytes, verificação final de limpeza) — todos sempre decisão do Luciano, nunca automáticos.
 
-1. **`terraform apply`** (Luciano presente, aprova antes de rodar) —
-   cria as 5 instâncias + 5 EIPs numa única apply (confirmado:
-   `aws_eip` depende de `aws_instance.this.id`, não há etapa
-   separada). ~3-5 minutos.
-2. **`pki_relay.py`** — distribui certificados/chaves em 2 saltos
-   (operador → controle → destino final). ~1-2 minutos.
-3. **Preflight de captura** (`check_capture_prerequisites`, Decisão
-   53/54) — roda uma vez, confirma tcpdump/sudo/imagem/interface em
-   cada instância que vai capturar. **PONTO DE PAUSA 1:** se
-   reprovar, o piloto NUNCA prossegue — mensagem clara do que falta,
-   decisão do Luciano se corrige e tenta de novo ou aborta.
-4. **Porta de fumaça** (12 execuções + prova de captura por perfil,
-   Decisão 48/53/54) — ~5-10 minutos. **PONTO DE PAUSA 2, já
-   implementado e testado:** se qualquer uma das 12 reprovar, ou a
-   prova de captura por perfil falhar, o orquestrador PARA (nunca
-   destrói por conta própria — confirmado no código, Decisão 49) e
-   imprime: "corrigir e repetir dentro da janela de 4h" ou "mandar
-   destruir". Decisão sempre do Luciano.
-5. **60 execuções cronometradas** (4 perfis × 3 rotas × 5) — pela
-   estimativa de custo (item c), ~30-60 minutos de janela medida.
-6. **`collect_artifacts.py`** — coleta com SHA-256 verificado por
-   bloco, ~2-5 minutos.
-7. **`cleanup.py --release-eips`** (sem `--force`, já que a coleta
-   do passo 6 já rodou) — destroy + verificação final de 5 chamadas
-   por região. **PONTO DE PAUSA 3 (obrigatório, nunca pulado):** o
-   próprio script reprova (`all_clean: false`) se qualquer recurso
-   sobreviver, sinalizando para o Luciano antes de considerar o
-   piloto encerrado.
+---
 
-**Soma:** ~45 minutos a ~1h20 de execução ativa, dentro da janela de
-autodesligamento de 4h (clientes/servidor) / 5h (controle) com folga
-grande — mesmo contando setup/troubleshooting manual, a janela de
-3-4h com o Luciano presente cobre o runbook completo com margem.
+## j) O que falta, do lado do Luciano (lista curta)
+
+1. Confirmar Service Quotas de vCPU nas 3 regiões e de Elastic IPs em `sa-east-1` (item b do dossiê original — sem mudança).
+2. Gerar um par de chaves SSH pessoal e exportar `TF_VAR_operator_ssh_public_key` antes do `terraform apply`.
+3. Revisar e aplicar a política IAM proposta (seção e) ao usuário/role do orquestrador — aceitar a folga documentada em `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup`, ou ajustar por conta própria.
+4. Rodar `iam_dryrun_check.py` com as credenciais reais antes do piloto, e separadamente testar `emergency_stop.py` em modo dry (sem `--execute`) contra a conta real.
+5. Decidir o valor do alerta de orçamento específico do piloto (US$3 sugerido) e criá-lo.
+6. Aprovar (ou pedir ajuste) o mecanismo de diagnóstico de bytes (`expected_handshake_bytes`, seção d) como camada de pausa-e-pergunta adicional ao smoke gate — nunca substitui os limiares pré-registrados.
+7. Definir a data do piloto.
