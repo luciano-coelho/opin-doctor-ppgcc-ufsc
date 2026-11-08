@@ -103,6 +103,41 @@ def test_extract_gateway_binary_info_aborta_se_sha256_diverge_do_pin(monkeypatch
         di.extract_gateway_binary_info(tmp_path)
 
 
+def test_deliver_images_sha_path_nunca_tem_cr(monkeypatch):
+    """Decisao 64 (achado real, ao vivo, na propria Fase A do piloto):
+    `write_text` no Windows grava "\\r\\n" -- `sha256sum -c` no
+    controle (Linux) le o "\\r" como parte do NOME do arquivo
+    ("'gateway.tar'$'\\r': No such file or directory") e reprova toda
+    verificacao, mesmo com o .tar correto. O `.sha256` local tem que
+    sair sempre com \\n puro."""
+    captured = {}
+
+    def fake_run(argv, timeout=None):
+        base = _run_factory([])(argv, None)
+        if argv[0] == "scp" and argv[-2].endswith(".sha256"):
+            captured["sha_bytes"] = Path(argv[-2]).read_bytes()
+        return base
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
+    assert b"\r" not in captured["sha_bytes"], captured["sha_bytes"]
+    assert captured["sha_bytes"].endswith(b".tar\n")
+
+
+def test_deliver_images_gateway_info_json_nunca_tem_cr(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, timeout=None):
+        base = _run_factory([])(argv, None)
+        if argv[0] == "scp" and argv[-2].endswith("gateway_binary_info.json"):
+            captured["info_bytes"] = Path(argv[-2]).read_bytes()
+        return base
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    di.deliver_images("203.0.113.5", "/fake/operator_key", images=("gateway",))
+    assert b"\r" not in captured["info_bytes"], captured["info_bytes"]
+
+
 def test_deliver_images_nunca_fala_com_servidor_ou_cliente(monkeypatch):
     """So o controle aparece em QUALQUER argv -- nenhum IP de
     servidor/cliente (este script e o PRIMEIRO salto, operador ->

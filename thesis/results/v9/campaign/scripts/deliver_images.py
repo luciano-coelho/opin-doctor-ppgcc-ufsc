@@ -161,7 +161,10 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
         if "gateway" in images:
             gw_info = extract_gateway_binary_info(workdir)
             gw_info_path = workdir / "gateway_binary_info.json"
-            gw_info_path.write_text(json.dumps(gw_info, indent=2), encoding="utf-8")
+            # Decisao 64 (mesma familia do achado da Decisao 62/63):
+            # write_text, no Windows, traduz \n pra \r\n -- escrito em
+            # binario, byte a byte, nunca deixando o SO decidir.
+            gw_info_path.write_bytes((json.dumps(gw_info, indent=2) + "\n").encode("utf-8"))
 
         report["disk_check"] = check_control_disk_space(control_ip, operator_key_path, total_bytes)
 
@@ -172,7 +175,13 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
         for key, tar_path in tar_paths.items():
             sha256 = hashlib.sha256(tar_path.read_bytes()).hexdigest()
             sha_path = tar_path.parent / f"{tar_path.name}.sha256"
-            sha_path.write_text(f"{sha256}  {tar_path.name}\n", encoding="utf-8")
+            # Decisao 64 (achado real, ao vivo, na propria Fase A --
+            # mesma familia das Decisoes 62/63): write_text no Windows
+            # grava "\r\n" -- sha256sum no controle (Linux) le o "\r"
+            # como PARTE DO NOME do arquivo ("'gateway.tar'$'\r':
+            # No such file or directory") e reprova TODA verificacao,
+            # mesmo com o .tar correto. Binario, \n puro, sempre.
+            sha_path.write_bytes(f"{sha256}  {tar_path.name}\n".encode("utf-8"))
 
             scp_proc = cli.run_scp(str(tar_path), f"ec2-user@{control_ip}:{REMOTE_STAGING_DIR}/{tar_path.name}", key_path=operator_key_path)
             if scp_proc.returncode != 0:

@@ -7898,3 +7898,51 @@ novo).
 scripts/deliver_images.py` (fix), `thesis/results/v9/campaign/tests/
 test_deliver_images.py` (fake atualizado), `thesis/results/v9/
 DECISIONS.md` (esta Decisao).
+
+## 64. Terceiro achado real, mesma familia CRLF (Decisoes 62/63), achado por auditoria preventiva depois do segundo -- deliver_images.py escrevia o .sha256 e o gateway_binary_info.json com write_text (Windows), corrompendo a verificacao sha256sum -c no controle real
+
+Branch `v9/fase1-local`, commit e push. Retentativa 3/3 pro "problema
+de caminho/encoding no Windows" (regra 3 -- na 3a, se persistir, a
+regra manda derrubar e parar; decidi auditar TODO o resto do pacote
+por esse padrao ANTES de gastar essa 3a tentativa, pra nao bater
+nela de novo por um 4o lugar nao verificado).
+
+**Achado, ao vivo, retomando o Passo 7 depois do fix da Decisao 63:**
+`docker save -o` agora criava o `.tar` certo, mas `sha256sum -c`
+falhava igual: `sha256sum: 'gateway.tar'$'\r': No such file or
+directory`. Mesma causa raiz das Decisoes 62/63 -- `sha_path.
+write_text(f"{sha256}  {tar_path.name}\n")` grava `\r\n` no Windows;
+o `\r` fica colado no NOME do arquivo quando `sha256sum` real
+(Linux) parseia a linha no controle.
+
+**Auditoria preventiva (antes de gastar a 3a/ultima retentativa):**
+`grep -rn "write_text(" thesis/results/v9/campaign/scripts/*.py` --
+9 ocorrencias. Classificadas:
+- `cli.py` (`_LocalShellShim`): so validacao LOCAL manual, nunca
+  exercitada pelo piloto real (`orchestrator.py --mode ssh` nunca
+  liga o shim) -- sem risco aqui.
+- `collect_artifacts.py` (`.pull-verified`): escrito no OPERADOR,
+  so EXISTENCIA e checada depois (`cleanup.py`), nunca o conteudo --
+  sem risco.
+- `orchestrator.py` (manifest/logs/criterio6/capturas): escritos
+  DENTRO do processo `orchestrator.py`, que roda no CONTROLE
+  (Linux, Decisao 59) -- `write_text` la nunca traduz pra CRLF (so
+  o Windows faz isso) -- sem risco.
+- `deliver_images.py` (`.sha256`, `gateway_binary_info.json`): os
+  DOIS escritos no OPERADOR (Windows) e depois LIDOS por um
+  processo Linux real (`sha256sum`/`json.loads` no controle) --
+  **risco real, os dois corrigidos**.
+
+**Corrigido:** os dois `write_text` de `deliver_images.py` trocados
+por `write_bytes` com `\n` explicito, mesmo padrao das Decisoes
+62/63.
+
+**Testes:** 2 novos
+(`test_deliver_images_sha_path_nunca_tem_cr`/`test_deliver_images_
+gateway_info_json_nunca_tem_cr`) -- 144/144 (142 antes + 2 novos),
+todos passando.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_images.py` (2 fixes), `thesis/results/v9/campaign/
+tests/test_deliver_images.py` (2 testes novos), `thesis/results/v9/
+DECISIONS.md` (esta Decisao).
