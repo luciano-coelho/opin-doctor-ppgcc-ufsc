@@ -6090,3 +6090,165 @@ fmt`/`validate` confirmados limpos depois da mudanca.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat. Nenhum push sem autorizacao explicita.
+
+## 51. Hibrido-AND corrigido (causa raiz confirmada com evidencia, nao hipotese) -- porta de fumaca fecha 12/12, os 4 perfis; pre-voo ganha trava permanente contra o erro de interpretador; capturas dedicadas do criterio 1 -- isolamento/hash/leitura validados localmente, captura de rede em si fica pendente, reportado honesto
+
+**1. Hibrido-AND, "alg mismatch" no `/token` -- EMENDA 13 (bug de
+implementacao, nunca mudou o desenho pre-registrado).**
+
+**(a) Reproduzido, evidencia exata:**
+```
+auth (backend): path=/token method=POST
+  error={"error":"invalid_client","error_description":"client authentication failed"}
+  detail=alg mismatch
+```
+**Quem levanta:** o BACKEND (`auth`), dentro da biblioteca
+`oidc-provider` (nao codigo deste projeto) --
+`node_modules/oidc-provider/lib/shared/jwt_client_auth.js:15-17`:
+```js
+if (ctx.oidc.client.clientAuthSigningAlg) {
+  if (header.alg !== ctx.oidc.client.clientAuthSigningAlg) {
+    throw new InvalidClientAuth('alg mismatch');
+  }
+}
+```
+**Alg esperado:** `RS256` (`client_one_hybrid_pub.jwks`, a chave
+registrada de `client_one` sob o perfil "hybrid" do backend --
+confirmado lendo o arquivo: `"alg": "RS256"`). **Alg recebido:**
+`PS256` -- capturado AO VIVO, nao suposto, decodificando o JWT real
+que `opin_flow.py` monta:
+```
+CRYPTO_PROFILE=hibrido-and -> load_client_signing_key() alg='PS256'
+JWT HEADER DE VERDADE ENVIADO: {'alg': 'PS256', 'kid': '...', 'typ': 'JWT'}
+```
+
+**(b) Lado a lado, hibrido-v8 (passa) vs hibrido-and (falhava),
+`thesis/scripts/opin_flow.py`:**
+
+| | hibrido-v8 (`CRYPTO_PROFILE=hybrid`) | hibrido-and (`CRYPTO_PROFILE=hibrido-and`, ANTES da correcao) |
+|---|---|---|
+| `load_client_signing_key()` | `elif crypto_profile == "hybrid":` (linha 595) -- bate | cai no `else` (linha 602) -- generico, NUNCA bate em "hibrido-and" |
+| Chave que assina | `(classic_key, pqc_jwk)` -- RSA de `client_one.jwks` + ML-DSA de `client_one_pqc.jwks` | so a RSA de `client_one.jwks` (nenhuma ML-DSA) |
+| `alg` devolvido | `"hybrid"` | `"PS256"` |
+| `sign_jwt()` despacha pra | `_sign_jwt_hybrid()` -- RS256 externo + claim `"pqc"` embutida (ML-DSA sobre RFC 8785) | `pyjwt.encode(..., algorithm="PS256")` direto -- sem claim `"pqc"` |
+| Header REAL enviado | `{"alg": "RS256", ...}` | `{"alg": "PS256", ...}` |
+| Validador (`auth`) espera | `RS256` (`client_one_hybrid_pub.jwks`) | `RS256` (MESMO arquivo -- o backend ja estava no perfil certo) |
+| Resultado | bate -- PASSA | nao bate -- `alg mismatch` |
+
+**(c) Hipotese de divergencia de perfil cliente/backend -- descartada
+com evidencia, confirmada ANTES da chamada:**
+```
+gateway (v9-mtls), log real: "profile=hibrido-and listening on :443" <- confirmado
+auth (backend), log real:    "Crypto profile: hybrid (signingAlgs: MLDSA65-RSA2048-PSS-SHA256)" <- confirmado
+```
+Os dois lados estavam no par CERTO (`BACKEND_CRYPTO_PROFILE_ENV`
+mapeia hibrido-and -> hybrid pro backend, Decisao 50) -- o `force-
+recreate` NAO deixou nenhum estado hibrido/divergente. A causa nunca
+foi ambiente inconsistente -- foi um `elif` faltando no CLIENTE.
+
+**(d) Correcao, so depois da evidencia -- bug de implementacao, nao
+mudanca de desenho pre-registrado.** `thesis/scripts/opin_flow.py`,
+`load_client_signing_key()`:
+```diff
+-        elif crypto_profile == "hybrid":
++        elif crypto_profile in ("hybrid", "hibrido-and"):
++            # Decisao 51: "hibrido-and" cai aqui tambem -- o
++            # mecanismo AND so acrescenta autenticacao TLS por DOIS
++            # certificados; nunca teve esquema de JWT proprio.
+```
+**Nenhuma outra linha mudou.** Verificado que NENHUM outro ponto que
+distingue "hybrid" (`get_client_cert_paths`, `get_local_leg_cert_
+paths`-equivalente, `TLS_KEM_PROXY_CURVE_BY_PROFILE`) esta no
+caminho causal deste erro especifico -- o handshake mTLS dual (AND)
+JA funcionava (`dualAuthenticated=true`, confirmado nos logs, antes e
+depois desta correcao), so o client_assertion OAuth estava errado.
+**Isso nunca toca os 7 criterios, baselines ou tolerancias do
+pre-registro `v9-prereg`** -- e so uma correcao do CLIENTE de teste
+(`opin_flow.py`, arquivo compartilhado entre v4-v9, editado
+aditivamente, mesma convencao de sempre), nunca tocando desenho de
+medicao. Confirmado com o Luciano que isso dispensa consulta previa
+(item (d) do pedido: "se for apenas bug de implementacao, registre
+como Emenda numerada").
+
+**(e) Criterio de aceite -- ATINGIDO, sem arredondar:**
+```
+hibrido-and, bloco de 5 execucoes reais: as 5 deram
+  {"http":44,"jwts":28,"jwks":4,"ca":4,"mtls":6}, "ok":true -- as 5
+criterio5 (zero erros): pass=true, errors_found=[]
+
+PORTA DE FUMACA: 12/12 -- "smoke_ok": true, "smoke_failures": []
+  route_orders confirma os 4 perfis x 3 rotas, todos passando:
+  L0:   hibrido-v8, classico, pqc, hibrido-and
+  L219: classico, hibrido-and, hibrido-v8, pqc
+  L325: hibrido-and, hibrido-v8, classico, pqc
+avaliador real sobre as 12: todas as rows "ok":true, criterio5 pass=true
+```
+
+**2. Trava permanente contra o erro de interpretador -- preflight.py.**
+
+`check_client_python_environment(python_exe, requirements_path,
+mldsa_cert_path)` (nova): roda um probe no MESMO interprete que o
+orquestrador vai usar -- imprime o caminho do executavel e as 3
+versoes (`cryptography`/`PyJWT`/`requests`), reprova se qualquer uma
+divergir do pin de `requirements.txt`, e PARSEIA um certificado
+ML-DSA-65 real (`mock-service-os/certs/root_ca_pqc.crt`), exigindo
+exatamente 1952 bytes de chave publica. Default: o venv do proprio
+projeto (`thesis/scripts/.venv/Scripts/python.exe`) -- nunca o Python
+de sistema. Wired em `run_preflight()`, reprova `go` se falhar.
+
+**Provado, os dois lados, com interpretes REAIS (nao stubados --
+`test_ambiente_python_correto_aprova`/`test_ambiente_python_errado_
+reprova`):**
+```
+=== venv do projeto ===
+"ok": true, "versions": {"cryptography":"50.0.2","PyJWT":"2.15.1","requests":"2.32.5"},
+"mldsa_public_key_bytes": 1952, "mismatches": []
+
+=== Python de sistema (C:\Python313\python.exe) ===
+"ok": false, "versions": {"cryptography":"46.0.3","PyJWT":"2.10.1","requests":"2.32.3"},
+"mismatches": [
+  "cryptography: instalado 46.0.3, requirements.txt pede 50.0.2",
+  "PyJWT: instalado 2.10.1, requirements.txt pede 2.15.1",
+  "requests: instalado 2.32.3, requirements.txt pede 2.32.5",
+  "parse de ML-DSA-65 falhou ou tamanho errado: ValueError: Unknown key type: 2.16.840.1.101.3.4.3.18"
+]
+```
+**Reproduz, ao pe da letra, o erro real da Decisao 50** -- agora
+pego pelo pre-voo, nunca mais em silencio.
+
+**3. Capturas dedicadas do criterio 1 -- validado localmente o que
+dava, pendencia honesta do que nao.**
+
+**Validado localmente:**
+- **Isolamento estrutural:** `test_capturas_dedicadas_rodam_fora_de_
+  qualquer_janela_cronometrada` -- as 12 capturas SO rodam depois do
+  loop de blocos inteiro (nunca entre um marcador INICIO e FIM),
+  nunca entram em `execucoes_calls`/`criterio6_rows`. Mutante (captura
+  simulada DENTRO de uma janela) prova que o teste pegaria a
+  contaminacao se existisse.
+- **Nome e hash dos artefatos:** os 12 arquivos saem como
+  `{perfil}_{rota}.log` exatos; hash SHA-256 estavel (mesmo perfil,
+  rotas diferentes -> mesmo hash, confirmado -- o tamanho de mensagem
+  TLS nao depende da rota).
+- **Leitura pelo avaliador real:** `criterion_1_message_sizes(aws_dir=...)`
+  le os 12 arquivos corretamente, **PASS genuino** (nao so "nao
+  quebra").
+
+**Pendente pra AWS (ou pra uma rodada local dedicada futura, fora do
+tempo desta):** a CAPTURA DE REDE em si, dentro de `SSHExecutor.
+dedicated_capture`, continua um placeholder (`cat /tmp/criterio1_...`,
+Decisao 49) -- nunca implementada de verdade. Achado nesta rodada,
+tentando: o trafego TLS real entre o proxy e o gateway acontece na
+rede BRIDGE do Docker (entre containers), nunca em loopback --
+capturar isso exige identificar a interface certa do bridge (ou
+rodar tcpdump DENTRO de um dos containers), complexidade nova que
+nao coube no tempo desta rodada. Registrado honesto, nao escondido.
+
+**Testes:** 57 (antes: 48) -- 9 novos (`check_client_python_
+environment` + 2 mutantes, `_parse_pinned_versions`, isolamento das
+12 capturas + mutante, nome/hash/leitura das 12 capturas, traducao de
+perfil pro hibrido-and ja coberta pelos testes existentes da Decisao
+49/50).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat. Nenhum push sem autorizacao explicita.

@@ -119,3 +119,101 @@ def test_mutante_go_sempre_true_e_pego(monkeypatch):
     assert go_mutante is True
     with pytest.raises(AssertionError):
         assert go_mutante is False
+
+
+# --- Decisao 51 (item 2): checagem do interprete Python do cliente --
+# REAIS, nunca stubadas (e exatamente o interprete que esta sendo
+# testado, nao a CLI da aws/ssh) -- pede dois interpretes de verdade
+# ja presentes nesta maquina de dev: o venv certo do projeto e o
+# Python de sistema (o mesmo que causou o "Unknown key type" real,
+# Decisao 50).
+_SYSTEM_PYTHON = r"C:\Python313\python.exe"
+_PROJECT_VENV_PYTHON = str(
+    Path(__file__).resolve().parents[4] / "scripts" / ".venv" / "Scripts" / "python.exe"
+)
+
+
+@pytest.mark.skipif(not Path(_PROJECT_VENV_PYTHON).is_file(), reason="venv do projeto nao existe nesta maquina")
+def test_ambiente_python_correto_aprova(tmp_path):
+    result = preflight.check_client_python_environment(_PROJECT_VENV_PYTHON)
+    assert result["ok"] is True, result
+    assert result["mldsa_public_key_bytes"] == 1952
+    assert result["mismatches"] == []
+
+
+@pytest.mark.skipif(not Path(_SYSTEM_PYTHON).is_file(), reason="Python de sistema nao existe nesta maquina")
+def test_ambiente_python_errado_reprova(tmp_path):
+    """O MESMO erro real que a Decisao 50 encontrou -- interprete de
+    sistema desta maquina, sem os pacotes do projeto (ou com versoes
+    velhas) -- tem que reprovar com mensagem clara, nunca em
+    silencio."""
+    result = preflight.check_client_python_environment(_SYSTEM_PYTHON)
+    assert result["ok"] is False, result
+    assert result["mismatches"], "deveria listar pelo menos um motivo da reprovacao"
+
+
+def test_interprete_inexistente_reprova_com_mensagem_clara():
+    result = preflight.check_client_python_environment("/caminho/que/nao/existe/python.exe")
+    assert result["ok"] is False
+    assert "nao encontrado" in result["note"]
+
+
+def test_parse_pinned_versions(tmp_path):
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "# comentario\n"
+        "requests==2.32.5 \\\n"
+        "    --hash=sha256:deadbeef\n"
+        "cryptography==50.0.2 \\\n"
+        "    --hash=sha256:deadbeef\n",
+        encoding="utf-8",
+    )
+    pins = preflight._parse_pinned_versions(req)
+    assert pins == {"requests": "2.32.5", "cryptography": "50.0.2"}
+
+
+def test_versao_desalinhada_do_pin_e_detectada(monkeypatch, tmp_path):
+    """Mutacao direta: simula um probe que devolve uma versao
+    DIFERENTE do pin -- tem que reprovar com o motivo exato."""
+    req = tmp_path / "requirements.txt"
+    req.write_text("cryptography==50.0.2 \\\n    --hash=sha256:x\n", encoding="utf-8")
+
+    def fake_run(argv, capture_output, text, timeout):
+        class FakeProc:
+            returncode = 0
+            stdout = ('{"executable": "/fake/python", '
+                      '"versions": {"cryptography": "46.0.3", "PyJWT": "2.15.1", "requests": "2.32.5"}, '
+                      '"mldsa_public_key_bytes": 1952}')
+            stderr = ""
+        return FakeProc()
+
+    monkeypatch.setattr(preflight.subprocess, "run", fake_run)
+    monkeypatch.setattr(preflight.Path, "is_file", lambda self: True)
+    result = preflight.check_client_python_environment("/fake/python", requirements_path=req)
+    assert result["ok"] is False
+    assert any("cryptography" in m and "46.0.3" in m and "50.0.2" in m for m in result["mismatches"])
+
+
+def test_mutante_ignora_mismatch_de_versao_e_pego(monkeypatch, tmp_path):
+    """Mutacao: `ok` calculado so pelo parse de ML-DSA, ignorando
+    `mismatches` de versao -- o teste acima tem que reprovar com essa
+    mutacao."""
+    req = tmp_path / "requirements.txt"
+    req.write_text("cryptography==50.0.2 \\\n    --hash=sha256:x\n", encoding="utf-8")
+
+    def fake_run(argv, capture_output, text, timeout):
+        class FakeProc:
+            returncode = 0
+            stdout = ('{"executable": "/fake/python", '
+                      '"versions": {"cryptography": "46.0.3"}, "mldsa_public_key_bytes": 1952}')
+            stderr = ""
+        return FakeProc()
+
+    monkeypatch.setattr(preflight.subprocess, "run", fake_run)
+    monkeypatch.setattr(preflight.Path, "is_file", lambda self: True)
+
+    probe = __import__("json").loads(fake_run(None, None, None, None).stdout)
+    mldsa_ok_mutante = probe["mldsa_public_key_bytes"] == 1952  # mutante: so olha isso
+    assert mldsa_ok_mutante is True  # mutante aprovaria indevidamente
+    with pytest.raises(AssertionError):
+        assert mldsa_ok_mutante is False

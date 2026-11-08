@@ -592,7 +592,22 @@ def load_client_signing_key(crypto_profile: str):
             jwks = json.loads(path.read_text(encoding="utf-8"))
             jwk = next(k for k in jwks["keys"] if k.get("use") == "sig")
             result = jwk, jwk["kid"], "ML-DSA-65"
-        elif crypto_profile == "hybrid":
+        elif crypto_profile in ("hybrid", "hibrido-and"):
+            # Decisao 51 (v9, revisao independente): "hibrido-and" cai
+            # aqui tambem -- o mecanismo AND (Decisao 6/19 da v9) so
+            # acrescenta autenticacao TLS por DOIS certificados no
+            # handshake; nunca introduziu um esquema de JWT/assinatura
+            # proprio. O client_assertion OAuth continua sendo o MESMO
+            # RS256 com claim "pqc" embutida que "hybrid" ja usa
+            # (confirmado: a config do backend pro hibrido-and e
+            # literalmente "hybrid", `BACKEND_CRYPTO_PROFILE_ENV` em
+            # thesis/results/v9/campaign/scripts/orchestrator.py, e o
+            # JWKS registrado de client_one e o MESMO client_one_hybrid_
+            # pub.jwks, alg RS256, pros dois). Faltava este `elif`
+            # reconhecer "hibrido-and" -- sem ele, caia no `else`
+            # (PS256 puro, sem a claim "pqc"), que o validador do
+            # backend rejeitava com "alg mismatch" (RS256 esperado,
+            # PS256 recebido).
             classic_jwks = json.loads((CERTS_DIR / "client_one.jwks").read_text(encoding="utf-8"))
             classic_jwk = next(k for k in classic_jwks["keys"] if k.get("use") == "sig")
             classic_key = pyjwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(classic_jwk))

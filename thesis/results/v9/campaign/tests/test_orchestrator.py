@@ -365,3 +365,87 @@ def test_mutante_sem_excluir_internal_caller_conta_errado():
     assert len(client_facing_mutante) == 2
     with pytest.raises(AssertionError):
         assert len(client_facing_mutante) == 1
+
+
+# --- Decisao 51 (item 3): as 12 capturas dedicadas do criterio 1 --
+# isolamento estrutural, nome/hash dos artefatos, leitura pelo
+# avaliador real. A captura de REDE em si (tcpdump+tshark contra
+# trafego real do SSHExecutor) fica PENDENTE -- reportado honesto no
+# relatorio, nao implementada nesta rodada (precisa identificar a
+# interface de rede certa do bridge Docker, achado ao vivo tentando).
+
+def test_capturas_dedicadas_rodam_fora_de_qualquer_janela_cronometrada(tmp_path):
+    """Isolamento estrutural: nenhuma das 12 capturas pode aparecer
+    DENTRO de uma janela EXECUCAO INICIO...FIM, nem contribuir pra
+    execucoes_calls/criterio6_rows (que so contam as 60/12 reais)."""
+    calls_to_dedicated_capture = []
+    real_dedicated_capture = orch.LocalExecutor.dedicated_capture
+
+    def spying_dedicated_capture(self, profile, route):
+        calls_to_dedicated_capture.append((profile, route))
+        return real_dedicated_capture(self, profile, route)
+
+    executor = orch.LocalExecutor()
+    import unittest.mock as mock
+    with mock.patch.object(orch.LocalExecutor, "dedicated_capture", spying_dedicated_capture):
+        manifest = orch.run_pilot(executor, seed=3, out_dir=tmp_path, n_per_profile=2)
+
+    # As 12 capturas rodaram, e SO depois do loop de blocos (nenhuma
+    # pode ter rodado antes da ultima execucao cronometrada -- testado
+    # indiretamente: nenhuma linha delas aparece no log combinado,
+    # que so tem os marcadores/linhas das execucoes reais).
+    assert len(calls_to_dedicated_capture) == 12
+    log_text = Path(manifest["combined_log"]).read_text(encoding="utf-8")
+    for m in re.finditer(r"== EXECUCAO INICIO.*?== EXECUCAO FIM.*?==", log_text, re.S):
+        assert "tamanho POR MENSAGEM" not in m.group(0), (
+            "uma captura dedicada vazou pra dentro de uma janela de execucao cronometrada"
+        )
+    execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    assert len(execucoes) == manifest["total_execucoes"], "capturas dedicadas nao podem inflar a contagem de execucoes reais"
+
+
+def test_mutante_captura_dedicada_dentro_do_bloco_e_detectada(tmp_path):
+    """Mutacao: roda uma captura dedicada DENTRO do loop de execucoes
+    (simulado direto, sem reescrever run_pilot) -- o teste de
+    isolamento acima tem que reprovar essa situacao."""
+    log_lines = [orch.execucao_marker_inicio("classico", "L0", 1)]
+    log_lines.append(orch._dedicated_capture_block("classico"))  # mutante: capturada DENTRO da janela
+    log_lines.append(orch.execucao_marker_fim("classico", "L0", 1))
+    log_text = "\n".join(log_lines)
+    found_contamination = any(
+        "tamanho POR MENSAGEM" in m.group(0)
+        for m in re.finditer(r"== EXECUCAO INICIO.*?== EXECUCAO FIM.*?==", log_text, re.S)
+    )
+    assert found_contamination is True  # mutante contamina de verdade
+    with pytest.raises(AssertionError):
+        assert found_contamination is False
+
+
+def test_capturas_dedicadas_tem_nome_e_hash_esperados_e_o_avaliador_le(tmp_path):
+    """Nome exato `{perfil}_{rota}.log`, hash SHA-256 estavel (mesmo
+    conteudo -> mesmo hash, round-trip de verificacao igual ao
+    `collect_artifacts.py` real) e leitura pelo avaliador REAL
+    (`criterion_1_message_sizes(aws_dir=...)`, PASS genuino)."""
+    import hashlib
+
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=4, out_dir=tmp_path, n_per_profile=1)
+    capturas_dir = Path(manifest["capturas_dir"])
+
+    hashes = {}
+    for profile in orch.PROFILES:
+        for route in orch.ROUTES:
+            path = capturas_dir / f"{profile}_{route}.log"
+            assert path.is_file(), f"captura ausente: {path.name}"
+            hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    assert len(hashes) == 12
+    # Mesmo conteudo (mesmo perfil, rotas diferentes nao mudam o
+    # tamanho de mensagem TLS) -> mesmo hash -- confirma estabilidade,
+    # nao so presenca do arquivo.
+    for profile in orch.PROFILES:
+        route_hashes = {hashes[f"{profile}_{route}.log"] for route in orch.ROUTES}
+        assert len(route_hashes) == 1, f"{profile}: hash deveria ser identico entre rotas (mesmo conteudo esperado)"
+
+    r1 = ec.criterion_1_message_sizes(log_text="", aws_dir=str(tmp_path))
+    assert r1["pass"] is True, r1
+    assert r1["missing_captures"] == []
