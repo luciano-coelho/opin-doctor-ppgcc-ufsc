@@ -8414,3 +8414,85 @@ test_deliver_source.py`, `thesis/results/v9/DECISIONS.md` (esta
 Decisao).
 
 Seguindo pros Passos 10-14 do roteiro (mesma fleet, sem reaplicar).
+
+## 72. Terceiro achado real, mesma retomada da Fase A, Passo 10 -- `rehearsal_handshake.sh` tinha os mesmos defaults de `CERTS_DIR`/`REAL_CERTS_DIR` relativos ao script (so fazem sentido rodando LOCAL), quebrando com "No such file or directory" ao rodar do controle real; corrigido pra usar o caminho `~`-relativo real quando `CLIENT_SSH`/`GATEWAY_SSH` estao setados -- validacao ao vivo PENDENTE (perda de conectividade com a fleet antes do retry, ver nota de infraestrutura abaixo)
+
+Branch `v9/fase1-local`, commit e push. Mesma fleet real das Decisoes
+70/71 (nenhuma nova instancia precisou subir pra este achado
+especifico).
+
+**Achado, ao vivo, no Passo 10 (handshake real por perfil):**
+`rehearsal_handshake.sh`, disparado do controle, abortou na primeira
+linha util com `rehearsal_handshake.sh: line 23: cd:
+./../../certs/generated: No such file or directory`.
+
+**Causa raiz:** `CERTS_DIR`/`REAL_CERTS_DIR` tinham o MESMO default
+relativo ao proprio script (`$(dirname "$0")/../../...`) que
+`orchestrator._launch_gateway.real_certs_mount` tinha ANTES da
+Decisao 58 -- so faz sentido quando o script roda no repositorio real
+(laptop do operador). A copia que `deliver_source.py` entrega pro
+CONTROLE (`CONTROL_FILES`) nunca tem `certs/generated` do lado dela
+(`CLIENT_ONLY_FILES` so entrega isso pro CLIENTE) -- e mesmo que
+tivesse, o mount `-v $CERTS_DIR:/certs:ro` precisa existir no HOST
+que de fato executa o `docker run` (cliente/servidor, via `on_client`/
+`on_gateway`), nunca no controle que so dispara o comando por SSH.
+Mesma classe de bug, exatamente o mesmo raciocinio ja corrigido em
+`_launch_gateway` (Decisao 58) -- so que este script shell nunca
+tinha recebido o mesmo tratamento.
+
+**Por que e uma correcao segura, nunca um STOP:** o caminho do mount
+de certificados nao altera nenhum binario/certificado pinado nem
+nenhum dos 7 criterios pre-registrados -- os MESMOS certificados
+(entregues por `deliver_source.py`) so passam a ser lidos do lugar
+certo (cliente/servidor reais) em vez de um lugar que nunca existiu
+(controle).
+
+**Corrigido, em `rehearsal_handshake.sh`:** `CERTS_DIR`/`REAL_CERTS_DIR`
+agora so caem no default antigo (relativo ao script) quando
+`CLIENT_SSH`/`GATEWAY_SSH` estao VAZIOS (modo local); quando setados
+(modo remoto real), usam `~/thesis/results/v9/certs/generated` e
+`~/mock-service-os/certs` respectivamente -- caminhos que `deliver_
+source.py` de fato entrega, expandidos pelo shell REMOTO (nunca por
+este processo), mesmo padrao ja usado em `_launch_gateway`.
+
+**Nota de infraestrutura (nao e um bug de codigo, registrada aqui
+por transparencia):** antes de conseguir re-entregar e re-testar esta
+correcao ao vivo, as 3 instancias de `sa-east-1` (controle/servidor/
+L0) ficaram simultaneamente inalcancaveis nas portas 22 E 443 a
+partir da maquina do operador, por ~8min seguidos (multiplas
+tentativas, inclusive teste de TCP puro via `/dev/tcp`, sem nenhuma
+resposta -- timeout de verdade, nunca "connection refused"). Nao foi
+um problema de codigo nem de configuracao: `aws ec2 describe-
+instance-status` confirmou as 3 instancias com `instance: ok` e
+`system: ok` (saudaveis no nivel do hypervisor); as chamadas da API
+da AWS (HTTPS) continuaram funcionando perfeitamente o tempo todo; o
+Security Group do controle confirmado inalterado e correto (regra
+22/tcp exatamente pro CIDR do operador, igual ao do apply); o IP
+publico do operador confirmado inalterado; porta 22 pra um host NAO-
+AWS (github.com) funcionou normalmente no mesmo instante. Conclusao:
+problema transitorio de rota de rede entre a maquina do operador e
+especificamente essas 3 instancias (regiao `sa-east-1`), nunca
+diagnosticavel nem corrigivel por este pacote -- sem SSM disponivel
+como alternativa (`ssm:DescribeInstanceInformation` negado pela
+politica IAM real, mesma limitacao ja conhecida de outras chamadas
+de leitura). Regra "frota nunca ociosa" (>15min travada) aplicada:
+apos ~8min sem recuperar, frota derrubada (`cleanup.py --tf-dir
+../../terraform --release-eips --force`, `all_clean: true`,
+`destroy_rc: 0`, sem drift) e confirmada limpa pelas 12 chamadas
+`describe-*` independentes (instancias/EIPs/security-groups/key-
+pairs, 3 regioes), todas vazias.
+
+**Testes:** sem teste automatizado novo (script shell sem suite
+pytest associada neste pacote, mesma situacao de todos os outros
+scripts `.sh`) -- 158 testes inalterados. **Validacao ao vivo
+PENDENTE**: a correcao foi revisada por leitura e aplicada, mas a
+perda de conectividade acima impediu reentregar e rerodar
+`rehearsal_handshake.sh` antes da frota cair -- sera validada de
+verdade na proxima tentativa da Fase A (fleet nova).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
+(esta Decisao).
+
+Reaplicando uma fleet nova (`self_terminate_hours=1`) pra retomar a
+Fase A do Passo 0, conta ja confirmada limpa acima.

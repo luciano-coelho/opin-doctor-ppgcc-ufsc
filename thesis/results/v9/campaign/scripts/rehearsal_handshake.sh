@@ -20,8 +20,31 @@ CLIENT_SSH="${CLIENT_SSH-}"
 GATEWAY_HOST="${GATEWAY_HOST:-mtls}"   # alias de rede local (loopback) ou EIP real (ensaio)
 GATEWAY_CONTAINER="${GATEWAY_CONTAINER:-v9-mtls-ensaio}"
 NETWORK="${NETWORK:-insurance-server-lambdas_default}"
-CERTS_DIR="${CERTS_DIR:-$(cd "$(dirname "$0")/../../certs/generated" && pwd)}"
-REAL_CERTS_DIR="${REAL_CERTS_DIR:-$(cd "$(dirname "$0")/../../../../../mock-service-os/certs" && pwd)}"
+# Decisao 72 (achado real, ao vivo, retomando a Fase A real, Passo
+# 10): o default antigo (sempre `$(dirname "$0")/../../...`) so faz
+# sentido rodando LOCAL (script no repo real, no laptop do operador)
+# -- a copia que `deliver_source.py` entrega pro CONTROLE nunca tem
+# `certs/generated` do lado dela (CLIENT_ONLY_FILES so entrega isso
+# pro CLIENTE) e, mesmo que tivesse, o mount `-v $CERTS_DIR:/certs:ro`
+# precisa existir no HOST que de fato roda o `docker run` (cliente/
+# servidor), nunca no controle que so dispara o comando via SSH --
+# mesmo raciocinio que ja corrigiu `_launch_gateway.real_certs_mount`
+# na Decisao 58. Em modo remoto (CLIENT_SSH/GATEWAY_SSH setados), usa
+# o caminho `~`-relativo que `deliver_source.py` de fato entrega.
+if [ -z "${CERTS_DIR-}" ]; then
+  if [ -n "$CLIENT_SSH" ]; then
+    CERTS_DIR="~/thesis/results/v9/certs/generated"
+  else
+    CERTS_DIR="$(cd "$(dirname "$0")/../../certs/generated" && pwd)"
+  fi
+fi
+if [ -z "${REAL_CERTS_DIR-}" ]; then
+  if [ -n "$GATEWAY_SSH" ]; then
+    REAL_CERTS_DIR="~/mock-service-os/certs"
+  else
+    REAL_CERTS_DIR="$(cd "$(dirname "$0")/../../../../../mock-service-os/certs" && pwd)"
+  fi
+fi
 
 on_gateway() { if [ -n "$GATEWAY_SSH" ]; then $GATEWAY_SSH "$1"; else bash -c "$1"; fi; }
 on_client()  { if [ -n "$CLIENT_SSH"  ]; then $CLIENT_SSH  "$1"; else bash -c "$1"; fi; }
