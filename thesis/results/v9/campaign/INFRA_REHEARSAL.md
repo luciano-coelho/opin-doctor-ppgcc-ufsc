@@ -1,18 +1,23 @@
-# Ensaio de infraestrutura — ~20 minutos, sem experimento
+# Ensaio de infraestrutura — ~25 minutos, sem experimento
 
-Decisão 57 (revisão do roteiro da Decisão 56, item 3). Roteiro para
-o Luciano executar (este processo nunca roda nenhum passo abaixo) —
-usa as MESMAS credenciais e o MESMO profile AWS CLI já usados na v8
-(`mockopin-pqc`). Objetivo: provar `terraform apply`/`destroy`
-reais, `docker save`/`load` com conferência de Image ID, um
+Decisão 58 (revisão do roteiro da Decisão 57, item 5 — acrescenta os
+passos de entrega de código/certificados e de exercício remoto de
+start_block/stop_block, achados reais desta rodada: ver DECISIONS.md).
+Roteiro para o Luciano executar (este processo nunca roda nenhum passo
+abaixo) — usa as MESMAS credenciais e o MESMO profile AWS CLI já
+usados na v8 (`mockopin-pqc`). Objetivo: provar `terraform
+apply`/`destroy` reais, a entrega completa do caminho remoto (código-
+fonte/certificados E as 4 imagens, incluindo `proxy`/`pqc-signer`,
+nunca entregues antes desta rodada — achado 19), um exercício real de
+`start_block`/`stop_block` via o próprio `orchestrator.py`, um
 handshake real por perfil (prova de mecanismo, não experimento), e a
-parada de emergência — nunca uma execução de experimento (nenhuma
-das 60 execuções oficiais, nenhuma das 12 capturas do critério 1).
+parada de emergência — nunca uma execução de experimento (nenhuma das
+60 execuções oficiais, nenhuma das 12 capturas do critério 1).
 
-**Duração alvo: ~20 minutos de janela medida, ordem estritamente
-linear (0→8, cada passo depende só do anterior).** `self_terminate_hours`
+**Duração alvo: ~25 minutos de janela medida, ordem estritamente
+linear (0→10, cada passo depende só do anterior).** `self_terminate_hours`
 reduzido pra **1h** só pro ensaio (rede de segurança — nunca
-pretendido pra durar isso; os passos 6-8 são o teardown real,
+pretendido pra durar isso; os passos 8-10 são o teardown real,
 obrigatórios mesmo que o ensaio termine antes do autodesligamento).
 
 ---
@@ -86,30 +91,171 @@ done
 **Saída esperada:** `"Docker pronto"` pras 5, dentro de 20 tentativas (~60s) cada.
 **Critério de abortar:** qualquer instância sem Docker pronto depois de 20 tentativas — SSH funcionando mas Docker nunca sobe é sinal de `user_data` falhado, investigar antes de prosseguir.
 
-**Porta usada no ensaio = porta da regra de ingress do Security Group, confirmado em `main.tf`:** SSH usa 22 (`aws_vpc_security_group_ingress_rule.ssh`, `from_port=22 to_port=22`); o gateway usa 443 (`aws_vpc_security_group_ingress_rule.gateway`, `from_port=443 to_port=443`, só no servidor) — os Passos 3/4 abaixo discam exatamente a porta 443, nenhuma outra.
+**Porta usada no ensaio = porta da regra de ingress do Security Group, confirmado em `main.tf`:** SSH usa 22 (`aws_vpc_security_group_ingress_rule.ssh`, `from_port=22 to_port=22`); o gateway usa 443 (`aws_vpc_security_group_ingress_rule.gateway`, `from_port=443 to_port=443`, só no servidor) — os Passos 5/6 abaixo discam exatamente a porta 443, nenhuma outra.
 
 ---
 
-## Passo 3 — `docker save | load`: gateway pro servidor, negtest pro cliente L0
+## Passo 3 — `deliver_source.py`: código-fonte e certificados (NOVO, achado real desta rodada)
+
+**Por que este passo existe, e por que não existia antes:** lendo
+`opin_flow.py`/`campaign_client_runner.py`/`orchestrator.py` direto
+(nunca suposto), confirmou-se que o caminho remoto assume presentes,
+em cada instância, três coisas que NENHUM script deste pacote jamais
+entregava: `thesis/scripts/*.py` (de onde `campaign_client_runner.py`
+roda e de onde `opin_flow.py` é importado), `mock-service-os/certs`
+(mount `/real-certs` do gateway — `_launch_gateway` — e caminhos de
+certificado do lado da aplicação do cliente) e
+`thesis/results/v9/certs/generated` (mount `-cert-dir /certs` do
+proxy, só nos clientes). Mesma classe de bug que a v8 real encontrou e
+corrigiu com `deliver_source.sh` ("NOTHING delivers any of
+insurance-server-lambdas/, thesis/scripts/*.py, or mock-service-os/ to
+ANY server or client") — nunca exercitada na v9 até esta rodada porque
+esta sessão nunca tocou AWS de verdade.
+
+**Também confirma, pela mesma leitura:** o Security Group do servidor e
+de cada cliente só aceita SSH do EIP do PRÓPRIO controle
+(`ssh_ingress_cidrs = {"control": ...}`, `main.tf`) — o OPERADOR NUNCA
+alcança o servidor/clientes direto numa AWS real, só o controle
+alcança. Isso significa que `orchestrator.py` (SSHExecutor) só
+funciona de verdade, contra uma AWS real, quando RODA a partir do
+controle (mesmo padrão real de `campaign_run.py`/`campaign_run.service`
+na v8) — `deliver_source.py` entrega os arquivos pela via que já
+existe (relé de 2 saltos via controle, mesmo padrão de `pki_relay.py`),
+mas quem efetivamente dispara `orchestrator.py --mode ssh` ainda
+precisa estar executando de dentro do controle, não do laptop do
+operador. **Registrado aqui como risco conhecido, não resolvido nesta
+rodada** (fora do pedido desta rodada, que era entrega de
+imagem/arquivo/certificado) — ver DECISIONS.md, Decisão 58.
+
+```
+cd ../campaign/scripts
+time python deliver_source.py \
+  --control-ip <IP-controle> \
+  --operator-key <chave-do-operador> \
+  --inventory-json <(terraform output -json inventory | python -c "import json,sys; raw=json.load(sys.stdin); print(json.dumps(raw['value'] if 'value' in raw else raw))")
+```
+**Saída esperada:** JSON com um relatório por destino (`server`, `L0`,
+`L219`, `L325`) — `files` listando os caminhos relativos entregues
+(`certs/generated` só para os 3 clientes, nunca para o servidor).
+**Critério de abortar:** qualquer `RuntimeError` (scp pro controle
+falhou, ou relé+extração falhou) — nenhuma imagem deve ser entregue
+(Passo 4) antes deste passo terminar com sucesso.
+
+**Tempo medido por região (preencher durante o ensaio real — tarball
+local mede ~200KB o comum / ~270KB o do cliente, confirmado nesta
+sessão; a variável real é a latência SSH entre controle e cada
+região, nunca medida nesta sessão por não haver AWS):**
+
+| Destino | Região | Tempo (`time` acima, só a fração daquele destino) |
+|---|---|---|
+| server | sa-east-1 | _a preencher_ |
+| L0 | sa-east-1 | _a preencher_ |
+| L219 | eu-north-1 | _a preencher_ |
+| L325 | ap-southeast-1 | _a preencher_ |
+
+---
+
+## Passo 4 — `docker save \| load`: as 4 imagens do caminho remoto (gateway/proxy/pqc-signer pros alvos reais, negtest pro cliente L0)
+
+**Achado real desta rodada (achado 19, DECISIONS.md Decisão 58):**
+`start_block` chama `of.start_pqc_signer_service()` no cliente, pra
+TODOS os 4 perfis, sem nenhum desvio `V9_HARNESS` (ao contrário de
+`start_tls_kem_proxy`, que tem um) — e NENHUM código deste pacote
+jamais entregava `mockopin-pqc-signer` pro cliente antes desta rodada
+(mesma classe de bug que a v8 encontrou em `deliver_images.sh` pro
+`tls_kem_proxy`/`pqc-signer` dela). Corrigido: `mockopin-pqc-signer`
+agora está pinado em `PINS.json` e `start_block` chama
+`self._deliver_image("pqc-signer", ...)` pela MESMA via (`docker
+save | ssh ... docker load`, fail-closed) que `gateway`/`proxy` já
+usavam — nenhum mecanismo novo. Este passo do ensaio agora entrega as
+4 imagens reais, não mais só 2.
 
 Local (máquina do Luciano, já com as imagens construídas):
 ```
-python -c "import json; print(json.load(open('../PINS.json'))['images']['gateway']['image_id'])"
-docker save mockopin-v9-gateway | ssh -i <chave-da-campanha> ec2-user@<EIP-servidor> docker load
-ssh -i <chave-da-campanha> ec2-user@<EIP-servidor> "docker image inspect mockopin-v9-gateway --format '{{.Id}}'"
+for IMG in gateway proxy pqc-signer; do
+  python -c "import json; d=json.load(open('../PINS.json'))['images']['$IMG']; print(d['docker_image'], d['image_id'])"
+done
 
-docker save mockopin-v9-negtest | ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0> docker load
+time (docker save mockopin-v9-gateway    | ssh -i <chave-da-campanha> ec2-user@<EIP-servidor>   docker load)
+time (docker save mockopin-v9-proxy      | ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0>  docker load)
+time (docker save mockopin-pqc-signer    | ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0>  docker load)
+time (docker save mockopin-v9-negtest    | ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0>  docker load)
+
+ssh -i <chave-da-campanha> ec2-user@<EIP-servidor>  "docker image inspect mockopin-v9-gateway   --format '{{.Id}}'"
+ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0> "docker image inspect mockopin-v9-proxy     --format '{{.Id}}'"
+ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0> "docker image inspect mockopin-pqc-signer    --format '{{.Id}}'"
 ```
-**Saída esperada:** o `.Id` do gateway na instância é **idêntico** ao `image_id` do `PINS.json` local.
-**Critério de abortar:** qualquer divergência de Image ID no gateway — nunca rodar essa imagem.
+**Saída esperada:** os 3 `.Id` (gateway/proxy/pqc-signer) idênticos aos
+`image_id` do `PINS.json` local.
+**Critério de abortar:** qualquer divergência de Image ID em
+qualquer uma das 3 — nunca rodar essa imagem.
 
-**`mockopin-v9-negtest` NÃO é pinada em `PINS.json`, de propósito — e está certo que não seja:** confirmado por grep, nenhum arquivo do orquestrador real (`orchestrator.py`/`preflight.py`) referencia `negtest` em nenhum lugar — é uma ferramenta de teste negativo/diagnóstico (Decisão 19/52), usada só em validações manuais e neste ensaio, nunca no caminho medido do piloto (que usa `mockopin-v9-proxy` via `opin_flow.py`, não `negtest`). Pinar um artefato que nenhum código de produção carrega não protegeria nada — por isso não há conferência de Image ID pra ela aqui, só o `docker load` em si (que já falha alto se o tar estiver corrompido).
+**`mockopin-v9-negtest` NÃO é pinada em `PINS.json`, de propósito — e
+está certo que não seja:** confirmado por grep, nenhum arquivo do
+orquestrador real (`orchestrator.py`/`preflight.py`) referencia
+`negtest` em nenhum lugar — é uma ferramenta de teste negativo/
+diagnóstico (Decisão 19/52), usada só em validações manuais e neste
+ensaio, nunca no caminho medido do piloto (que usa `mockopin-v9-proxy`/
+`mockopin-pqc-signer` via `opin_flow.py`, não `negtest`). Pinar um
+artefato que nenhum código de produção carrega não protegeria nada —
+por isso não há conferência de Image ID pra ela aqui, só o `docker
+load` em si (que já falha alto se o tar estiver corrompido).
 
 **Nenhum `docker run`, nenhuma conexão mTLS ainda — só a entrega das imagens.**
 
+**Tempo medido por imagem/região (preencher durante o ensaio real):**
+
+| Imagem | Destino | Região | Tempo (`time` acima) |
+|---|---|---|---|
+| gateway | server | sa-east-1 | _a preencher_ |
+| proxy | L0 | sa-east-1 | _a preencher_ |
+| pqc-signer | L0 | sa-east-1 | _a preencher_ |
+| negtest | L0 | sa-east-1 | _a preencher_ |
+
 ---
 
-## Passo 4 — handshake real por perfil (4, prova de mecanismo, nunca experimento)
+## Passo 5 — exercício remoto de `start_block`/`stop_block` (NOVO, 1 perfil, sem contar nas 60/12)
+
+**Por que este passo é diferente do handshake do Passo 6:** o Passo 6
+(`rehearsal_handshake.sh`) testa o mecanismo gateway+negtest
+DIRETAMENTE, sem passar pelo `orchestrator.py`/`SSHExecutor` real —
+prova o handshake, mas não prova que o CAMINHO REAL do piloto (entrega
+de imagem fail-closed, verificação de binário, subida de
+proxy+pqc_signer via `opin_flow.py`) funciona de ponta a ponta numa
+instância real. Este passo exercita exatamente esse caminho, uma vez,
+sem nenhuma execução cronometrada.
+
+```
+python orchestrator.py --mode ssh \
+  --inventory-json <inventory.json> --ssh-key <chave-da-campanha> \
+  --exercise-start-stop --exercise-profile classico --exercise-route L0
+```
+**Saída esperada:** JSON com `"start_block_ok": true`,
+`"stop_block_ok": true`, `gateway_binary_verifications` (1 entrada,
+`pin_matched: true`, `running_container_sha256_ok: true`),
+`image_delivery_verifications` (3 entradas — gateway/proxy/pqc-signer
+— todas `"ok": true`), `tcp_preflight_results` (1 entrada, `"ok":
+true`). Confirme manualmente, por SSH direto, que os 3 containers
+(`v9-mtls`, `tls_kem_proxy_run`, `pqc_signer_service_run`) sobem
+durante a chamada e são removidos ao final:
+```
+ssh -i <chave-da-campanha> ec2-user@<EIP-servidor>  "docker ps -a --filter name=v9-mtls"
+ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0> "docker ps -a --filter name=tls_kem_proxy_run --filter name=pqc_signer_service_run"
+```
+(rodar ISSO durante a chamada acima, numa segunda sessão SSH, pra
+confirmar que os containers EXISTEM enquanto o comando roda — depois
+que `exercise-start-stop` retorna, `docker ps -a` ainda mostra os 3
+containers no estado `Exited` (removidos pelo `docker rm -f`/`docker
+stop`+`docker rm -f`, nunca deixados `Up` indefinidamente).
+**Critério de abortar:** qualquer campo `"ok": false`/exceção — mesmo
+critério fail-closed de qualquer bloco real; **nenhum arquivo de
+manifesto/execução é escrito por este passo** (confirmado por teste,
+`test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest`) —
+nunca conta como nenhuma das 60/12 oficiais.
+
+---
+
+## Passo 6 — handshake real por perfil (4, prova de mecanismo, nunca experimento)
 
 Script de verdade, **testado localmente em loopback antes de ser
 entregue** — saída real desta sessão:
@@ -141,26 +287,26 @@ GATEWAY_HOST="$EIP_SERVIDOR" \
 bash rehearsal_handshake.sh
 ```
 **Saída esperada:** `RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos` — igual ao teste local, agora numa rede/instâncias reais.
-**Critério de abortar:** qualquer `FALHA` impressa pelo script, ou `RESULTADO FINAL: FAIL` — não é motivo de destruir às pressas (é um achado sobre o mecanismo, não da infraestrutura), mas marca o ensaio como **reprovado neste ponto**, registrado explicitamente, antes de seguir pro passo 5.
+**Critério de abortar:** qualquer `FALHA` impressa pelo script, ou `RESULTADO FINAL: FAIL` — não é motivo de destruir às pressas (é um achado sobre o mecanismo, não da infraestrutura), mas marca o ensaio como **reprovado neste ponto**, registrado explicitamente, antes de seguir pro passo 7.
 
 **O que este passo NÃO faz:** não conta como nenhuma das 60 execuções oficiais nem nenhuma das 12 capturas do critério 1.
 
 ---
 
-## Passo 5 — `emergency_stop.py`, modo dry (diagnóstico, antes de qualquer teardown)
+## Passo 7 — `emergency_stop.py`, modo dry (diagnóstico, antes de qualquer teardown)
 
 ```
 cd ../campaign/scripts
 python emergency_stop.py --profile mockopin-pqc
 ```
-**Saída esperada:** `instances_found`/`eips_found`/`security_groups_found`/`key_pairs_found` listando os recursos reais do ensaio (**4 key pairs agora aparecem de verdade** — corrigido nesta rodada, ver nota abaixo), e todas as listas `..._terminated`/`..._released`/`..._deleted` **vazias** — modo dry nunca age.
+**Saída esperada:** `instances_found`/`eips_found`/`security_groups_found`/`key_pairs_found` listando os recursos reais do ensaio (**4 key pairs agora aparecem de verdade** — corrigido na Decisão 57, ver nota abaixo), e todas as listas `..._terminated`/`..._released`/`..._deleted` **vazias** — modo dry nunca age.
 **Critério de abortar:** qualquer lista de ação não-vazia em modo dry — bug real, investigar antes de usar `--execute` em qualquer cenário.
 
-**Achado e corrigido nesta rodada:** nenhum `aws_key_pair` (nem aqui, nem na v8 original) tinha tag `Project` — `emergency_stop.py` (que filtra tudo por tag) nunca teria encontrado nenhuma key pair, mesmo com as 4 existindo de verdade. `main.tf` corrigido (tags adicionadas às 4, aditivo, nunca muda `key_name`/`public_key` nem o comportamento de nenhum outro recurso) — confirme no passo acima que `key_pairs_found` lista as 4 agora.
+**Achado e corrigido na Decisão 57:** nenhum `aws_key_pair` (nem aqui, nem na v8 original) tinha tag `Project` — `emergency_stop.py` (que filtra tudo por tag) nunca teria encontrado nenhuma key pair, mesmo com as 4 existindo de verdade. `main.tf` corrigido (tags adicionadas às 4, aditivo, nunca muda `key_name`/`public_key` nem o comportamento de nenhum outro recurso) — confirme no passo acima que `key_pairs_found` lista as 4 agora.
 
 ---
 
-## Passo 6 — teardown PRINCIPAL: `cleanup.py --release-eips --force`
+## Passo 8 — teardown PRINCIPAL: `cleanup.py --release-eips --force`
 
 **Por que `cleanup.py`, não `emergency_stop.py`, é o caminho principal:**
 comparado linha a linha contra `v8/campaign/scripts/campaign_down.sh`
@@ -177,29 +323,37 @@ não só renomeação) — por isso o caminho principal passa a ser
 `cleanup.py`, mais capaz, nunca o `emergency_stop.py` (mais novo,
 pior testado contra a AWS real).
 
+**Redação de erros da AWS:** `cleanup.py` nunca precisou de uma chamada
+própria de redação — `cli.run_terraform`/`cli.run_aws`/`cli.run_aws_json`
+(a fronteira única deste pacote pra qualquer comando real) já redigem
+`stdout`/`stderr` via `redact_aws_errors.redact` (reaproveitada direto
+do arquivo real da v8, nunca duplicada) antes de devolver ou levantar
+— confirmado lendo `cli.py` linha a linha, nenhuma lacuna encontrada
+aqui (ao contrário do achado 19, este item não precisou de correção).
+
 ```
 python cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force
 ```
 **Saída esperada:** JSON com `"all_clean": true` — `cleanup.py` já roda `terraform destroy` E verifica as 5 categorias internamente, nas 3 regiões, incluindo a liberação de qualquer EIP órfão encontrado.
-**Critério de abortar:** `all_clean: false`, ou qualquer excessão — não destruir mais nada manualmente ainda, ir pro passo 7 (fallback), nunca pular direto pro passo 8.
+**Critério de abortar:** `all_clean: false`, ou qualquer excessão — não destruir mais nada manualmente ainda, ir pro passo 9 (fallback), nunca pular direto pro passo 10.
 
 ---
 
-## Passo 7 — fallback: `emergency_stop.py --execute`, só se sobrou algo
+## Passo 9 — fallback: `emergency_stop.py --execute`, só se sobrou algo
 
-**Só roda se o passo 6 reportou `all_clean: false`.** Se o passo 6
-já deu `all_clean: true`, pule direto pro passo 8 (nada a fazer aqui
+**Só roda se o passo 8 reportou `all_clean: false`.** Se o passo 8
+já deu `all_clean: true`, pule direto pro passo 10 (nada a fazer aqui
 — registre isso no relatório do ensaio).
 
 ```
 python emergency_stop.py --profile mockopin-pqc --execute
 ```
-**Saída esperada:** qualquer recurso que o passo 6 não limpou aparece em `..._terminated`/`..._released`/`..._deleted` agora (com as tags do passo 5, incluindo as 4 key pairs corrigidas).
+**Saída esperada:** qualquer recurso que o passo 8 não limpou aparece em `..._terminated`/`..._released`/`..._deleted` agora (com as tags do passo 7, incluindo as 4 key pairs corrigidas).
 **Critério de abortar:** qualquer erro de permissão persistente — nesse ponto, investigação manual pela console AWS é o próximo passo, nunca mais automação.
 
 ---
 
-## Passo 8 — verificação final: nada ficou na conta
+## Passo 10 — verificação final: nada ficou na conta
 
 ```
 aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" "Name=instance-state-name,Values=running,pending,stopping,stopped"
@@ -209,18 +363,20 @@ aws ec2 describe-key-pairs --profile mockopin-pqc --region sa-east-1 --filters "
 ```
 (repetir as 4 chamadas para `eu-north-1`/`ap-southeast-1` — 12 chamadas no total, 4 tipos × 3 regiões)
 
-**Saída esperada:** as 12 chamadas devolvem listas **vazias**. Se o passo 6 já deu `all_clean: true`, este passo é só a confirmação formal e independente (API direta, não reaproveita o JSON do `cleanup.py`).
+**Saída esperada:** as 12 chamadas devolvem listas **vazias**. Se o passo 8 já deu `all_clean: true`, este passo é só a confirmação formal e independente (API direta, não reaproveita o JSON do `cleanup.py`).
 **Critério de abortar/alerta:** qualquer recurso ainda presente — investigar antes de considerar o ensaio limpo.
 
 ---
 
 ## Custo estimado do ensaio
 
-~20 minutos de frota (passos 0-8) — 5 instâncias: 4× `m7i-flex.large`
+~25 minutos de frota (passos 0-10, +5 min sobre a Decisão 57 pelos 2
+passos novos: entrega de código/certificados e exercício de
+start_block/stop_block) — 5 instâncias: 4× `m7i-flex.large`
 + 1× `t4g.micro` — + 5 EIPs:
-- Compute: (4 × US$0,0958 + US$0,0084) × (20/60)h ≈ US$0,131
-- EIP: 5 × US$0,005 × (20/60)h ≈ US$0,008
+- Compute: (4 × US$0,0958 + US$0,0084) × (25/60)h ≈ US$0,164
+- EIP: 5 × US$0,005 × (25/60)h ≈ US$0,010
 - EBS: negligível (apagado junto no destroy/termination)
-- **Total estimado: ≈ US$0,14**, mesmo no dobro do tempo (40 min): ≈ US$0,28.
+- **Total estimado: ≈ US$0,17**, mesmo no dobro do tempo (50 min): ≈ US$0,35.
 
-**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~4× o acima (≈US$0,56 de compute) — os EIPs seguem o mesmo risco residual já documentado, agora coberto tanto por `cleanup.py --release-eips` (principal) quanto por `emergency_stop.py` (fallback).
+**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~2,4× o acima (≈US$0,42 de compute) — os EIPs seguem o mesmo risco residual já documentado, agora coberto tanto por `cleanup.py --release-eips` (principal) quanto por `emergency_stop.py` (fallback).

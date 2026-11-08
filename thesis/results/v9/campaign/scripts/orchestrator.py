@@ -281,6 +281,11 @@ class SSHExecutor:
         # Decisao 55, item 2: docker save|ssh docker load -- uma
         # entrada por entrega de imagem (gateway/proxy/measure).
         self.image_delivery_verifications = []
+        # Decisao 58, achado 18: sondagem TCP pura, uma vez por rota,
+        # ANTES de qualquer entrega/execucao cara daquela rota --
+        # mesmo papel que `preflight_tcp.py` tinha na v8 real.
+        self._tcp_preflight_done = set()
+        self.tcp_preflight_results = []
         # Decisao 49: SO pra validacao local via shim -- quando
         # REMOTE_GATEWAY_HOST esta setado, opin_flow.start_tls_kem_proxy
         # NUNCA junta `--network insurance-server-lambdas_default`
@@ -551,6 +556,29 @@ class SSHExecutor:
         `stop_block` ja terminaram, nunca entre elas), entao nenhum
         dado ja medido e alterado por ela."""
         keylog_flag = "-e KEYLOG_PATH=/tmp/v9_keylog.txt " if keylog else ""
+        # Decisao 58 (achado real desta rodada): `$(pwd)/../../mock-
+        # service-os/certs` so faz sentido quando `cli.run_ssh` dispara
+        # de verdade pro HOST REMOTO -- la, `$(pwd)` resolve pro
+        # diretorio padrao do login SSH (`/home/ec2-user`), nunca pro
+        # layout relativo do repo local; `/home/ec2-user/../../mock-
+        # service-os/certs` nao existe em nenhuma instancia real, e
+        # nada neste pacote jamais entregava nada ali -- confirmado
+        # lendo `deliver_source.py` (Decisao 58, novo: entrega
+        # `mock-service-os/certs` pra `~/mock-service-os/certs`,
+        # espelhando o layout relativo do repo sob `~`, mesmo padrao
+        # que `deliver_source.sh` real da v8 ja usava). `~` (expandido
+        # pelo PROPRIO shell remoto, nunca por este processo) e o
+        # caminho correto pro caso remoto de verdade. `local_shim_
+        # bridge_join=True` (SO validacao local, Decisao 49) continua
+        # usando `$(pwd)/../../...` -- o shim local (`_LocalShellShim`)
+        # roda com `cwd=scripts_cwd`, onde essa expressao relativa
+        # resolve pro `mock-service-os/certs` de VERDADE deste
+        # repositorio; mudar pra `~` quebraria essa validacao (o HOME
+        # desta maquina de desenvolvimento nao e a raiz do repo).
+        real_certs_mount = (
+            "$(pwd)/../../mock-service-os/certs" if self.local_shim_bridge_join
+            else "~/mock-service-os/certs"
+        )
         cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
         cli.run_ssh(self._server_ip(),
                     f"docker run -d --name {self.gateway_container} "
@@ -559,7 +587,7 @@ class SSHExecutor:
                     f"--network-alias matls-api.local --network-alias api.local --network-alias directory "
                     f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
                     f"{keylog_flag}"
-                    f"-v $(pwd)/../../mock-service-os/certs:/real-certs:ro mockopin-v9-gateway",
+                    f"-v {real_certs_mount}:/real-certs:ro mockopin-v9-gateway",
                     key_path=self.key_path)
         # Espera o gateway de verdade terminar de subir (carregar os
         # certs, abrir :443) antes do proxy tentar discar -- achado ao
@@ -569,6 +597,34 @@ class SSHExecutor:
         cli.run_ssh(self._server_ip(),
                     f"for i in $(seq 1 30); do docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && break; sleep 1; done",
                     key_path=self.key_path)
+
+    def _tcp_preflight(self, route):
+        """Decisao 58, achado 18: mesma checagem, mesma justificativa
+        literal do `tcp_check_from_client` real da v8 (`preflight_tcp.py`)
+        -- conecta via `/dev/tcp` DE DENTRO do CLIENTE (nunca do
+        controle: a v8 ja registrou que o caminho de rede e diferente,
+        e o caso co-localizado depende especificamente do IP PRIVADO
+        do servidor, que so o cliente de fato disca). Roda UMA vez por
+        rota (nao por bloco/perfil -- a rota e o SG nunca mudam entre
+        perfis), ANTES de qualquer entrega de imagem/verificacao cara
+        -- barato, falha rapido se o Security Group/VPC estiver
+        errado, sem esperar o resto do `start_block` pra descobrir."""
+        if route in self._tcp_preflight_done:
+            return
+        gw_ip = self._server_gateway_ip(route)
+        timeout = 5
+        cmd = f"timeout {timeout} bash -c 'echo > /dev/tcp/{gw_ip}/443' && echo OK || echo FAIL"
+        proc = cli.run_ssh(self._client_ip(route), cmd, key_path=self.key_path)
+        ok = "OK" in (proc.stdout or "")
+        self.tcp_preflight_results.append({"route": route, "gateway_ip": gw_ip, "ok": ok,
+                                            "output": (proc.stdout + proc.stderr).strip()})
+        self._tcp_preflight_done.add(route)
+        if not ok:
+            raise RuntimeError(
+                f"_tcp_preflight {route}: cliente nao alcancou {gw_ip}:443 por TCP puro -- "
+                f"provavel Security Group/VPC errado, abortando ANTES de qualquer entrega de imagem "
+                f"(saida: {(proc.stdout + proc.stderr).strip()!r})"
+            )
 
     def start_block(self, profile, route):
         """Decisao 49: reusa o padrao real de `start_block_proxies`
@@ -589,6 +645,7 @@ class SSHExecutor:
         compose que troque so o servico `mtls` pela imagem da v9) --
         isso NAO existe ainda, gap separado do pedido desta rodada
         (que era so a invocacao do CLIENTE)."""
+        self._tcp_preflight(route)
         self._block_start_utc[(profile, route)] = datetime.now(timezone.utc)
         if self.local_shim_bridge_join:
             # Achado real desta rodada (Decisao 49): trocar SO o
@@ -652,6 +709,18 @@ class SSHExecutor:
         # tambem -- nunca `docker build` la (opin_flow.start_tls_kem_
         # proxy so faz `docker run`, presume a imagem ja presente).
         self._deliver_image("proxy", self._client_ip(route))
+        # Decisao 58 (Emenda, achado real desta rodada): of.start_pqc_
+        # signer_service() (chamado embaixo, pra TODOS os 4 perfis,
+        # sem nenhum desvio V9_HARNESS -- diferente de start_tls_kem_
+        # proxy, que TEM um) faz `docker run -d ... mockopin-pqc-signer
+        # node server.mjs` incondicionalmente. NENHUM codigo deste
+        # pacote jamais entregava essa imagem ao cliente antes desta
+        # correcao -- mesma classe de bug que a v8 encontrou e corrigiu
+        # em deliver_images.sh (CLIENT_IMAGES nunca chegavam ao
+        # cliente). Agora pinada em PINS.json e entregue pela MESMA via
+        # `_deliver_image` (save/load, fail-closed) que gateway/proxy
+        # ja usam -- nunca um mecanismo novo.
+        self._deliver_image("pqc-signer", self._client_ip(route))
         gw_ip = self._server_gateway_ip(route)
         env = self._client_env(profile, gw_ip)
         py_code = ("import opin_flow as of; of.start_tls_kem_proxy(%s, detached=True); "
@@ -1087,15 +1156,43 @@ def run_smoke_gate(executor, seed: int, out_dir: Path, certs_dir=_DEFAULT_CERTS_
     return manifest
 
 
+def exercise_start_stop(executor: "SSHExecutor", profile: str, route: str) -> dict:
+    """Decisao 58, item 5 (INFRA_REHEARSAL.md): exercicio de start_
+    block/stop_block REMOTOS, um perfil numa rota so (default do
+    roteiro: classico/L0) -- prova que TODOS os containers (gateway,
+    proxy, pqc-signer) sobem e descem de verdade, SEM nenhuma execucao
+    cronometrada e SEM contar nas 60/12 oficiais (nunca chama
+    run_execution/readiness_probe, nunca escreve manifest.json/
+    piloto_calls.json -- so imprime um relatorio proprio, incapaz de
+    ser confundido com um bloco real)."""
+    report = {"profile": profile, "route": route, "started_at_utc": datetime.now(timezone.utc).isoformat()}
+    executor.start_block(profile, route)
+    report["start_block_ok"] = True
+    report["gateway_binary_verifications"] = list(executor.gateway_binary_verifications)
+    report["image_delivery_verifications"] = list(executor.image_delivery_verifications)
+    report["tcp_preflight_results"] = list(executor.tcp_preflight_results)
+    executor.stop_block(profile, route)
+    report["stop_block_ok"] = True
+    report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+    report["note"] = ("exercicio de infraestrutura -- NUNCA uma execucao cronometrada, nunca conta nas "
+                       "60/12 oficiais, nenhum manifest.json escrito por esta chamada")
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["simulate", "ssh"], default="simulate")
     ap.add_argument("--seed", type=int, default=20261107)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", required=False)
     ap.add_argument("--inventory-json", help="obrigatorio no modo --mode ssh (terraform output -json inventory)")
     ap.add_argument("--ssh-key", help="caminho da chave privada do piloto (modo ssh)")
     ap.add_argument("--smoke", action="store_true",
                      help="Decisao 48: porta de fumaca, 1 execucao por perfil x rota (12, nunca contadas nas 60)")
+    ap.add_argument("--exercise-start-stop", action="store_true",
+                     help="Decisao 58, item 5: exercicio REMOTO de start_block/stop_block num unico "
+                          "perfil/rota, sem execucao cronometrada, nunca contado nas 60/12 oficiais")
+    ap.add_argument("--exercise-profile", default="classico")
+    ap.add_argument("--exercise-route", default="L0")
     args = ap.parse_args()
 
     if args.mode == "simulate":
@@ -1105,6 +1202,14 @@ def main():
             ap.error("--mode ssh exige --inventory-json")
         inventory = json.load(open(args.inventory_json, encoding="utf-8"))
         executor = SSHExecutor(inventory, key_path=args.ssh_key)
+
+    if args.exercise_start_stop:
+        report = exercise_start_stop(executor, args.exercise_profile, args.exercise_route)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+
+    if not args.out:
+        ap.error("--out e obrigatorio fora do modo --exercise-start-stop")
 
     if args.smoke:
         manifest = run_smoke_gate(executor, args.seed, Path(args.out))

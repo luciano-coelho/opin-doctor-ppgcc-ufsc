@@ -7301,3 +7301,174 @@ documentacao/script de validacao, a tag nas key pairs e aditiva
 teardown principal e uma escolha operacional baseada em evidencia
 (cleanup.py mais capaz que a v8), nunca uma mudanca de criterio.
 Continuo sem autorizar push nem recursos na AWS.
+
+## 58. Comparacao de infraestrutura v9 vs v8 (rodada read-only, sem mudanca de codigo) revela achado real -- `start_block` nunca entregava `mockopin-pqc-signer` pro cliente (achado 19), nem `thesis/scripts/*.py`/`mock-service-os/certs`/`certs/generated` pra nenhuma instancia (mesma classe de bug que a v8 ja tinha corrigido); corrigidos pela via que ja existe (PINS.json + `_deliver_image`, novo `deliver_source.py` por rele de 2 saltos); sondagem TCP pura restaurada (achado 18); sampler de CPU/steal registrado como lacuna conhecida antes da campanha oficial (achado 10, nao implementado); cleanup.py ja redigia erros da AWS (sem lacuna); achado adicional nao corrigido -- o SG do servidor/clientes so aceita SSH do EIP do controle, nunca do operador, entao `orchestrator.py` so funciona de verdade rodando a partir do controle
+
+Nada de AWS, sem push, branch `v9/fase1-local`. Commit local.
+
+**Contexto:** uma comparacao v9-vs-v8 puramente read-only (sem alterar
+nada, "so o diff e a classificacao") achou, em paralelo, um achado
+real (19): `start_block` chama `of.start_pqc_signer_service()` no
+cliente remoto, pra TODOS os 4 perfis, sem NENHUM desvio
+`V9_HARNESS` (ao contrario de `start_tls_kem_proxy`, que tem um) --
+e nenhum codigo deste pacote jamais entregava `mockopin-pqc-signer`
+pro cliente. Mesma classe de bug que a v8 real encontrou e corrigiu
+em `deliver_images.sh` (`CLIENT_IMAGES` nunca chegavam ao cliente,
+"this would have failed the very FIRST profile switch / first
+execution of the real campaign"). Pedido desta rodada: tabela de
+dependencias do caminho remoto inteiro, correcao pela via que ja
+existe, pin das imagens novas por emenda, testes que pegam a
+regressao, e tres itens relacionados (achados 18/10, redacao de
+erros no cleanup.py).
+
+**1 (tabela de dependencias + correcao do achado 19):** lendo
+`orchestrator.py`/`opin_flow.py`/`cli.py` linha por linha (nunca
+suposto), o caminho remoto do `SSHExecutor` depende de:
+
+| Comando remoto | Imagem/arquivo/certificado | Entrega ANTES desta rodada | Pin/verificacao |
+|---|---|---|---|
+| `_launch_gateway` (`docker run ... mockopin-v9-gateway`) | imagem `gateway` | `_deliver_image` (save/load) | PINS.json, Image ID + sha256 do binario |
+| `_launch_gateway` (`-v .../mock-service-os/certs:/real-certs:ro`) | `mock-service-os/certs` | **NUNCA entregue** -- caminho `$(pwd)/../../...` so fazia sentido no shim local | nenhum -- corrigido nesta rodada |
+| `of.start_tls_kem_proxy` (`docker run ... mockopin-v9-proxy`) | imagem `proxy` | `_deliver_image` (save/load) | PINS.json, Image ID |
+| `of.start_tls_kem_proxy` (V9_HARNESS, `-v V9_CERTS_DIR:/certs:ro`) | `thesis/results/v9/certs/generated` | **NUNCA entregue** | nenhum -- corrigido nesta rodada |
+| `of.start_pqc_signer_service` (`docker run ... mockopin-pqc-signer`) | imagem `pqc-signer` | **NUNCA entregue -- achado 19** | nenhum antes; PINS.json + `_deliver_image` agora |
+| `python3 campaign_client_runner.py`/`opin_flow.py` (import) | `thesis/scripts/*.py` (+`requirements.txt`) | **NUNCA entregue** | nenhum -- corrigido nesta rodada |
+| `dedicated_capture` (`docker run ... mockopin-v9-measure`) | imagem `measure` | `_deliver_image` (save/load) | PINS.json, Image ID |
+| `rehearsal_handshake.sh` (fora do orquestrador) | imagem `negtest` | save/load, so no ensaio | sem pin, por motivo registrado na Decisao 57 (nenhum codigo de producao a usa) |
+| nenhum (local-only, T6) | `bench`/`interop`/`certs`(Go)/`gateway-check` | n/a | fora do escopo do caminho remoto -- so `run_t6.sh`/validacao local |
+| nenhum (e um ENDPOINT, nao um artefato) | `/jwks` | servido pelos containers `auth`/`mockapi` (docker-compose, `insurance-server-lambdas`) | gap SEPARADO, ja documentado no proprio docstring de `start_block` ("precisa de uma versao v9-consciente... isso NAO existe ainda") -- fora do pedido desta rodada |
+
+Corrigido pela via que ja existe (nenhum mecanismo novo): `pqc-signer`
+pinado em `PINS.json` (so Image ID, sem binario proprio pra hashear --
+`server.mjs`, Node, mesmo padrao de `measure`) e `start_block` agora
+chama `self._deliver_image("pqc-signer", self._client_ip(route))`
+antes do `python3 -c "...start_pqc_signer_service..."`, mesma posicao
+relativa (depois do proxy, antes do disparo). `thesis/scripts/*.py`/
+`mock-service-os/certs`/`thesis/results/v9/certs/generated` ganham um
+script novo, `deliver_source.py` (`thesis/results/v9/campaign/
+scripts/`), mesmo rele de 2 saltos que `pki_relay.py` ja usa
+(operador -> controle -> destino, chave da campanha no segundo salto)
+-- motivo do rele, nao uma escolha estetica: o Security Group do
+servidor e de cada cliente so aceita SSH do EIP do PROPRIO controle
+(`main.tf`, `ssh_ingress_cidrs = {"control": ...}`), nunca do
+operador. `COMMON_FILES` (scripts + mock-service-os/certs) vai pro
+servidor e todo cliente; `CLIENT_ONLY_FILES` (certs/generated) so pros
+clientes (confirmado lendo `opin_flow.py`: `V9_CERTS_DIR` so e montado
+dentro de `start_tls_kem_proxy`, que so roda no cliente). Tarball
+local via `tarfile` (sem depender de um `tar` no PATH do operador),
+~200KB (comum) / ~270KB (cliente), medido nesta sessao contra o repo
+real.
+
+**Achado adicional, registrado, NAO corrigido nesta rodada:** a mesma
+leitura do Security Group confirma que o OPERADOR nunca alcanca
+servidor/clientes direto numa AWS real -- so o controle alcanca.
+`orchestrator.py` (SSHExecutor), portanto, so funciona de verdade
+rodando a partir do CONTROLE (mesmo padrao real de `campaign_run.py`/
+`campaign_run.service` na v8), nunca do laptop do operador.
+`deliver_source.py` entrega os arquivos pela via certa, mas QUEM
+dispara `orchestrator.py --mode ssh` ainda precisa estar executando
+de dentro do controle -- isso nao muda nesta rodada (o pedido era
+entrega de imagem/arquivo/certificado, nao onde o processo roda).
+Registrado aqui e no `INFRA_REHEARSAL.md` (Passo 3) pra nunca ficar
+escondido.
+
+**Correcao relacionada:** `_launch_gateway` montava `/real-certs` a
+partir de `$(pwd)/../../mock-service-os/certs` -- caminho que so faz
+sentido na validacao LOCAL via `local_shim_bridge_join=True` (onde
+`cwd` e forcado pro repositorio real pelo shim); numa instancia remota
+de verdade, `$(pwd)` resolve pro diretorio de login SSH
+(`/home/ec2-user`), nunca pro layout do repo. Corrigido pra
+`~/mock-service-os/certs` no caso remoto real (onde `deliver_
+source.py` agora entrega de verdade, e onde `opin_flow.py`'s proprio
+`CERTS_DIR = BASE_DIR/"mock-service-os"/"certs"`, com `BASE_DIR =
+SCRIPTS_DIR.parent.parent`, ja presumia sem mudanca de codigo nenhuma)
+-- o caminho antigo continua, sem mudanca, so quando
+`local_shim_bridge_join=True`.
+
+**Testes (achado 19):** `_assert_every_used_image_was_delivered_first`
+-- "executor simulado que registra os comandos e as imagens",
+generico, confere que toda imagem com um marcador de USO (`docker run
+-d --name v9-mtls`/`--entrypoint tshark mockopin-v9-measure`/
+`start_tls_kem_proxy`/`start_pqc_signer_service`) teve uma entrega
+(`docker save <imagem> | ssh ... docker load`) num indice ANTERIOR na
+mesma lista de chamadas.
+`test_toda_imagem_usada_no_caminho_remoto_foi_entregue_antes` exercita
+`dedicated_capture` (que chama `start_block` por dentro) e confere as
+4 imagens reais; `test_mutante_pqc_signer_nao_entregue_e_pego`
+reproduz o bug ORIGINAL (`_deliver_image` que pula "pqc-signer") e
+confirma que o teste acima reprova com essa mutacao -- este e o teste
+que teria pego o achado 19 se existisse antes desta rodada.
+
+**2 (achado 18, sondagem TCP restaurada):** `readiness_probe`
+(existente) ja roda de dentro do CLIENTE e ja prova alcancabilidade
+de fato (um handshake TLS completo nao acontece sem TCP funcionando) --
+mas so DEPOIS de `start_block` ja ter entregue imagem, verificado
+binario e subido 3 containers, um custo caro pra descobrir um SG
+errado. `preflight_tcp.py` real da v8 fazia essa MESMA checagem (TCP
+puro, `/dev/tcp`, disparada do CLIENTE -- nunca do controle, por
+motivo literal que a v8 ja registrou: "checking from control directly
+would test a different network path") uma vez por cenario, ANTES de
+qualquer coisa cara. Restaurado como `SSHExecutor._tcp_preflight(route)`,
+chamado como a PRIMEIRA linha de `start_block` -- uma vez por ROTA
+(nao por bloco/perfil, memorizado em `self._tcp_preflight_done`),
+fail-closed (aborta ANTES de qualquer entrega de imagem se o cliente
+nao alcancar `{gateway_ip}:443` por TCP puro). 4 testes novos
+(`test_tcp_preflight_roda_do_cliente_antes_de_qualquer_entrega`/
+`test_tcp_preflight_aborta_antes_de_qualquer_entrega_se_sem_alcance`/
+`test_tcp_preflight_roda_so_uma_vez_por_rota`).
+
+**3 (redacao de erros da AWS em cleanup.py):** conferido, nao e uma
+lacuna -- `cli.run_terraform`/`cli.run_aws`/`cli.run_aws_json` (a
+UNICA fronteira deste pacote pra qualquer comando real de
+terraform/aws) ja chamam `redact_aws_errors.redact` (reaproveitada
+direto do arquivo real da v8, nunca duplicada) sobre `stdout`/`stderr`
+antes de devolver ou levantar -- `cleanup.py` nunca precisou de uma
+chamada propria porque toda saida que passa por ele ja vem redigida
+na fronteira. Nenhuma mudanca de codigo feita aqui -- documentado no
+`INFRA_REHEARSAL.md`, Passo 8, pra nao parecer uma lacuna ignorada.
+
+**4 (achado 10, sampler de CPU/steal -- lacuna conhecida, NAO
+implementada):** a v8 real monitorava `cpu_mem_steal` (ruido de
+vizinhanca em nuvem compartilhada) durante toda janela cronometrada
+real (`_PeriodicSampler`/`_cpu_mem_sampler_start_cmd`/
+`_steal_pct_from_cpu_jsonl`, usado em `compute_window_health`) -- o
+piloto da v9 (60 execucoes, nunca a fonte dos numeros oficiais da
+tese) nao tem nada equivalente, por desenho (o piloto testa
+viabilidade, nao coleta estatistica publicavel). **Registrado aqui
+como lacuna conhecida que precisa ser resolvida ANTES de uma campanha
+oficial real** (nao antes do piloto) -- nao implementado nesta rodada,
+por pedido explicito.
+
+**5 (INFRA_REHEARSAL.md):** reescrito com 11 passos (0-10, ordem
+linear preservada) -- Passo 3 novo (`deliver_source.py`, com a secao
+honesta sobre o SG so aceitar SSH do controle), Passo 4 agora entrega
+as 4 imagens reais (gateway/proxy/pqc-signer/negtest, nao mais 2) com
+tabela de tempo por imagem/regiao a preencher no ensaio real, Passo 5
+novo (`orchestrator.py --exercise-start-stop`, 1 perfil em L0, sem
+contar nas 60/12 -- confirma os 3 containers reais subindo/descendo
+pelo CAMINHO REAL do SSHExecutor, distinto do handshake direto
+gateway+negtest do Passo 6). Custo estimado ajustado pra ~25 min
+(~US$0,17).
+
+**Testes:** 123 em `thesis/results/v9/campaign/tests/` (108 antes
+desta rodada + 15 novos: 9 em `test_orchestrator.py` -- dependencia de
+imagem/mutante, 3 de sondagem TCP, 2 de caminho de `/real-certs`, 2 de
+`exercise_start_stop` -- + 6 em `test_deliver_source.py`, novo),
+todos passando.
+
+**Commit local** (sem push): `thesis/results/v9/campaign/PINS.json`
+(entrada `pqc-signer`), `thesis/results/v9/campaign/scripts/
+orchestrator.py` (entrega de pqc-signer, `_tcp_preflight`, correcao do
+mount de `/real-certs`, `exercise_start_stop`),
+`thesis/results/v9/campaign/scripts/deliver_source.py` (novo),
+`thesis/results/v9/campaign/tests/test_orchestrator.py` (15 testes
+novos no total entre os dois arquivos), `thesis/results/v9/campaign/
+tests/test_deliver_source.py` (novo), `thesis/results/v9/campaign/
+INFRA_REHEARSAL.md` (reescrito).
+
+Toda correcao desta rodada e aditiva (nenhum mecanismo de entrega
+novo, so a mesma via -- PINS.json + `_deliver_image`, rele de 2
+saltos -- aplicada a dependencias que faltavam) -- nenhuma exige
+emenda ao pre-registro. O achado do SG/onde-o-orquestrador-roda fica
+registrado como risco real, nao resolvido, pra decisao do Luciano.
+Continuo sem autorizar push nem recursos na AWS.

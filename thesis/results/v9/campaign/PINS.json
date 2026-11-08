@@ -39,6 +39,17 @@
       "go_version_m_text": null,
       "image_id": "sha256:2274de77a3ade4c2cf12b8cfc0e88aceec13ddfb20fe8ccda669798b53d61e6d",
       "note": "So tooling de captura (tcpdump+tshark) -- nunca decide aceitar/rejeitar conexao nenhuma (ver DECISIONS.md, risco residual). Pin so pelo Image ID, verificado apos docker load; nenhum binario unico proprio pra hashear (a imagem embute copias de gateway/proxy/bench so pro harness standalone de medicao, nunca usadas pelo piloto real)."
+    },
+    "pqc-signer": {
+      "docker_image": "mockopin-pqc-signer",
+      "platform": "linux/amd64",
+      "binary_path_in_image": null,
+      "binary_sha256": null,
+      "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null,
+      "go_version_m_text": null,
+      "image_id": "sha256:b141cc7831aacdc1369d6a3efefbad55e0c839dac83e25fed1728a6614923b01",
+      "note": "Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- pin so pelo Image ID, verificado apos docker load, mesmo padrao de 'measure'."
     }
   }
 }

@@ -141,6 +141,7 @@ _FAKE_IMAGE_IDS = {
     "gateway": "sha256:" + "1" * 64,
     "proxy": "sha256:" + "2" * 64,
     "measure": "sha256:" + "3" * 64,
+    "pqc-signer": "sha256:" + "4" * 64,
 }
 
 
@@ -150,6 +151,7 @@ def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None):
         "gateway": {"binary_sha256": gateway_sha256, "docker_image": "mockopin-v9-gateway", "image_id": image_ids["gateway"]},
         "proxy": {"docker_image": "mockopin-v9-proxy", "image_id": image_ids["proxy"]},
         "measure": {"docker_image": "mockopin-v9-measure", "image_id": image_ids["measure"]},
+        "pqc-signer": {"docker_image": "mockopin-pqc-signer", "image_id": image_ids["pqc-signer"]},
     }}
 
 
@@ -187,9 +189,21 @@ def _fake_image_id_for_remote_cmd(remote_cmd, image_ids=_FAKE_IMAGE_IDS):
     se o comando nao for essa chamada."""
     if "docker image inspect" not in remote_cmd:
         return None
-    for key, name in (("gateway", "mockopin-v9-gateway"), ("proxy", "mockopin-v9-proxy"), ("measure", "mockopin-v9-measure")):
+    for key, name in (("gateway", "mockopin-v9-gateway"), ("proxy", "mockopin-v9-proxy"),
+                      ("measure", "mockopin-v9-measure"), ("pqc-signer", "mockopin-pqc-signer")):
         if name in remote_cmd:
             return f"{image_ids[key]}\n"
+    return None
+
+
+def _fake_tcp_preflight_call(remote_cmd):
+    """Decisao 58, achado 18: `_tcp_preflight` roda via SSH antes de
+    qualquer outra coisa em `start_block` -- resposta fake generica
+    (sempre OK) pra nao quebrar nenhum teste existente que nao esta
+    testando a sondagem TCP em si. Devolve None se o comando nao for
+    essa chamada."""
+    if "/dev/tcp/" in remote_cmd:
+        return _SimpleProc(stdout="OK\n")
     return None
 
 
@@ -232,6 +246,9 @@ def _fake_run_factory(calls):
         if sh_save_load is not None:
             return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(stdout=f"gateway: OK\n")
         if "sha256sum /gateway" in remote_cmd:
@@ -609,6 +626,9 @@ def test_start_block_aborta_antes_de_qualquer_execucao_se_binario_adulterado_no_
         if sh_save_load is not None:
             return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(returncode=1, stdout="gateway: FAILED\n", stderr="sha256sum: WARNING: 1 computed checksum did NOT match\n")
         image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
@@ -652,6 +672,9 @@ def test_start_block_aborta_se_binario_do_container_rodando_diverge(monkeypatch)
         if sh_save_load is not None:
             return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(stdout="gateway: OK\n")
         if "sha256sum /gateway" in remote_cmd:
@@ -788,6 +811,9 @@ def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monk
         if sh_save_load is not None:
             return sh_save_load
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
         if "docker image inspect" in remote_cmd:
             return _SimpleProc(stdout="sha256:" + "9" * 64 + "\n")  # ID errado, de proposito
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
@@ -800,6 +826,208 @@ def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monk
     assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
     assert not any("start_tls_kem_proxy" in c for c in flat), flat
     assert executor.image_delivery_verifications[0]["ok"] is False
+
+
+# --- Decisao 58 (pedido independente, item 1): tabela de dependencias
+# do caminho remoto -- achado real (19): start_block chamava
+# of.start_pqc_signer_service() no cliente sem NUNCA entregar
+# mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou
+# em deliver_images.sh). `_assert_every_used_image_was_delivered_first`
+# e o "executor simulado que registra os comandos e as imagens"
+# pedido -- generico, reusavel por qualquer teste que exercite
+# start_block/dedicated_capture.
+
+_IMAGE_USAGE_MARKERS = {
+    # Marcador distinto do proprio comando `docker save <imagem> | ssh
+    # ... docker load` de entrega -- senao a entrega conta como "uso"
+    # dela mesma (o nome da imagem aparece nos dois comandos).
+    "gateway": "docker run -d --name v9-mtls",
+    "measure": "--entrypoint tshark mockopin-v9-measure",
+    "proxy": "start_tls_kem_proxy",
+    "pqc-signer": "start_pqc_signer_service",
+}
+_IMAGE_DOCKER_NAMES = {
+    "gateway": "mockopin-v9-gateway", "proxy": "mockopin-v9-proxy",
+    "measure": "mockopin-v9-measure", "pqc-signer": "mockopin-pqc-signer",
+}
+
+
+def _assert_every_used_image_was_delivered_first(calls):
+    """Pra cada imagem com um marcador de USO presente em `calls`,
+    confere que uma entrega real (`docker save <imagem> | ssh ...
+    docker load`, via `_deliver_image`) apareceu num indice ANTERIOR
+    na mesma lista de chamadas -- fail-closed: imagem usada sem
+    entrega registrada, ou entregue DEPOIS do uso, reprova."""
+    flat = [" ".join(c) for c in calls]
+    delivered_at = {}
+    for i, c in enumerate(flat):
+        for key, docker_name in _IMAGE_DOCKER_NAMES.items():
+            if f"docker save {docker_name}" in c and key not in delivered_at:
+                delivered_at[key] = i
+    for key, marker in _IMAGE_USAGE_MARKERS.items():
+        usage_indices = [i for i, c in enumerate(flat) if marker in c]
+        if not usage_indices:
+            continue  # esta imagem nunca foi usada nesta chamada -- nada a conferir
+        assert key in delivered_at, (
+            f"imagem '{key}' foi usada ({marker!r}) mas NUNCA entregue via _deliver_image -- " + str(flat)
+        )
+        assert delivered_at[key] < min(usage_indices), (
+            f"imagem '{key}' foi usada ({marker!r}) ANTES de ser entregue (entrega no indice "
+            f"{delivered_at[key]}, uso no indice {min(usage_indices)}) -- " + str(flat)
+        )
+
+
+def test_toda_imagem_usada_no_caminho_remoto_foi_entregue_antes(monkeypatch):
+    """Exercita start_block (via dedicated_capture, que tambem entrega
+    e usa 'measure') e confere as 4 imagens reais do caminho remoto
+    (gateway/proxy/pqc-signer/measure) -- este e o teste que teria
+    pegado o achado 19 se existisse antes desta rodada."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("classico", "L0")
+    _assert_every_used_image_was_delivered_first(calls)
+
+
+def test_mutante_pqc_signer_nao_entregue_e_pego(monkeypatch):
+    """Mutacao: reproduz o bug ORIGINAL do achado 19 -- `_deliver_image`
+    nunca entrega 'pqc-signer' (como no codigo antes desta rodada) --
+    o teste acima, reaplicado sobre esta mutacao, tem que reprovar."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    real_deliver_image = orch.SSHExecutor._deliver_image
+
+    def mutant_deliver_image(self, image_key, host):
+        if image_key == "pqc-signer":
+            return  # mutante: nunca entrega -- reproduz o achado 19 original
+        return real_deliver_image(self, image_key, host)
+
+    monkeypatch.setattr(orch.SSHExecutor, "_deliver_image", mutant_deliver_image)
+    executor.start_block("classico", "L0")
+    with pytest.raises(AssertionError, match="pqc-signer"):
+        _assert_every_used_image_was_delivered_first(calls)
+
+
+# --- Decisao 58, achado 18: sondagem TCP pura (preflight_tcp.py real
+# da v8), restaurada -- uma vez por rota, DE DENTRO do cliente, ANTES
+# de qualquer entrega/execucao cara.
+
+def test_tcp_preflight_roda_do_cliente_antes_de_qualquer_entrega(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    tcp_idx = next(i for i, c in enumerate(flat) if "/dev/tcp/" in c)
+    deliver_idx = next(i for i, c in enumerate(flat) if "docker save mockopin-v9-gateway" in c)
+    assert tcp_idx < deliver_idx, flat
+    # a chamada tem que ter disparado do CLIENTE (203.0.113.60), nunca
+    # do controle/operador -- mesma exigencia literal da v8 real.
+    assert any("203.0.113.60" in c and "/dev/tcp/" in c for c in flat), flat
+    assert executor.tcp_preflight_results == [
+        {"route": "L0", "gateway_ip": "10.0.1.50", "ok": True, "output": "OK"}
+    ]
+
+
+def test_tcp_preflight_aborta_antes_de_qualquer_entrega_se_sem_alcance(monkeypatch):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "/dev/tcp/" in remote_cmd:
+            return _SimpleProc(stdout="FAIL\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="nao alcancou"):
+        executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker save" in c for c in flat), (
+        "nenhuma entrega de imagem pode acontecer se a sondagem TCP falhar -- " + str(flat)
+    )
+
+
+def test_tcp_preflight_roda_so_uma_vez_por_rota(monkeypatch):
+    """Troca de PERFIL (dentro da mesma rota) nunca precisa refazer a
+    sondagem TCP -- a rota/SG nao mudam entre perfis."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    executor.start_block("pqc", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert sum(1 for c in flat if "/dev/tcp/" in c) == 1, flat
+    assert len(executor.tcp_preflight_results) == 1
+
+
+# --- Decisao 58, achado real: `_launch_gateway` montava `/real-certs`
+# a partir de `$(pwd)/../../mock-service-os/certs` -- caminho que so
+# faz sentido na validacao LOCAL via shim (onde `cwd` e forcado pro
+# repositorio real); numa instancia remota de verdade, `$(pwd)` resolve
+# pro diretorio de login SSH (`/home/ec2-user`), e nada neste pacote
+# jamais entregava nada em `/home/ec2-user/../../mock-service-os/
+# certs`. Corrigido pra `~/mock-service-os/certs` (onde
+# `deliver_source.py`, novo, entrega de verdade) no caso remoto real;
+# o caminho antigo so continua pra `local_shim_bridge_join=True`.
+
+def test_launch_gateway_monta_real_certs_de_home_no_caso_remoto_real(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")  # local_shim_bridge_join=False (default)
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
+    assert gateway_launches, flat
+    assert all("~/mock-service-os/certs:/real-certs:ro" in c for c in gateway_launches), gateway_launches
+    assert all("$(pwd)/../../mock-service-os/certs" not in c for c in gateway_launches), gateway_launches
+
+
+def test_launch_gateway_mantem_pwd_relativo_so_na_validacao_local_via_shim(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key", local_shim_bridge_join=True)
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
+    assert gateway_launches, flat
+    assert all("$(pwd)/../../mock-service-os/certs:/real-certs:ro" in c for c in gateway_launches), gateway_launches
+
+
+# --- Decisao 58, item 5 (INFRA_REHEARSAL.md): exercicio remoto de
+# start_block/stop_block, sem execucao cronometrada, nunca contado nas
+# 60/12 oficiais.
+
+def test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    report = orch.exercise_start_stop(executor, "classico", "L0")
+    flat = [" ".join(c) for c in calls]
+
+    assert report["start_block_ok"] is True
+    assert report["stop_block_ok"] is True
+    assert any("docker run -d --name v9-mtls" in c for c in flat), flat
+    assert any("docker stop tls_kem_proxy_run pqc_signer_service_run" in c for c in flat), flat
+    assert not any("campaign_client_runner.py" in c for c in flat), (
+        "o exercicio NUNCA pode disparar uma execucao real -- " + str(flat)
+    )
+    # nenhum arquivo de manifesto/execucao e escrito por este exercicio.
+    assert not list(tmp_path.glob("*")), "exercise_start_stop nao deveria escrever nada em disco"
+
+
+def test_exercise_start_stop_tambem_entrega_pqc_signer(monkeypatch):
+    """O mesmo achado 19 vale aqui -- o exercicio tem que confirmar a
+    entrega das 3 imagens do caminho remoto, nao so subir o gateway."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    orch.exercise_start_stop(executor, "classico", "L0")
+    delivered_keys = {v["image_key"] for v in executor.image_delivery_verifications}
+    assert delivered_keys == {"gateway", "proxy", "pqc-signer"}
+    assert all(v["ok"] for v in executor.image_delivery_verifications)
 
 
 def test_stop_block_para_os_dois_containers_fixos(monkeypatch):
@@ -963,7 +1191,9 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
 
         proc = _SimpleProc()
-        if "ip -o -4 route show to default" in remote_cmd:
+        if "/dev/tcp/" in remote_cmd:
+            proc.stdout = "OK\n"
+        elif "ip -o -4 route show to default" in remote_cmd:
             proc.stdout = f"{iface}\n"
         elif "nohup tcpdump" in remote_cmd:
             proc.stdout = f"{tcpdump_pid}\n"
