@@ -8030,3 +8030,69 @@ no total (144 antes + 1 novo).
 scripts/orchestrator.py` (`_tcp_preflight` corrigido),
 `thesis/results/v9/campaign/tests/test_orchestrator.py` (2 testes),
 `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 67. PARADA real na Fase A, Passo 9 -- Image ID pos docker-load diverge entre a versao de Docker do operador (29.9.1) e a do servidor real (25.0.16), mesmo com binario/certificados confirmados byte-identicos; mecanismo de verificacao pre-registrado por Image ID (Decisao 55) nao sobrevive a essa diferenca de versao -- parada conforme as regras 6/7(e), conta derrubada e confirmada limpa
+
+Branch `v9/fase1-local`, commit e push. Frota derrubada
+(`cleanup.py --release-eips --force`, `all_clean: true`) e
+confirmada limpa por 12 chamadas `describe-*` independentes, todas
+vazias, nas 3 regioes. Ver `thesis/results/v9/piloto/PARADA.md` pro
+relato completo (teste/evidencia/opcoes pro Luciano decidir).
+
+**O que rodou de verdade antes desta parada:** apply real (28
+recursos), Passos 0-8 do ensaio completos -- cada um corrigido pelo
+menos uma vez ao vivo (Decisoes 62-66, todas commitadas/empurradas).
+Passo 9 (`--exercise-start-stop`) chegou a entregar o `.tar` do
+gateway por 2 saltos reais, verificado por sha256 nos dois pontos de
+transporte -- e so FALHOU na conferencia de Image ID POS-load.
+
+**Achado, investigado so por leitura (nenhum rebuild, nenhuma
+mudanca em PINS.json):** o binario `/gateway` dentro do container
+real, no servidor, tem sha256 identico ao pinado -- conteudo
+correto, confirmado. O Image ID (`docker image inspect .Id`) pos
+`docker load`, porem, diverge do pinado. Causa raiz: a maquina do
+OPERADOR roda Docker 29.9.1; o servidor real (Amazon Linux 2023,
+pacote `dnf install docker`) roda Docker 25.0.16 -- o MESMO `.tar`,
+carregado pelas duas versoes, produz dois Image IDs diferentes. Esse
+cenario NUNCA tinha sido testado entre versoes diferentes de Docker
+antes desta execucao real (a determinabilidade de `docker load`,
+estabelecida nas Decisoes 54/55/58/59, so foi confirmada ATE AGORA
+dentro da MESMA instalacao de Docker).
+
+**Por que isso e uma parada, nao uma correcao:** corrigir isso
+(trocar o que e verificado, ou fixar a versao do Docker no host)
+altera um mecanismo de verificacao PRE-REGISTRADO (Decisao 55) --
+regra 6 do Luciano ("alterar... criterios pre-registrados: PARE e
+relate") e regra 7(e) ("duvida sobre se uma correcao altera o que
+esta sendo medido"). Registrado honestamente como achado real, nunca
+contornado por conta propria.
+
+**Risco pra campanha oficial, nao so pro piloto:** qualquer instancia
+EC2 real tende a rodar um Docker mais antigo (pacote de distribuicao)
+que o do operador (Docker Desktop) -- este problema deve se repetir
+em qualquer entrega real por Image ID, nao e especifico desta
+instancia/execucao.
+
+**3 opcoes registradas em PARADA.md, nenhuma aplicada:** (1) trocar
+o criterio fail-closed pro sha256 do binario/`.tar` (ja comprovado
+estavel entre versoes) e rebaixar Image ID a diagnostico; (2) fixar
+a MESMA versao de Docker no host que no operador (`install_common_
+packages.sh` passaria a pinar uma versao, nao `dnf install -y
+docker` generico); (3) outra via.
+
+**Testes:** sem mudanca de codigo nesta Decisao (so investigacao e
+documentacao) -- 145/145, inalterado.
+
+**Custo real desta execucao (apply + ~9 passos + destroy, 3 regioes,
+~25-30min de frota):** bem abaixo de US$1, muito abaixo do teto de
+US$5. Nenhum "mesmo problema" passou de 1 retentativa.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/piloto/
+PARADA.md` (reescrito com o achado real), `thesis/results/v9/
+piloto/estado.json`, `thesis/results/v9/piloto/ensaio_infra/logs/*`
+(apply/cleanup/verificacao final/diagnostico reais, redigidos),
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Nenhuma Fase B tentada -- a Fase A nao fechou verde. Aguardando
+decisao do Luciano sobre o mecanismo de verificacao de Image ID
+antes de qualquer nova tentativa.
