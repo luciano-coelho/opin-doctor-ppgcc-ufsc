@@ -330,6 +330,13 @@ def _fake_run_factory(calls):
             return _SimpleProc(stdout=f"gateway: OK\n")
         if "sha256sum /gateway" in remote_cmd:
             return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        if "listening on" in remote_cmd:
+            # Decisao 69: `_launch_gateway` agora falha rapido se o laco
+            # de espera nunca ver "FOUND" no stdout -- fake sempre acha
+            # de primeira (comportamento feliz default; testes que
+            # precisam simular o container nunca subindo sobrescrevem
+            # este fake especificamente).
+            return _SimpleProc(stdout="FOUND\n")
         image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
         if image_id_stdout is not None:
             return _SimpleProc(stdout=image_id_stdout)
@@ -754,6 +761,8 @@ def test_start_block_aborta_se_binario_do_container_rodando_diverge(monkeypatch)
             return tcp_preflight
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(stdout="gateway: OK\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
         if "sha256sum /gateway" in remote_cmd:
             return _SimpleProc(stdout="0000000000000000000000000000000000000000000000000000000000000000  /gateway\n")
         image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
@@ -791,6 +800,8 @@ def test_mutante_start_block_ignora_resultado_da_verificacao_e_pego(monkeypatch)
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "sha256sum -c" in remote_cmd:
             return _SimpleProc(returncode=1, stdout="gateway: FAILED\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
 
     monkeypatch.setattr(cli, "_run", fake_run)
@@ -1250,6 +1261,13 @@ def test_launch_gateway_monta_real_certs_de_home_no_caso_remoto_real(monkeypatch
     assert gateway_launches, flat
     assert all("~/mock-service-os/certs:/real-certs:ro" in c for c in gateway_launches), gateway_launches
     assert all("$(pwd)/../../mock-service-os/certs" not in c for c in gateway_launches), gateway_launches
+    # Decisao 69 (achado real, ao vivo, na retomada da Fase A real): a
+    # rede/alias so existem no stack local de validacao -- no caso
+    # remoto real, o unico jeito do cliente (que disca o IP do HOST,
+    # nunca um alias Docker) alcancar a porta 443 e publica-la no host.
+    assert all("-p 443:443" in c for c in gateway_launches), gateway_launches
+    assert all("insurance-server-lambdas_default" not in c for c in gateway_launches), gateway_launches
+    assert all("--network-alias" not in c for c in gateway_launches), gateway_launches
 
 
 def test_launch_gateway_mantem_pwd_relativo_so_na_validacao_local_via_shim(monkeypatch):
@@ -1261,6 +1279,59 @@ def test_launch_gateway_mantem_pwd_relativo_so_na_validacao_local_via_shim(monke
     gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
     assert gateway_launches, flat
     assert all("$(pwd)/../../mock-service-os/certs:/real-certs:ro" in c for c in gateway_launches), gateway_launches
+    # Decisao 69: a validacao LOCAL ainda precisa da rede/alias (outros
+    # containers do stack de compose resolvem "mtls" por ela) -- so o
+    # caso remoto real troca pra `-p 443:443` (teste acima).
+    assert all("insurance-server-lambdas_default" in c for c in gateway_launches), gateway_launches
+    assert all("--network-alias mtls" in c for c in gateway_launches), gateway_launches
+    assert all("-p 443:443" not in c for c in gateway_launches), gateway_launches
+
+
+def test_launch_gateway_aborta_se_docker_run_falha(monkeypatch):
+    """Decisao 69 (achado real): sem checar o retorno de `docker run
+    -d`, uma rede inexistente (ou qualquer outro erro de `docker run`)
+    deixava o container em "Created" (nunca "Up") e so apareceria 2
+    passos depois, numa mensagem sem pista da causa raiz. Agora aborta
+    na hora, com a saida real do `docker run` na mensagem."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "docker run -d --name v9-mtls" in remote_cmd:
+            return _SimpleProc(returncode=1, stderr="docker: Error response from daemon: network not found.\n")
+        if "/dev/tcp/" in remote_cmd:
+            return _SimpleProc(stdout="OK\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="'docker run -d' falhou"):
+        executor._launch_gateway("classico")
+
+
+def test_launch_gateway_aborta_se_container_nunca_fica_pronto(monkeypatch):
+    """Decisao 69 (achado real, ao vivo): `docker run -d` pode retornar
+    0 e o container ainda nunca ficar pronto (nunca loga "listening
+    on" -- foi exatamente o que aconteceu na Fase A real, por causa da
+    rede inexistente, mas poderia ser qualquer outra causa). O laco de
+    espera antigo nunca checava isso -- a falha so aparecia 2 passos
+    depois em `_verify_running_gateway_binary`, sem pista da causa."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="")  # nunca encontra "listening on"
+        if "docker ps -a" in remote_cmd:
+            return _SimpleProc(stdout="Created\n")
+        return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="nunca logou 'listening on'"):
+        executor._launch_gateway("classico")
 
 
 # --- Decisao 58, item 5 (INFRA_REHEARSAL.md): exercicio remoto de
@@ -1475,6 +1546,8 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
             proc.stdout = tshark_output
         elif "sha256sum -c" in remote_cmd:
             proc.stdout = "gateway: OK\n"
+        elif "listening on" in remote_cmd:
+            proc.stdout = "FOUND\n"
         elif "sha256sum /gateway" in remote_cmd:
             proc.stdout = f"{_FAKE_GATEWAY_SHA256}  /gateway\n"
         else:

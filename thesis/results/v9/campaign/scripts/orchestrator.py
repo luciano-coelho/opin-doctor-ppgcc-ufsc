@@ -627,24 +627,63 @@ class SSHExecutor:
             "$(pwd)/../../mock-service-os/certs" if self.local_shim_bridge_join
             else "~/mock-service-os/certs"
         )
+        # Decisao 69 (achado real, ao vivo, na retomada da Fase A real):
+        # `--network insurance-server-lambdas_default` + os `--network-
+        # alias` so existem/fazem sentido na validacao LOCAL (criados
+        # pelo stack docker-compose de `insurance-server-lambdas`, que
+        # SO sobe quando `local_shim_bridge_join=True`, no bloco acima
+        # de `start_block`). Num servidor EC2 real (`local_shim_
+        # bridge_join=False`), essa rede nunca existe -- `docker run -d`
+        # falhava (rede nao encontrada), o container ficava parado em
+        # "Created" (nunca "Up"), e nem isso nem o laco de espera por
+        # "listening on" abaixo verificavam o codigo de saida -- o erro
+        # real so aparecia 2 passos depois, em `_verify_running_
+        # gateway_binary` ("container ... is not running"), sem pista
+        # da causa raiz. O servidor remoto real tambem nunca tem outro
+        # container pra resolver `mtls`/`auth.local` por alias Docker
+        # (o backend real nao existe nesta rodada, ver limitacao
+        # honesta no docstring de `start_block`) -- o cliente (`_server_
+        # gateway_ip`) sempre disca o IP do HOST na porta 443, nunca um
+        # alias Docker, entao o unico requisito real e publicar a porta
+        # no host (`-p 443:443`), nunca juntar a uma rede especifica.
+        if self.local_shim_bridge_join:
+            network_flags = (
+                "--network insurance-server-lambdas_default "
+                "--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
+                "--network-alias matls-api.local --network-alias api.local --network-alias directory "
+            )
+        else:
+            network_flags = "-p 443:443 "
         cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
-        cli.run_ssh(self._server_ip(),
+        run_proc = cli.run_ssh(self._server_ip(),
                     f"docker run -d --name {self.gateway_container} "
-                    f"--network insurance-server-lambdas_default "
-                    f"--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
-                    f"--network-alias matls-api.local --network-alias api.local --network-alias directory "
+                    f"{network_flags}"
                     f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
                     f"{keylog_flag}"
                     f"-v {real_certs_mount}:/real-certs:ro mockopin-v9-gateway",
                     key_path=self.key_path)
+        if run_proc.returncode != 0:
+            raise RuntimeError(
+                f"_launch_gateway {profile}: 'docker run -d' falhou -- abortando ANTES de qualquer "
+                f"verificacao/execucao (saida: {(run_proc.stdout + run_proc.stderr).strip()!r})"
+            )
         # Espera o gateway de verdade terminar de subir (carregar os
         # certs, abrir :443) antes do proxy tentar discar -- achado ao
         # vivo (Decisao 49): sem isso, a primeira chamada do proxy
         # pode cair numa janela em que o container ja existe mas ainda
         # nao esta aceitando conexao, devolvendo 502 rio abaixo.
-        cli.run_ssh(self._server_ip(),
-                    f"for i in $(seq 1 30); do docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && break; sleep 1; done",
+        wait_proc = cli.run_ssh(self._server_ip(),
+                    f"for i in $(seq 1 30); do "
+                    f"docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && echo FOUND && break; "
+                    f"sleep 1; done",
                     key_path=self.key_path)
+        if "FOUND" not in (wait_proc.stdout or ""):
+            status_proc = cli.run_ssh(self._server_ip(), f"docker ps -a --filter name={self.gateway_container} --format '{{{{.Status}}}}'", key_path=self.key_path)
+            raise RuntimeError(
+                f"_launch_gateway {profile}: container {self.gateway_container} nunca logou 'listening on' em "
+                f"30s -- abortando ANTES de qualquer verificacao/execucao (status: "
+                f"{(status_proc.stdout or '').strip()!r})"
+            )
 
     def _tcp_preflight(self, route):
         """Decisao 58, achado 18: mesma checagem, mesma justificativa

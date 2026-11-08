@@ -104,6 +104,56 @@ def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch
     assert "thesis/results/v9/certs/generated" in l0_report["files"]
 
 
+# --- Decisao 69 (achado real, ao vivo): nenhum passo deste pacote
+# jamais instalava requirements.txt no cliente de verdade --
+# ModuleNotFoundError: No module named 'jwt' no primeiro start_block
+# real. So o CLIENTE instala (o servidor nunca executa esse codigo).
+
+def test_deliver_source_instala_requirements_so_nos_clientes(monkeypatch, fake_repo):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {
+        "server": {"public_ip": "203.0.113.50"},
+        "clients": {"L0": {"public_ip": "203.0.113.60"}, "L219": {"public_ip": "203.0.113.70"}},
+    }
+    report = ds.deliver_source(
+        control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+        campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+        inventory=inventory, repo_root=fake_repo,
+    )
+    pip_cmds = [c[-1] for c in calls if c and c[0] == "ssh" and any("203.0.113.5" in a for a in c) and "pip3 install" in c[-1]]
+    assert len(pip_cmds) == 2, "um pip install por CLIENTE, nunca pro servidor -- " + str(pip_cmds)
+    assert any("@203.0.113.60" in c and "requirements.txt" in c and "--require-hashes" in c for c in pip_cmds), pip_cmds
+    assert any("@203.0.113.70" in c for c in pip_cmds), pip_cmds
+    assert not any("@203.0.113.50" in c for c in pip_cmds), "servidor nunca precisa de requirements.txt"
+
+    l0_report = next(r for r in report if r["target"] == "L0")
+    assert l0_report["requirements_installed"] is True
+    server_report = next(r for r in report if r["target"] == "server")
+    assert "requirements_installed" not in server_report
+
+
+def test_deliver_source_aborta_se_pip_install_falha_no_cliente(monkeypatch, fake_repo):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "pip3 install" in argv[-1]:
+            return FakeProc(returncode=1, stderr="No matching distribution found for PyJWT==2.15.1")
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {"L0": {"public_ip": "203.0.113.60"}}}
+    with pytest.raises(RuntimeError, match="pip install falhou"):
+        ds.deliver_source(
+            control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+            campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+            inventory=inventory, repo_root=fake_repo,
+        )
+
+
 def test_rele_extrai_antes_de_remover_o_tarball(monkeypatch, fake_repo):
     """Mesma politica de ordem que pki_relay.py ja testa pro shred --
     aqui, `tar -xzf` (extracao) tem que vir ANTES de qualquer `rm -f`

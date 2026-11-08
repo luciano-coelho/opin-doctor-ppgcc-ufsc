@@ -8278,3 +8278,139 @@ Com isso, os itens 1 e 2 do prompt do Luciano estao completos. Segue
 para o item 3: suite de testes verde -> Fase A do zero (nova fleet,
 passos 0 a 14, `self_terminate_hours=1`) -> se fechar verde, Fase B
 sem pedir confirmacao.
+
+## 70. Achado real, ao vivo, retomando a Fase A real (fleet nova, Passo 9) -- `_launch_gateway` usava incondicionalmente `--network insurance-server-lambdas_default` (so existe na validacao LOCAL via shim), travando o container em "Created" (nunca "Up") num servidor EC2 real; nem `docker run -d` nem o laco de espera por "listening on" checavam o codigo de saida, entao o erro real so aparecia 2 passos depois, sem pista da causa
+
+Branch `v9/fase1-local`, commit e push. Retomada real da Fase A (item
+3 do prompt anterior do Luciano), fleet nova (`terraform apply
+-var="self_terminate_hours=1"`, 28 recursos, 5 instancias, 3
+regioes) -- conta confirmada limpa (12 chamadas `describe-*`, 3
+regioes, todas vazias) antes do apply.
+
+**Achado, ao vivo, no Passo 9 (`--exercise-start-stop`):**
+`_verify_running_gateway_binary` abortou com `"Error response from
+daemon: container ... is not running"`. Investigado via `docker ps -a`
+no servidor real (2o salto, pelo controle): o container `v9-mtls`
+estava em status `Created` (nunca `Up`) -- `docker run -d` nunca de
+fato iniciou o container.
+
+**Causa raiz:** `_launch_gateway` sempre usava `--network
+insurance-server-lambdas_default` + 6 `--network-alias` (pensados pra
+resolucao DNS Docker interna de OUTROS containers do stack local de
+`insurance-server-lambdas`, que so sobe quando `local_shim_bridge_
+join=True`). Num servidor EC2 real (`local_shim_bridge_join=False`,
+o caso de todo piloto remoto de verdade), essa rede NUNCA existe --
+`docker run` falhava (rede nao encontrada), mas nem essa chamada nem
+o laco de espera por `"listening on"` abaixo dela (`cli.run_ssh(...)`
+sem checar `.returncode`) verificavam o erro -- o problema so
+aparecia 2 passos depois, em `_verify_running_gateway_binary`, sem
+nenhuma pista da causa real. Esta mesma lacuna ja estava registrada
+honestamente no docstring de `start_block` desde a Decisao 49
+("Pra um piloto remoto de verdade, esse script precisa de uma versao
+v9-consciente... isso NAO existe ainda") -- um gap conhecido, adiado,
+que so se manifestou de verdade nesta retomada.
+
+**Por que e uma correcao segura, nunca um STOP:** o cliente real
+(`_server_gateway_ip`) sempre disca o IP do HOST na porta 443, nunca
+um alias Docker -- a rede/aliases nunca tiveram efeito nenhum sobre o
+que e medido (bytes/latencia do handshake TLS real), so decidiam se
+OUTROS containers locais (auth/mockapi, que no piloto remoto nem
+existem) conseguiam resolver "mtls" por DNS Docker. Trocar isso pelo
+unico requisito real do caso remoto (publicar a porta no host) nao
+toca PINS.json, binario/certificado pinado, nem nenhum dos 7
+criterios pre-registrados.
+
+**Corrigido, em `orchestrator.py._launch_gateway`:** `network_flags`
+agora e condicional a `local_shim_bridge_join` -- `True` mantem a
+rede/aliases antigos (validacao local, onde outros containers do
+compose precisam resolver o alias); `False` (caso remoto real) passa
+a usar `-p 443:443`. `docker run -d` agora tem seu `.returncode`
+checado, abortando na hora com a saida real se falhar. O laco de
+espera por `"listening on"` agora tambem verifica se encontrou
+("FOUND" no stdout) antes de seguir -- se nunca encontrar em 30s,
+aborta com o status real do container (`docker ps -a`) na mensagem,
+em vez de deixar o erro aparecer 2 passos depois sem contexto.
+
+**Testes:** 2 novos (`test_launch_gateway_aborta_se_docker_run_falha`,
+`test_launch_gateway_aborta_se_container_nunca_fica_pronto`) + os 2
+testes existentes de `_launch_gateway` (caso remoto real / validacao
+local) ganharam asserções novas conferindo os `network_flags`
+corretos em cada modo. 156 testes no total.
+
+**Validado ao vivo, retomando o Passo 9 na MESMA fleet real** (apos
+redeployar `orchestrator.py` corrigido pro controle via
+`deliver_source.py --to-control`): `start_block_ok: true` -- gateway
+sobe, loga "listening on", `_verify_running_gateway_binary` confere
+`running_container_sha256_ok: true`.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/orchestrator.py`, `thesis/results/v9/campaign/tests/
+test_orchestrator.py`, `thesis/results/v9/DECISIONS.md` (esta
+Decisao).
+
+## 71. Segundo achado real, mesma retomada da Fase A, Passo 9 (apos a Decisao 70) -- `deliver_source.py` nunca instalava `thesis/scripts/requirements.txt` no cliente real (passo que a v8 original tinha, perdido na reescrita em Python); `opin_flow.py` quebrava com `ModuleNotFoundError: No module named 'jwt'` no primeiro `start_block` real
+
+Branch `v9/fase1-local`, commit e push. Mesma fleet real da Decisao
+70 (nenhuma nova instancia precisou subir).
+
+**Achado, ao vivo, retomando o Passo 9 (apos corrigir a Decisao
+70):** `start_block` chegou a subir o gateway com sucesso, mas
+falhou em "subindo proxy/signer" no cliente L0, com o traceback real:
+`File ".../opin_flow.py", line 131 -- import jwt as pyjwt --
+ModuleNotFoundError: No module named 'jwt'`.
+
+**Causa raiz:** `install_common_packages.sh` (template Terraform, ja
+existente) tem um comentario citando que o `deliver_source.sh` REAL
+da v8 fazia, como seu PROPRIO ultimo passo, `pip3 install --user -r
+requirements.txt` no destino -- a reescrita em Python deste pacote
+(`deliver_source.py`, Decisao 58) entregava o ARQUIVO `requirements.
+txt` (esta em `COMMON_FILES`) mas nunca o instalava em lugar nenhum.
+Mascarado nesta rodada inteira (incluindo a Decisao 67) porque a
+unica verificacao de ambiente Python existente
+(`preflight.check_client_python_environment`) testa o `.venv` do
+PROPRIO OPERADOR (`_VENV_PYTHON_DEFAULT`, caminho Windows), nunca o
+cliente remoto -- so apareceu ao vivo no primeiro `start_block` real
+que chegou implicitamente a subir o proxy/signer no cliente (passos
+anteriores, Decisoes 62-67, nunca chegaram tao longe).
+
+**Por que e uma correcao segura, nunca um STOP:** instalar
+dependencias Python PINADAS por hash (`requirements.txt` ja exige
+`--require-hashes`, Decisao anterior a esta rodada) no cliente nao
+altera nenhum binario/certificado pinado, nem PINS.json, nem nenhum
+dos 7 criterios pre-registrados -- e so o pre-requisito de ambiente
+pra `opin_flow.py` rodar.
+
+**Corrigido:** `deliver_source.py` ganha `install_client_requirements()`
+(roda `pip3 install --user --require-hashes -r ~/thesis/scripts/
+requirements.txt` no cliente, relayado pelo controle com a chave da
+CAMPANHA, mesmo padrao de 2 saltos do resto do arquivo) -- chamada
+DENTRO do laco de clientes de `deliver_source()`, nunca pro servidor
+(que nunca executa esse codigo). Relatorio por cliente ganha
+`"requirements_installed": true`.
+
+**Testes:** 2 novos
+(`test_deliver_source_instala_requirements_so_nos_clientes`,
+`test_deliver_source_aborta_se_pip_install_falha_no_cliente`). 158
+testes no total.
+
+**Validado ao vivo, retomando o Passo 9 na MESMA fleet real** (apos
+`deliver_source.py --inventory-json ...` redeployar os 3 clientes com
+o pip install novo): Passo 9 fechou **completamente verde**
+-- `start_block_ok: true`, `stop_block_ok: true`,
+`gateway_binary_verifications[0].pin_matched: true` e
+`running_container_sha256_ok: true`, as 3 `image_delivery_
+verifications` (gateway/proxy/pqc-signer) com `ok/layers_ok/
+config_ok/binary_ok` todos `true`, `tcp_preflight_results[0].ok:
+true`. Primeira vez nesta rodada (e na historia deste pacote) que o
+Passo 9 fecha de ponta a ponta numa execucao real na AWS.
+
+**Custo acumulado desta retomada:** fleet nova, ~25min de vida ate
+aqui (apply + passos 0-9 + as 2 correcoes acima), bem abaixo de US$1,
+muito abaixo do teto de US$5.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_source.py`, `thesis/results/v9/campaign/tests/
+test_deliver_source.py`, `thesis/results/v9/DECISIONS.md` (esta
+Decisao).
+
+Seguindo pros Passos 10-14 do roteiro (mesma fleet, sem reaplicar).

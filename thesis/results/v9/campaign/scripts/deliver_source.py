@@ -141,12 +141,38 @@ def relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, t
     return proc
 
 
+def install_client_requirements(control_ip, operator_key_path, campaign_key_remote_path, target_ip):
+    """Decisao 69 (achado real, ao vivo, retomando a Fase A real):
+    NENHUM passo deste pacote jamais instalava `thesis/scripts/
+    requirements.txt` no cliente de verdade -- a v8 real original
+    fazia isso como o ULTIMO passo do proprio `deliver_source.sh`
+    (ver comentario em `install_common_packages.sh`); a reescrita em
+    Python (`deliver_source.py`, Decisao 58) entregava o ARQUIVO
+    `requirements.txt` mas nunca o instalava. Mascarado at agora
+    porque a validacao LOCAL via shim usa o `.venv` do PROPRIO
+    operador (`preflight.check_client_python_environment`), nunca pip
+    no cliente remoto -- so apareceu ao vivo no primeiro
+    `start_block` real (`ModuleNotFoundError: No module named
+    'jwt'`, importado por `opin_flow.py`)."""
+    remote_cmd = (
+        f"ssh -i {campaign_key_remote_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"ec2-user@{target_ip} "
+        f"'pip3 install --user --require-hashes -r ~/thesis/scripts/requirements.txt'"
+    )
+    proc = cli.run_ssh(control_ip, remote_cmd, key_path=operator_key_path, connect_timeout=90)
+    if proc.returncode != 0:
+        raise RuntimeError(f"install_client_requirements({target_ip}): pip install falhou: {cli.redact(proc.stderr)}")
+    return proc
+
+
 def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inventory, repo_root=_REPO_ROOT):
     """`inventory`: o mesmo dict que `terraform output -json inventory`
     produz. Entrega `COMMON_FILES` pro servidor + todo cliente;
-    `CLIENT_ONLY_FILES` so pros clientes. Devolve um relatorio por
-    destino (nunca conteudo de arquivo, so contagem/lista de caminhos
-    relativos entregues)."""
+    `CLIENT_ONLY_FILES` so pros clientes, e so pros clientes tambem
+    instala `requirements.txt` (Decisao 69 -- o servidor nunca executa
+    nenhum codigo Python que precise dessas dependencias). Devolve um
+    relatorio por destino (nunca conteudo de arquivo, so contagem/
+    lista de caminhos relativos entregues)."""
     report = []
     with tempfile.TemporaryDirectory(prefix="v9_deliver_source_") as tmp:
         common_tarball = build_tarball(COMMON_FILES, Path(tmp) / "common.tar.gz", repo_root=repo_root)
@@ -161,7 +187,9 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
             client_ip = client["public_ip"]
             staged = stage_on_control(control_ip, operator_key_path, client_tarball, f"{route}.tar.gz")
             relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, client_ip, staged)
-            report.append({"target": route, "ip": client_ip, "files": list(COMMON_FILES) + list(CLIENT_ONLY_FILES)})
+            install_client_requirements(control_ip, operator_key_path, campaign_key_remote_path, client_ip)
+            report.append({"target": route, "ip": client_ip, "files": list(COMMON_FILES) + list(CLIENT_ONLY_FILES),
+                            "requirements_installed": True})
     return report
 
 
