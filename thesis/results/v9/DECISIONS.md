@@ -9681,3 +9681,111 @@ scripts/deliver_source.py`,
 
 Reentregando `deliver_source.py` (Passo 6, servidor+clientes -- o
 `setup_ssm.sh` corrigido so chega assim) e repetindo o Passo 10.
+
+## 90. PARADA real na Fase B, Passo 10 -- o backend de negocio sobe de ponta a ponta pela PRIMEIRA vez (12/12 execucoes, 0 falhas), mas a prova de captura reprova nos 4 perfis -- achado real sobre rede real, nunca exercitado antes, regra 7(e) aplicada
+
+**Resultado, apos as Decisoes 81/87/88/89 (achados reais, todos
+corrigidos ao vivo, cada um validado): o Passo 10 avancou mais do que
+em QUALQUER tentativa anterior desta rodada.** `smoke_capture_proof`
+confirma, lendo o `manifest.json` real direto do controle (a conexao
+SSH travou sem fechar depois do comando terminar -- mesmo sintoma
+"heredoc vazio" ja registrado antes nesta sessao, nunca um problema
+do PROPRIO piloto -- o resultado real foi lido direto do arquivo no
+controle, nunca suposto):
+
+- `capture_preflight.go: true`
+- **12/12 execucoes da porta de fumaca, ZERO falhas** (`smoke_
+  failures: []`) -- a PRIMEIRA vez na historia deste pacote que o
+  backend de negocio real (auth/mockapi/mongo_seed + psql/
+  localstack/mongodb) sobe, serve JWKS/token de verdade, e sustenta
+  12 execucoes reais via `campaign_client_runner.py`/`opin_flow.py`
+  sem nenhuma falha -- **a entrega completa do item 1 do pedido do
+  Luciano esta provada, ao vivo, numa AWS real.**
+- `bytes_diagnostic_needs_decision: false` (diagnostico, Decisao 76,
+  nunca o gate oficial -- passou limpo).
+- `capture_proof_ok: false` -- os 4 testes de PROVA DO MECANISMO
+  (Decisao 53, item 4b -- 1 captura dedicada por perfil, nunca uma
+  das 12 oficiais do criterio 1) reprovaram, os 4 com `ok: false`.
+
+**Investigado ao vivo, nunca suposto:** os 4 logs de captura
+(`smoke_capture_proof/*.log`, arquivados aqui) mostram decifragem
+REAL funcionando -- `tamanho POR MENSAGEM` com valores concretos,
+plausiveis, nunca vazios nem corrompidos. A causa do `ok: false` e
+que CADA log contem o MESMO grupo de mensagens REPETIDO 6 vezes
+(sempre com os MESMOS bytes a cada repeticao -- nunca valores
+divergentes entre si), com o grupo "CertificateVerify+Finished do
+servidor" (tshark tipos 15,20) aparecendo numa linha SEPARADA do
+grupo "ServerHello+EncryptedExtensions+CertificateRequest+
+Certificate" (tipos 2,8,13,11) -- `_message_sizes_for_profile`
+(evaluate_criteria.py) so atribui 15/20 como "do servidor" quando
+aparecem NA MESMA linha que 2+11; quando o tshark os reporta em
+frames SEPARADOS (por fragmentacao/coalescimento TCP diferente numa
+rede real vs. local), esses dois campos nunca sao preenchidos, e o
+criterio reprova por campo ausente, nunca por byte errado.
+
+**Por que isto e uma PARADA, nunca uma correcao-e-repete:** esta
+classificacao (`_message_sizes_for_profile`) e a MESMA funcao que
+decide o criterio 1 OFICIAL (o criterio mais citado do pre-registro)
+-- nunca so a prova de mecanismo da porta de fumaca. Esta e a
+PRIMEIRA VEZ, na historia inteira deste projeto, que essa
+classificacao roda contra uma captura de rede REAL (toda validacao
+anterior foi local/loopback, onde o coalescimento TCP e sempre
+diferente). Corrigir essa logica de classificacao, sob pressao de
+tempo, numa fleet ao vivo, SEM entender completamente se o
+agrupamento de frames varia por execucao (timing/jitter de rede) ou
+e deterministico pro ambiente real -- e exatamente a "duvida sobre
+se a correcao altera o que e medido" que a regra 7(e) desta
+autorizacao pede pra tratar com parada, nunca com uma tentativa
+dentro da mesma sessao. Diferente das Decisoes 81/87/88/89 (bugs de
+infraestrutura/transporte/transcricao, sempre com causa raiz unica e
+obviamente segura de corrigir), este achado toca o MECANISMO DE
+MEDICAO em si.
+
+**Decisao tomada:** PARAR aqui. O backend de negocio (o pedido
+central desta rodada) esta provado funcionando de ponta a ponta --
+isso e um resultado real e significativo, nao uma derrota. A
+classificacao de mensagens por tshark sob rede real precisa da
+decisao do Luciano antes de qualquer mudanca: ela toca o criterio 1
+oficial.
+
+**Acao tomada, seguindo a regra 6 (fleet nunca ociosa):** `emergency_
+stop.py` modo dry confirmou os 5 instances/5 EIPs/3 SGs/4 key pairs
+esperados; `cleanup.py --tf-dir ../../terraform --profile mockopin-pqc
+--release-eips --force` reportou `"all_clean": true`, zero drift;
+verificacao final independente (12 chamadas `describe-*`, 3 regioes)
+confirmada vazia.
+
+**Decisoes pendentes do Luciano:**
+1. A classificacao por linha de `_message_sizes_for_profile` precisa
+   agrupar por JANELA DE TEMPO (nao so por linha exata), ou tshark
+   precisa de uma opcao que force remontagem de registro TLS antes
+   da analise (`-o tls.desegment_ssl_records: TRUE`, ja pode estar
+   ligado por padrao -- precisa confirmar), ou e um comportamento
+   esperado/tolerable que so precisa de um fallback na classificacao
+   (somar 15/20 de QUALQUER linha no bloco, nao so a que tem 2+11)?
+2. Os 6 grupos repetidos por captura -- sao 6 conexoes de verdade
+   (por que 6, se cada captura deveria ter so 1 execucao de
+   settling?) ou e o MESMO handshake sendo relatado em multiplicas
+   janelas pelo tshark? Precisa de investigacao mais profunda (talvez
+   com o pcap crudo, nao so o texto ja extraido) antes de qualquer
+   correcao.
+3. Dado que o backend de negocio ja esta provado (item 1 completo),
+   Luciano decide se quer: (a) investigar/corrigir a classificacao
+   antes de qualquer nova tentativa de piloto real, ou (b) aceitar
+   rodar o piloto completo mesmo com a prova de mecanismo da porta
+   de fumaca reprovando (nunca recomendado -- a mesma classificacao
+   decide o criterio 1 oficial), ou (c) outra abordagem.
+
+**Testes:** nenhum novo (achado de medicao sob rede real, nunca
+testavel localmente da mesma forma -- precisaria de uma captura real
+equivalente, que so existe nesta evidencia arquivada).
+
+**Custo desta tentativa:** fleet viva por aproximadamente 1h25
+(apply ~20:32 UTC, teardown ~21:53 UTC) -- a MAIOR janela de uma
+unica tentativa nesta rodada, mas ainda bem dentro do teto de US$5
+(estimativa ~US$1,20 so desta tentativa, ~US$2,45 acumulado com a
+Fase A e a tentativa anterior da Fase B).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/DECISIONS.md`
+(esta Decisao), evidencia em `thesis/results/v9/piloto/
+ensaio_fase_b_real_v2/`.

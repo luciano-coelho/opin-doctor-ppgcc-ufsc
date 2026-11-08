@@ -10,15 +10,23 @@ coisa está.
 - **Fase A (ensaio de infraestrutura, `INFRA_REHEARSAL.md`): COMPLETA
   E VERDE.** Passos 0–14 todos passaram numa execução real na AWS
   (segunda tentativa desta retomada).
-- **Fase B (piloto real de 60 execuções): PARADA no Passo 10,
-  segunda tentativa.** Luciano respondeu as 3 lacunas (Decisões
-  75–80: SAN real descartada, smoke gate corrigido, coleta/
-  consolidação reescritas, `PILOT_RUNBOOK.md` escrito) e autorizou
-  seguir. Fleet real aplicada, Passos 0–9 verdes; Passo 10 achou e
-  corrigiu ao vivo um bug real (Decisão 81), depois parou num gap de
-  infraestrutura muito maior — o backend de negócio (AS/API) nunca
-  foi portado pra nenhuma instância real v9 (Decisão 82, 3 opções
-  pendentes do Luciano). Fleet derrubada, conta confirmada limpa.
+- **Fase B (piloto real de 60 execuções): backend de negócio PROVADO
+  funcionando de ponta a ponta — PARADA na prova de captura.**
+  Luciano respondeu as 3 lacunas da 1ª rodada (Decisões 75–80) e,
+  depois da parada da Decisão 82, respondeu o pedido de portar o
+  backend de verdade (Decisões 83–85: backend auth/mockapi/
+  mongo_seed portado, tabela de dependências, validação local em
+  ambiente limpo, critérios 2/3/7 ligados ao pipeline). 2ª tentativa
+  real: 4 achados reais corrigidos ao vivo em sequência (Decisões
+  81/87/88/89 — preflight de captura, identidade de imagem só-por-
+  digest, `Env` truncado em PINS.json, bit executável perdido no
+  Windows) até o backend subir de ponta a ponta — **12/12 execuções
+  da porta de fumaça, ZERO falhas, primeira vez na história deste
+  pacote.** Parou (Decisão 90) na prova de mecanismo da captura (4/4
+  perfis reprovados) — achado de classificação de mensagens sob rede
+  real (nunca exercitado localmente), toca o critério 1 oficial, 3
+  decisões pendentes do Luciano. Fleet derrubada, conta confirmada
+  limpa.
 - **Fase C (consolidação):** não aplicável ainda (depende da Fase B).
 
 ## Arquivos neste diretório
@@ -33,6 +41,7 @@ coisa está.
 | `ensaio_infra_retomada/` | Logs da retomada da Fase A que fechou COMPLETA E VERDE (Decisões 68–74). Ver `ensaio_infra_retomada/IDENTIDADE.json`. |
 | `dados_oficiais/validacao-local-fase-b/` | Caminho de dados completo (run_pilot→coleta→avaliação→consolidação) provado localmente antes da Fase B real (Decisão 79) — critérios 1/4/5/6 PASS reais, 2/3/7 sem evidência (gap conhecido). |
 | `ensaio_fase_b_real/` | Logs da primeira tentativa real da Fase B (parou no Passo 10, Decisões 81–82). Ver `ensaio_fase_b_real/IDENTIDADE.json`. |
+| `ensaio_fase_b_real_v2/` | Logs da segunda tentativa real da Fase B — backend provado (12/12, 0 falhas), parou na prova de captura (Decisões 81/87/88/89/90). Ver `ensaio_fase_b_real_v2/IDENTIDADE.json`. |
 
 ## Convenção
 

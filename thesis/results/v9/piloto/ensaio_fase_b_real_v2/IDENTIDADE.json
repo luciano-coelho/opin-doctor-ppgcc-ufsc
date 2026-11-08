@@ -1,0 +1,17 @@
+{
+  "subpasta": "ensaio_fase_b_real_v2",
+  "descricao": "Segunda tentativa real da Fase B, apos o Luciano aprovar o port do backend de negocio da v8 (Decisao 83) e ligar os produtores dedicados dos criterios 2/3/7 (Decisao 85). Passos 0-9 verdes (31 recursos terraform, chave entregue, docker pronto, codigo/certs/backend-config entregues, imagens entregues e verificadas). Passo 10 (porta de fumaca) encontrou e corrigiu 4 achados reais em sequencia (Decisoes 81/87/88/89 -- preflight de captura, identidade de imagem so-por-digest, Env truncado em PINS.json, bit executavel perdido no Windows) antes de finalmente completar as 12 execucoes com ZERO falhas -- primeira vez que o backend de negocio real sobe de ponta a ponta nesta AWS. Parou (Decisao 90) na prova de mecanismo da captura (4/4 reprovados) por um achado de classificacao de mensagens sob rede real, nunca exercitado localmente -- toca o criterio 1 oficial, decisao do Luciano pendente antes de qualquer correcao.",
+  "data_utc": "2026-11-08",
+  "resultado": "Backend de negocio PROVADO funcionando (12/12 execucoes, 0 falhas) -- PARADA na prova de captura (Decisao 90) por achado de classificacao de mensagens sob rede real, decisao pendente do Luciano.",
+  "decisoes_relacionadas": [81, 87, 88, 89, 90],
+  "fleet": "fleet real desta tentativa (terraform apply, self_terminate_hours=4, 31 recursos), derrubada apos a parada -- aproximadamente 1h25 de vida",
+  "conta_confirmada_limpa": true,
+  "arquivos": [
+    "logs/smoke_capture_proof_classico.log",
+    "logs/smoke_capture_proof_pqc.log",
+    "logs/smoke_capture_proof_hibrido-v8.log",
+    "logs/smoke_capture_proof_hibrido-and.log",
+    "logs/smoke_manifest.json"
+  ],
+  "ver_tambem": "thesis/results/v9/DECISIONS.md, Decisoes 81/87/88/89/90 (narrativa completa, causa raiz de cada achado, 3 decisoes pendentes do Luciano na Decisao 90)"
+}

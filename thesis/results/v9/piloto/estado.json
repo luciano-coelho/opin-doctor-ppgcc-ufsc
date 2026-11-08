@@ -1,5 +1,5 @@
 {
-  "fase_atual": "FASE_A_COMPLETA -- FASE_B_PARADA_NO_PASSO_10_POR_GAP_DE_INFRAESTRUTURA",
+  "fase_atual": "FASE_A_COMPLETA -- FASE_B_BACKEND_PROVADO -- PARADA NA CLASSIFICACAO DE CAPTURA SOB REDE REAL",
   "fase_a": {
     "status": "completa, verde, 15/15 passos (0-14) numa fleet real",
     "tentativas": 2,
@@ -8,17 +8,20 @@
     "tentativa_2b_retomada": "COMPLETA -- Passos 0-14 todos verdes -- ver ensaio_infra_retomada/, Decisoes 68-74"
   },
   "fase_b": {
-    "status": "PARADA no Passo 10 (segunda retomada, fleet real nova) -- gap de infraestrutura real, nunca um erro de omissao",
-    "resposta_do_luciano_as_3_lacunas_anteriores": "aplicada integralmente: SAN real descartada e verificada por conteudo (Decisao 75); smoke gate corrigido (ssl stdlib + certs/generated entregue ao controle + excecao nunca quebra o gate, Decisao 76); operator-IP pre-check criado (Decisao 77); collect_artifacts.py reescrito pra estrutura flat real (Decisao 78); consolidate_v9_pilot.py criado e caminho de dados completo provado localmente, coerente (Decisao 79); PILOT_RUNBOOK.md escrito (Decisao 80). Suite verde (175 testes) antes de tocar a AWS.",
-    "tentativa_1_passo10": "capture_ready_check() reprovava sempre numa fleet nova -- so lia se mockopin-v9-measure existia no servidor, nunca entregava (Decisao 81, achado real, corrigido ao vivo, redelivery feito, retry imediato)",
-    "tentativa_2_passo10": "PAROU -- a camada de negocio do gateway (HTTP_MODE=business) proxyia JWKS/AS/API pra hostnames (auth/mockapi) que so existem como alias de rede Docker na validacao LOCAL; nenhuma instancia EC2 real jamais recebeu/orquestrou esse backend (nenhum script v9 entrega essas imagens, elas nem existem localmente hoje) -- confirmado lendo o log real do gateway (dial tcp: lookup auth ... no such host) e confirmando que a v8 ja resolvia isso com 4 imagens de servidor extras (deliver_images.sh), nunca portadas pra v9. Ver Decisao 82.",
+    "status": "backend de negocio PROVADO funcionando de ponta a ponta (12/12 execucoes, 0 falhas) -- PARADA na prova de captura (Decisao 90), achado de classificacao de mensagens sob rede real, decisao pendente do Luciano",
+    "resposta_do_luciano_as_3_lacunas_anteriores_rodada1": "aplicada integralmente (Decisoes 75-80): SAN real descartada, smoke gate corrigido, operator-IP pre-check, collect_artifacts.py reescrito, consolidate_v9_pilot.py criado, PILOT_RUNBOOK.md escrito. 175 testes verdes antes de tocar a AWS.",
+    "tentativa_1_passo10_rodada1": "capture_ready_check() reprovava sempre numa fleet nova (Decisao 81, corrigido ao vivo)",
+    "tentativa_2_passo10_rodada1": "PAROU (Decisao 82) -- backend de negocio (auth/mockapi/mongo_seed) nunca portado pra nenhuma instancia EC2 real.",
+    "resposta_do_luciano_item1_rodada2": "Decisao 83: backend de negocio da v8 portado de verdade (6 imagens novas em PINS.json, deliver_images.py/deliver_source.py extendidos, orchestrator.py.start_block destravado -- o mecanismo JA EXISTIA, so gatado atras de local_shim_bridge_join). Item 2: DEPENDENCY_MAP.md (Decisao 84). Item 3: validacao local em ambiente limpo (Decisao 84, achado real ao vivo confirmando o design). Item 4: criterios 2/3/7 ligados ao pipeline real (Decisao 85, porta SG nova 9876, adaptador reusando criterion_4_counts, tshark via docker). 202 depois 205 testes verdes.",
+    "tentativa_3_passo10_rodada2": "4 achados reais em sequencia, todos corrigidos ao vivo: Decisao 87 (psql/localstack/mongodb sao imagens so-por-digest, nunca preservam nome atraves de save/load -- removidas do mecanismo de 2 saltos, compose as pula direto); Decisao 88 (Env de mongo_seed/mockapi truncado em PINS.json, erro de transcricao desta sessao, nunca um bug de sistema); Decisao 89 (setup_ssm.sh perdia o bit executavel no Windows, localstack o executa direto via subprocess.call). Backend sobe de ponta a ponta, 12/12 execucoes smoke, 0 falhas -- PRIMEIRA VEZ na historia deste pacote.",
+    "parada_final_rodada2": "Decisao 90 -- a prova de mecanismo de captura (4 perfis, nunca o criterio oficial em si) reprova: _message_sizes_for_profile (a MESMA funcao que decide o criterio 1 oficial) classifica mal quando tshark reporta CertificateVerify+Finished do servidor numa linha SEPARADA do resto do flight do servidor -- padrao de fragmentacao TCP NUNCA visto antes (toda validacao anterior foi local/loopback). Toca o criterio 1 oficial -- parada pela regra 7(e), decisao do Luciano pendente antes de qualquer correcao.",
     "decisoes_pendentes_do_luciano": [
-      "Portar o backend auth/mockapi/mongo_seed da v8 pra v9 (reconstruir as imagens, novo mecanismo de entrega, orquestrar no servidor junto com o gateway) -- caminho mais completo, mais caro em tempo",
-      "Decidir se o piloto v9 pode/deve medir so a camada mTLS sem o fluxo de negocio completo (JWKS/AS/RS) -- mudaria o que e medido (criterios 4/6 dependem das 40/44 chamadas HTTP completas), provavelmente exige re-registrar criterios",
-      "Uma terceira opcao que o Luciano prefira (ex.: um stub minimo de AS/API, mais simples que portar a v8 inteira, se julgar que isso nao altera o que e medido de forma relevante)"
+      "Como corrigir _message_sizes_for_profile pra agrupar corretamente mensagens do servidor fragmentadas em linhas/frames separados pelo tshark sob rede real (nunca visto em loopback) -- sem arriscar mudar o que o criterio 1 oficial mede",
+      "Investigar por que cada captura mostra o MESMO grupo de mensagens repetido 6 vezes (6 conexoes reais, ou o mesmo handshake relatado em multiplas janelas pelo tshark?) -- precisa do pcap bruto, nao so o texto ja extraido",
+      "Decidir se investiga/corrige a classificacao antes de qualquer nova tentativa de piloto real, ou aceita rodar mesmo assim, ou outra abordagem"
     ]
   },
-  "custo_acumulado_usd_estimado": 0.70,
+  "custo_acumulado_usd_estimado": 2.45,
   "teto_usd": 5.0,
   "recursos_vivos": false,
   "conta_limpa_confirmada": true
