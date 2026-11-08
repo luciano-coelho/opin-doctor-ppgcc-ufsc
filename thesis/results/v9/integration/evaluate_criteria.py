@@ -25,6 +25,12 @@ DualAuthenticated) e a secao "tamanho POR MENSAGEM" do tshark -- este
 script le as duas do MESMO arquivo de log, sem reimplementar nenhuma
 medicao, so reconferindo contra os limiares ja definidos.
 """
+# Decisao 65: ver orchestrator.py -- controle roda Python 3.9, `str |
+# None` (PEP 604) so existe a partir do 3.10. Adia a avaliacao de
+# anotacao pra string, zero mudanca de comportamento (nada aqui
+# inspeciona anotacao em runtime).
+from __future__ import annotations
+
 import argparse
 import json
 import os

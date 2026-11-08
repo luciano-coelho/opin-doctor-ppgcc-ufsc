@@ -7946,3 +7946,46 @@ todos passando.
 scripts/deliver_images.py` (2 fixes), `thesis/results/v9/campaign/
 tests/test_deliver_images.py` (2 testes novos), `thesis/results/v9/
 DECISIONS.md` (esta Decisao).
+
+## 65. Dois achados reais no Passo 8 (conferencia de dependencias no controle, exatamente o passo desenhado pra pegar isso) -- redact_aws_errors.py nunca entregue ao controle (cli.py depende dele via sys.path relativo), e orchestrator.py/evaluate_criteria.py usam sintaxe de uniao `|` (PEP 604) que quebra no Python 3.9 real do controle
+
+Branch `v9/fase1-local`, commit e push. Novo "problema" pra regra 3
+(0/3 retentativas usadas nele ainda).
+
+**Achado 1 -- `redact_aws_errors.py` ausente:** `python3 orchestrator.py
+--help` no controle quebrou em `import cli`, que quebrou em
+`ModuleNotFoundError: No module named 'redact_aws_errors'`.
+`cli.py` importa esse modulo via `sys.path` relativo (`Path(__file__).
+resolve().parents[3] / "v8" / "campaign" / "scripts"`, achado da
+Decisao 59 que presume o repositorio inteiro) -- mas `deliver_to_
+control` (Decisao 59) nunca incluiu esse arquivo v8 na lista do que
+entrega ao controle. Corrigido: `CONTROL_FILES` (`deliver_source.py`)
+ganha `thesis/results/v8/campaign/scripts/redact_aws_errors.py`.
+
+**Achado 2 -- Python 3.9 real no controle, sintaxe incompativel:**
+o controle (AL2023, confirmado `python3 --version` = 3.9.25) nao tem
+`list[str] | None` (uniao `|` entre tipos, PEP 604 -- so a partir do
+3.10). `orchestrator.py` (2 ocorrencias) e `evaluate_criteria.py` (1
+ocorrencia) usam essa sintaxe em anotacao de funcao -- avaliada na
+DEFINICAO da funcao, quebraria o modulo inteiro assim que o primeiro
+achado fosse corrigido e o import chegasse ali. Corrigido com `from
+__future__ import annotations` (adia toda anotacao pra string, nunca
+avaliada em runtime -- confirmado, nenhum `get_type_hints`/dataclass
+em nenhum dos 4 arquivos que o controle roda, zero mudanca de
+comportamento) nos 2 arquivos.
+
+**Por que os dois so apareceram agora:** nenhum teste automatizado
+roda `orchestrator.py` sob o Python real do controle (os testes
+rodam na maquina do operador, Python 3.13) -- exatamente o motivo da
+Decisao 60 ter pedido este Passo 8 como item novo do roteiro.
+Funcionou: achou os dois ANTES de qualquer execucao cronometrada.
+
+**Testes:** 144/144, inalterado (sintaxe/import, nada que os fakes
+testem especificamente -- `from __future__ import annotations` e
+transparente pros testes existentes).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_source.py` (`CONTROL_FILES` +1), `thesis/results/v9/
+campaign/scripts/orchestrator.py` (`from __future__ import
+annotations`), `thesis/results/v9/integration/evaluate_criteria.py`
+(idem), `thesis/results/v9/DECISIONS.md` (esta Decisao).

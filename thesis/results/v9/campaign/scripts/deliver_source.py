@@ -79,6 +79,14 @@ CONTROL_FILES = [
     "thesis/results/v9/campaign/scripts/rehearsal_handshake.sh",
     "thesis/results/v9/campaign/PINS.json",
     "thesis/results/v9/integration/evaluate_criteria.py",
+    # Decisao 65 (achado real, ao vivo, no Passo 8 do ensaio real):
+    # cli.py importa redact_aws_errors via sys.path relativo
+    # (Path(__file__).resolve().parents[3] / "v8" / "campaign" /
+    # "scripts") -- presume o repositorio INTEIRO presente, mas so
+    # os arquivos acima eram entregues ao controle. Sem este arquivo,
+    # `python3 orchestrator.py --help` quebra com ModuleNotFoundError
+    # antes de imprimir qualquer coisa.
+    "thesis/results/v8/campaign/scripts/redact_aws_errors.py",
 ]
 
 REMOTE_STAGING_DIR = "/tmp/mockopin-v9-source-relay"

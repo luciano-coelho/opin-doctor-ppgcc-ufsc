@@ -31,6 +31,16 @@ daquele perfil rodam em sequencia. A sondagem de prontidao (Decisao
 18/36) roda uma vez por troca de bloco, ANTES do primeiro marcador
 INICIO -- fora de qualquer janela, por construcao.
 """
+# Decisao 65 (achado real, ao vivo, no Passo 8 do ensaio real): o
+# controle roda Python 3.9 (Amazon Linux 2023 base) -- `list[str] |
+# None` (PEP 604, uniao com `|`) so existe a partir do 3.10 e quebra
+# na DEFINICAO da funcao, antes de qualquer `--help`. `from __future__
+# import annotations` adia a avaliacao de toda anotacao pra string
+# (nunca inspecionada em runtime por este modulo -- nenhum `get_type_
+# hints`/dataclass aqui) -- zero mudanca de comportamento, so
+# compatibilidade com o Python real do controle.
+from __future__ import annotations
+
 import argparse
 import json
 import random
