@@ -15,9 +15,23 @@ codigo antes desta rodada.
 Nenhuma chave privada e impressa; so NOMES de arquivo aparecem em
 qualquer saida deste script (mesma regra que a Decisao 26 ja
 registrou pra v8).
+
+**Decisao 59 (achado real, mesma classe do achado 19):**
+`relay_from_control`/`deliver_source.relay_and_extract`/`orchestrator.
+SSHExecutor` todos ASSUMEM `campaign_key_remote_path` (default
+`/home/ec2-user/.ssh/campaign_key`) ja presente no controle pro
+segundo salto -- nenhum script deste pacote jamais o entregava
+(`terraform output -raw campaign_private_key`, nunca escrito em
+arquivo pelo proprio Terraform -- so o operador le e entrega, mesmo
+padrao real de `campaign_up.sh` da v8: `scp "$TMP_KEY" "ec2-user@
+${CONTROL_IP}:~/.ssh/campaign_key"`). `deliver_campaign_key()` (novo)
+fecha esse gap -- UM SO salto, nunca relayado mais pra frente, chmod
+600 no destino, arquivo temporario local SEMPRE num `with
+TemporaryDirectory` (removido automaticamente, mesmo em erro).
 """
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,6 +39,35 @@ import cli  # noqa: E402
 
 REMOTE_STAGING_DIR = "/tmp/mockopin-v9-pki-relay"
 REMOTE_DEST_DIR = "/home/ec2-user/pki"
+
+
+def deliver_campaign_key(control_ip, operator_key_path, campaign_private_key_pem,
+                          campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key"):
+    """Pre-requisito de TUDO que faz um segundo salto (`relay_from_
+    control` aqui, `deliver_source.relay_and_extract`, e o proprio
+    `orchestrator.py` rodando do controle) -- sem isso, nenhum deles
+    consegue de fato alcancar servidor/clientes a partir do controle.
+    `campaign_private_key_pem`: o CONTEUDO (nunca um caminho) -- quem
+    chama le via `terraform output -raw campaign_private_key`, nunca
+    deste modulo. Nunca aparece em nenhuma mensagem de log/excecao
+    deste modulo, so o CAMINHO de destino."""
+    with tempfile.TemporaryDirectory(prefix="v9_campaign_key_") as tmp:
+        local_key_path = Path(tmp) / "campaign_key"
+        local_key_path.write_text(campaign_private_key_pem, encoding="utf-8")
+        local_key_path.chmod(0o600)
+
+        mkdir_proc = cli.run_ssh(control_ip, "mkdir -p ~/.ssh && chmod 700 ~/.ssh", key_path=operator_key_path)
+        if mkdir_proc.returncode != 0:
+            raise RuntimeError(f"deliver_campaign_key: mkdir ~/.ssh no controle falhou: {cli.redact(mkdir_proc.stderr)}")
+
+        scp_proc = cli.run_scp(str(local_key_path), f"ec2-user@{control_ip}:{campaign_key_remote_path}", key_path=operator_key_path)
+        if scp_proc.returncode != 0:
+            raise RuntimeError(f"deliver_campaign_key: scp da chave pro controle falhou: {cli.redact(scp_proc.stderr)}")
+
+    chmod_proc = cli.run_ssh(control_ip, f"chmod 600 {campaign_key_remote_path}", key_path=operator_key_path)
+    if chmod_proc.returncode != 0:
+        raise RuntimeError(f"deliver_campaign_key: chmod no controle falhou: {cli.redact(chmod_proc.stderr)}")
+    return {"target": "control", "ip": control_ip, "campaign_key_remote_path": campaign_key_remote_path}
 
 
 def stage_on_control(control_ip, operator_key_path, target_name, local_files):
@@ -83,11 +126,25 @@ def main():
     ap.add_argument("--control-ip", required=True)
     ap.add_argument("--operator-key", required=True)
     ap.add_argument("--campaign-key-remote-path", default="/home/ec2-user/.ssh/campaign_key")
-    ap.add_argument("--pki-dir", required=True, help="diretorio local com <nome>.crt/<nome>.key por destino + CAs publicas")
+    ap.add_argument("--deliver-campaign-key", action="store_true",
+                     help="Decisao 59: entrega SO a chave SSH da campanha pro controle (le "
+                          "`terraform output -raw campaign_private_key` do stdin), pre-requisito "
+                          "de qualquer rele/orchestrator.py -- nunca roda junto com --pki-dir")
+    ap.add_argument("--pki-dir", help="diretorio local com <nome>.crt/<nome>.key por destino + CAs publicas")
     ap.add_argument("--inventory-json", required=True)
     args = ap.parse_args()
 
     import json
+
+    if args.deliver_campaign_key:
+        campaign_private_key_pem = sys.stdin.read()
+        report = deliver_campaign_key(args.control_ip, args.operator_key, campaign_private_key_pem,
+                                       campaign_key_remote_path=args.campaign_key_remote_path)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+
+    if not args.pki_dir:
+        ap.error("--pki-dir e obrigatorio fora do modo --deliver-campaign-key")
     inventory = json.load(open(args.inventory_json, encoding="utf-8"))
     pki_dir = Path(args.pki_dir)
     ca_files = sorted(pki_dir.glob("*ca*.crt"))

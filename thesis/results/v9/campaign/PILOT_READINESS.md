@@ -52,13 +52,19 @@ Os 4 foram reconfirmados com 0B de desvio em 480 conexões reais locais nesta se
 
 **Reprodutibilidade, testada de verdade:** o binário do gateway e do proxy foi construído duas vezes, do zero (`--no-cache`), com `-trimpath` + `GOARCH=amd64` explícitos — sha256 **idêntico** nas duas vezes, nos dois binários. O **Image ID Docker não é reproduzível** entre builds independentes (confirmado: o mesmo binário, dois builds, dois Image IDs diferentes — metadados de camada/timestamp variam, conteúdo não). Por isso o Image ID em PINS.json só é válido para o artefato **distribuído por `docker save`/`docker load`** (determinístico — nunca para uma reconstrução local independente).
 
-### Como a imagem chega a cada instância — nunca por `docker build`
-`SSHExecutor._deliver_image(image_key, host)`: `docker save <imagem> | ssh <host> docker load`, seguido de `docker image inspect --format '{{.Id}}'` no destino, comparado contra PINS.json. Fail-closed: aborta antes de qualquer execução se o ID carregado divergir. Testado (binário/Image ID adulterado aborta; correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins).
+### Como a imagem chega a cada instância — nunca por `docker build`, agora em 2 saltos reais (Decisão 59)
+Restaurado o modelo real da v8 (`deliver_images.sh`), porque `docker save <imagem> | ssh <host> docker load` (Decisão 55) exigia Docker na máquina que executa esse comando -- e essa máquina é o CONTROLE agora que `orchestrator.py` roda de lá, e o controle nunca tem Docker. Dois saltos, cada um na máquina certa:
+1. `deliver_images.py`, na máquina do OPERADOR (tem Docker): `docker save <imagem> > <imagem>.tar`, sha256, checagem de espaço em disco no controle, scp pro controle (`~/images/`). Pro gateway, também extrai o binário e confere o sha256 contra PINS.json aqui (nunca no controle).
+2. `SSHExecutor._deliver_image(image_key, host)`, rodando DO CONTROLE: scp do `.tar` já estagiado (arquivo LOCAL, nunca `docker save`) pro host, `ssh host docker load`, depois `docker image inspect --format '{{.Id}}'` no destino, comparado contra PINS.json. Fail-closed: aborta antes de qualquer execução se o ID carregado divergir.
+
+Testado (binário/Image ID adulterado aborta; correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins; nenhuma chamada invoca `docker` localmente nem faz o pipe antigo `docker save | ssh ... docker load`).
 
 ### Arquitetura de cada instância — quem roda o quê
-| Instância | Tipo | Arquitetura | Roda gateway/proxy/measure? |
-|---|---|---|---|
-| Controle | `t4g.micro` | **ARM64** | **Não — confirmado no código.** `pki_relay.py`/`collect_artifacts.py`/`cleanup.py` (os 3 scripts que rodam no controle) nunca invocam `docker`. Nenhuma das 3 imagens (todas linux/amd64) chega a ser carregada ou executada no controle. |
+**Correção à Decisão 56(a) (achado real da Decisão 59):** "o orquestrador e o build rodam na máquina do operador... NUNCA numa instância AWS" estava **errado** pra parte "o orquestrador". O *build* (docker build/save) continua, de fato, só na máquina do operador — mas `orchestrator.py` (`SSHExecutor`, a execução remota real) só alcança servidor/clientes de dentro do **controle** (Security Group do servidor/clientes só aceita SSH do EIP do próprio controle, `main.tf`) — `deliver_to_control()` (`deliver_source.py`, Decisão 59) entrega `orchestrator.py` + dependências pro controle, de onde ele roda de verdade. `pki_relay.py`/`collect_artifacts.py`/`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py` continuam rodando **no operador** (nunca no controle) — falam com o controle por SSH (`pki_relay.py`/`collect_artifacts.py`) ou nem isso (`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py`, só API AWS direta).
+
+| Instância | Tipo | Arquitetura | Roda gateway/proxy/measure/pqc-signer? | Roda `docker` localmente? |
+|---|---|---|---|---|
+| Controle | `t4g.micro` | **ARM64** | **Não.** As 4 imagens (linux/amd64) nunca chegam a ser carregadas/executadas no controle — só relayadas (`.tar` estagiado por `deliver_images.py`, scp pro host, `docker load` rodando NO HOST via ssh). `orchestrator.py` roda de verdade AQUI (Decisão 59), mas nunca invoca `docker` como processo local (confirmado por teste, `test_deliver_image_nunca_invoca_docker_localmente`). | **Não — nunca.** |
 | Servidor (L0, sa-east-1) | `m7i-flex.large` | x86_64 | gateway + measure (ambos amd64, batem com a arquitetura real) |
 | Cliente L0 (co-localizado) | `m7i-flex.large` | x86_64 | proxy (amd64) |
 | Cliente L219 (eu-north-1) | `m7i-flex.large` | x86_64 | proxy |

@@ -85,6 +85,52 @@ def test_scp_falho_para_controle_nunca_chega_a_tentar_o_rele(monkeypatch, pki_fi
         )
 
 
+# --- Decisao 59: deliver_campaign_key -- pre-requisito de qualquer
+# rele/orchestrator.py, achado real (a chave da campanha nunca era
+# entregue pro controle por nenhum script antes desta rodada).
+
+def test_deliver_campaign_key_um_so_salto_nunca_imprime_o_conteudo(monkeypatch):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    report = pki_relay.deliver_campaign_key("203.0.113.5", "/fake/operator_key", "-----BEGIN FAKE KEY-----\nconteudo\n-----END FAKE KEY-----\n")
+    assert report["campaign_key_remote_path"] == "/home/ec2-user/.ssh/campaign_key"
+    flat = " ".join(a for c in calls for a in c)
+    assert "FAKE KEY" not in flat and "conteudo" not in flat, "o CONTEUDO da chave nunca pode aparecer num argv"
+    scp_calls = [c for c in calls if c[0] == "scp"]
+    assert len(scp_calls) == 1, "um unico salto -- operador -> controle, nunca relayado mais pra frente"
+    assert any("@203.0.113.5:" in a for a in scp_calls[0])
+
+
+def test_deliver_campaign_key_arquivo_local_e_removido_depois(monkeypatch):
+    captured_paths = []
+
+    def fake_run(argv, timeout=None):
+        if argv[0] == "scp":
+            captured_paths.append(argv[-2])  # caminho LOCAL (origem do scp)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    pki_relay.deliver_campaign_key("203.0.113.5", "/fake/operator_key", "conteudo falso de chave\n")
+    assert len(captured_paths) == 1
+    assert not Path(captured_paths[0]).exists(), "o arquivo temporario local tem que ser removido apos o scp"
+
+
+def test_deliver_campaign_key_falha_no_scp_nunca_e_engolida(monkeypatch):
+    def fake_run(argv, timeout=None):
+        if argv[0] == "scp":
+            return FakeProc(returncode=1, stderr="Permission denied")
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="scp da chave pro controle falhou"):
+        pki_relay.deliver_campaign_key("203.0.113.5", "/fake/operator_key", "conteudo falso\n")
+
+
 def test_mutante_shred_antes_do_scp_e_detectado(monkeypatch, pki_files):
     """Mutacao: shred() escrito ANTES do scp pro destino (ordem
     errada no `&&`) -- o teste de ordem acima deve reprovar."""

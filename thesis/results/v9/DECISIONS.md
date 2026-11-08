@@ -7472,3 +7472,126 @@ saltos -- aplicada a dependencias que faltavam) -- nenhuma exige
 emenda ao pre-registro. O achado do SG/onde-o-orquestrador-roda fica
 registrado como risco real, nao resolvido, pra decisao do Luciano.
 Continuo sem autorizar push nem recursos na AWS.
+
+## 59. O achado do Security Group da Decisao 58 (operador nunca alcanca servidor/clientes, so o controle) e decidido como BLOQUEANTE, nao trabalho futuro -- resolvido com o modelo real da v8: entrega de imagem restaurada em 2 saltos reais (docker save em ARQUIVO no operador, scp pro controle com checagem de espaco em disco, docker load no host via ssh do controle, nunca docker local no controle), orchestrator.py entregue de verdade pro controle e e de la que roda, chave SSH da campanha entregue ao controle (gap adicional achado e corrigido), INFRA_REHEARSAL.md reescrito com toda etapa rotulada por maquina
+
+Nada de AWS, sem push, branch `v9/fase1-local`. Commit local.
+
+**Contexto:** a Decisao 58 registrou, como achado adicional nao
+corrigido, que o Security Group do servidor/clientes so aceita SSH
+do EIP do PROPRIO controle (`main.tf`, `ssh_ingress_cidrs =
+{"control": ...}`) -- o operador nunca alcanca esses hosts direto
+numa AWS real. Luciano decidiu que isso NAO e trabalho futuro: bloqueia
+o piloto, e se resolve nesta rodada com o modelo real da v8
+(`campaign_run.py` roda do controle; `deliver_images.sh` faz `docker
+save` em arquivo, nao um pipe).
+
+**Contradicoes encontradas e corrigidas, lendo o codigo direto (nunca
+assumidas):**
+- Decisao 56, resposta (a): "o orquestrador e o build rodam na
+  maquina do operador... NUNCA numa instancia AWS" -- ERRADO pra
+  "o orquestrador". So o BUILD continua no operador; a execucao real
+  de `SSHExecutor` (que fala com servidor/clientes) so funciona de
+  dentro do CONTROLE.
+- `PILOT_READINESS.md`: "controle... nunca invoca docker" -- a
+  AFIRMACAO em si estava certa (e continua certa), mas a lista de
+  scripts que "rodam no controle" estava errada -- `pki_relay.py`/
+  `collect_artifacts.py`/`cleanup.py` rodam no OPERADOR (falam com o
+  controle por SSH, ou nem isso); so `orchestrator.py`, agora, roda
+  de verdade LA. Corrigido (secao "Arquitetura de cada instancia").
+
+**1. Tabela unica do modelo de execucao** (pedido explicito) -- onde
+cada etapa roda, caminho de SSH, dependencia de Docker:
+
+| Etapa | Onde roda | Caminho de SSH | Depende de Docker na maquina que executa? |
+|---|---|---|---|
+| Build das imagens (`docker build`) | Operador | n/a (local) | Sim |
+| `docker save` (gera `.tar`) | Operador (`deliver_images.py`) | n/a (local) | Sim |
+| Envio do `.tar` ao controle | Operador -> Controle (`deliver_images.py`) | scp/ssh operador->controle (permitido) | Nao |
+| `docker load` nos hosts | Controle -> Host (`orchestrator._deliver_image`, 2o salto) | scp do `.tar` local no controle -> host; ssh host "docker load" (permitido) | Nao no controle; sim no HOST |
+| Conferencia de Image ID | Controle (le via ssh host "docker image inspect", compara em Python) | ssh controle->host | Nao (comparacao de string) |
+| `pki_relay.py` (certs + `deliver_campaign_key`, novo) | Operador -> Controle -> Host (2 saltos) | 1o: operador->controle (chave operador); 2o: controle->host (chave campanha) | Nao |
+| `deliver_source.py` (server/client) | Operador -> Controle -> Host (2 saltos) | idem | Nao |
+| `deliver_source.py --to-control` (novo) | Operador -> Controle (1 salto) | operador->controle | Nao |
+| `deliver_images.py` (novo) | Operador -> Controle (1 salto) | operador->controle (+docker LOCAL no operador) | Sim (no operador) |
+| `orchestrator.py` (SSHExecutor real) | **CONTROLE** (entregue por `deliver_to_control`, invocado via `ssh controle "python3 orchestrator.py ..."`) | controle->host (start_block/stop_block/run_execution/etc) | Nao -- nunca chama docker localmente (testado) |
+| `dedicated_capture` | Controle (dentro do mesmo processo `orchestrator.py`) | controle->host (tcpdump/tshark rodam no HOST via ssh) | Nao no controle; sim no host |
+| `collect_artifacts.py` | Operador (pull direto do controle) | operador->controle | Nao |
+| `cleanup.py` | Operador | Nenhum SSH -- so API AWS direta + terraform local | Nao |
+| `emergency_stop.py`/`iam_dryrun_check.py` | Operador | Nenhum SSH -- so API AWS | Nao |
+
+**2. Modelo de entrega de imagens restaurado (v8 real), 2 saltos:**
+`deliver_images.py` (novo) roda no OPERADOR -- `docker save <imagem>
+> <imagem>.tar`, sha256, checagem de espaco em disco no CONTROLE
+(`df` real -- volume `gp3` de 30GB, confirmado em `main.tf`, folga
+enorme pros ~140MB totais medidos nesta sessao: gateway ~10MB, proxy
+~9MB, pqc-signer ~59MB, measure ~58MB), scp pro controle
+(`~/images/`), `sha256sum -c` la. Pro gateway, tambem extrai o
+binario (`docker create`+`cp`) e confere sha256 contra PINS.json
+AQUI (nunca no controle -- reproduz exatamente `_local_gateway_
+binary_info` da Decisao 54, so que agora na maquina certa).
+`orchestrator.SSHExecutor._deliver_image`/`_verify_gateway_binary`
+reescritos: nunca mais `docker save | ssh ... docker load` (exigia
+Docker no controle); agora so `Path.is_file()` (leitura LOCAL do que
+`deliver_images.py` ja estagiou) + scp/ssh pro HOST -- fail-closed se
+o `.tar`/binario nao estiver estagiado ("rode deliver_images.py
+primeiro").
+
+**3. `orchestrator.py` entregue pro controle, e e de la que roda:**
+`deliver_source.deliver_to_control()` (novo) -- UM SO salto (operador
+-> controle, nunca relayado mais pra frente): `orchestrator.py`/
+`cli.py`/`preflight.py`/`rehearsal_handshake.sh`/`PINS.json`/
+`evaluate_criteria.py` + `inventory.json` (gerado por `terraform
+output`, copiado em separado -- nunca um arquivo do repositorio).
+
+**Achado adicional, corrigido:** `pki_relay.py`/`deliver_source.
+relay_and_extract`/`orchestrator.py` TODOS assumiam `~/.ssh/
+campaign_key` ja presente no controle pro segundo salto -- nenhum
+script jamais o entregava. `pki_relay.deliver_campaign_key()` (novo)
+fecha o gap -- mesmo padrao real de `campaign_up.sh` da v8, UM SO
+salto, chmod 600, arquivo temporario local sempre removido (`with
+TemporaryDirectory`), conteudo nunca impresso em lugar nenhum.
+
+**4. `INFRA_REHEARSAL.md` reescrito** -- 14 passos (0-13), TODO passo
+rotulado **[OPERADOR]** ou **[CONTROLE]**, conferidos um a um contra
+`ssh_ingress_cidrs`/`gateway_ingress_cidrs` reais de `main.tf` (tabela
+no Passo 1). Passo 3 novo (entrega da chave da campanha). Passo 8
+(`--exercise-start-stop`) e Passo 9 (`rehearsal_handshake.sh`) agora
+disparados de dentro do CONTROLE, nunca do laptop do operador --
+`negtest` (nao pinada, motivo ja registrado na Decisao 57) entregue
+por um 2o salto manual equivalente, documentado por completo no
+proprio passo.
+
+**5. Testes:** `_assert_every_used_image_was_delivered_first`
+atualizado pro novo marcador de entrega (`"<imagem>.tar ec2-user@"`,
+nunca mais `"docker save <imagem>"`). Novos, provando que a entrega
+por `.tar` estagiado e a UNICA via: `test_deliver_image_nunca_
+invoca_docker_localmente` (nenhum `argv[0]=="docker"` em start_block/
+dedicated_capture), `test_deliver_image_nunca_faz_docker_save_pipe_ssh`
+(reproduz e proibe o padrao antigo), `test_deliver_image_falha_alto_
+se_tar_nao_esta_estagiado` (fail-closed, zero chamadas scp/ssh se o
+`.tar` faltar). Mais: `test_deliver_images.py` (6, novo, extracao do
+binario + conferencia de pin + checagem de espaco + rele de 1 salto),
+`test_deliver_to_control_*` (4, novo, em `test_deliver_source.py`),
+`test_deliver_campaign_key_*` (3, novo, em `test_pki_relay.py`).
+
+**Testes:** 139 em `thesis/results/v9/campaign/tests/` (123 antes
+desta rodada + 16 novos), todos passando.
+
+**Commit local** (sem push): `thesis/results/v9/campaign/scripts/
+orchestrator.py` (`_deliver_image`/`_verify_gateway_binary`
+reescritos, `_local_gateway_binary_info` removido),
+`thesis/results/v9/campaign/scripts/deliver_images.py` (novo),
+`thesis/results/v9/campaign/scripts/deliver_source.py`
+(`CONTROL_FILES`/`deliver_to_control`), `thesis/results/v9/campaign/
+scripts/pki_relay.py` (`deliver_campaign_key`), `thesis/results/v9/
+campaign/tests/{test_orchestrator.py, test_deliver_images.py (novo),
+test_deliver_source.py, test_pki_relay.py}`, `thesis/results/v9/
+campaign/INFRA_REHEARSAL.md` (reescrito), `thesis/results/v9/
+campaign/PILOT_READINESS.md` (correcao a Decisao 56(a) + tabela de
+arquitetura).
+
+Nenhuma correcao desta rodada muda nenhum criterio pre-registrado --
+e correcao de um bloqueio operacional real (entrega de imagem/codigo/
+chave), nunca uma mudanca de design do piloto. Continuo sem autorizar
+push nem recursos na AWS.

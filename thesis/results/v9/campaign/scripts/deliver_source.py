@@ -19,12 +19,13 @@ ip}/32"}`, nenhuma entrada pro operador) -- o OPERADOR NUNCA alcanca o
 servidor/clientes direto numa AWS de verdade; so o controle alcanca.
 Isso significa que `orchestrator.py` (SSHExecutor) so funciona de
 verdade, contra uma AWS real, quando RODA a partir do controle (mesmo
-padrao real de `campaign_run.py`/`campaign_run.service` da v8) -- este
-script entrega os arquivos, mas QUEM dispara `cli.run_ssh` contra
-servidor/cliente ainda precisa estar executando de dentro do controle;
-registrado aqui e em DECISIONS.md (achado adicional desta rodada),
-nunca escondido, mas a mudanca de ONDE o orquestrador roda fica fora
-do pedido desta rodada (que era so entrega de imagem/arquivo/certificado).
+padrao real de `campaign_run.py`/`campaign_run.service` da v8).
+**Decisao 59 (correcao desta rodada):** essa mudanca de ONDE o
+orquestrador roda NAO fica mais pendente -- `deliver_to_control()`
+(novo, neste arquivo) entrega `orchestrator.py`/`cli.py`/`preflight.py`/
+`PINS.json`/`evaluate_criteria.py` + o `inventory.json` gerado direto
+pro controle, UM SO salto (operador -> controle, nunca relayado mais
+pra frente -- orchestrator.py nao roda em servidor/cliente).
 
 Entrega, pra CADA destino (servidor + cada cliente), `COMMON_FILES`:
   - thesis/scripts/{opin_flow,latency_automation,baseline_automation,
@@ -35,12 +36,17 @@ Entrega, pra CADA destino (servidor + cada cliente), `COMMON_FILES`:
 E so pra cada CLIENTE, alem disso, `CLIENT_ONLY_FILES`:
   - thesis/results/v9/certs/generated (opin_flow.V9_CERTS_DIR -- mount
     `-cert-dir /certs` do proxy, so no ramo V9_HARNESS)
+E so pro CONTROLE (um salto so, `deliver_to_control`), `CONTROL_FILES`:
+  - campaign/scripts/{orchestrator,cli,preflight}.py, campaign/PINS.json,
+    integration/evaluate_criteria.py (+ inventory.json, copiado em
+    separado -- nao e um arquivo do repositorio)
 
 Extrai em `~/` em cada destino, espelhando o layout relativo do
 repositorio sob `~` -- EXATAMENTE a mesma convencao que `deliver_
 source.sh` real da v8 ja usava, e que `opin_flow.py` (BASE_DIR =
 SCRIPTS_DIR.parent.parent, calculado a partir do PROPRIO arquivo, sem
-mudanca de codigo nenhuma) ja presume.
+mudanca de codigo nenhuma)/`orchestrator.py` (PINS_PATH = Path(
+__file__).resolve().parents[1] / "PINS.json") ja presumem.
 """
 import argparse
 import json
@@ -66,9 +72,19 @@ COMMON_FILES = [
 CLIENT_ONLY_FILES = [
     "thesis/results/v9/certs/generated",
 ]
+CONTROL_FILES = [
+    "thesis/results/v9/campaign/scripts/orchestrator.py",
+    "thesis/results/v9/campaign/scripts/cli.py",
+    "thesis/results/v9/campaign/scripts/preflight.py",
+    "thesis/results/v9/campaign/scripts/rehearsal_handshake.sh",
+    "thesis/results/v9/campaign/PINS.json",
+    "thesis/results/v9/integration/evaluate_criteria.py",
+]
 
 REMOTE_STAGING_DIR = "/tmp/mockopin-v9-source-relay"
 REMOTE_TARBALL_PATH = "/tmp/mockopin-v9-source.tar.gz"
+REMOTE_CONTROL_TARBALL_PATH = "/tmp/mockopin-v9-control.tar.gz"
+REMOTE_INVENTORY_PATH = "~/thesis/results/v9/campaign/scripts/inventory.json"
 
 
 def build_tarball(rel_paths: list[str], out_path: Path, repo_root: Path = _REPO_ROOT) -> Path:
@@ -141,16 +157,55 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
     return report
 
 
+def deliver_to_control(control_ip, operator_key_path, inventory_json_path, repo_root=_REPO_ROOT):
+    """Decisao 59: UM SO salto (operador -> controle direto, igual a
+    `deliver_images.py`) -- orchestrator.py NAO roda em servidor/
+    cliente, entao nunca e relayado mais pra frente. `inventory.json`
+    e copiado em separado (nao esta no repositorio -- e gerado por
+    `terraform output -json inventory` a cada apply, pela maquina do
+    OPERADOR, que tem o state do Terraform)."""
+    with tempfile.TemporaryDirectory(prefix="v9_deliver_control_") as tmp:
+        tarball = build_tarball(CONTROL_FILES, Path(tmp) / "control.tar.gz", repo_root=repo_root)
+
+        mkdir_proc = cli.run_ssh(control_ip, "mkdir -p ~/thesis", key_path=operator_key_path)
+        if mkdir_proc.returncode != 0:
+            raise RuntimeError(f"deliver_to_control: mkdir no controle falhou: {cli.redact(mkdir_proc.stderr)}")
+
+        scp_proc = cli.run_scp(str(tarball), f"ec2-user@{control_ip}:{REMOTE_CONTROL_TARBALL_PATH}", key_path=operator_key_path)
+        if scp_proc.returncode != 0:
+            raise RuntimeError(f"deliver_to_control: scp do tarball pro controle falhou: {cli.redact(scp_proc.stderr)}")
+
+        extract_proc = cli.run_ssh(
+            control_ip,
+            f"tar -xzf {REMOTE_CONTROL_TARBALL_PATH} -C ~/ && rm -f {REMOTE_CONTROL_TARBALL_PATH}",
+            key_path=operator_key_path,
+        )
+        if extract_proc.returncode != 0:
+            raise RuntimeError(f"deliver_to_control: extracao no controle falhou: {cli.redact(extract_proc.stderr)}")
+
+        inv_scp = cli.run_scp(str(inventory_json_path), f"ec2-user@{control_ip}:{REMOTE_INVENTORY_PATH}", key_path=operator_key_path)
+        if inv_scp.returncode != 0:
+            raise RuntimeError(f"deliver_to_control: scp do inventory.json falhou: {cli.redact(inv_scp.stderr)}")
+
+    return {"target": "control", "ip": control_ip, "files": list(CONTROL_FILES) + ["inventory.json (gerado, nao versionado)"]}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--control-ip", required=True)
     ap.add_argument("--operator-key", required=True)
     ap.add_argument("--campaign-key-remote-path", default="/home/ec2-user/.ssh/campaign_key")
+    ap.add_argument("--to-control", action="store_true",
+                     help="Decisao 59: entrega so pro controle (orchestrator.py + deps + inventory.json), "
+                          "um salto, sem relay pro servidor/clientes")
     ap.add_argument("--inventory-json", required=True)
     args = ap.parse_args()
 
-    inventory = json.load(open(args.inventory_json, encoding="utf-8"))
-    report = deliver_source(args.control_ip, args.operator_key, args.campaign_key_remote_path, inventory)
+    if args.to_control:
+        report = deliver_to_control(args.control_ip, args.operator_key, args.inventory_json)
+    else:
+        inventory = json.load(open(args.inventory_json, encoding="utf-8"))
+        report = deliver_source(args.control_ip, args.operator_key, args.campaign_key_remote_path, inventory)
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 

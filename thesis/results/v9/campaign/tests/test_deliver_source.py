@@ -22,12 +22,12 @@ class FakeProc:
 @pytest.fixture
 def fake_repo(tmp_path):
     """Monta, sob tmp_path, a MESMA arvore relativa que COMMON_FILES/
-    CLIENT_ONLY_FILES referenciam -- arquivos com conteudo falso,
-    `mock-service-os/certs` e `thesis/results/v9/certs/generated` como
-    diretorios com um arquivo falso dentro cada."""
+    CLIENT_ONLY_FILES/CONTROL_FILES referenciam -- arquivos com
+    conteudo falso, `mock-service-os/certs` e `thesis/results/v9/
+    certs/generated` como diretorios com um arquivo falso dentro cada."""
     repo = tmp_path / "fake_repo"
-    for rel in ds.COMMON_FILES:
-        if rel.endswith(".py") or rel.endswith(".txt"):
+    for rel in ds.COMMON_FILES + ds.CONTROL_FILES:
+        if rel.endswith((".py", ".txt", ".json", ".sh")):
             p = repo / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(f"conteudo falso de {rel}\n", encoding="utf-8")
@@ -155,3 +155,77 @@ def test_falha_no_rele_e_reportada_nunca_engolida(monkeypatch, fake_repo):
             campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
             inventory=inventory, repo_root=fake_repo,
         )
+
+
+# --- Decisao 59: deliver_to_control -- UM SO salto (operador ->
+# controle direto), orchestrator.py + deps + inventory.json, nunca
+# relayado mais pra frente (nunca fala com servidor/cliente nenhum).
+
+def test_deliver_to_control_um_so_salto_nunca_fala_com_servidor_ou_cliente(monkeypatch, fake_repo, tmp_path):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {"public_ip": "203.0.113.50"}, "clients": {}}', encoding="utf-8")
+
+    report = ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+    assert report["target"] == "control"
+    flat = " ".join(a for c in calls for a in c)
+    assert "203.0.113.5" in flat
+    # nunca fala com nenhum IP de servidor/cliente -- so com o controle.
+    assert "203.0.113.50" not in flat
+    assert "/home/ec2-user/.ssh/campaign_key" not in flat, (
+        "deliver_to_control e UM SO salto (operador -> controle) -- nunca usa a chave da campanha"
+    )
+
+
+def test_deliver_to_control_entrega_inventory_json_tambem(monkeypatch, fake_repo, tmp_path):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
+
+    ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+    scp_calls = [c for c in calls if c[0] == "scp"]
+    assert any(str(inventory_path) in a for c in scp_calls for a in c), (
+        "inventory.json tem que ser copiado pro controle -- " + str(scp_calls)
+    )
+    assert any("inventory.json" in a for c in scp_calls for a in c)
+
+
+def test_deliver_to_control_extrai_antes_de_remover_o_tarball(monkeypatch, fake_repo, tmp_path):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
+
+    ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+    extract_cmd = next(c[-1] for c in calls if c and c[0] == "ssh" and "tar -xzf" in c[-1])
+    assert extract_cmd.index("tar -xzf") < extract_cmd.rindex("rm -f"), extract_cmd
+
+
+def test_deliver_to_control_falha_no_scp_do_inventory_nunca_e_engolida(monkeypatch, fake_repo, tmp_path):
+    def fake_run(argv, timeout=None):
+        if argv[0] == "scp" and "inventory.json" in argv[-1]:
+            return FakeProc(returncode=1, stderr="Permission denied")
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="scp do inventory.json falhou"):
+        ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)

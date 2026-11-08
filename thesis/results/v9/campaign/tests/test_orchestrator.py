@@ -156,6 +156,33 @@ def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None):
 
 
 @pytest.fixture(autouse=True)
+def _staged_images_dir(tmp_path, monkeypatch):
+    """Decisao 59: `_deliver_image`/`_verify_gateway_binary` agora
+    leem arquivos LOCAIS de `self.images_staging_dir` (default
+    `Path.home() / "images"`, onde `deliver_images.py` estagiaria de
+    verdade no controle) em vez de rodar docker -- monkeypatcha
+    `Path.home()` pra um diretorio de teste com os 4 `.tar` (conteudo
+    falso -- so a PRESENCA do arquivo importa, o conteudo nunca e lido
+    por `_deliver_image`) + `gateway_binary_info.json`/binario
+    `gateway` fake (mesmo sha256 que `_fake_pins()` ja usa). Autouse --
+    todo teste deste arquivo ja comeca com isso presente."""
+    fake_home = tmp_path / "fake_home"
+    images_dir = fake_home / "images"
+    images_dir.mkdir(parents=True)
+    for key in ("gateway", "proxy", "measure", "pqc-signer"):
+        (images_dir / f"{key}.tar").write_bytes(b"tar falso, so para teste\n")
+    (images_dir / "gateway").write_bytes(_FAKE_GATEWAY_BINARY_BYTES)
+    (images_dir / "gateway_binary_info.json").write_text(json.dumps({
+        "sha256": _FAKE_GATEWAY_SHA256,
+        "go_version_m": "/verify/gateway: go1.27.3\n",
+        "go_build_version": "go1.27.3",
+        "toolchain_build_metadata": {"go_tag": "go1.27.3"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(orch.Path, "home", lambda: fake_home)
+    return images_dir
+
+
+@pytest.fixture(autouse=True)
 def _default_fake_pins(monkeypatch):
     """Decisao 55, item 1: `_local_gateway_binary_info` agora confere
     o sha256 extraido contra PINS.json de verdade -- todo teste deste
@@ -838,31 +865,28 @@ def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monk
 # start_block/dedicated_capture.
 
 _IMAGE_USAGE_MARKERS = {
-    # Marcador distinto do proprio comando `docker save <imagem> | ssh
-    # ... docker load` de entrega -- senao a entrega conta como "uso"
+    # Marcador distinto do proprio comando de entrega (scp do .tar
+    # LOCAL pro host, Decisao 59) -- senao a entrega conta como "uso"
     # dela mesma (o nome da imagem aparece nos dois comandos).
     "gateway": "docker run -d --name v9-mtls",
     "measure": "--entrypoint tshark mockopin-v9-measure",
     "proxy": "start_tls_kem_proxy",
     "pqc-signer": "start_pqc_signer_service",
 }
-_IMAGE_DOCKER_NAMES = {
-    "gateway": "mockopin-v9-gateway", "proxy": "mockopin-v9-proxy",
-    "measure": "mockopin-v9-measure", "pqc-signer": "mockopin-pqc-signer",
-}
 
 
 def _assert_every_used_image_was_delivered_first(calls):
     """Pra cada imagem com um marcador de USO presente em `calls`,
-    confere que uma entrega real (`docker save <imagem> | ssh ...
-    docker load`, via `_deliver_image`) apareceu num indice ANTERIOR
-    na mesma lista de chamadas -- fail-closed: imagem usada sem
-    entrega registrada, ou entregue DEPOIS do uso, reprova."""
+    confere que uma entrega real (scp do `<imagem>.tar` JA ESTAGIADO
+    no controle pro host, via `_deliver_image`, Decisao 59) apareceu
+    num indice ANTERIOR na mesma lista de chamadas -- fail-closed:
+    imagem usada sem entrega registrada, ou entregue DEPOIS do uso,
+    reprova."""
     flat = [" ".join(c) for c in calls]
     delivered_at = {}
     for i, c in enumerate(flat):
-        for key, docker_name in _IMAGE_DOCKER_NAMES.items():
-            if f"docker save {docker_name}" in c and key not in delivered_at:
+        for key in _IMAGE_USAGE_MARKERS:
+            if f"{key}.tar ec2-user@" in c and key not in delivered_at:
                 delivered_at[key] = i
     for key, marker in _IMAGE_USAGE_MARKERS.items():
         usage_indices = [i for i, c in enumerate(flat) if marker in c]
@@ -909,6 +933,62 @@ def test_mutante_pqc_signer_nao_entregue_e_pego(monkeypatch):
         _assert_every_used_image_was_delivered_first(calls)
 
 
+# --- Decisao 59 (achado real: o controle nunca roda docker, nem SSH
+# chega do operador direto no servidor/cliente -- so do controle,
+# Security Group em main.tf). A entrega por .tar JA ESTAGIADO no
+# controle (deliver_images.py, rodando na maquina do operador,
+# entrega so ATE o controle) e a UNICA via que SSHExecutor usa.
+
+def test_deliver_image_nunca_invoca_docker_localmente(monkeypatch):
+    """`cli._run` com `argv[0] == "docker"` seria o processo QUE RODA
+    SSHExecutor chamando docker na sua PROPRIA maquina -- so faz
+    sentido se essa maquina for o operador (tem Docker); rodando do
+    controle (onde SSHExecutor roda de verdade, Decisao 59), isso
+    quebraria ("docker: command not found" ou pior, nenhum Docker
+    instalado la de proposito). Nenhuma chamada deste tipo pode
+    acontecer em start_block/dedicated_capture."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("classico", "L0")
+    local_docker_calls = [c for c in calls if c and c[0] == "docker"]
+    assert not local_docker_calls, (
+        "SSHExecutor nunca pode invocar `docker` localmente (o controle nao tem Docker) -- " + str(local_docker_calls)
+    )
+
+
+def test_deliver_image_nunca_faz_docker_save_pipe_ssh(monkeypatch):
+    """Reproduz o padrao ANTIGO (Decisao 55, corrigido na Decisao 59) --
+    `sh -c "docker save <imagem> | ssh ... docker load"` -- nenhuma
+    chamada deste arquivo pode conter esse padrao: a entrega agora e
+    scp de um .tar LOCAL (ja estagiado) pro host, nunca um pipe que
+    exige Docker na maquina que executa SSHExecutor."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker save" in c for c in flat), (
+        "nenhuma chamada pode fazer `docker save` -- isso e responsabilidade exclusiva de "
+        "deliver_images.py, na maquina do OPERADOR -- " + str(flat)
+    )
+
+
+def test_deliver_image_falha_alto_se_tar_nao_esta_estagiado(monkeypatch, tmp_path):
+    """Fail-closed: se `deliver_images.py` nunca rodou (o .tar nao
+    esta no diretorio de estagiamento), `_deliver_image` tem que
+    levantar ANTES de tentar qualquer scp/ssh pro host -- nunca
+    silenciosamente tentar entregar um arquivo inexistente."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    empty_staging = tmp_path / "images_vazio"
+    empty_staging.mkdir()
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key", images_staging_dir=str(empty_staging))
+    with pytest.raises(RuntimeError, match="rode deliver_images.py primeiro"):
+        executor._deliver_image("gateway", executor._server_ip())
+    assert calls == [], "nenhuma chamada scp/ssh pode acontecer sem o .tar estagiado -- " + str(calls)
+
+
 # --- Decisao 58, achado 18: sondagem TCP pura (preflight_tcp.py real
 # da v8), restaurada -- uma vez por rota, DE DENTRO do cliente, ANTES
 # de qualquer entrega/execucao cara.
@@ -920,7 +1000,7 @@ def test_tcp_preflight_roda_do_cliente_antes_de_qualquer_entrega(monkeypatch):
     executor.start_block("classico", "L0")
     flat = [" ".join(c) for c in calls]
     tcp_idx = next(i for i, c in enumerate(flat) if "/dev/tcp/" in c)
-    deliver_idx = next(i for i, c in enumerate(flat) if "docker save mockopin-v9-gateway" in c)
+    deliver_idx = next(i for i, c in enumerate(flat) if "gateway.tar ec2-user@" in c)
     assert tcp_idx < deliver_idx, flat
     # a chamada tem que ter disparado do CLIENTE (203.0.113.60), nunca
     # do controle/operador -- mesma exigencia literal da v8 real.
@@ -1015,7 +1095,12 @@ def test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest(monkeypatch,
         "o exercicio NUNCA pode disparar uma execucao real -- " + str(flat)
     )
     # nenhum arquivo de manifesto/execucao e escrito por este exercicio.
-    assert not list(tmp_path.glob("*")), "exercise_start_stop nao deveria escrever nada em disco"
+    # "fake_home" e so a fixture autouse de images_staging_dir (Decisao
+    # 59) -- nunca escrita por exercise_start_stop em si. Nenhum
+    # manifest.json/piloto_calls.json/criterio6_execucoes.json (os
+    # artefatos reais de um bloco oficial) pode existir.
+    written = [p.name for p in tmp_path.glob("*") if p.name != "fake_home"]
+    assert not written, "exercise_start_stop nao deveria escrever nada em disco: " + str(written)
 
 
 def test_exercise_start_stop_tambem_entrega_pqc_signer(monkeypatch):

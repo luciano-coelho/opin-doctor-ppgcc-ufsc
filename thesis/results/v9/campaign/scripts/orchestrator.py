@@ -32,12 +32,9 @@ daquele perfil rodam em sequencia. A sondagem de prontidao (Decisao
 INICIO -- fora de qualquer janela, por construcao.
 """
 import argparse
-import hashlib
 import json
-import os
 import random
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -265,21 +262,31 @@ class SSHExecutor:
 
     TLS_KEM_PROXY_CONTAINER = "tls_kem_proxy_run"
     PQC_SIGNER_CONTAINER = "pqc_signer_service_run"
-    GATEWAY_IMAGE = "mockopin-v9-gateway"
-    TOOLCHAIN_IMAGE = "mockopin-v9-toolchain"
 
-    def __init__(self, inventory, key_path=None, gateway_container="v9-mtls", local_shim_bridge_join=False):
+    def __init__(self, inventory, key_path=None, gateway_container="v9-mtls", local_shim_bridge_join=False,
+                 images_staging_dir=None):
         self.inventory = inventory
         self.key_path = key_path
         self.gateway_container = gateway_container
         self._block_start_utc = {}
+        # Decisao 59 (achado real: o controle NUNCA roda docker --
+        # confirmado em PILOT_READINESS.md, "pki_relay.py/collect_
+        # artifacts.py/cleanup.py... nunca invocam docker" --
+        # orchestrator.py tem que respeitar a MESMA regra agora que
+        # roda de dentro do controle). `deliver_images.py`, rodando na
+        # maquina do OPERADOR (onde Docker existe), encosta os .tar +
+        # `gateway_binary_info.json` + o binario `gateway` extraido
+        # AQUI, num diretorio LOCAL do controle -- `_deliver_image`/
+        # `_verify_gateway_binary` so leem arquivo local (Path, nunca
+        # cli._run/docker) e falam com o HOST por scp/ssh, nunca
+        # invocam `docker` localmente.
+        self.images_staging_dir = Path(images_staging_dir) if images_staging_dir else Path.home() / "images"
         # Decisao 54, item 1: verificacao scp+sha256sum -c do binario
-        # do gateway -- cacheado (o binario local nao muda entre
-        # blocos), acumulado pra entrar no manifesto de cada bloco.
-        self._gateway_binary_info = None
+        # do gateway -- acumulado pra entrar no manifesto de cada bloco.
         self.gateway_binary_verifications = []
-        # Decisao 55, item 2: docker save|ssh docker load -- uma
-        # entrada por entrega de imagem (gateway/proxy/measure).
+        # Decisao 55, item 2: docker load no HOST, carregado a partir
+        # do .tar ja estagiado no controle -- uma entrada por entrega
+        # de imagem (gateway/proxy/pqc-signer/measure).
         self.image_delivery_verifications = []
         # Decisao 58, achado 18: sondagem TCP pura, uma vez por rota,
         # ANTES de qualquer entrega/execucao cara daquela rota --
@@ -350,92 +357,49 @@ class SSHExecutor:
                 parsed.append(m.groupdict())
         return raw_lines, parsed
 
-    def _local_gateway_binary_info(self):
-        """Decisao 54, item 1: extrai o binario `/gateway` da imagem
-        Docker JA construida LOCALMENTE (`docker create`+`docker cp`,
-        mesmo padrao de `thesis/results/v9/certs/Makefile`), calcula
-        o sha256 de verdade e inspeciona com `go version -m` (via a
-        imagem `mockopin-v9-toolchain`, que tem o binario `go` -- so
-        LEITURA estatica do binario, nunca o executa) mais os
-        metadados de build que o PROPRIO toolchain ja registra
-        (`/build_metadata.json`: tag/commit do Go, hash do patch AND).
-        Cacheado -- o binario local nao muda entre blocos do mesmo
-        orquestrador, recalcular a cada bloco seria trabalho
-        repetido sem nenhum ganho de seguranca (o `docker image` so
-        muda se alguem rodar `docker build` de novo, fora do processo
-        do orquestrador)."""
-        if self._gateway_binary_info is not None:
-            return self._gateway_binary_info
-        # cli._run (nunca subprocess direto) -- mesma fronteira unica
-        # que TODO o resto deste pacote usa, pros testes conseguirem
-        # substituir exatamente este ponto, sem docker real.
-        verify_dir = Path(tempfile.mkdtemp(prefix="v9_gateway_verify_"))
-        bin_path = verify_dir / "gateway"
-        container = f"v9-gateway-extract-{os.getpid()}"
-        cli._run(["docker", "rm", "-f", container], timeout=30)
-        create = cli._run(["docker", "create", "--name", container, self.GATEWAY_IMAGE], timeout=30)
-        if create.returncode != 0:
-            raise RuntimeError(f"_local_gateway_binary_info: docker create falhou: {create.stderr}")
-        try:
-            cp = cli._run(["docker", "cp", f"{container}:/gateway", str(bin_path)], timeout=30)
-        finally:
-            cli._run(["docker", "rm", "-f", container], timeout=30)
-        if cp.returncode != 0:
-            raise RuntimeError(f"_local_gateway_binary_info: docker cp falhou: {cp.stderr}")
-
-        sha256 = hashlib.sha256(bin_path.read_bytes()).hexdigest()
-
-        gv = cli._run(
-            ["docker", "run", "--rm", "-v", f"{verify_dir}:/verify:ro",
-             "--entrypoint", "/go-src/bin/go", self.TOOLCHAIN_IMAGE, "version", "-m", "/verify/gateway"],
-            timeout=30,
-        )
-        go_version_m = gv.stdout.strip() if gv.returncode == 0 else f"ERRO ({gv.returncode}): {gv.stderr.strip()}"
-        first_line = go_version_m.splitlines()[0] if go_version_m else ""
-        go_build_version = first_line.split(":", 1)[1].strip() if ":" in first_line else None
-
-        meta_proc = cli._run(["docker", "run", "--rm", "--entrypoint", "cat", self.TOOLCHAIN_IMAGE, "/build_metadata.json"], timeout=30)
-        toolchain_build_metadata = None
-        if meta_proc.returncode == 0:
-            try:
-                toolchain_build_metadata = json.loads(meta_proc.stdout)
-            except json.JSONDecodeError:
-                toolchain_build_metadata = {"raw": meta_proc.stdout.strip()}
-
-        # Decisao 55, item 1: confere o binario recem-extraido contra
-        # PINS.json -- fail-closed, ANTES de qualquer execucao. So o
-        # sha256 do BINARIO e comparado aqui (reproduzivel, confirmado
-        # em build duplo nesta rodada) -- o Image ID NUNCA e
-        # comparado no lado LOCAL (um rebuild local legitimo produz um
-        # Image ID diferente por desenho do Docker, mesmo com binario
-        # identico -- so o lado REMOTO, apos `docker load`, compara
-        # Image ID, porque load e deterministico, rebuild nao).
+    def _read_staged_gateway_binary_info(self):
+        """Decisao 59: substitui `_local_gateway_binary_info` (achado
+        real -- extrair com `docker create`/`docker cp`/`docker run`
+        exigia Docker LOCAL, e o controle (onde este processo roda de
+        verdade) nunca tem Docker, confirmado em PILOT_READINESS.md).
+        A EXTRACAO (docker create/cp/run) agora acontece so na maquina
+        do OPERADOR, dentro de `deliver_images.py` -- este metodo so
+        LE o resultado ja estagiado (`gateway_binary_info.json`,
+        arquivo LOCAL do controle, nunca cli._run/docker). A
+        CONFERENCIA contra PINS.json e refeita AQUI tambem (nao so
+        confiada no que `deliver_images.py` ja checou do lado do
+        operador) -- fail-closed contra o PINS.json que o PROPRIO
+        controle tem (pode ter ficado desatualizado/divergente do que
+        o operador tinha no momento da extracao)."""
+        info_path = self.images_staging_dir / "gateway_binary_info.json"
+        if not info_path.is_file():
+            raise RuntimeError(
+                f"_read_staged_gateway_binary_info: {info_path} nao encontrado -- rode deliver_images.py "
+                f"primeiro (operador -> controle, antes de qualquer start_block)"
+            )
+        info = json.loads(info_path.read_text(encoding="utf-8"))
         pins = load_pins()
         pin_sha256 = pins["images"]["gateway"]["binary_sha256"]
-        if sha256 != pin_sha256:
+        if info["sha256"] != pin_sha256:
             raise RuntimeError(
-                f"_local_gateway_binary_info: sha256 do binario do gateway NAO bate com PINS.json -- "
-                f"esperado {pin_sha256}, obtido {sha256}. Alterar PINS.json exige Emenda numerada "
-                f"explicita em DECISIONS.md, nunca uma atualizacao automatica."
+                f"_read_staged_gateway_binary_info: sha256 do binario estagiado NAO bate com PINS.json "
+                f"(copia do CONTROLE) -- esperado {pin_sha256}, obtido {info['sha256']}. Alterar PINS.json "
+                f"exige Emenda numerada explicita em DECISIONS.md, nunca uma atualizacao automatica."
             )
-
-        self._gateway_binary_info = {
-            "sha256": sha256, "local_bin_path": str(bin_path),
-            "go_version_m": go_version_m, "go_build_version": go_build_version,
-            "toolchain_build_metadata": toolchain_build_metadata,
-            "pin_matched": True, "pins_path": str(PINS_PATH),
-        }
-        return self._gateway_binary_info
+        info["pin_matched"] = True
+        info["pins_path"] = str(PINS_PATH)
+        return info
 
     def _verify_gateway_binary(self, profile, route):
         """Decisao 54, item 1 -- implementa o mecanismo JA PRE-
         REGISTRADO (`v9-prereg`, secao "Entrega do binario": "operador
         `scp` o `gateway`/`proxy` (mais o `.sha256`) pro controle,
         controle `scp` pra cada instancia de destino... cada instancia
-        roda `sha256sum -c` antes de usar") -- nunca implementado no
-        `SSHExecutor` real antes desta rodada (gap honesto registrado
-        na Decisao 53, item 2c). Fail-closed: levanta ANTES de
-        `_launch_gateway` rodar, entao antes de qualquer execucao.
+        roda `sha256sum -c` antes de usar"). Decisao 59: o binario
+        `gateway` tambem vem ESTAGIADO no controle (`deliver_images.py`
+        o copiou pra `images_staging_dir`, extraido na maquina do
+        OPERADOR) -- este metodo so faz o SEGUNDO salto (controle ->
+        host), scp de um arquivo LOCAL, nunca docker.
 
         Fecha o laco completo (nao so o transporte): depois de
         confirmar que o binario chegou intacto, `start_block` ainda
@@ -444,14 +408,20 @@ class SSHExecutor:
         hash -- senao a verificacao do transporte provaria pouco (a
         imagem Docker podia ter sido construida de um binario
         diferente do que foi copiado aqui)."""
-        info = self._local_gateway_binary_info()
+        info = self._read_staged_gateway_binary_info()
+        local_bin_path = self.images_staging_dir / "gateway"
+        if not local_bin_path.is_file():
+            raise RuntimeError(
+                f"_verify_gateway_binary {profile}/{route}: {local_bin_path} nao encontrado -- rode "
+                f"deliver_images.py primeiro"
+            )
         server_ip = self._server_ip()
         remote_dir = "~/pki/gateway_verify"
         remote_bin = f"{remote_dir}/gateway"
         remote_sha = f"{remote_dir}/gateway.sha256"
 
         cli.run_ssh(server_ip, f"mkdir -p {remote_dir}", key_path=self.key_path)
-        scp_proc = cli.run_scp(info["local_bin_path"], f"ec2-user@{server_ip}:{remote_bin}", key_path=self.key_path)
+        scp_proc = cli.run_scp(str(local_bin_path), f"ec2-user@{server_ip}:{remote_bin}", key_path=self.key_path)
         if scp_proc.returncode != 0:
             raise RuntimeError(f"_verify_gateway_binary {profile}/{route}: scp do binario falhou: {scp_proc.stderr}")
 
@@ -500,32 +470,39 @@ class SSHExecutor:
             )
 
     def _deliver_image(self, image_key, host):
-        """Decisao 55, item 2: `docker save | ssh ... docker load` --
-        NENHUMA instancia roda `docker build` (achado da Decisao 53,
-        item 4a, agora resolvido: a imagem e construida SO localmente,
-        uma vez, e entregue como artefato binario). Depois do load,
-        confere o Image ID carregado contra PINS.json -- `docker load`
-        e deterministico (nunca um rebuild), entao o MESMO Image ID
-        tem que aparecer sempre, em qualquer instancia, pro mesmo
-        `docker save` de origem. Fail-closed: levanta ANTES de
-        qualquer execucao se divergir."""
+        """Decisao 59 (achado real: o controle nunca roda docker,
+        confirmado em PILOT_READINESS.md -- `docker save | ssh ...
+        docker load` da Decisao 55 exigia Docker LOCAL na maquina que
+        executa `_deliver_image`, que e o CONTROLE agora que
+        `orchestrator.py` roda de la). Segundo salto do modelo restaurado
+        da v8 (`deliver_images.sh` real): o .tar JA chegou no controle
+        via `deliver_images.py` (primeiro salto, operador -> controle,
+        com Docker so do lado do operador) -- este metodo so faz scp
+        do ARQUIVO LOCAL pro host e `ssh host docker load`, nunca
+        docker localmente. Depois do load, confere o Image ID
+        carregado contra PINS.json -- `docker load` e deterministico
+        (nunca um rebuild), entao o MESMO Image ID tem que aparecer
+        sempre, em qualquer instancia, pro mesmo `docker save` de
+        origem. Fail-closed: levanta ANTES de qualquer execucao se
+        divergir."""
         pins = load_pins()
         docker_image = pins["images"][image_key]["docker_image"]
         expected_id = pins["images"][image_key]["image_id"]
 
-        # docker save|ssh docker load num UNICO comando de shell local
-        # (cli._run, mesma fronteira de sempre) -- evita escrever um
-        # tar intermediario em disco.
-        ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        if self.key_path:
-            ssh_cmd += f" -i {self.key_path}"
-        ssh_cmd += f" ec2-user@{host} docker load"
-        save_load_proc = cli._run(["sh", "-c", f"docker save {docker_image} | {ssh_cmd}"], timeout=180)
-        if save_load_proc.returncode != 0:
+        local_tar_path = self.images_staging_dir / f"{image_key}.tar"
+        if not local_tar_path.is_file():
             raise RuntimeError(
-                f"_deliver_image({image_key}, {host}): docker save|ssh docker load falhou: "
-                f"{save_load_proc.stderr}"
+                f"_deliver_image({image_key}, {host}): {local_tar_path} nao encontrado no controle -- "
+                f"rode deliver_images.py primeiro (operador -> controle)"
             )
+        remote_tar = f"~/{image_key}.tar"
+        scp_proc = cli.run_scp(str(local_tar_path), f"ec2-user@{host}:{remote_tar}", key_path=self.key_path)
+        if scp_proc.returncode != 0:
+            raise RuntimeError(f"_deliver_image({image_key}, {host}): scp do tar pro host falhou: {scp_proc.stderr}")
+
+        load_proc = cli.run_ssh(host, f"docker load < {remote_tar} && rm -f {remote_tar}", key_path=self.key_path)
+        if load_proc.returncode != 0:
+            raise RuntimeError(f"_deliver_image({image_key}, {host}): docker load no host falhou: {load_proc.stderr}")
 
         id_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{.Id}}}}'", key_path=self.key_path)
         loaded_id = id_proc.stdout.strip()
@@ -1186,6 +1163,8 @@ def main():
     ap.add_argument("--out", required=False)
     ap.add_argument("--inventory-json", help="obrigatorio no modo --mode ssh (terraform output -json inventory)")
     ap.add_argument("--ssh-key", help="caminho da chave privada do piloto (modo ssh)")
+    ap.add_argument("--images-staging-dir", help="Decisao 59: diretorio LOCAL (no controle) onde "
+                     "deliver_images.py ja estagiou os .tar/gateway_binary_info.json -- default ~/images")
     ap.add_argument("--smoke", action="store_true",
                      help="Decisao 48: porta de fumaca, 1 execucao por perfil x rota (12, nunca contadas nas 60)")
     ap.add_argument("--exercise-start-stop", action="store_true",
@@ -1201,7 +1180,7 @@ def main():
         if not args.inventory_json:
             ap.error("--mode ssh exige --inventory-json")
         inventory = json.load(open(args.inventory_json, encoding="utf-8"))
-        executor = SSHExecutor(inventory, key_path=args.ssh_key)
+        executor = SSHExecutor(inventory, key_path=args.ssh_key, images_staging_dir=args.images_staging_dir)
 
     if args.exercise_start_stop:
         report = exercise_start_stop(executor, args.exercise_profile, args.exercise_route)
