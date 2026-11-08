@@ -17,7 +17,8 @@
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "ba8f857b5d868f2c9b0596e72b3089b9e6c678ceb6a911a90035596e2ceb9493",
       "go_version_m_text": "/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:625acc6b8838725265e2f66a52feaa00d87cac513713836d2bb7cc4af816f9ff"
+      "image_id": "sha256:fadd40fc9bf98d018a0cda2c364e1d546ac8b51db80613bac96dee5690bc9d28",
+      "note": "Decisao 61 (Emenda): Image ID re-pinado -- a imagem original (625acc6b8838...) nao existe mais localmente (nem tagueada, nem dangling; confirmado via docker image inspect/docker images -a --no-trunc). Binario/go_version_m IDENTICOS ao pin anterior (sha256 conferido de novo); camada base e byte-a-byte igual a um pull fresco de alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a (mesmo digest de layer); as 2 camadas adicionais sao so COPY /gateway e COPY certs, nada mais, nenhuma configuracao de runtime diferente (ENTRYPOINT/EXPOSE inalterados). Imagem tagueada imutavelmente como mockopin-v9-gateway:pinned. Ver DECISIONS.md, Decisao 61, pro diff completo e a prova de conteudo dos certificados."
     },
     "proxy": {
       "docker_image": "mockopin-v9-proxy",

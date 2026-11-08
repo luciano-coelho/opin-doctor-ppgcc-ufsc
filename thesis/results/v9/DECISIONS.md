@@ -7691,3 +7691,132 @@ Nenhuma correcao desta rodada muda nenhum criterio pre-registrado --
 sao correcoes de endereco/robustez/relatorio no roteiro de ensaio,
 nunca uma mudanca de design do piloto. Continuo sem autorizar push
 nem recursos na AWS.
+
+## 61. Emenda -- Image ID do gateway em PINS.json re-pinado (a imagem original nao existe mais localmente; binario/certificados/camada base confirmados identicos por conteudo, nunca reconstruidos). Luciano autoriza execucao real na AWS a partir desta Decisao (presente remotamente, ausente durante a execucao em si) -- push passa a ser permitido so em v9/fase1-local
+
+**Autorizacao:** Luciano autorizou execucao autonoma na AWS (conta e
+profile `mockopin-pqc`, teto de custo US$5, retentativas limitadas,
+frota nunca ociosa, paradas obrigatorias em criterios especificos) e
+push em `v9/fase1-local` (nunca main/tag `v9-prereg`), confirmado
+explicitamente apos eu ter parado no pre-voo anterior e perguntado de
+volta. Branch `v9/fase1-local`.
+
+**Contexto (retomando o PARADA.md anterior):** o pre-voo desta sessao
+achou `mockopin-v9-gateway:latest` local com Image ID
+`fadd40fc9bf98d018a0cda2c364e1d546ac8b51db80613bac96dee5690bc9d28`,
+divergente do pinado em PINS.json
+(`625acc6b8838725265e2f66a52feaa00d87cac513713836d2bb7cc4af816f9ff`).
+Luciano pediu, antes de autorizar qualquer re-pin: procurar a imagem
+original por digest; se nao existir, Emenda condicionada a 4 provas.
+
+**Busca pela imagem original:** `docker image inspect sha256:625acc
+6b8838...` -- `[]`/"No such image". `docker images -a --no-trunc` --
+nao aparece, nem tagueada nem dangling. **Confirmado: nao existe mais
+localmente.**
+
+**As 4 provas exigidas, todas feitas por leitura/comparacao de
+conteudo -- NENHUM rebuild, NENHUM `make certs`:**
+
+**(a) sha256 do binario identico ao pinado.** Extraido de novo
+(`docker create`+`docker cp` da imagem atual) -- `a08ba8e31c4e6bdc
+865cd32164413169390eca6766359105d10ed0e7557ff47f`, IDENTICO ao
+`binary_sha256` ja em PINS.json. `go version -m` tambem idêntico
+(mesmo texto, mesma flags de build).
+
+**(b) Conteudo da imagem, arquivo por arquivo, contra o esperado.**
+`docker history --no-trunc` mostra so 2 camadas acrescentadas sobre a
+base: `COPY /gateway /gateway` (11.6MB) e `COPY certs /certs` (193kB)
+-- exatamente o que o `Dockerfile` declara, nada mais. A camada BASE
+(`sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878
+fc2ba`) e IDENTICA, byte a byte (mesmo digest de camada), a um `docker
+pull` fresco de `alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a
+09c5aaaf51968b89368a3c0371ea2c9a` -- o digest exato que o `Dockerfile`
+fixa na linha `FROM`. Listei TODOS os arquivos da imagem com sha256
+(`find / -xdev -type f | xargs sha256sum`, dentro de um container
+real) -- 33 arquivos em `/certs`, o binario `/gateway`, e o resto e o
+conteudo padrao do Alpine 3.24 minirootfs (busybox, apk, openssl,
+etc.) -- nada alem do que o Dockerfile copia. `ENTRYPOINT ["/gateway"]`
+e `EXPOSE 443` sao as UNICAS instrucoes de runtime, sem CMD nem ENV
+extras. **Nenhum executavel ou configuracao de runtime diverge.**
+
+**(c) Certificados embutidos -- SAN e tamanho DER contra os
+baselines.** 10 certificados (5 server + 5 client, um par por perfil:
+`classico`/`pqc`/`hibrido_v8`/`hibrido_and_rsa`/`hibrido_and_mldsa`).
+Todo certificado SERVER tem SAN `DNS:mtls,...,IP Address:127.0.0.1,
+IP Address:0:0:0:0:0:0:0:1` -- exatamente o formato `<IP>,::1` que a
+Decisao 56 provou zerar o desvio de bytes contra o baseline (o VALOR
+do IPv4 nunca afeta tamanho DER, so a Decisao 56 ja confirmou). Tamanho
+DER de cada certificado, extraido de dentro da imagem (`openssl x509
+-outform DER`), comparado contra `evaluate_criteria.BASELINE_CERT_
+DER_SIZES`:
+
+| Perfil | DER client (medido) | baseline "in" | DER server (medido) | baseline "out" |
+|---|---|---|---|---|
+| classico | 787 | 787 | 900 | 900 |
+| pqc | 5506 | 5506 | 5619 | 5619 |
+| hibrido-v8 | 6131 | 6131 | 6242 | 6242 |
+| hibrido-and (rsa+mldsa somados) | 801+5534=6335 | 6335 | 914+5647=6561 | 6561 |
+
+**0B de desvio contra o baseline, nos 4 perfis, nos 2 sentidos** --
+identico ao que a Decisao 56 ja tinha provado em 20 rebuilds, agora
+confirmado tambem na imagem REAL que vai pro piloto.
+
+**(d) Diff do PINS.json.** So o campo `image_id` do gateway mudou,
+mais um campo `note` novo explicando o re-pin; `binary_sha256`/
+`go_version_m_sha256`/`go_version_m_text` inalterados (ja confirmados
+identicos no item a):
+```diff
+-      "image_id": "sha256:625acc6b8838725265e2f66a52feaa00d87cac513713836d2bb7cc4af816f9ff"
++      "image_id": "sha256:fadd40fc9bf98d018a0cda2c364e1d546ac8b51db80613bac96dee5690bc9d28",
++      "note": "Decisao 61 (Emenda): Image ID re-pinado -- a imagem original (625acc6b8838...) nao existe mais localmente [...]"
+```
+
+**Imagem tagueada imutavelmente:** `docker tag mockopin-v9-gateway:latest
+mockopin-v9-gateway:pinned` -- essa tag nunca mais e sobrescrita; nenhum
+`docker build`/`make certs` roda de novo neste host antes do piloto
+terminar (regra do Luciano, registrada aqui pra nao ser esquecida).
+
+**Item 2 do pedido do Luciano -- quotas de vCPU, confirmadas por
+registro historico da v8 (deixou de ser bloqueante, vira documentacao):**
+`thesis/results/v8/campaign/terraform/main.tf` (arquivo real usado na
+campanha v8) declara, nas 3 regioes do piloto v9, EXATAMENTE a mesma
+contagem de instancias/tipos que o piloto v9 precisa: `sa-east-1` --
+`control`(t4g.micro)+`server_sa_east_1`(m7i-flex.large)+`client_l0`
+(m7i-flex.large) = 3 instancias/6 vCPU; `eu-north-1` --
+`client_eu_north_1`(m7i-flex.large) = 1/2 vCPU; `ap-southeast-1` --
+`client_ap_southeast_1`(m7i-flex.large) = 1/2 vCPU (confirmado
+`m7i-flex.large`/`t4g.micro` = 2 vCPU cada via `aws ec2 describe-
+instance-types`, chamada real so-leitura). Evidencia de execucao REAL
+(nao so config): Decisao 73 da v8 ("Flex launch test run for real, 14
+instancias, 7 regioes") -- `m7i-flex.large` E `c7i-flex.large`
+rodaram de verdade, simultaneamente, em sa-east-1/eu-north-1/
+ap-southeast-1 (entre outras), 2026-10-20, confirmado por
+`describe-instances`/`StateTransitionReason` reais, nao suposto.
+**Isso prova diretamente >=4 vCPU simultaneos em sa-east-1 e >=2 em
+eu-north-1/ap-southeast-1 ja funcionaram** -- cobre com evidencia
+direta o minimo de `eu-north-1`/`ap-southeast-1` (2 cada), mas NAO
+prova diretamente os 6 vCPU que o piloto v9 precisa em `sa-east-1`
+simultaneamente (o teste real da Decisao 73 so rodou 2 instancias por
+regiao, nao 3) -- a config real da campanha completa (3 instancias em
+sa-east-1) nunca foi confirmada aqui por uma unica citacao direta de
+um apply com as 3 juntas. **A tentativa de apply real de verdade, com
+a regra 7(c) (derrubar e parar se `VcpuLimitExceeded`), e o
+backstop final -- exatamente como o proprio Luciano desenhou.**
+
+**Permissao de Service Quotas (achado do pre-voo anterior):**
+permanece negada (`servicequotas:GetServiceQuota`) -- nao bloqueia
+mais, por instrucao explicita do Luciano; registrado aqui, nao
+escondido.
+
+**Testes:** 141/141, inalterados -- nenhuma mudanca de codigo
+Python nesta Decisao, so `PINS.json` (dado, nao codigo).
+
+**Commit e PUSH** (autorizado agora, so em `v9/fase1-local`):
+`thesis/results/v9/campaign/PINS.json` (Image ID do gateway
+re-pinado), `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+A partir daqui, a execucao segue o runbook (Fase A -- ensaio de
+infraestrutura; Fase B -- piloto de 60 execucoes; Fase C --
+consolidacao) sob os limites exatos que o Luciano fixou, sem pedir
+confirmacao a cada passo -- so em paradas que os proprios limites
+exigem.
