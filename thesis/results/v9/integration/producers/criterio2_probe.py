@@ -91,6 +91,16 @@ def ethtool_offloads(iface) -> dict:
     }
 
 
+def _tshark_argv(pcap_path):
+    """Decisao 85 (pedido do Luciano): o servidor real nunca tem
+    `tshark` no PATH do host (so dentro de `mockopin-v9-measure`, a
+    MESMA imagem pinada que `dedicated_capture`/criterio 1 ja usa) --
+    roda `tshark` dentro dela, nunca bare no host, nunca reconstroi
+    nem muda a imagem."""
+    return ["docker", "run", "--rm", "-v", "/tmp:/tmp:ro", "--entrypoint", "tshark",
+            "mockopin-v9-measure", "-r", pcap_path]
+
+
 def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int | None]:
     """tshark: MSS das opcoes do SYN do SERVIDOR (quem aceita a
     conexao, nao quem conecta); bytes que o SERVIDOR mandou (seq
@@ -99,18 +109,18 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
     esses bytes (ack_num > seq inicial dos dados do servidor)."""
     # MSS anunciado pelo SERVIDOR no seu SYN-ACK (tcp.flags.syn==1 &&
     # tcp.flags.ack==1, origem = porta do servidor).
-    mss_out = run([
-        "tshark", "-r", pcap_path, "-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
-        "-T", "fields", "-e", "tcp.options.mss_val",
-    ]).stdout.strip().splitlines()
+    mss_out = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
+                                    "-T", "fields", "-e", "tcp.options.mss_val"],
+    ).stdout.strip().splitlines()
     mss = int(mss_out[0]) if mss_out and mss_out[0] else None
 
     # Todos os segmentos de DADOS que o servidor mandou (porta de
     # origem = porta do servidor, len>0), em ordem.
-    data_out = run([
-        "tshark", "-r", pcap_path, "-Y", f"tcp.srcport=={port} && tcp.len>0",
-        "-T", "fields", "-e", "tcp.seq", "-e", "tcp.len",
-    ]).stdout.strip().splitlines()
+    data_out = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.len>0",
+                                    "-T", "fields", "-e", "tcp.seq", "-e", "tcp.len"],
+    ).stdout.strip().splitlines()
     if not data_out:
         return mss, None
     first_seq = int(data_out[0].split("\t")[0])
@@ -118,10 +128,10 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
 
     # Primeiro ACK do CLIENTE (porta de destino = porta do servidor,
     # flag ACK, sem SYN) e o numero de ACK que ele carrega.
-    ack_out = run([
-        "tshark", "-r", pcap_path, "-Y", f"tcp.dstport=={port} && tcp.flags.ack==1 && tcp.flags.syn==0",
-        "-T", "fields", "-e", "tcp.ack",
-    ]).stdout.strip().splitlines()
+    ack_out = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.dstport=={port} && tcp.flags.ack==1 && tcp.flags.syn==0",
+                                    "-T", "fields", "-e", "tcp.ack"],
+    ).stdout.strip().splitlines()
     if not ack_out:
         return mss, None
     first_client_ack = int(ack_out[0])

@@ -18,21 +18,30 @@ import glob
 import json
 
 
+def collect_l325_execucoes(execucoes_dir) -> dict:
+    """Decisao 85: fatorado de `main()` pra ser reusado -- a MESMA
+    agregacao, chamada tanto pela CLI (abaixo) quanto por `dedicated_
+    criteria.py` (novo), que adapta `piloto_calls.json` (formato real
+    do piloto) pra este formato por-execucao ANTES de chamar esta
+    funcao -- nunca reimplementa a agregacao em si."""
+    execucoes = []
+    for path in sorted(glob.glob(f"{execucoes_dir}/*.json")):
+        entry = json.load(open(path, encoding="utf-8"))
+        if entry.get("route") == "L325":
+            execucoes.append({"profile": entry.get("profile"), "route": "L325", "ok": entry.get("ok")})
+    return {"execucoes": execucoes}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--execucoes-dir", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    execucoes = []
-    for path in sorted(glob.glob(f"{args.execucoes_dir}/*.json")):
-        entry = json.load(open(path, encoding="utf-8"))
-        if entry.get("route") == "L325":
-            execucoes.append({"profile": entry.get("profile"), "route": "L325", "ok": entry.get("ok")})
-
+    result = collect_l325_execucoes(args.execucoes_dir)
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({"execucoes": execucoes}, f, indent=2, ensure_ascii=False)
-    print(f"{len(execucoes)} execucoes de L325 escritas em {args.out}")
+        json.dump(result, f, indent=2, ensure_ascii=False)
+    print(f"{len(result['execucoes'])} execucoes de L325 escritas em {args.out}")
 
 
 if __name__ == "__main__":

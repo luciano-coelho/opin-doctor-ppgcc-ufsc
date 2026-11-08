@@ -76,6 +76,11 @@ COMMON_FILES = [
     "thesis/scripts/switch_crypto_profile.py",
     "thesis/scripts/requirements.txt",
     "mock-service-os/certs",
+    # Decisao 85 (pedido do Luciano): produtor do criterio 7 (RTT por
+    # rota) roda nos dois lados -- canal `probe` no CLIENTE, canal
+    # `pcap` no SERVIDOR -- por isso vai em COMMON_FILES, nunca so
+    # num dos dois.
+    "thesis/results/v9/integration/producers/criterio7_rtt.py",
 ]
 CLIENT_ONLY_FILES = [
     "thesis/results/v9/certs/generated",
@@ -87,6 +92,9 @@ CLIENT_ONLY_FILES = [
 # source de build: as imagens ja chegam pinadas via deliver_images.py/
 # _deliver_backend_images, nunca `docker build` na instancia).
 SERVER_ONLY_FILES = [
+    # Decisao 85 (pedido do Luciano): produtor do criterio 2 (initcwnd
+    # real) roda SO no servidor (e quem aceita a conexao de teste).
+    "thesis/results/v9/integration/producers/criterio2_probe.py",
     "insurance-server-lambdas/docker-compose.yml",
     "insurance-server-lambdas/pg_hba.conf",
     "insurance-server-lambdas/mongod.conf",
@@ -101,6 +109,10 @@ CONTROL_FILES = [
     "thesis/results/v9/campaign/scripts/cli.py",
     "thesis/results/v9/campaign/scripts/preflight.py",
     "thesis/results/v9/campaign/scripts/rehearsal_handshake.sh",
+    # Decisao 85 (pedido do Luciano): roda DO CONTROLE, igual a
+    # orchestrator.py (so o controle alcanca servidor/clientes).
+    "thesis/results/v9/campaign/scripts/dedicated_criteria.py",
+    "thesis/results/v9/campaign/scripts/deliver_images.py",
     "thesis/results/v9/campaign/PINS.json",
     "thesis/results/v9/integration/evaluate_criteria.py",
     # Decisao 75, item 2 (pedido do Luciano): run_smoke_gate roda no

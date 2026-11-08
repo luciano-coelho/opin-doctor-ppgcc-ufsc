@@ -100,6 +100,25 @@ resource "aws_vpc_security_group_ingress_rule" "gateway" {
   }
 }
 
+# Decisao 85 (pedido do Luciano): porta dedicada do produtor do
+# criterio 2 (initcwnd real, criterio2_probe.py) -- MESMO conjunto de
+# clientes de `gateway_ingress_cidrs` (nunca o operador, nunca mais
+# amplo que o necessario), porta FIXA e NOVA (9876, nunca 443/22,
+# nunca usada por nenhum outro servico deste piloto).
+resource "aws_vpc_security_group_ingress_rule" "criterio2_probe" {
+  for_each          = var.role == "server" ? var.gateway_ingress_cidrs : {}
+  security_group_id = aws_security_group.this.id
+  description       = "Criterio 2 (initcwnd real) -- porta dedicada do produtor, scoped a um cliente /32"
+  from_port         = 9876
+  to_port           = 9876
+  ip_protocol       = "tcp"
+  cidr_ipv4         = each.value
+  tags = {
+    Project = "mockopin-pqc-v9-piloto"
+    Role    = "campaign-${var.role}"
+  }
+}
+
 locals {
   # Renewable safety timer -- Decision 49. A systemd timer checks a
   # deadline file every 5 minutes; past it, the instance shuts itself

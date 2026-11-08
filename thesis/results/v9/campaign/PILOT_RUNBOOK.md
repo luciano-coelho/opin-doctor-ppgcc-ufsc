@@ -19,21 +19,19 @@ roda ANTES de QUALQUER fase deste roteiro que dependa de SSH
 funcionar** — nunca só uma vez no Passo 0. Repita o comando do Passo
 1 antes de cada bloco marcado com 🔁 abaixo.
 
-**Gap conhecido, documentado e deliberadamente FORA do escopo desta
-rodada (Decisão 79):** os critérios 2 (initcwnd), 3 (zero erros na
-rota mais distante) e 7 (sanidade de latência) dependem de 3 scripts
-dedicados (`thesis/results/v9/integration/producers/{criterio2_probe,
-criterio3_collector,criterio7_rtt}.py`) que NUNCA foram ligados a
-este pipeline — nenhuma referência em `orchestrator.py`/`deliver_
-source.py`/este roteiro. Wire-los exigiria abrir uma porta de
-ingress NOVA numa conta AWS real (criterio2) e escrever um adaptador
-nunca pedido (criterio3) — fora do que o Luciano pediu no item 6
-("apply, PKI/entrega, preflight de captura, porta de fumaça, 60
-execuções, 12 capturas, coleta, cleanup, consolidação, verificação
-final"), que nunca menciona esses produtores. **Este roteiro fecha
-os critérios 1/4/5/6 de verdade; 2/3/7 reprovam honestamente por
-ausência de evidência — nunca por omissão silenciosa.** Decisão de
-wire-los fica pendente do Luciano.
+**Gap fechado (Decisão 85):** os critérios 2 (initcwnd), 3 (zero
+erros na rota mais distante) e 7 (sanidade de latência) agora rodam
+de verdade contra o piloto real — `dedicated_criteria.py` (novo,
+entregue ao controle) liga os 3 produtores (`thesis/results/v9/
+integration/producers/{criterio2_probe,criterio3_collector,
+criterio7_rtt}.py`) ao pipeline: uma porta de ingress NOVA (9876,
+Decisão 85, mesmo escopo de `gateway_ingress_cidrs`) pro criterio 2;
+um adaptador que reusa `evaluate_criteria.criterion_4_counts` (nunca
+reimplementado) pro criterio 3; os dois produtores corrigidos pra
+rodar `tshark` via `docker run ... mockopin-v9-measure` (o servidor
+real nunca tem `tshark` no PATH do host) pro criterio 7. **Este
+roteiro agora fecha os 7 critérios de verdade — nenhum "sem
+evidência" esperado por desenho.**
 
 ---
 
@@ -61,7 +59,8 @@ python ../campaign/scripts/check_operator_ip.py --tf-dir .
 
 ## Passo 2 — `terraform plan`, depois `terraform apply` (`self_terminate_hours=4`) **[OPERADOR]**
 
-Mesma contagem de recursos do ensaio de infraestrutura (a infraestrutura em si não muda, só o parâmetro de autodesligamento):
+Mesma infraestrutura do ensaio de infraestrutura, MAIS 3 regras novas
+(Decisão 85 — porta dedicada do produtor do critério 2):
 
 | Recurso | Quantidade |
 |---|---|
@@ -70,21 +69,22 @@ Mesma contagem de recursos do ensaio de infraestrutura (a infraestrutura em si n
 | `aws_security_group.this` | 5 |
 | `aws_vpc_security_group_ingress_rule.ssh` | 5 |
 | `aws_vpc_security_group_ingress_rule.gateway` | 3 |
+| `aws_vpc_security_group_ingress_rule.criterio2_probe` | 3 |
 | `aws_instance.this` | 5 |
 | `aws_eip.this` | 5 |
-| **Total** | **28** |
+| **Total** | **31** |
 
 ```
 export TF_VAR_operator_ip_cidr="$(curl -s https://checkip.amazonaws.com)/32"
 terraform plan -var="self_terminate_hours=4"
 ```
-**Saída esperada:** `Plan: 28 to add, 0 to change, 0 to destroy.` — se divergir, **pare e reconcilie antes do apply**.
+**Saída esperada:** `Plan: 31 to add, 0 to change, 0 to destroy.` — se divergir, **pare e reconcilie antes do apply**.
 
 ```
 terraform apply -var="self_terminate_hours=4" -auto-approve
 ```
-**Saída esperada:** `Apply complete! Resources: 28 added, 0 changed, 0 destroyed.`
-**Critério de abortar:** qualquer erro de apply, ou N ≠ 28 sem explicação — `terraform destroy -auto-approve` imediatamente.
+**Saída esperada:** `Apply complete! Resources: 31 added, 0 changed, 0 destroyed.`
+**Critério de abortar:** qualquer erro de apply, ou N ≠ 31 sem explicação — `terraform destroy -auto-approve` imediatamente.
 
 Repita o Passo 1 agora (a regra de ingress já existe).
 
@@ -139,8 +139,9 @@ python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-ope
 
 ## Passo 7 — `deliver_source.py --to-control`: `orchestrator.py` e dependências **[OPERADOR → CONTROLE]**
 
-**O que é copiado pro controle agora** (`CONTROL_FILES`, Decisão 76 acrescenta o último item desta lista):
+**O que é copiado pro controle agora** (`CONTROL_FILES`, Decisões 76/85 acrescentam os últimos itens desta lista):
 - `campaign/scripts/{orchestrator,cli,preflight}.py`, `rehearsal_handshake.sh`
+- `campaign/scripts/{dedicated_criteria,deliver_images}.py` (Decisão 85 — `orchestrator.py` agora importa `deliver_images` pro `BACKEND_IMAGE_KEYS`; `dedicated_criteria.py` roda do controle, mesma convenção)
 - `campaign/PINS.json`, `integration/evaluate_criteria.py`
 - `v8/campaign/scripts/redact_aws_errors.py`
 - **`thesis/results/v9/certs/generated`** (Decisão 76 — o diagnóstico de bytes do smoke gate, Passo 10, lê isto do controle; sem isto, antes desta Decisão, quebrava com `FileNotFoundError` — agora, mesmo se faltasse, só pausaria o diagnóstico, nunca o gate oficial)
@@ -231,13 +232,40 @@ REMOTE
 
 ---
 
+## Passo 11.5 — produtores dedicados dos critérios 2/3/7 (Decisão 85) **[CONTROLE]**
+
+```
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
+cd ~/thesis/results/v9/campaign/scripts
+python3 dedicated_criteria.py --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
+  --dir ~/campaign-data/v9/piloto
+REMOTE
+```
+**O que roda, na ordem:** critério 3 (local, reusa `evaluate_criteria.
+criterion_4_counts` já escrito pelo Passo 11, filtra L325) → critério
+2 (sobe `criterio2_probe.py` no servidor, dispara 1 conexão de teste
+do cliente L219 via `/dev/tcp`, porta 9876) → critério 7 (por rota:
+`probe` do cliente contra 443, `pcap` no servidor reaproveitando os
+pcaps dedicados que o Passo 11 já escreveu em `/tmp`). Escreve
+`criterio2_initcwnd.json`/`criterio3_l325_execucoes.json`/
+`criterio7_rtt_por_rota.json` no MESMO diretório `~/campaign-data/v9/
+piloto/` — um único pull no Passo 12 traz tudo junto.
+**Saída esperada:** JSON com as 3 chaves (`criterio2`/`criterio3`/
+`criterio7`), nenhuma vazia.
+**Critério de abortar:** qualquer `RuntimeError` — nunca prossiga pro
+Passo 12 com um dos 3 arquivos ausente (a consolidação reportaria
+"sem evidência" silenciosamente, sem dizer que a causa foi este
+passo falhando).
+
+---
+
 ## Passo 12 — coleta com manifesto verificado (Decisão 78) **[OPERADOR → CONTROLE]**
 
 ```
 python collect_artifacts.py --control-ip "$CONTROL_IP" --key <chave-do-operador> \
   --remote-dir ~/campaign-data/v9/piloto --local-dir /tmp/v9_piloto_coletado
 ```
-**Saída esperada:** JSON com `"files_verified": N` (N = todos os arquivos do diretório: `manifest.json` + `piloto_combined.log` + `piloto_calls.json` + `criterio6_execucoes.json` + 12 de `criterio1_capturas/` + `manifest.sha256`), `.pull-verified` escrito em `/tmp/v9_piloto_coletado/`.
+**Saída esperada:** JSON com `"files_verified": N` (N = todos os arquivos do diretório: `manifest.json` + `piloto_combined.log` + `piloto_calls.json` + `criterio6_execucoes.json` + 12 de `criterio1_capturas/` + `criterio2_initcwnd.json` + `criterio3_l325_execucoes.json` + `criterio7_rtt_por_rota.json` + `manifest.sha256`), `.pull-verified` escrito em `/tmp/v9_piloto_coletado/`.
 **Critério de abortar:** qualquer `RuntimeError` ("nao bate"/"ausente") — nunca confiar numa cópia parcial/corrompida.
 
 ---
@@ -250,8 +278,8 @@ python consolidate_v9_pilot.py \
   --out-dir ../../piloto/dados_oficiais/piloto-real-aws-<data-utc> \
   --run-label piloto-real-aws-<data-utc>
 ```
-**Saída esperada:** `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` escritos em `thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-<data>/`. **Esperado, por desenho, nesta rodada:** critérios 1/4/5/6 avaliados de verdade sobre dados REAIS de AWS pela primeira vez na história deste pacote (PASS ou FAIL real, nunca suposto); critérios 2/3/7 reprovam com nota "arquivo não encontrado" (gap conhecido — ver cabeçalho deste roteiro). `"all_criteria_pass": false` é o resultado ESPERADO, não um alarme.
-**Critério de abortar:** nenhum — é só leitura/consolidação, nunca toca a fleet. A interpretação do resultado (1/4/5/6 reais) vai pro relatório final.
+**Saída esperada:** `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` escritos em `thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-<data>/`. **Esperado, por desenho, nesta rodada (Decisão 85 fechou o gap):** os 7 critérios avaliados de verdade sobre dados REAIS de AWS pela primeira vez na história deste pacote (PASS ou FAIL real por critério, nunca suposto, nunca "sem evidência"). `"all_criteria_pass"` reflete o resultado real — nem sempre `true` é esperado (um critério pode reprovar de verdade), mas nenhum deve reprovar por ARQUIVO AUSENTE.
+**Critério de abortar:** nenhum — é só leitura/consolidação, nunca toca a fleet. Se algum dos 7 reprovar por "arquivo não encontrado" (em vez de um FAIL real com dados), volte ao Passo 11.5 — algo não rodou.
 
 ---
 

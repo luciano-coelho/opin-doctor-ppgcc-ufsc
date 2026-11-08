@@ -42,6 +42,29 @@ def tcp_connect_probe(host: str, port: int, n: int) -> dict:
             "samples_ms": [round(x, 3) for x in samples]}
 
 
+def _tshark_argv(pcap_path: str) -> list[str]:
+    """Decisao 85 (pedido do Luciano): o servidor real nunca tem
+    `tshark` no PATH do host (so dentro de `mockopin-v9-measure`, a
+    MESMA imagem pinada que `dedicated_capture`/criterio 1 ja usa) --
+    roda `tshark` dentro dela, nunca bare no host, nunca reconstroi
+    nem muda a imagem. `-v /tmp:/tmp:ro` porque todo pcap deste
+    pipeline vive sob `/tmp` (mesmo caminho dentro/fora do container,
+    nunca precisa traduzir)."""
+    return ["docker", "run", "--rm", "-v", "/tmp:/tmp:ro", "--entrypoint", "tshark",
+            "mockopin-v9-measure", "-r", pcap_path]
+
+
+def rtt_from_syn_synack_times(syn_times: list[float], synack_times: list[float]) -> dict:
+    """Decisao 85: matematica pura, fatorada de `pcap_syn_synack_rtt`
+    pra ser reusada tanto localmente (tshark bare, caso de teste/
+    validacao) quanto remotamente (tshark via docker no servidor
+    real, Decisao 85) -- MESMO calculo, nunca duplicado."""
+    rtts = [(synack - syn) * 1000.0 for syn, synack in zip(syn_times, synack_times)]
+    if not rtts:
+        return {"rtt_ms_pcap": None, "n_samples_pcap": 0}
+    return {"rtt_ms_pcap": round(statistics.median(rtts), 3), "n_samples_pcap": len(rtts)}
+
+
 def pcap_syn_synack_rtt(pcap_path: str, port: int) -> dict:
     """SYN do cliente (dstport==port, flags.syn==1, flags.ack==0) e o
     SYN-ACK correspondente (srcport==port, flags.syn==1,
@@ -49,21 +72,16 @@ def pcap_syn_synack_rtt(pcap_path: str, port: int) -> dict:
     campanha (v8/DECISIONS.md, linha 9970-9971), direto de uma
     captura ja existente, sem nenhuma conexao nova."""
     syn_out = subprocess.run(
-        ["tshark", "-r", pcap_path, "-Y", f"tcp.dstport=={port} && tcp.flags.syn==1 && tcp.flags.ack==0",
-         "-T", "fields", "-e", "frame.time_epoch"],
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.dstport=={port} && tcp.flags.syn==1 && tcp.flags.ack==0",
+                                    "-T", "fields", "-e", "frame.time_epoch"],
         capture_output=True, text=True,
     ).stdout.strip().splitlines()
     synack_out = subprocess.run(
-        ["tshark", "-r", pcap_path, "-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
-         "-T", "fields", "-e", "frame.time_epoch"],
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
+                                    "-T", "fields", "-e", "frame.time_epoch"],
         capture_output=True, text=True,
     ).stdout.strip().splitlines()
-    rtts = []
-    for syn_t, synack_t in zip(syn_out, synack_out):
-        rtts.append((float(synack_t) - float(syn_t)) * 1000.0)
-    if not rtts:
-        return {"rtt_ms_pcap": None, "n_samples_pcap": 0}
-    return {"rtt_ms_pcap": round(statistics.median(rtts), 3), "n_samples_pcap": len(rtts)}
+    return rtt_from_syn_synack_times([float(x) for x in syn_out], [float(x) for x in synack_out])
 
 
 def main():

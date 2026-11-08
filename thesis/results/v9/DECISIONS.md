@@ -9325,3 +9325,108 @@ ambiente, nunca testavel por pytest -- precisa de Docker real).
 
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
 DEPENDENCY_MAP.md`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 85. Os 3 produtores dedicados dos criterios 2/3/7 ligados ao pipeline real e ao consolidador -- gap da Decisao 79 fechado
+
+Decisao do Luciano, item 4 do mesmo pedido pos-Decisao 82: ligar
+`criterio2_probe.py`/`criterio3_collector.py`/`criterio7_rtt.py` ao
+pipeline real e ao consolidador, como testes e mutantes, pro
+consolidado produzir valores reais pros 7 criterios, nunca "sem
+evidencia".
+
+**Achados reais, corrigidos nos proprios produtores (nunca
+reinventados):** nem `criterio2_probe.py` nem `criterio7_rtt.py`
+tinham como rodar -- os dois chamam `tshark` bare, mas o servidor
+real NUNCA tem esse binario no PATH do host (so dentro de
+`mockopin-v9-measure`, a MESMA imagem pinada que `dedicated_capture`
+ja usa pro criterio 1). Corrigido nos dois: `tshark` agora roda via
+`docker run --rm -v /tmp:/tmp:ro --entrypoint tshark mockopin-v9-
+measure ...` -- nunca reconstroi nem muda a imagem. Em
+`criterio7_rtt.py`, a matematica de RTT (mediana de SYN->SYN-ACK) foi
+fatorada numa funcao pura nova (`rtt_from_syn_synack_times`), reusada
+tanto pelo caminho local (tshark bare, se algum dia existir) quanto
+pelo caminho real (tshark via docker) -- nunca duplicada.
+
+**Criterio 2 (initcwnd real) -- porta nova:** o SG do piloto so abria
+443/22 -- criterio2_probe.py precisa de uma porta DEDICADA pro
+listener de teste. `thesis/results/v9/terraform/modules/campaign_
+instance/main.tf` ganha `aws_vpc_security_group_ingress_rule.
+criterio2_probe` (porta 9876, MESMO `gateway_ingress_cidrs` que a
+porta 443 ja usa -- nunca mais amplo) -- 3 recursos novos (um por
+cliente), terraform sobe de 28 pra 31 recursos totais.
+
+**Criterio 3 (zero erros em L325) -- adaptador que reusa o
+avaliador:** `criterio3_collector.py` espera um arquivo JSON por
+execucao (`{"profile","route","ok"}`) que nada no pipeline real
+produz -- `run_pilot` so escreve UM `piloto_calls.json` combinado,
+sem campo `"ok"`. Em vez de inventar uma deteccao de erro nova, o
+adaptador (`dedicated_criteria.build_criterio3`) chama
+`evaluate_criteria.criterion_4_counts` (ja escrito, ja testado --
+compara contagens HTTP/mTLS reais de cada execucao contra o
+esperado) e reusa o `ok` que ELE ja calcula por execucao, filtrando
+so `route == "L325"`. `criterio3_collector.py` ganha `collect_l325_
+execucoes()` (fatorado de `main()`, nunca duplicado) pra ficar
+importavel.
+
+**Criterio 7 (RTT por rota) -- os dois canais:** canal `probe`
+(conexao TCP real, do CLIENTE contra a porta 443 ja aberta -- nenhuma
+porta nova) + canal `pcap` (reaproveita os pcaps dedicados que
+`_launch_gateway`/`dedicated_capture` JA escrevem em `/tmp/criterio1_
+<perfil>_<rota>.pcap` no servidor -- nenhuma captura nova, qualquer
+perfil prova o canal, SYN/SYN-ACK nunca depende de perfil
+criptografico).
+
+**Orquestracao -- `dedicated_criteria.py` (novo), roda DO CONTROLE**
+(mesma convencao de `orchestrator.py` -- so o controle alcanca
+servidor/clientes, Decisao 59): `run_all(executor, collected_dir,
+out_dir)` chama os 3, na ordem (criterio3 primeiro, nunca depende de
+rede; depois 2 e 7, que precisam da fleet viva), escrevendo os 3
+arquivos novos no MESMO diretorio que `run_pilot --out` ja usou --
+um unico `collect_artifacts.py` depois traz tudo junto. CLI propria
+(`--inventory-json`/`--ssh-key`/`--dir`), entregue ao controle via
+`CONTROL_FILES` (novo item, junto com `deliver_images.py` -- achado
+real, nunca entregue antes: `orchestrator.py` importa `deliver_
+images` desde a Decisao 83 pro `BACKEND_IMAGE_KEYS`, mas nunca tinha
+sido adicionado a `CONTROL_FILES` -- `python3 orchestrator.py --help`
+quebraria no controle real por `ModuleNotFoundError`, nunca pego
+antes porque os testes importam os dois modulos no MESMO processo
+Python local). `criterio2_probe.py` entregue so ao SERVIDOR
+(`SERVER_ONLY_FILES`); `criterio7_rtt.py` entregue a AMBOS (`COMMON_
+FILES` -- roda nos dois lados).
+
+**Consolidador:** nenhuma mudanca necessaria -- `consolidate_v9_
+pilot.py`/`evaluate_criteria.py` ja chamam os 7 criterios
+incondicionalmente contra `--aws-dir`; uma vez que os 3 arquivos
+existem no diretorio coletado, os criterios 2/3/7 passam a ser
+avaliados de verdade, nunca mais "sem evidencia" por desenho.
+
+**`PILOT_RUNBOOK.md` atualizado:** contagem de recursos 28->31; novo
+Passo 11.5 (produtores dedicados, entre o piloto real e a coleta);
+Passo 13 atualizado -- os 7 criterios agora tem resultado real
+esperado, nunca "sem evidencia" por desenho (se isso acontecer, e
+sinal de que o Passo 11.5 falhou, nao um resultado normal).
+
+**Testes (novos, com mutantes pedidos explicitamente):**
+`test_producers.py` (7 testes -- `_tshark_argv` dos dois produtores
+roda via docker, nunca bare, com mutante que reverte; `rtt_from_syn_
+synack_times` calcula mediana corretamente, nunca quebra vazio, com
+mutante media-vs-mediana; `collect_l325_execucoes` filtra rota
+certa); `test_dedicated_criteria.py` (7 testes -- `build_criterio3`
+reusa `criterion_4_counts` de verdade e filtra L325, com mutante que
+esquece o filtro; `run_criterio2` sobe o probe, dispara o cliente
+certo, falha alto se o arquivo nunca aparece, com mutante que nunca
+espera; `run_criterio7` roda probe no cliente certo e pcap no
+servidor certo, falha alto se nenhum pcap dedicado existe). 199
+testes no total (186 + 13: 7 producers + 7 dedicated_criteria - 1
+jah contado).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/terraform/
+modules/campaign_instance/main.tf`,
+`thesis/results/v9/integration/producers/{criterio2_probe,
+criterio3_collector,criterio7_rtt}.py`,
+`thesis/results/v9/campaign/scripts/
+{dedicated_criteria.py (novo),deliver_source.py}`,
+`thesis/results/v9/campaign/tests/
+{test_producers.py (novo),test_dedicated_criteria.py (novo)}`,
+`thesis/results/v9/campaign/PILOT_RUNBOOK.md`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
