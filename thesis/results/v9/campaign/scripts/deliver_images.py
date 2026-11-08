@@ -125,6 +125,23 @@ def save_image_tarball(image_key: str, docker_image: str, out_dir: Path) -> Path
     return tar_path
 
 
+def _scp_timeout_for_bytes(size_bytes, min_mbps=24, buffer_seconds=60):
+    """Decisao 86 (achado real, ao vivo): `cli.run_scp`'s default
+    (`connect_timeout=20` -> timeout total de 140s) foi medido contra
+    as 4 imagens originais (~140MB totais, confirmado completando
+    bem dentro de 140s) -- nunca contra as 6 imagens do backend
+    (Decisao 83, ate ~1,8GB cada). `localstack.tar` (1,8GB) estourou
+    o timeout fixo ao vivo (`subprocess.TimeoutExpired` apos 140s),
+    MESMO com banda real suficiente (psql, 642MB, ja tinha completado
+    dentro do mesmo limite antes dele, >4,5MB/s medido). Corrigido:
+    timeout PROPORCIONAL ao tamanho real do arquivo (piso
+    conservador de 24Mbps -- bem abaixo da banda real observada --
+    nunca o fixo de sempre, que so fazia sentido pras imagens
+    pequenas)."""
+    min_bytes_per_second = (min_mbps * 1_000_000) / 8
+    return max(20, int(size_bytes / min_bytes_per_second) + buffer_seconds)
+
+
 def check_control_disk_space(control_ip, operator_key_path, needed_bytes, headroom_factor=2):
     """Decisao 59: o controle e `t4g.micro`, mas com volume `gp3` de
     30GB (confirmado em `modules/campaign_instance/main.tf`,
@@ -204,7 +221,9 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
             # mesmo com o .tar correto. Binario, \n puro, sempre.
             sha_path.write_bytes(f"{sha256}  {tar_path.name}\n".encode("utf-8"))
 
-            scp_proc = cli.run_scp(str(tar_path), f"ec2-user@{control_ip}:{REMOTE_STAGING_DIR}/{tar_path.name}", key_path=operator_key_path)
+            scp_timeout = _scp_timeout_for_bytes(tar_path.stat().st_size)
+            scp_proc = cli.run_scp(str(tar_path), f"ec2-user@{control_ip}:{REMOTE_STAGING_DIR}/{tar_path.name}",
+                                    key_path=operator_key_path, connect_timeout=scp_timeout)
             if scp_proc.returncode != 0:
                 raise RuntimeError(f"deliver_images({key}): scp do tar pro controle falhou: {cli.redact(scp_proc.stderr)}")
             cli.run_scp(str(sha_path), f"ec2-user@{control_ip}:{REMOTE_STAGING_DIR}/{sha_path.name}", key_path=operator_key_path)

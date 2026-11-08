@@ -9430,3 +9430,60 @@ criterio3_collector,criterio7_rtt}.py`,
 {test_producers.py (novo),test_dedicated_criteria.py (novo)}`,
 `thesis/results/v9/campaign/PILOT_RUNBOOK.md`,
 `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 86. Achado real, ao vivo, executando a Fase B de novo (Passo 8) -- timeout fixo do scp (140s) nunca pensado pras imagens do backend, estourou entregando localstack.tar (1,8GB)
+
+Branch `v9/fase1-local`. Fleet nova aplicada (31 recursos, `self_
+terminate_hours=4`), Passos 0-7 todos verdes (IP do operador
+conferido, chave entregue, Docker pronto nas 5 instancias, `deliver_
+source.py` confirmou os arquivos novos das Decisoes 83/85 chegando
+certos, `dedicated_criteria.py`/`orchestrator.py` confirmados
+importando no controle de verdade -- ver nota abaixo). Passo 8
+(`deliver_images.py`, agora com 10 imagens -- as 4 originais + as 6
+do backend) reprovou entregando `localstack.tar` (1,8GB):
+
+```
+subprocess.TimeoutExpired: Command [... 'scp' ... 'localstack.tar' ...]
+timed out after 140 seconds
+```
+
+**Causa raiz:** `cli.run_scp`'s timeout (`connect_timeout=20` default
+-> timeout total do processo de 140s) foi medido e calibrado so
+contra as 4 imagens originais (~140MB totais, Decisao 59/68) -- nunca
+pensado pras 6 imagens do backend (Decisao 83), algumas de ~1,8GB.
+A banda real estava BOA (`psql.tar`, 642MB, completou dentro do
+mesmo limite de 140s ANTES do `localstack.tar` -- >4,5MB/s medido ao
+vivo) -- o problema nunca foi a rede, foi o timeout fixo nunca
+escalar com o tamanho real do arquivo.
+
+**Corrigido:** `deliver_images.py` ganha `_scp_timeout_for_bytes`
+(novo) -- calcula o `connect_timeout` (que `cli.run_scp` ja usa como
+base do timeout total do processo) PROPORCIONAL ao tamanho real do
+`.tar`, com piso conservador de 24Mbps (bem abaixo da banda real
+observada, nunca o fixo de sempre). Passado explicitamente na
+chamada de `cli.run_scp` do tar principal (nunca no `.sha256`,
+minusculo).
+
+**Por que e uma correcao segura, nunca um STOP:** nao toca nenhuma
+verificacao de identidade/conteudo (sha256/layers/config continuam
+exatamente como a Decisao 68 definiu) -- so da tempo suficiente pro
+scp de verdade terminar antes do processo achar que travou. Nenhum
+criterio pre-registrado muda.
+
+**Testes (novos):** `test_scp_timeout_for_bytes_escala_com_tamanho_
+real` (+ mutante que volta pro fixo, pego) + `test_deliver_images_
+usa_timeout_proporcional_no_scp_do_tar` (confere o `ConnectTimeout=N`
+exato no argv real do scp). 202 testes no total (199 + 3).
+
+**Estado do controle no momento do achado (nunca precisou limpeza
+manual -- scp sobrescreve o destino):** `gateway`/`proxy`/`pqc-
+signer`/`measure`/`psql` ja entregues e verificados (sha256 OK);
+`localstack.tar` parcial (470MB de ~1,8GB) -- sera sobrescrito pela
+reentrega. Disco do controle com 28GB livres, folga enorme.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/deliver_images.py`,
+`thesis/results/v9/campaign/tests/test_deliver_images.py`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Reentregando as imagens restantes (mesma fleet, sem reaplicar).

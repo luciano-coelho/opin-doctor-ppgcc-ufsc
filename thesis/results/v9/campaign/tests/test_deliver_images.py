@@ -66,6 +66,60 @@ def _run_factory(calls, df_avail_kb="999999999"):
     return fake_run
 
 
+# --- Decisao 86 (achado real, ao vivo): o timeout FIXO do scp
+# (140s, default de cli.run_scp) estourou de verdade entregando
+# localstack.tar (1,8GB) -- `_scp_timeout_for_bytes` tem que escalar
+# com o tamanho real, nunca um fixo so bom pras imagens pequenas.
+
+def test_scp_timeout_for_bytes_escala_com_tamanho_real():
+    pequeno = di._scp_timeout_for_bytes(10 * 1024 * 1024)  # 10MB
+    grande = di._scp_timeout_for_bytes(1_800_000_000)  # ~1.8GB, como localstack.tar
+    assert grande > pequeno
+    assert pequeno >= 20  # nunca menor que o minimo de sempre
+    # ~1,8GB a 24Mbps (piso conservador) ~= 600s -- tem que dar MUITO
+    # mais que os 140s fixos de antes (que e so connect_timeout=20).
+    assert grande > 400
+
+
+def test_mutante_scp_timeout_fixo_e_pego():
+    """Mutante: volta pro timeout fixo (ignora o tamanho) -- o teste
+    acima tem que reprovar com essa mutacao."""
+    def mutant_scp_timeout_for_bytes(size_bytes):
+        return 20  # mutante: ignora size_bytes
+    assert mutant_scp_timeout_for_bytes(1_800_000_000) == mutant_scp_timeout_for_bytes(10 * 1024 * 1024)
+    assert di._scp_timeout_for_bytes(1_800_000_000) != di._scp_timeout_for_bytes(10 * 1024 * 1024)
+
+
+def test_deliver_images_usa_timeout_proporcional_no_scp_do_tar(monkeypatch):
+    calls = []
+    big_tar_bytes = b"x" * (2 * 1024 * 1024)  # 2MB fake, grande o bastante pra medir a escala
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "save":
+            tar_path = argv[argv.index("-o") + 1]
+            Path(tar_path).write_bytes(big_tar_bytes)
+            return FakeProc()
+        if argv[0] == "ssh" and "df --output=avail" in argv[-1]:
+            return FakeProc(stdout="999999999\n")
+        if argv[0] == "ssh" and "sha256sum -c" in argv[-1]:
+            return FakeProc(stdout="OK\n")
+        return FakeProc()
+
+    sha256_big = hashlib.sha256(big_tar_bytes).hexdigest()
+    monkeypatch.setattr(di, "load_pins", lambda: {"images": {
+        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": sha256_big},
+    }})
+    monkeypatch.setattr(cli, "_run", fake_run)
+    di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
+
+    scp_calls = [c for c in calls if c[0] == "scp" and "proxy.tar" in c[-1]]
+    assert scp_calls, calls
+    expected_timeout = di._scp_timeout_for_bytes(len(big_tar_bytes))
+    assert f"ConnectTimeout={expected_timeout}" in scp_calls[0], scp_calls[0]
+    assert expected_timeout > 20, "timeout proporcional tem que ser maior que o minimo pra um tar de 2MB"
+
+
 def test_extract_gateway_binary_info_confere_sha256_e_devolve_metadata(monkeypatch, tmp_path):
     calls = []
 
