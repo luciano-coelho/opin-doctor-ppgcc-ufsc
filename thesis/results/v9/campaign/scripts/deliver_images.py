@@ -45,6 +45,12 @@ GATEWAY_IMAGE = "mockopin-v9-gateway"
 TOOLCHAIN_IMAGE = "mockopin-v9-toolchain"
 REMOTE_STAGING_DIR = "~/images"
 ALL_IMAGE_KEYS = ("gateway", "proxy", "pqc-signer", "measure")
+# Decisao 83 (pedido do Luciano): backend de negocio da v8 (auth/
+# mockapi, serve JWKS/token/API) portado pro piloto v9 -- entregue SO
+# ao SERVIDOR (nunca a cliente nenhum), uma vez por fleet (nunca por
+# bloco/perfil -- essas imagens nunca trocam de CRYPTO_PROFILE em si,
+# so o CONTEUDO que `docker compose up` gera/seeda muda).
+BACKEND_IMAGE_KEYS = ("psql", "localstack", "mongodb", "auth", "mongo_seed", "mockapi")
 
 
 def load_pins():

@@ -53,6 +53,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import cli  # noqa: E402
 import preflight  # noqa: E402  -- Decisao 53, item 4: pre-requisitos de captura por host
+import deliver_images  # noqa: E402  -- Decisao 83: BACKEND_IMAGE_KEYS, nunca duplicado aqui
 
 _INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "integration"
 sys.path.insert(0, str(_INTEGRATION_DIR))
@@ -321,6 +322,15 @@ class SSHExecutor:
         # depender do nome. Numa instancia EC2 real, `gw_ip` ja e um
         # IP de verdade (Decisao 27/43/45) -- este bloco nunca executa.
         self.local_shim_bridge_join = local_shim_bridge_join
+        # Decisao 83: backend de negocio (auth/mongo_seed/mockapi +
+        # psql/localstack/mongodb) entregue UMA vez por fleet (nunca
+        # por bloco -- essas imagens nunca trocam de CRYPTO_PROFILE em
+        # si), e amostras de CPU/memoria do servidor pra comparar com o
+        # que a v8 ja mediu (mesmo formato de sempre, campaign_run.py.
+        # _sample_cpu_mem_steal() -- /proc/stat+/proc/meminfo, nunca
+        # `docker stats`).
+        self._backend_delivered = False
+        self.cpu_mem_samples = []
 
     def _server_ip(self):
         return self.inventory["server"]["public_ip"]
@@ -589,6 +599,40 @@ class SSHExecutor:
                 f"config_ok={config_ok}, binary_ok={binary_ok}) -- abortando ANTES de qualquer execucao"
             )
 
+    def _deliver_backend_images(self):
+        """Decisao 83 (pedido do Luciano, apos a Decisao 82): entrega
+        as 6 imagens do backend de negocio da v8 (psql/localstack/
+        mongodb/auth/mongo_seed/mockapi) ao SERVIDOR, UMA vez por
+        fleet -- mesmo mecanismo de sempre (`_deliver_image`, save/
+        load + verificacao por conteudo contra PINS.json, Decisao 68),
+        nenhum mecanismo novo. Idempotente via guarda explicita (nunca
+        reentrega 6 imagens de varios GB a cada bloco -- so gateway/
+        proxy/pqc-signer trocam de verdade por bloco, o backend nunca
+        muda de binario, so de conteudo seedado pelo proprio compose)."""
+        if self._backend_delivered:
+            return
+        for key in deliver_images.BACKEND_IMAGE_KEYS:
+            self._deliver_image(key, self._server_ip())
+        self._backend_delivered = True
+
+    def _sample_cpu_mem(self, host) -> dict:
+        """Decisao 83 (pedido do Luciano, item 1: comparar CPU/memoria
+        do servidor com o que a v8 ja mediu) -- MESMO formato que
+        `campaign_run.py._sample_cpu_mem_steal()` ja usa (`/proc/stat`
+        linha `cpu` + `/proc/meminfo`, nunca `docker stats` -- motivo
+        de sempre: `/proc/stat` inclui `steal`, visivel so no nivel do
+        HOST, nunca de dentro de um container)."""
+        proc = cli.run_ssh(host, "cat /proc/stat | head -1; echo ---MEMINFO---; cat /proc/meminfo",
+                            key_path=self.key_path)
+        sample = {"sampled_at_utc": datetime.now(timezone.utc).isoformat()}
+        if proc.returncode != 0:
+            sample["error"] = cli.redact(proc.stderr)
+            return sample
+        stat_part, _, mem_part = (proc.stdout or "").partition("---MEMINFO---")
+        sample["proc_stat_line"] = stat_part.strip()
+        sample["proc_meminfo_raw"] = mem_part.strip()
+        return sample
+
     def _launch_gateway(self, profile, keylog=False):
         """Decisao 52 (Emenda 14): fatorado de `start_block` pra ser
         reusado por `dedicated_capture` tambem -- o UNICO lugar que
@@ -628,32 +672,28 @@ class SSHExecutor:
             else "~/mock-service-os/certs"
         )
         # Decisao 69 (achado real, ao vivo, na retomada da Fase A real):
-        # `--network insurance-server-lambdas_default` + os `--network-
-        # alias` so existem/fazem sentido na validacao LOCAL (criados
-        # pelo stack docker-compose de `insurance-server-lambdas`, que
-        # SO sobe quando `local_shim_bridge_join=True`, no bloco acima
-        # de `start_block`). Num servidor EC2 real (`local_shim_
-        # bridge_join=False`), essa rede nunca existe -- `docker run -d`
-        # falhava (rede nao encontrada), o container ficava parado em
-        # "Created" (nunca "Up"), e nem isso nem o laco de espera por
-        # "listening on" abaixo verificavam o codigo de saida -- o erro
-        # real so aparecia 2 passos depois, em `_verify_running_
-        # gateway_binary` ("container ... is not running"), sem pista
-        # da causa raiz. O servidor remoto real tambem nunca tem outro
-        # container pra resolver `mtls`/`auth.local` por alias Docker
-        # (o backend real nao existe nesta rodada, ver limitacao
-        # honesta no docstring de `start_block`) -- o cliente (`_server_
-        # gateway_ip`) sempre disca o IP do HOST na porta 443, nunca um
-        # alias Docker, entao o unico requisito real e publicar a porta
-        # no host (`-p 443:443`), nunca juntar a uma rede especifica.
-        if self.local_shim_bridge_join:
-            network_flags = (
-                "--network insurance-server-lambdas_default "
-                "--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
-                "--network-alias matls-api.local --network-alias api.local --network-alias directory "
-            )
-        else:
-            network_flags = "-p 443:443 "
+        # `--network insurance-server-lambdas_default` so existia de
+        # verdade na validacao LOCAL -- num servidor EC2 real, antes da
+        # Decisao 83, essa rede nunca existia (nada subia o backend
+        # la), `docker run -d` falhava (rede nao encontrada). Decisao
+        # 83 (pedido do Luciano): o backend de negocio AGORA roda de
+        # verdade no servidor remoto tambem (`start_block`, via `docker
+        # compose`) -- essa MESMA rede passa a existir de verdade la
+        # tambem (compose a cria no primeiro `up`). O gateway entra
+        # nela nos DOIS modos agora (pra resolver `auth`/`mockapi` por
+        # alias Docker -- `business.go`'s AUTH_URI/API_GATEWAY_URI
+        # default `http://auth:3000`/`http://mockapi:8080`), MAS, so
+        # no caso remoto real, TAMBEM publica a porta no host
+        # (`-p 443:443`) -- o cliente (`_server_gateway_ip`) sempre
+        # disca o IP do HOST na porta 443, nunca um alias Docker (so o
+        # gateway, nunca o cliente, precisa resolver os aliases).
+        network_flags = (
+            "--network insurance-server-lambdas_default "
+            "--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
+            "--network-alias matls-api.local --network-alias api.local --network-alias directory "
+        )
+        if not self.local_shim_bridge_join:
+            network_flags += "-p 443:443 "
         cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
         run_proc = cli.run_ssh(self._server_ip(),
                     f"docker run -d --name {self.gateway_container} "
@@ -744,62 +784,73 @@ class SSHExecutor:
         (v8) -- troca o perfil do GATEWAY e sobe proxy+signer
         DETACHED antes de qualquer execucao cronometrada do bloco.
 
-        **Limitacao honesta, registrada aqui (nao escondida):** a
-        troca de perfil do GATEWAY em si, pro `docker run
-        {self.gateway_container}` usado nesta validacao LOCAL, e um
-        atalho SO pra esta validacao (o container `v9-mtls` que esta
-        sessao sobe manualmente, substituindo o `mtls` real no
-        `insurance-server-lambdas_default`) -- a v8 real troca o
-        perfil do servidor via `switch_crypto_profile.py`
-        (`docker compose up -d --force-recreate auth mtls mongo_seed
-        mockapi`), que NAO conhece a v9 (nunca importa nem referencia
-        o gateway/proxy da v9). Pra um piloto remoto de verdade, esse
-        script precisa de uma versao v9-consciente (ou um override de
-        compose que troque so o servico `mtls` pela imagem da v9) --
-        isso NAO existe ainda, gap separado do pedido desta rodada
-        (que era so a invocacao do CLIENTE)."""
+        Decisao 83 (pedido do Luciano, apos a Decisao 82 -- a limitacao
+        honesta que este docstring registrava antes, "isso NAO existe
+        ainda, gap separado desta rodada", agora fechada): o backend de
+        negocio da v8 (auth/mongo_seed/mockapi, + psql/localstack/
+        mongodb como dependencias do proprio `docker compose`) e
+        portado de verdade -- mesmo comando, mesmos Dockerfiles/fontes,
+        rodando AGORA nos dois modos (antes, so `local_shim_bridge_
+        join=True`): `auth` roda com seu PROPRIO CRYPTO_PROFILE (visto
+        ao vivo: "Crypto profile: classic (signingAlgs: PS256)" no log
+        dela), que determina o algoritmo de assinatura/JWKS que ela
+        espera do token do cliente -- sem troca-la (+ mongo_seed/
+        mockapi) junto com o gateway, um bloco hibrido-v8 contra uma
+        `auth` ainda em "classic" devolve 401 em /token (achado ao
+        vivo, Decisao 49). `cd` escolhido pela MESMA convencao ja usada
+        pra `real_certs_mount` (Decisao 58): `$(pwd)/../../...` so faz
+        sentido no shim local; `~/insurance-server-lambdas` (entregue
+        por `deliver_source.py`, Decisao 83) e o caminho real remoto."""
         self._tcp_preflight(route)
         self._block_start_utc[(profile, route)] = datetime.now(timezone.utc)
-        if self.local_shim_bridge_join:
-            # Achado real desta rodada (Decisao 49): trocar SO o
-            # gateway nao basta -- `auth` roda com seu PROPRIO
-            # CRYPTO_PROFILE (visto ao vivo: "Crypto profile: classic
-            # (signingAlgs: PS256)" no log dela), que determina o
-            # algoritmo de assinatura/JWKS que ela espera do token do
-            # cliente. Sem trocar `auth`/`mongo_seed`/`mockapi`
-            # tambem, um bloco hibrido-v8 contra uma `auth` ainda em
-            # "classic" devolve 401 em /token -- confirmado ao vivo,
-            # nao suposto (ver Decisao 49). Mesmo comando (literal,
-            # exceto por excluir "mtls", que a v9 substitui pelo seu
-            # proprio container acima) que `switch_crypto_profile.py`
-            # real usa.
-            backend_profile = BACKEND_CRYPTO_PROFILE_ENV[profile]
-            cli.run_ssh(self._server_ip(),
-                        f'cd "$(pwd)/../../insurance-server-lambdas" && '
-                        f"CRYPTO_PROFILE={backend_profile} docker compose --profile main "
-                        f"up -d --force-recreate auth mongo_seed mockapi && "
-                        # Decisao 49: switch_crypto_profile.py real espera health
-                        # de verdade (chronyc/psql/retry) -- aqui, so um poll
-                        # simples nos dois servicos que o settling de fato
-                        # chama, ate os dois responderem. `mockapi`
-                        # (Java/Micronaut, Hibernate) demora de verdade pra
-                        # subir (~30s, confirmado ao vivo nos logs) -- achado
-                        # ao vivo: 502 Bad Gateway em /jwks (via api.local,
-                        # roteado pro mockapi) sem esperar especificamente por
-                        # ele, so por auth (rapido, ~3s) nao bastava.
-                        f"for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/jwks >/dev/null 2>&1 && break; sleep 1; done && "
-                        # `mockapi` (Java/Micronaut, Hibernate metamodel scan)
-                        # demora ~30s pra subir de verdade -- confirmado ao
-                        # vivo nos logs dele -- e devolve conexao recusada OU
-                        # respostas inconsistentes nesse meio tempo (nao um
-                        # unico codigo de erro confiavel pra sondar com
-                        # curl). Espera fixa, generosa, em vez de um poll
-                        # fragil: mais simples e mais robusto pra esta
-                        # validacao local.
-                        f"for i in $(seq 1 45); do "
-                        f"docker logs insurance-server-lambdas-mockapi-1 2>&1 | grep -q 'Startup completed' && break; "
-                        f"sleep 1; done",
-                        key_path=self.key_path, connect_timeout=90)
+        if not self.local_shim_bridge_join:
+            # Decisao 83: as 6 imagens do backend (Decisao 68, mesmo
+            # mecanismo de sempre) -- uma vez por fleet, nunca por
+            # bloco (nunca trocam de CRYPTO_PROFILE em si).
+            self._deliver_backend_images()
+            self.cpu_mem_samples.append(
+                {"label": "antes_do_backend", "profile": profile, "route": route,
+                 **self._sample_cpu_mem(self._server_ip())})
+        compose_dir = (
+            '"$(pwd)/../../insurance-server-lambdas"' if self.local_shim_bridge_join
+            else "~/insurance-server-lambdas"
+        )
+        backend_profile = BACKEND_CRYPTO_PROFILE_ENV[profile]
+        backend_proc = cli.run_ssh(self._server_ip(),
+                    f'cd {compose_dir} && '
+                    f"CRYPTO_PROFILE={backend_profile} docker compose --profile main "
+                    f"up -d --force-recreate auth mongo_seed mockapi && "
+                    # Decisao 49: switch_crypto_profile.py real espera health
+                    # de verdade (chronyc/psql/retry) -- aqui, so um poll
+                    # simples nos dois servicos que o settling de fato
+                    # chama, ate os dois responderem. `mockapi`
+                    # (Java/Micronaut, Hibernate) demora de verdade pra
+                    # subir (~30s, confirmado ao vivo nos logs) -- achado
+                    # ao vivo: 502 Bad Gateway em /jwks (via api.local,
+                    # roteado pro mockapi) sem esperar especificamente por
+                    # ele, so por auth (rapido, ~3s) nao bastava.
+                    f"for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/jwks >/dev/null 2>&1 && break; sleep 1; done && "
+                    # `mockapi` (Java/Micronaut, Hibernate metamodel scan)
+                    # demora ~30s pra subir de verdade -- confirmado ao
+                    # vivo nos logs dele -- e devolve conexao recusada OU
+                    # respostas inconsistentes nesse meio tempo (nao um
+                    # unico codigo de erro confiavel pra sondar com
+                    # curl). Espera fixa, generosa, em vez de um poll
+                    # fragil: mais simples e mais robusto.
+                    f"for i in $(seq 1 45); do "
+                    f"docker logs insurance-server-lambdas-mockapi-1 2>&1 | grep -q 'Startup completed' && break; "
+                    f"sleep 1; done",
+                    key_path=self.key_path, connect_timeout=90)
+        if backend_proc.returncode != 0:
+            raise RuntimeError(
+                f"start_block {profile}/{route}: subir o backend de negocio (docker compose) falhou -- "
+                f"abortando ANTES de qualquer verificacao/execucao (saida: "
+                f"{(backend_proc.stdout + backend_proc.stderr).strip()!r})"
+            )
+        if not self.local_shim_bridge_join:
+            self.cpu_mem_samples.append(
+                {"label": "depois_do_backend", "profile": profile, "route": route,
+                 **self._sample_cpu_mem(self._server_ip())})
         # Decisao 55, item 2: entrega por save/load, NUNCA build na
         # instancia -- ANTES de qualquer verificacao/execucao.
         self._deliver_image("gateway", self._server_ip())
@@ -846,10 +897,27 @@ class SSHExecutor:
     def stop_block(self, profile, route):
         """Mesmo comando (literal) que `stop_block_proxies` da v8
         real usa -- `docker stop`+`docker rm -f`, os dois containers
-        fixos (`tls_kem_proxy_run`/`pqc_signer_service_run`)."""
+        fixos (`tls_kem_proxy_run`/`pqc_signer_service_run`).
+
+        Decisao 83 (pedido do Luciano, item 1: "inclua no stop"):
+        tambem para (nunca remove -- `stop`, nunca `down`, pra NUNCA
+        derrubar a rede `insurance-server-lambdas_default` que o
+        gateway ja esta usando, Decisao 83 em `_launch_gateway`) o
+        backend de negocio no SERVIDOR -- o proximo `start_block`
+        (de qualquer perfil, inclusive o mesmo) sempre faz
+        `--force-recreate` de novo, entao parar aqui so libera CPU/
+        memoria entre blocos, nunca perde estado necessario."""
         remote_cmd = (f"docker stop {self.TLS_KEM_PROXY_CONTAINER} {self.PQC_SIGNER_CONTAINER} 2>/dev/null; "
                       f"docker rm -f {self.TLS_KEM_PROXY_CONTAINER} {self.PQC_SIGNER_CONTAINER} 2>/dev/null; true")
         cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
+        compose_dir = (
+            '"$(pwd)/../../insurance-server-lambdas"' if self.local_shim_bridge_join
+            else "~/insurance-server-lambdas"
+        )
+        cli.run_ssh(self._server_ip(),
+                    f"cd {compose_dir} && docker compose --profile main stop auth mongo_seed mockapi "
+                    f"2>/dev/null; true",
+                    key_path=self.key_path)
         self._block_start_utc.pop((profile, route), None)
 
     def readiness_probe(self, profile, route):
@@ -1157,6 +1225,10 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         # vazia pro LocalExecutor (nunca tem binario real pra
         # verificar).
         "gateway_binary_verifications": getattr(executor, "gateway_binary_verifications", []),
+        # Decisao 83, item 1: amostras de CPU/memoria do servidor
+        # (antes/depois de cada subida do backend) -- comparar com o
+        # que a v8 ja mediu. Lista vazia pro LocalExecutor.
+        "cpu_mem_samples": getattr(executor, "cpu_mem_samples", []),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest

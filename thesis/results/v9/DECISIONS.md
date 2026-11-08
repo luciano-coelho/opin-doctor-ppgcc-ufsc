@@ -9141,3 +9141,116 @@ bem dentro do teto de US$5, soma-se ao gasto da Fase A (~US$0,55).
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/DECISIONS.md`
 (esta Decisao), evidencia em `thesis/results/v9/piloto/
 ensaio_fase_b_real/`.
+
+## 83. Emenda -- backend de negocio da v8 (auth/mockapi/mongo_seed + psql/localstack/mongodb) portado de verdade pro piloto v9, fechando o gap real da Decisao 82
+
+Decisao do Luciano, item 1 do pedido pos-Decisao 82: portar o que a
+v8 ja fazia -- imagens extras de servidor, a rede Docker com
+aliases, a ordem de subida, os health checks e o encerramento,
+usando os mesmos Dockerfiles/fontes da v8, entregues pelo mesmo
+mecanismo de 2 saltos, com o backend subindo ANTES do gateway com
+readiness probe real, incluido no stop/captura dedicada/cleanup, e
+uma comparacao de CPU/memoria contra a v8.
+
+**Achado-chave, investigado antes de escrever qualquer linha nova:**
+`orchestrator.py.start_block` JA TINHA o mecanismo inteiro escrito
+(Decisao 49) -- `docker compose --profile main up -d --force-
+recreate auth mongo_seed mockapi` + os MESMOS health checks reais
+(curl `/jwks` pra `auth`, grep `"Startup completed"` no log do
+`mockapi`) -- mas GATADO por `if self.local_shim_bridge_join:`,
+nunca rodando no caso remoto real (o proprio docstring de `start_
+block` ja registrava isso como "limitacao honesta... gap separado
+desta rodada"). A correcao NUNCA foi reescrever a orquestracao do
+zero -- foi destravar o `if`, escolher o `cd` certo por modo (mesma
+convencao ja usada pra `real_certs_mount`, Decisao 58), e entregar as
+imagens/arquivos que faltavam.
+
+**Imagens -- 6 entradas NOVAS em PINS.json (nenhuma existente
+alterada), mesmo esquema de identidade por conteudo (Decisao 68):**
+`psql`/`localstack`/`mongodb` sao imagens ESTOQUE, puladas pelo
+digest EXATO que `insurance-server-lambdas/docker-compose.yml` ja
+fixa -- nunca reconstruidas, so verificadas. `auth`/`mongo_seed`
+RECONSTRUIDAS nesta rodada a partir do source ATUAL (`mock-service-
+os/mock_as` e `mock_as/mongo-seed`, `docker compose --profile main
+build`, 2026-11-08) -- confirmado por `git log` que o working tree
+desses diretorios estava limpo (nenhum commit pendente) na hora da
+construcao. **`mockapi` (`raidiam-insurance-lambdas`), excecao
+honesta:** imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida.
+`insurance-server-lambdas/Dockerfile` mudou em 2026-10-21, mas so
+pinagem de digest das MESMAS imagens-base (gradle:5.3.1-jdk11-slim/
+amazonlinux:2) -- `git log` confirma zero mudanca em `src/`/`build.
+gradle` desde 2026-09-24. Alem disso, o `Entrypoint` REAL desta
+imagem (`java -jar /home/app/application.jar`) nunca corresponde ao
+que esse Dockerfile produziria (GraalVM native-image, `/home/
+application/server`) -- prova de que esta imagem nunca foi construida
+por ele; o processo de build documentado (`./gradlew optimizedDocker
+Build`) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do
+projeto pinado numa versao incompativel, thesis/results/v4/
+DECISIONS.md). Mantida como estava, com a divergencia registrada
+explicitamente -- nunca escondida, nunca reconstruida "pra fingir que
+bate". Decisao de desencravar o build de verdade fica pendente do
+Luciano.
+
+**Entrega (mesmo mecanismo de sempre, nenhum novo):**
+`deliver_images.py.BACKEND_IMAGE_KEYS` (novo, 6 chaves) soma ao
+`ALL_IMAGE_KEYS` existente -- primeiro salto (operador -> controle)
+idêntico. Segundo salto: `SSHExecutor._deliver_backend_images()`
+(novo) chama `_deliver_image` (Decisao 68, inalterado) pra cada uma,
+AO SERVIDOR, com uma guarda de idempotencia (`self._backend_
+delivered`) -- nunca reentrega ~6GB por bloco, so uma vez por fleet
+(as imagens do backend nunca trocam de binario por perfil, so o
+CONTEUDO que o proprio `docker compose` seeda). `deliver_source.py`
+ganha `SERVER_ONLY_FILES` (novo) -- `docker-compose.yml` +
+`pg_hba.conf`/`mongod.conf`/`participants.json`/`software_statement.
+json`/`setup_ssm.sh`/`ssa/*.json` -- entregue SO ao servidor (nunca
+clientes), nunca o source de build (as imagens ja chegam pinadas).
+
+**Orquestracao (`start_block`, destravado):** backend sobe ANTES do
+gateway, com `CRYPTO_PROFILE` traduzido (`BACKEND_CRYPTO_PROFILE_ENV`,
+Decisao 49, inalterado) e os MESMOS 2 health checks reais de sempre
+(curl `/jwks` pra `auth`; grep `"Startup completed"` pro `mockapi`,
+que demora ~30s de verdade). Fail-closed NOVO (nunca existia antes,
+nem no caso local): se `docker compose up` falhar, levanta
+`RuntimeError` ANTES do gateway tentar subir -- o codigo anterior
+simplesmente ignorava o `returncode`. `_launch_gateway`: a rede
+`insurance-server-lambdas_default` + os aliases (`auth.local`/
+`matls-api.local`/etc.) agora sao usados nos DOIS modos (antes, so
+local) -- no caso remoto real, o gateway TAMBEM publica `-p 443:443`
+(os dois nunca sao mutuamente exclusivos no Docker). `stop_block`:
+agora tambem para (nunca `down` -- nunca derruba a rede que o
+gateway usa) o backend, liberando CPU/memoria entre blocos (o
+proximo `start_block`, de qualquer perfil, sempre faz `--force-
+recreate` de novo). `dedicated_capture` ja chama `start_block`
+primeiro -- ganha o backend de graca, sem nenhuma mudanca propria.
+
+**CPU/memoria (pedido explicito do Luciano, item 1):**
+`SSHExecutor._sample_cpu_mem(host)` (novo) -- MESMO formato que
+`campaign_run.py._sample_cpu_mem_steal()` ja usa (`/proc/stat` linha
+`cpu` + `/proc/meminfo`, nunca `docker stats`, pelo mesmo motivo de
+sempre: `steal` so e visivel no nivel do HOST). Uma amostra antes e
+uma depois de cada subida do backend, acumuladas em `self.cpu_mem_
+samples`, incluidas no `manifest.json` (`run_pilot`) -- comparacao
+real contra a v8 fica pra consolidacao/relatorio final, depois do
+piloto rodar de verdade.
+
+**Testes (novos, 10 + extensao das fixtures `_fake_pins`/`_FAKE_*`
+pras 6 chaves novas em TODOS os testes existentes de entrega):**
+`_deliver_backend_images` entrega as 6 e e idempotente (+ mutante que
+remove a guarda e e pego); `start_block` sobe o backend ANTES do
+gateway com os 2 health checks reais, usa o `CRYPTO_PROFILE`
+traduzido certo, e aborta ANTES do gateway se o compose falhar;
+`stop_block` tambem para o backend, nunca com `down`; `_sample_cpu_
+mem` le `/proc/stat`+`/proc/meminfo` e nunca quebra se o SSH falhar;
+`start_block` registra as 2 amostras (antes/depois). Testes
+pre-existentes atualizados pra refletir a nova contagem/ordem real de
+entregas (gateway deixa de ser a PRIMEIRA imagem entregue -- o
+backend entra antes) e a rede agora presente nos dois modos. 186
+testes no total (175 + 11: 10 novos + 1 reescrito de `==3` pra
+`== {3 originais} | {6 do backend}`).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PINS.json`, `thesis/results/v9/campaign/scripts/
+{orchestrator.py,deliver_images.py,deliver_source.py}`,
+`thesis/results/v9/campaign/tests/{test_orchestrator.py,
+test_deliver_source.py}`, `thesis/results/v9/DECISIONS.md` (esta
+Decisao).

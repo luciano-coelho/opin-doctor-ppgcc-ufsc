@@ -36,6 +36,13 @@ Entrega, pra CADA destino (servidor + cada cliente), `COMMON_FILES`:
 E so pra cada CLIENTE, alem disso, `CLIENT_ONLY_FILES`:
   - thesis/results/v9/certs/generated (opin_flow.V9_CERTS_DIR -- mount
     `-cert-dir /certs` do proxy, so no ramo V9_HARNESS)
+E so pro SERVIDOR, alem disso, `SERVER_ONLY_FILES` (Decisao 83 --
+backend de negocio da v8, portado pro piloto v9): o `docker-compose.
+yml` real + os arquivos PEQUENOS de config que ele referencia
+(`pg_hba.conf`/`mongod.conf`/`participants.json`/`software_statement.
+json`/`setup_ssm.sh`/`ssa/*.json`) -- NUNCA o source de build (as
+imagens ja chegam pinadas via `deliver_images.py`, Decisao 83, nunca
+`docker build` na instancia)
 E so pro CONTROLE (um salto so, `deliver_to_control`), `CONTROL_FILES`:
   - campaign/scripts/{orchestrator,cli,preflight}.py, campaign/PINS.json,
     integration/evaluate_criteria.py, certs/generated (Decisao 75, item
@@ -72,6 +79,22 @@ COMMON_FILES = [
 ]
 CLIENT_ONLY_FILES = [
     "thesis/results/v9/certs/generated",
+]
+# Decisao 83 (pedido do Luciano): backend de negocio da v8 (auth/
+# mockapi/mongo_seed + psql/localstack/mongodb como dependencias do
+# proprio compose), portado pro servidor real -- so o docker-compose.
+# yml + os arquivos de config PEQUENOS que ele referencia (nunca o
+# source de build: as imagens ja chegam pinadas via deliver_images.py/
+# _deliver_backend_images, nunca `docker build` na instancia).
+SERVER_ONLY_FILES = [
+    "insurance-server-lambdas/docker-compose.yml",
+    "insurance-server-lambdas/pg_hba.conf",
+    "insurance-server-lambdas/mongod.conf",
+    "insurance-server-lambdas/participants.json",
+    "insurance-server-lambdas/software_statement.json",
+    "mock-service-os/setup_ssm.sh",
+    "mock-service-os/ssa/jwks.json",
+    "mock-service-os/ssa/private_jwk.json",
 ]
 CONTROL_FILES = [
     "thesis/results/v9/campaign/scripts/orchestrator.py",
@@ -184,13 +207,13 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
     lista de caminhos relativos entregues)."""
     report = []
     with tempfile.TemporaryDirectory(prefix="v9_deliver_source_") as tmp:
-        common_tarball = build_tarball(COMMON_FILES, Path(tmp) / "common.tar.gz", repo_root=repo_root)
+        server_tarball = build_tarball(COMMON_FILES + SERVER_ONLY_FILES, Path(tmp) / "server.tar.gz", repo_root=repo_root)
         client_tarball = build_tarball(COMMON_FILES + CLIENT_ONLY_FILES, Path(tmp) / "client.tar.gz", repo_root=repo_root)
 
         server_ip = inventory["server"]["public_ip"]
-        staged = stage_on_control(control_ip, operator_key_path, common_tarball, "server.tar.gz")
+        staged = stage_on_control(control_ip, operator_key_path, server_tarball, "server.tar.gz")
         relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, server_ip, staged)
-        report.append({"target": "server", "ip": server_ip, "files": list(COMMON_FILES)})
+        report.append({"target": "server", "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES)})
 
         for route, client in inventory["clients"].items():
             client_ip = client["public_ip"]

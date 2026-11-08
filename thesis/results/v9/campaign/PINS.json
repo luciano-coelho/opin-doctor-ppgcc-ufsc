@@ -116,6 +116,197 @@
       "image_id": "sha256:b141cc7831aacdc1369d6a3efefbad55e0c839dac83e25fed1728a6614923b01",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
       "note": "Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- identidade conferida so por tar_sha256+rootfs_layers+config_subset (Decisao 68)."
+    },
+    "psql": {
+      "docker_image": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d",
+      "platform": "linux/amd64",
+      "tar_sha256": "bc02e58eefb6775ec98b3b853961694171e63e55d5551934edc204c881eccf47",
+      "rootfs_layers": [
+        "sha256:15f1c8eb1ab18eae260c7fb6296434cbe1ff0e1e30fd814ae92a80dd54005e62",
+        "sha256:a2aaf9f8ec4fa481e6d5555191319fc36169b88d1f26b32e20086c4646ffaa17",
+        "sha256:107a07e558c4ac5ac958b84cda655442d7d4f24994b8cf79df9ad92397374b5a",
+        "sha256:48d6495e2364e624faad944217595c6664c70a4755a4fdbd6c618e06fc07e8f6",
+        "sha256:5501bd379747e541948565b5d6af1e63106404ccb2ece95c621f16883217a544",
+        "sha256:c99d7ad948a95d054287e4c65d898a99b5da11f350777d0407bab4c3eda8891c",
+        "sha256:97b67cfa7e93ba7b718168b8eb3477a822580dd82ffc097feccc08505f0e8dae",
+        "sha256:3e4c80b15b2fe570859017af60e2d1f7ebc303d9b25bef51d3ae212bdccd8445",
+        "sha256:3c2ecbb88723e523c1c0a6c026721b3a5ffb039f97f1f23e79b6bf2f6ce5337b",
+        "sha256:2f5e9c1f37978de0e5401ce2412a42e52ee30642c5e4fd447528944f16b22fb9",
+        "sha256:3e2cfb88908753c04594e22efe9276265aea568cf58742a381004e27ecfc910e",
+        "sha256:d8f68f9922250f50c611996c9de08395f018defa54b05e56f767d8574e217e41",
+        "sha256:3e0eb748b0eb2b667c223eb4b472ccd0c9c00a99063831911045a12ad4d36708",
+        "sha256:2aaa88d0dc05f2c3715b7bd20aa391d433a2fd106e6abd05cbde9fceaae854b8"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"],
+        "Cmd": ["postgres"],
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/16/bin",
+                "GOSU_VERSION=1.19", "LANG=en_US.utf8", "PG_MAJOR=16", "PG_VERSION=16.15-1.pgdg13+2",
+                "PGDATA=/var/lib/postgresql/data"],
+        "ExposedPorts": {"5432/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, nenhuma entrada existente alterada): imagem estoque (postgres:16), pulada pelo digest EXATO que insurance-server-lambdas/docker-compose.yml ja fixa (`postgres:16@sha256:ca0bd...`) -- nunca reconstruida, so verificada. Backend de negocio (mockapi) da v8, portado pro piloto v9 (pedido do Luciano apos a Decisao 82)."
+    },
+    "localstack": {
+      "docker_image": "localstack/localstack:4.0",
+      "platform": "linux/amd64",
+      "tar_sha256": "c053887245844cc8f5eb3724f6b39c05c77de244058c4cc3bbec528fe271409d",
+      "rootfs_layers": [
+        "sha256:edf698db7561f9f53f2b22b9d417f9fde0be95175736b6954c7ef917c7114cb1",
+        "sha256:6be3abfee1446ddfb97160837ec6ea1edec87a006b73a02dca2bae5de070302e",
+        "sha256:d61b2032cf38c9b3a32892263e46b0fb47f4170bbfad0b39f7322afeab237b38",
+        "sha256:79628e57880364ee6d63036acda21299818f45eef14a371154a11b2068b6f36b",
+        "sha256:79878763ec8eafb9ffab06f2f1152de7a864f2cfe4f5794b11b4785a240b053c",
+        "sha256:e389a665dc3f518ded3aae07169552c9714515006d9726afc83657dac6b0dd00",
+        "sha256:af38b5d38565b22f8dc62c8f2850a5e6b5ea63a416f4e8bb46d6b93502ae85e4",
+        "sha256:1ea22eb6ef41b94c946032a68f99ee453f362b7a040abec3d0f1285e519f75e6",
+        "sha256:e3b1492494142b03b9044bf0f0be23df472319ab6749b97dcd5049ec778eca0b"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"], "Cmd": null,
+        "Env": ["PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8", "USER=localstack", "PYTHONUNBUFFERED=1",
+                "LOCALSTACK_BUILD_VERSION=4.0.3"],
+        "ExposedPorts": {"4566/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:17c2f79ca4e1f804eb912291a19713d4134806325ef0d21d4c1053161dfa72d0",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): imagem estoque, pulada pelo digest EXATO que o compose ja fixa. Mocka SSM/S3 (AWS) pra que `auth` publique as chaves JWKS -- precisa de /var/run/docker.sock montado no host real, mesmo mecanismo que a validacao local ja usa."
+    },
+    "mongodb": {
+      "docker_image": "mongo@sha256:dc28ed5a9d0fc616903c3f463bb1e53b92b49f441721b91926e87d90bf957ce8",
+      "platform": "linux/amd64",
+      "tar_sha256": "1ce97d47a99bfb64e49fff2cabafbcbbcdfbc19579aded10b842998ce5c8a4c3",
+      "rootfs_layers": [
+        "sha256:c3548211b8264f8bfa47a6727043a64f1791b82ac965a284a7ea187e971a95e2",
+        "sha256:2440dc0bfce0be50901996dd0de04d2830062f2b2e63a73217fd9237e18c9b7c",
+        "sha256:25b72b8029f800d4047ffbfc4017258ab87699d0e84084290fc35b89aef1391e",
+        "sha256:bb4412c1f640a563d7a796fb752395399c529bfd06fa9c451b980b5ee5807d40",
+        "sha256:e759088f201c3ea23a4f77279cd9ccb4a85bb5d645d2cb6bc4eb8a2b85cc773c",
+        "sha256:eb2ad2e8f99a6dd4b7d4b82ebdf01c1769baee6a1a703409c27997c219e4afc4",
+        "sha256:d9eae2bed4336da2d77d449388d026151bf28a6763938c8f9747638d39771244",
+        "sha256:af152f6e1e229f4d7231980cf0bf4957614a8829128dea13afd9c89c6f8d86b4",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:6be49d9f3721195f62a3264f025885cdb6a4ae40b4bdb3e625867eac3a12e6d8",
+        "sha256:5c21e40a4e25d17e0fb83d78dfd6a1a06a7d9598cca7f66037ba1f747ffc983c",
+        "sha256:cb8af2a310614f1feee14c846860c061cbd2a0bbeb7109904e33ba86899e0ff6",
+        "sha256:b0b2bbec0c0f9123eab585eed108298a777d05d8998358604228e218df4549da",
+        "sha256:7bffd26fb384b719bfed9c860fb37def4d862f4e6b911baced00d4128a730b5f",
+        "sha256:4f54f1e18434adc69a52727606d178bef4f79f7758e82c4d5cb10bf265d5b3c0",
+        "sha256:cdbb933fe1a9a4742334a3cdc7bf0f1de70cdd31f45926bbf309e1ad0687c8bd",
+        "sha256:8a90987ab62b54c0c59437bf35a24dd3a5f309cf078c1cb1f3748c1247a5b792",
+        "sha256:ee3e5ae1d8add560b5a4d9acce2106db2ef30f65766a2d58181bebe0dbd28f6e",
+        "sha256:96f46af8e4924bb1cb5c1d2cbd70148177ccdaa27792849a6023ef3eeae9eb5b",
+        "sha256:9ef3db485d1df0a6a6a532ac58d05a9d78c8dc22d5a7603fa9be953c3c762cbf",
+        "sha256:97b0871d26053f90ff3a9d157339ca59bca6bcb2f7931a433dc273244ddefa1c",
+        "sha256:e637311c102dc5c862258e1d9b008c52dbb1abb2d3c91679cbb5ed0c00bda270",
+        "sha256:f8d64f922634315d80cd2f379fb8e2f45aea7059327cfb942ac4fa1a839b8c9b"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["mongod"],
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GOSU_VERSION=1.19",
+                "MONGO_PACKAGE=mongodb-org", "MONGO_MAJOR=9.0", "MONGO_VERSION=9.0.4"],
+        "ExposedPorts": {"27017/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:dc28ed5a9d0fc616903c3f463bb1e53b92b49f441721b91926e87d90bf957ce8",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): imagem estoque, pulada pelo digest EXATO que o compose ja fixa."
+    },
+    "auth": {
+      "docker_image": "insurance-server-lambdas-auth:latest",
+      "platform": "linux/amd64",
+      "tar_sha256": "5ce75b03d195f69c7ab9ce42868933b7f877b471d9aa93c1b8c90955d080e34c",
+      "rootfs_layers": [
+        "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+        "sha256:097adc8e8de750358e0bc505a53d7f3055534238d0d4a0b9e3092b720de39b51",
+        "sha256:2ea56cd9a304c4091b108300290afb99cc0d4568f3d3ca9fabe095080a1d898c",
+        "sha256:88d9dfe7274031e3ec59d86af7044d33b0e0fefbfff973941722387fa39ff914",
+        "sha256:5813ff9bd23dfc481e571bcb866558e46f608e6a1e6f2b0d6a08a3fabf4a7983",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:acb5bb05a10f04dd31a7f79d0cc604965f7818e2ceab16ed7f35b6217afe558f",
+        "sha256:b419462557f8e2f0ae3706a80a47b7425f22d80b747c41bf3b4ebbb8b7859e61",
+        "sha256:f46a0fa230bd4c01149fdaae855c9285459ebabe0d132fd821303cff1fb4bf1d"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["npm", "run", "dev"],
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "NODE_VERSION=24.22.0", "YARN_VERSION=1.22.22"],
+        "ExposedPorts": {"3000/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:4a1f5a891f7141bd585c3f5dbfe72965bed37af79604720cab8e9c3966a2b813",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): RECONSTRUIDA nesta rodada a partir do source ATUAL (`mock-service-os/mock_as`, `docker compose --profile main build auth`, 2026-11-08) -- confirmado por `git log` que nao havia nenhum commit pendente sobre esse diretorio na hora da construcao (working tree limpo). Esta e a imagem AUTH do backend de negocio da v8 (serve JWKS/token), portada pro piloto v9."
+    },
+    "mongo_seed": {
+      "docker_image": "insurance-server-lambdas-mongo_seed:latest",
+      "platform": "linux/amd64",
+      "tar_sha256": "34d1d47621e776e5e0f1128b41f6eeeb087e5b097314a8534766e86f8c7b810c",
+      "rootfs_layers": [
+        "sha256:edf698db7561f9f53f2b22b9d417f9fde0be95175736b6954c7ef917c7114cb1",
+        "sha256:6be3abfee1446ddfb97160837ec6ea1edec87a006b73a02dca2bae5de070302e",
+        "sha256:d61b2032cf38c9b3a32892263e46b0fb47f4170bbfad0b39f7322afeab237b38",
+        "sha256:79628e57880364ee6d63036acda21299818f45eef14a371154a11b2068b6f36b",
+        "sha256:79878763ec8eafb9ffab06f2f1152de7a864f2cfe4f5794b11b4785a240b053c",
+        "sha256:e389a665dc3f518ded3aae07169552c9714515006d9726afc83657dac6b0dd00",
+        "sha256:af38b5d38565b22f8dc62c8f2850a5e6b5ea63a416f4e8bb46d6b93502ae85e4",
+        "sha256:1ea22eb6ef41b94c946032a68f99ee453f362b7a040abec3d0f1285e519f75e6",
+        "sha256:e3b1492494142b03b9044bf0f0be23df472319ab6749b97dcd5049ec778eca0b",
+        "sha256:2efe34dfc9c8d87cc79e54cded2b833c6f48fe5b74713f455b1e16fda05e40d6",
+        "sha256:bcf21defc5e190ef4bca74647d80298efcd040878da8ec870c45a44589fec5cb",
+        "sha256:8219ab31bb2b48d7d528465b35fb82f5b0af94d8e69ce07503207945d22624ad",
+        "sha256:d91e9d47899cadca9e69b24957862aecb20975a7e67c9add251431d3a9769709",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "config_subset": {
+        "Entrypoint": ["docker-entrypoint.sh"],
+        "Cmd": ["/bin/sh", "-c", "/start.sh \"my-replica-set/mongo3:30003,mongo2:30002,mongo1:30001\""],
+        "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GOSU_VERSION=1.19",
+                "MONGO_PACKAGE=mongodb-org", "MONGO_MAJOR=9.0", "MONGO_VERSION=9.0.4"],
+        "ExposedPorts": {"27017/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:922d02cc5780c88db34b7d2dba58f84d1fd058adb5bf0371871e127cdb69eacb",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): RECONSTRUIDA nesta rodada a partir do source ATUAL (`mock-service-os/mock_as/mongo-seed`, mesmo build, 2026-11-08, working tree limpo confirmado). `Cmd` reflete a imagem base, nunca o `command:` real do compose (`/start.sh mongodb:27017`), que e passado em runtime pelo `docker run`, nao gravado na imagem."
+    },
+    "mockapi": {
+      "docker_image": "raidiam-insurance-lambdas:latest",
+      "platform": "linux/amd64",
+      "tar_sha256": "eae5da2f0ba5eba493391a15e8f7634d8c61aa006e20dd5178a95325695b86f1",
+      "rootfs_layers": [
+        "sha256:d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245",
+        "sha256:d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5",
+        "sha256:6179f2d67db29f34420fb206023a7d7a7128556412c2450b793330715ff40d79",
+        "sha256:32c0ccbd895551d580429f55759ea6f1f10e3a0b3053c55ef3738860520c0f72",
+        "sha256:85c8d6ef0f93810fd512e6c9564bdbf80f3015370c459fba586740544f97b2ed",
+        "sha256:301aed5e5c67f2f150c475697fb725021e964c983eb2fd9b102daa95a031fc60",
+        "sha256:e05607f8cc3d49c12b899c0a04fbd112039a9b2161b3e52607fe5a4bd21ac5a4",
+        "sha256:aee7a1cd7242f1e1ca636e5a963cb7274eaa8ab2a3196065436fe42d387df861",
+        "sha256:db1e575b74c0c12bf038c06c7867e6953f68038d2cb7ae4d308dab3ce38ef606",
+        "sha256:abdb15096161afc78d7d99e7048e9d76bcdd7200c262203c76fa3761946e3488"
+      ],
+      "config_subset": {
+        "Entrypoint": ["java", "-jar", "/home/app/application.jar"], "Cmd": null,
+        "Env": ["PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "JAVA_HOME=/opt/java/openjdk", "JAVA_VERSION=jdk-17.0.19+10"],
+        "ExposedPorts": {"8080/tcp": {}}
+      },
+      "binary_path_in_image": null, "binary_sha256": null, "binary_sha256_reproducible": null,
+      "go_version_m_sha256": null, "go_version_m_text": null,
+      "image_id": "sha256:1c83ab8648288d5ecbc6430e5c9af64e8297d3d8108a1809c527f6874a9f900a",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Luciano decide se isso e aceitavel ou se o build precisa ser desencravado numa rodada futura."
     }
   }
 }

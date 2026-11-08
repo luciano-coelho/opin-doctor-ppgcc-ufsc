@@ -26,8 +26,8 @@ def fake_repo(tmp_path):
     conteudo falso, `mock-service-os/certs` e `thesis/results/v9/
     certs/generated` como diretorios com um arquivo falso dentro cada."""
     repo = tmp_path / "fake_repo"
-    for rel in ds.COMMON_FILES + ds.CONTROL_FILES:
-        if rel.endswith((".py", ".txt", ".json", ".sh")):
+    for rel in ds.COMMON_FILES + ds.CONTROL_FILES + ds.SERVER_ONLY_FILES:
+        if rel.endswith((".py", ".txt", ".json", ".sh", ".yml", ".conf")):
             p = repo / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(f"conteudo falso de {rel}\n", encoding="utf-8")
@@ -102,6 +102,20 @@ def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch
     l0_report = next(r for r in report if r["target"] == "L0")
     assert "thesis/results/v9/certs/generated" not in server_report["files"]
     assert "thesis/results/v9/certs/generated" in l0_report["files"]
+
+    # Decisao 83: SERVER_ONLY_FILES (backend de negocio da v8, docker-
+    # compose.yml + config) so entra no tarball do SERVIDOR, nunca dos
+    # clientes.
+    assert "insurance-server-lambdas/docker-compose.yml" in server_report["files"]
+    assert "insurance-server-lambdas/docker-compose.yml" not in l0_report["files"]
+
+
+def test_build_tarball_do_servidor_inclui_server_only_files(fake_repo, tmp_path):
+    out = ds.build_tarball(ds.COMMON_FILES + ds.SERVER_ONLY_FILES, tmp_path / "out.tar.gz", repo_root=fake_repo)
+    with tarfile.open(out, "r:gz") as tar:
+        names = set(tar.getnames())
+    for rel in ds.SERVER_ONLY_FILES:
+        assert rel in names, f"{rel} nao esta no tarball ({names})"
 
 
 # --- Decisao 69 (achado real, ao vivo): nenhum passo deste pacote

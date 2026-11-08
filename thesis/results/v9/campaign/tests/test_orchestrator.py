@@ -142,10 +142,20 @@ _FAKE_IMAGE_IDS = {
     "proxy": "sha256:" + "2" * 64,
     "measure": "sha256:" + "3" * 64,
     "pqc-signer": "sha256:" + "4" * 64,
+    # Decisao 83: backend de negocio da v8, portado pro piloto v9.
+    "psql": "sha256:" + "5" * 64,
+    "localstack": "sha256:" + "6" * 64,
+    "mongodb": "sha256:" + "7" * 64,
+    "auth": "sha256:" + "8" * 64,
+    "mongo_seed": "sha256:" + "9" * 64,
+    "mockapi": "sha256:" + "0" * 64,
 }
 _FAKE_DOCKER_IMAGE_NAMES = {
     "gateway": "mockopin-v9-gateway", "proxy": "mockopin-v9-proxy",
     "measure": "mockopin-v9-measure", "pqc-signer": "mockopin-pqc-signer",
+    "psql": "postgres", "localstack": "localstack/localstack",
+    "mongodb": "mongo", "auth": "insurance-server-lambdas-auth",
+    "mongo_seed": "insurance-server-lambdas-mongo_seed", "mockapi": "raidiam-insurance-lambdas",
 }
 # Decisao 68 (Emenda -- substitui a verificacao por Image ID):
 # conteudo FALSO, deterministico, por imagem -- o sha256 de cada um
@@ -159,14 +169,25 @@ _FAKE_LAYERS = {
     "proxy": ["sha256:" + "a1" * 32, "sha256:" + "b2" * 32],
     "measure": ["sha256:" + "a1" * 32, "sha256:" + "c2" * 32],
     "pqc-signer": ["sha256:" + "d1" * 32, "sha256:" + "d2" * 32],
+    "psql": ["sha256:" + "e1" * 32], "localstack": ["sha256:" + "e2" * 32],
+    "mongodb": ["sha256:" + "e3" * 32], "auth": ["sha256:" + "e4" * 32],
+    "mongo_seed": ["sha256:" + "e5" * 32], "mockapi": ["sha256:" + "e6" * 32],
 }
 _FAKE_CONFIG = {
     "gateway": {"Entrypoint": ["/gateway"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": {"443/tcp": {}}},
     "proxy": {"Entrypoint": ["/proxy"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
     "measure": {"Entrypoint": ["/usr/local/bin/measure.sh"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
     "pqc-signer": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["node", "sign.mjs"], "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
+    "psql": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["postgres"], "Env": ["PATH=/usr/bin"], "ExposedPorts": {"5432/tcp": {}}},
+    "localstack": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": {"4566/tcp": {}}},
+    "mongodb": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["mongod"], "Env": ["PATH=/usr/bin"], "ExposedPorts": {"27017/tcp": {}}},
+    "auth": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["npm", "run", "dev"], "Env": ["PATH=/usr/bin"], "ExposedPorts": {"3000/tcp": {}}},
+    "mongo_seed": {"Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["/start.sh"], "Env": ["PATH=/usr/bin"], "ExposedPorts": None},
+    "mockapi": {"Entrypoint": ["java", "-jar", "/home/app/application.jar"], "Cmd": None, "Env": ["PATH=/usr/bin"], "ExposedPorts": {"8080/tcp": {}}},
 }
-_FAKE_BINARY_PATH = {"gateway": "/gateway", "proxy": "/proxy", "measure": None, "pqc-signer": None}
+_FAKE_BINARY_PATH = {"gateway": "/gateway", "proxy": "/proxy", "measure": None, "pqc-signer": None,
+                      "psql": None, "localstack": None, "mongodb": None, "auth": None,
+                      "mongo_seed": None, "mockapi": None}
 _FAKE_PROXY_BINARY_SHA256 = "b" * 64
 
 
@@ -175,7 +196,9 @@ def _fake_pins(gateway_sha256=_FAKE_GATEWAY_SHA256, image_ids=None, layers=None,
     layers = layers or _FAKE_LAYERS
     config = config or _FAKE_CONFIG
     tar_sha256 = tar_sha256 or _FAKE_TAR_SHA256
-    binary_sha256_by_key = {"gateway": gateway_sha256, "proxy": _FAKE_PROXY_BINARY_SHA256, "measure": None, "pqc-signer": None}
+    binary_sha256_by_key = {"gateway": gateway_sha256, "proxy": _FAKE_PROXY_BINARY_SHA256, "measure": None, "pqc-signer": None,
+                             "psql": None, "localstack": None, "mongodb": None, "auth": None,
+                             "mongo_seed": None, "mockapi": None}
     return {"images": {
         key: {
             "docker_image": name, "image_id": image_ids[key],
@@ -255,7 +278,12 @@ def _fake_image_id_for_remote_cmd(remote_cmd, image_ids=None, layers=None, confi
     layers = layers or _FAKE_LAYERS
     config = config or _FAKE_CONFIG
     binary_shas = binary_shas or {"gateway": _FAKE_GATEWAY_SHA256, "proxy": _FAKE_PROXY_BINARY_SHA256}
-    key = next((k for k, name in _FAKE_DOCKER_IMAGE_NAMES.items() if name in remote_cmd), None)
+    # Decisao 83: "mongo" (mongodb) e substring de "insurance-server-
+    # lambdas-mongo_seed" (mongo_seed) -- escolhe o nome MAIS LONGO que
+    # bate, nunca o primeiro por ordem de dict (ordem-dependente e
+    # frágil exatamente nesse caso).
+    matches = [k for k, name in _FAKE_DOCKER_IMAGE_NAMES.items() if name in remote_cmd]
+    key = max(matches, key=lambda k: len(_FAKE_DOCKER_IMAGE_NAMES[k])) if matches else None
     if key is None:
         return None
     if "RootFS.Layers" in remote_cmd:
@@ -923,7 +951,11 @@ def test_deliver_image_aborta_se_tar_local_adulterado(monkeypatch):
     with pytest.raises(RuntimeError, match="sha256 do .tar"):
         executor.start_block("classico", "L0")
     flat = [" ".join(c) for c in calls]
-    assert not any(c[0] == "scp" for c in calls), "nenhum scp pode acontecer com o .tar local adulterado -- " + str(flat)
+    # Decisao 83: start_block entrega o backend (6 imagens) ANTES do
+    # gateway -- esses scps sao esperados; so o scp do GATEWAY em si
+    # (adulterado) nunca pode acontecer.
+    assert not any(c[0] == "scp" and "gateway.tar" in " ".join(c) for c in calls), (
+        "nenhum scp do gateway.tar pode acontecer com ele adulterado -- " + str(flat))
     assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
 
 
@@ -948,7 +980,8 @@ def test_deliver_image_aborta_se_camada_adulterada(monkeypatch):
     flat = [" ".join(c) for c in calls]
     assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
     assert not any("start_tls_kem_proxy" in c for c in flat), flat
-    assert executor.image_delivery_verifications[0]["layers_ok"] is False
+    delivered = {v["image_key"]: v for v in executor.image_delivery_verifications}
+    assert delivered["gateway"]["layers_ok"] is False
 
 
 def test_deliver_image_aborta_se_config_adulterada(monkeypatch):
@@ -968,7 +1001,8 @@ def test_deliver_image_aborta_se_config_adulterada(monkeypatch):
     executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
     with pytest.raises(RuntimeError, match="identidade nao confere"):
         executor.start_block("classico", "L0")
-    assert executor.image_delivery_verifications[0]["config_ok"] is False
+    delivered = {v["image_key"]: v for v in executor.image_delivery_verifications}
+    assert delivered["gateway"]["config_ok"] is False
 
 
 def test_deliver_image_aborta_se_binario_na_imagem_adulterado(monkeypatch):
@@ -998,13 +1032,16 @@ def test_deliver_image_aborta_se_binario_na_imagem_adulterado(monkeypatch):
 
 def test_deliver_image_correto_passa_com_nova_verificacao(monkeypatch):
     """Tar, camadas, config e binario todos corretos -- `_deliver_
-    image` tem que passar pras 3 imagens que `start_block` entrega
-    (gateway/proxy/pqc-signer), sem nenhum Image ID sendo conferido."""
+    image` tem que passar pras 3 imagens que `start_block` sempre
+    entregava (gateway/proxy/pqc-signer) MAIS as 6 do backend de
+    negocio (Decisao 83), sem nenhum Image ID sendo conferido."""
     calls = []
     monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
     executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
     executor.start_block("classico", "L0")
-    assert len(executor.image_delivery_verifications) == 3
+    delivered_keys = {v["image_key"] for v in executor.image_delivery_verifications}
+    assert delivered_keys == {"gateway", "proxy", "pqc-signer"} | set(orch.deliver_images.BACKEND_IMAGE_KEYS)
+    assert all(v["ok"] for v in executor.image_delivery_verifications)
     for v in executor.image_delivery_verifications:
         assert v["ok"] is True, v
         assert v["layers_ok"] is True and v["config_ok"] is True and v["binary_ok"] is True, v
@@ -1337,13 +1374,17 @@ def test_launch_gateway_monta_real_certs_de_home_no_caso_remoto_real(monkeypatch
     assert gateway_launches, flat
     assert all("~/mock-service-os/certs:/real-certs:ro" in c for c in gateway_launches), gateway_launches
     assert all("$(pwd)/../../mock-service-os/certs" not in c for c in gateway_launches), gateway_launches
-    # Decisao 69 (achado real, ao vivo, na retomada da Fase A real): a
-    # rede/alias so existem no stack local de validacao -- no caso
-    # remoto real, o unico jeito do cliente (que disca o IP do HOST,
-    # nunca um alias Docker) alcancar a porta 443 e publica-la no host.
+    # Decisao 83 (pedido do Luciano -- fecha a limitacao que a Decisao
+    # 69 tinha registrado): o backend de negocio AGORA roda de
+    # verdade no servidor remoto tambem, entao a rede
+    # `insurance-server-lambdas_default` passa a existir de verdade
+    # la (criada pelo proprio `docker compose up`) -- o gateway entra
+    # nela nos DOIS modos agora (pra resolver auth/mockapi por alias
+    # Docker), MAS, so no caso remoto real, TAMBEM publica a porta no
+    # host (o cliente sempre disca o IP do HOST, nunca um alias).
     assert all("-p 443:443" in c for c in gateway_launches), gateway_launches
-    assert all("insurance-server-lambdas_default" not in c for c in gateway_launches), gateway_launches
-    assert all("--network-alias" not in c for c in gateway_launches), gateway_launches
+    assert all("insurance-server-lambdas_default" in c for c in gateway_launches), gateway_launches
+    assert all("--network-alias auth.local" in c for c in gateway_launches), gateway_launches
 
 
 def test_launch_gateway_mantem_pwd_relativo_so_na_validacao_local_via_shim(monkeypatch):
@@ -1439,13 +1480,14 @@ def test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest(monkeypatch,
 
 def test_exercise_start_stop_tambem_entrega_pqc_signer(monkeypatch):
     """O mesmo achado 19 vale aqui -- o exercicio tem que confirmar a
-    entrega das 3 imagens do caminho remoto, nao so subir o gateway."""
+    entrega das 3 imagens do caminho remoto (mais as 6 do backend,
+    Decisao 83), nao so subir o gateway."""
     calls = []
     monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
     executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
     orch.exercise_start_stop(executor, "classico", "L0")
     delivered_keys = {v["image_key"] for v in executor.image_delivery_verifications}
-    assert delivered_keys == {"gateway", "proxy", "pqc-signer"}
+    assert delivered_keys == {"gateway", "proxy", "pqc-signer"} | set(orch.deliver_images.BACKEND_IMAGE_KEYS)
     assert all(v["ok"] for v in executor.image_delivery_verifications)
 
 
@@ -1461,6 +1503,142 @@ def test_stop_block_para_os_dois_containers_fixos(monkeypatch):
     flat = [" ".join(c) for c in calls]
     assert any("docker stop tls_kem_proxy_run pqc_signer_service_run" in c for c in flat), flat
     assert any("docker rm -f tls_kem_proxy_run pqc_signer_service_run" in c for c in flat), flat
+
+
+# --- Decisao 83 (pedido do Luciano, apos a Decisao 82): backend de
+# negocio da v8 (auth/mongo_seed/mockapi + psql/localstack/mongodb)
+# portado pro piloto v9 -- entregue UMA vez por fleet, subido ANTES
+# do gateway com health check real, incluido no stop, comparacao de
+# CPU/memoria.
+
+def test_deliver_backend_images_entrega_as_6_imagens_uma_vez(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor._deliver_backend_images()
+    delivered_keys = {v["image_key"] for v in executor.image_delivery_verifications}
+    assert delivered_keys == set(orch.deliver_images.BACKEND_IMAGE_KEYS)
+    assert executor._backend_delivered is True
+
+
+def test_deliver_backend_images_e_idempotente_nunca_reentrega(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor._deliver_backend_images()
+    n_calls_1a_vez = len(calls)
+    executor._deliver_backend_images()  # 2a chamada -- nunca deveria disparar SSH/scp de novo
+    assert len(calls) == n_calls_1a_vez, "a 2a chamada nunca deveria disparar nenhuma chamada nova"
+
+
+def test_mutante_guarda_de_idempotencia_removida_e_pega(monkeypatch):
+    """Mutacao: remove a guarda `if self._backend_delivered: return` --
+    o teste de idempotencia acima tem que reprovar com essa mutacao,
+    provando que ele depende de fato da guarda."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+
+    def mutant_deliver_backend_images(self):
+        for key in orch.deliver_images.BACKEND_IMAGE_KEYS:
+            self._deliver_image(key, self._server_ip())
+        self._backend_delivered = True
+
+    monkeypatch.setattr(orch.SSHExecutor, "_deliver_backend_images", mutant_deliver_backend_images)
+    executor._deliver_backend_images()
+    n_calls_1a_vez = len(calls)
+    executor._deliver_backend_images()
+    assert len(calls) > n_calls_1a_vez, "mutante deveria ter reentregue (prova que o teste real dependia da guarda)"
+
+
+def test_start_block_sobe_o_backend_antes_do_gateway_com_health_check(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    backend_calls = [c for c in flat if "docker compose --profile main up -d --force-recreate auth mongo_seed mockapi" in c]
+    assert backend_calls, flat
+    assert all("curl -sf http://127.0.0.1:3000/jwks" in c for c in backend_calls), backend_calls
+    assert all("Startup completed" in c for c in backend_calls), backend_calls
+    assert all("~/insurance-server-lambdas" in c for c in backend_calls), (
+        "caminho remoto real tem que ser ~-relativo -- " + str(backend_calls)
+    )
+    # backend sobe ANTES do gateway.
+    backend_idx = next(i for i, c in enumerate(flat) if "docker compose" in c)
+    gateway_idx = next(i for i, c in enumerate(flat) if "docker run -d --name v9-mtls" in c)
+    assert backend_idx < gateway_idx, flat
+
+
+def test_start_block_usa_crypto_profile_do_backend_traduzido(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("hibrido-v8", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert any("CRYPTO_PROFILE=hybrid docker compose" in c for c in flat), flat
+
+
+def test_start_block_aborta_se_subir_o_backend_falha(monkeypatch):
+    def fake_run(argv, timeout=None):
+        base = _fake_run_factory(calls)(argv, timeout)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "docker compose --profile main up" in remote_cmd:
+            return _SimpleProc(returncode=1, stderr="mockapi exited: psql connection refused")
+        return base
+
+    calls = []
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="backend de negocio"):
+        executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    assert not any("docker run -d --name v9-mtls" in c for c in flat), (
+        "o gateway nunca pode subir se o backend falhou -- " + str(flat)
+    )
+
+
+def test_stop_block_tambem_para_o_backend_de_negocio(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.stop_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    stop_calls = [c for c in flat if "docker compose --profile main stop auth mongo_seed mockapi" in c]
+    assert stop_calls, flat
+    # stop, NUNCA down -- down derrubaria a rede que o gateway usa.
+    assert not any(" down " in c or c.endswith(" down") for c in stop_calls), stop_calls
+
+
+def test_sample_cpu_mem_le_proc_stat_e_meminfo(monkeypatch):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "/proc/stat" in argv[-1]:
+            return _SimpleProc(stdout="cpu  100 0 50 800 0 0 0 0\n---MEMINFO---\nMemTotal:  1000 kB\nMemFree: 200 kB\n")
+        return _SimpleProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    sample = executor._sample_cpu_mem("203.0.113.50")
+    assert "sampled_at_utc" in sample
+    assert sample["proc_stat_line"] == "cpu  100 0 50 800 0 0 0 0"
+    assert "MemTotal" in sample["proc_meminfo_raw"]
+
+
+def test_sample_cpu_mem_nunca_quebra_se_ssh_falha(monkeypatch):
+    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: _SimpleProc(returncode=1, stderr="connection timed out"))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    sample = executor._sample_cpu_mem("203.0.113.50")
+    assert "error" in sample
+    assert "sampled_at_utc" in sample
+
+
+def test_start_block_registra_amostras_de_cpu_mem_antes_e_depois_do_backend(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    labels = [s["label"] for s in executor.cpu_mem_samples]
+    assert labels == ["antes_do_backend", "depois_do_backend"]
 
 
 def test_connection_ok_extrai_curve_e_dual_authenticated_reais():
