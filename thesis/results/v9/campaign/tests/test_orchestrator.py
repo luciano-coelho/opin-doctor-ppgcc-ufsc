@@ -855,6 +855,44 @@ def test_deliver_image_aborta_antes_de_qualquer_execucao_se_image_id_errado(monk
     assert executor.image_delivery_verifications[0]["ok"] is False
 
 
+def test_deliver_image_registra_tempo_e_tamanho_do_2o_salto(monkeypatch):
+    """Decisao 60, item 4: cada entrega registra `elapsed_seconds`
+    (real, medido -- nunca estimado) e `tar_bytes`, pro ensaio
+    reportar por host/imagem. `slow` marca so acima de
+    DELIVERY_SLOW_THRESHOLD_SECONDS -- nunca aborta por conta
+    propria."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    for v in executor.image_delivery_verifications:
+        assert isinstance(v["elapsed_seconds"], float) and v["elapsed_seconds"] >= 0, v
+        assert v["tar_bytes"] > 0, v
+        assert v["slow"] is False, v  # fake e instantaneo, nunca passa de 10min
+
+
+def test_mutante_entrega_lenta_e_marcada_slow(monkeypatch):
+    """Mutacao: forca uma entrega 'lenta' via monkeypatch de time.monotonic
+    -- confirma que `slow` de fato depende do tempo medido, nao e
+    sempre False por acidente."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+
+    real_monotonic = orch.time.monotonic
+    call_count = [0]
+
+    def fake_monotonic():
+        call_count[0] += 1
+        # primeira chamada (t0, dentro de _deliver_image) normal; as
+        # seguintes avancam 601s, simulando uma entrega lenta.
+        return real_monotonic() if call_count[0] == 1 else real_monotonic() + 601
+
+    monkeypatch.setattr(orch.time, "monotonic", fake_monotonic)
+    executor.start_block("classico", "L0")
+    assert any(v["slow"] for v in executor.image_delivery_verifications), executor.image_delivery_verifications
+
+
 # --- Decisao 58 (pedido independente, item 1): tabela de dependencias
 # do caminho remoto -- achado real (19): start_block chamava
 # of.start_pqc_signer_service() no cliente sem NUNCA entregar

@@ -35,6 +35,7 @@ import argparse
 import json
 import random
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,6 +73,10 @@ def load_pins(pins_path=PINS_PATH):
 PROFILES = ["classico", "pqc", "hibrido-v8", "hibrido-and"]
 ROUTES = ["L0", "L219", "L325"]
 N_PER_PROFILE = 5
+# Decisao 60, item 4: limiar de RELATORIO (nunca aborta por conta
+# propria) pro 2o salto de `_deliver_image` -- 10 minutos, pedido
+# explicito pro ensaio de infraestrutura.
+DELIVERY_SLOW_THRESHOLD_SECONDS = 600
 EXPECTED_TOTAL = len(PROFILES) * len(ROUTES) * N_PER_PROFILE  # 60
 EXPECTED_CAPTURES = len(PROFILES) * len(ROUTES)  # 12
 
@@ -495,6 +500,15 @@ class SSHExecutor:
                 f"_deliver_image({image_key}, {host}): {local_tar_path} nao encontrado no controle -- "
                 f"rode deliver_images.py primeiro (operador -> controle)"
             )
+        # Decisao 60, item 4 (pedido independente): tempo real do 2o
+        # salto (controle -> host) -- scp do .tar + docker load +
+        # conferencia de Image ID, pra reportar no ensaio por host/
+        # imagem (nunca uma estimativa). `DELIVERY_SLOW_THRESHOLD_
+        # SECONDS` e so um limiar de RELATORIO (marca `"slow": true`)
+        # -- a decisao de abortar por demora e sempre do Luciano,
+        # lendo o relatorio, nunca automatica.
+        tar_bytes = local_tar_path.stat().st_size
+        t0 = time.monotonic()
         remote_tar = f"~/{image_key}.tar"
         scp_proc = cli.run_scp(str(local_tar_path), f"ec2-user@{host}:{remote_tar}", key_path=self.key_path)
         if scp_proc.returncode != 0:
@@ -505,11 +519,14 @@ class SSHExecutor:
             raise RuntimeError(f"_deliver_image({image_key}, {host}): docker load no host falhou: {load_proc.stderr}")
 
         id_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{.Id}}}}'", key_path=self.key_path)
+        elapsed_seconds = time.monotonic() - t0
         loaded_id = id_proc.stdout.strip()
         ok = id_proc.returncode == 0 and loaded_id == expected_id
         self.image_delivery_verifications.append({
             "image_key": image_key, "docker_image": docker_image, "host": host,
             "expected_image_id": expected_id, "loaded_image_id": loaded_id, "ok": ok,
+            "tar_bytes": tar_bytes, "elapsed_seconds": round(elapsed_seconds, 1),
+            "slow": elapsed_seconds > DELIVERY_SLOW_THRESHOLD_SECONDS,
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),
         })
         if not ok:

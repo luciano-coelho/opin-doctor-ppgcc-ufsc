@@ -1,37 +1,40 @@
-# Ensaio de infraestrutura — ~30 minutos, sem experimento
+# Ensaio de infraestrutura — ~35 minutos, sem experimento
 
-Decisão 59 (correção do roteiro da Decisão 58 — achado real: o
-operador NUNCA alcança o servidor/clientes direto numa AWS real, só o
-controle alcança — `ssh_ingress_cidrs = {"control": ...}` em
-`main.tf` — e o controle nunca roda `docker`, confirmado em
-`PILOT_READINESS.md`. Isso bloqueava o piloto, não era trabalho
-futuro — corrigido nesta rodada, modelo da v8 restaurado). **Cada
-passo abaixo diz explicitamente EM QUE MÁQUINA roda** — "OPERADOR"
-(o laptop do Luciano) ou "CONTROLE" (a instância `control`, única que
-alcança servidor/clientes). Nenhum comando deste roteiro assume SSH
-direto do operador pro servidor ou pra qualquer cliente — conferido
-passo a passo contra `ssh_ingress_cidrs`/`gateway_ingress_cidrs` reais
-de `main.tf`.
+Decisão 60 (correção do roteiro da Decisão 59 — 5 ajustes pedidos +
+1 achado adicional da mesma classe, encontrado corrigindo o item 2):
+geração do `inventory.json` antecipada e verificada contra o formato
+real que os scripts leem; endereço do servidor no handshake lido do
+inventário (nunca digitado — L0 é co-localizado e disca o IP
+PRIVADO, não o EIP); o laço de "Docker pronto" agora falha alto com o
+host no erro; a entrega de imagem (2º salto) agora reporta tempo e
+Image ID por host, com critério de abortar por demora; passo novo
+antes do exercício remoto, confirmando que `orchestrator.py` importa
+de verdade no controle. **Cada passo abaixo diz explicitamente EM QUE
+MÁQUINA roda** — "OPERADOR" (o laptop do Luciano) ou "CONTROLE" (a
+instância `control`, única que alcança servidor/clientes). Nenhum
+endereço deste roteiro é digitado à mão — todos vêm de
+`/tmp/inventory.json` (operador) ou da cópia local dele no controle
+(`inventory.json`, entregue no Passo 6).
 
 Usa as MESMAS credenciais e o MESMO profile AWS CLI já usados na v8
 (`mockopin-pqc`). Objetivo: provar `terraform apply`/`destroy` reais,
 a entrega completa do caminho remoto em 2 saltos (operador → controle
 → host, nunca operador → host direto), `orchestrator.py` rodando DE
 VERDADE a partir do controle, um handshake real por perfil disparado
-do controle, e a parada de emergência — nunca uma execução de
-experimento (nenhuma das 60 execuções oficiais, nenhuma das 12
-capturas do critério 1).
+do controle pro MESMO endereço que a rota real disca, e a parada de
+emergência — nunca uma execução de experimento (nenhuma das 60
+execuções oficiais, nenhuma das 12 capturas do critério 1).
 
-**Duração alvo: ~30 minutos de janela medida, ordem estritamente
-linear (0→12, cada passo depende só do anterior).** `self_terminate_hours`
+**Duração alvo: ~35 minutos de janela medida, ordem estritamente
+linear (0→14, cada passo depende só do anterior).** `self_terminate_hours`
 reduzido pra **1h** só pro ensaio (rede de segurança — nunca
-pretendido pra durar isso; os passos 10-12 são o teardown real,
+pretendido pra durar isso; os passos 11-14 são o teardown real,
 obrigatórios mesmo que o ensaio termine antes do autodesligamento).
 
 | Convenção | Significado |
 |---|---|
 | **[OPERADOR]** | Roda no laptop do Luciano. Só pode SSH/SCP direto no CONTROLE (`ssh_ingress_cidrs = {"operator": var.operator_ip_cidr}`) — nunca no servidor/clientes. |
-| **[CONTROLE]** | Roda DE DENTRO da instância `control` (via `ssh <control-ip> "<comando>"` disparado pelo operador). Alcança servidor/clientes porque `ssh_ingress_cidrs` deles só lista `{"control": "${module.control.public_ip}/32"}`. |
+| **[CONTROLE]** | Roda DE DENTRO da instância `control` (via `ssh $CONTROL_IP "<comando>"` disparado pelo operador). Alcança servidor/clientes porque `ssh_ingress_cidrs` deles só lista `{"control": "${module.control.public_ip}/32"}`. |
 
 ---
 
@@ -90,67 +93,108 @@ servidor/cliente tem que rodar **[CONTROLE]**, nunca **[OPERADOR]**.
 
 ---
 
-## Passo 2 — confirmar as 5 instâncias via `describe-instances` **[OPERADOR]**
+## Passo 2 — confirmar instâncias + gerar e verificar `/tmp/inventory.json` **[OPERADOR]**
 
 ```
-terraform output -json inventory
 aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 \
   --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" \
   --query "Reservations[].Instances[].State.Name"
 ```
 (repetir para `eu-north-1`/`ap-southeast-1`, 1 instância cada — total 5)
-
-**Saída esperada:** `inventory` com os 5 IPs; cada `describe-instances` devolve `"running"`.
+**Saída esperada:** cada `describe-instances` devolve `"running"`.
 **Critério de abortar:** qualquer instância fora de `running`/`pending` por mais de 2 minutos.
-**Por que roda no operador:** API da AWS direta, nenhum SSH a instância alguma — sem restrição de Security Group.
+
+**Gera `/tmp/inventory.json` AGORA (não só no Passo 5 — todo passo
+seguinte que precisa de um endereço lê daqui, nunca digitado à mão) e
+confere o formato contra o que `deliver_source.py`/`pki_relay.py`/
+`orchestrator.py` realmente leem** (`inventory["server"]["public_ip"
+/"private_ip"]`, `inventory["clients"][rota]["public_ip"/"private_ip"
+/"colocated"]`, `inventory["control"]["public_ip"]` — confirmado
+lendo os 3 arquivos: todos esperam o dict JÁ DESEMBRULHADO, por isso
+a extração de `"value"` abaixo — `terraform output -json <nome>`,
+pra um output NOMEADO, sempre embrulha em `{"sensitive":...,
+"value":...}`):
+```
+cd ../../terraform
+terraform output -json inventory | python3 -c "
+import json, sys
+raw = json.load(sys.stdin)
+inv = raw['value'] if 'value' in raw else raw
+assert 'server' in inv and 'clients' in inv and 'control' in inv, f'formato inesperado: {list(inv.keys())}'
+assert all(k in inv['clients'] for k in ('L0', 'L219', 'L325')), f'rotas inesperadas: {list(inv[\"clients\"].keys())}'
+json.dump(inv, open('/tmp/inventory.json', 'w'), indent=2)
+print('formato OK -- server/clients/control presentes, salvo em /tmp/inventory.json')
+"
+cd ../campaign/scripts
+```
+**Saída esperada:** `formato OK -- server/clients/control presentes, salvo em /tmp/inventory.json`.
+**Critério de abortar:** qualquer `AssertionError` — o formato real divergiu do que os scripts esperam, investigar ANTES de usar o arquivo em qualquer passo seguinte.
+
+**Variáveis usadas no resto deste roteiro — SEMPRE lidas de
+`/tmp/inventory.json`, nunca digitadas à mão:**
+```
+CONTROL_IP=$(python3 -c "import json; print(json.load(open('/tmp/inventory.json'))['control']['public_ip'])")
+SERVER_IP=$(python3 -c "import json; print(json.load(open('/tmp/inventory.json'))['server']['public_ip'])")
+L0_IP=$(python3 -c "import json; print(json.load(open('/tmp/inventory.json'))['clients']['L0']['public_ip'])")
+L219_IP=$(python3 -c "import json; print(json.load(open('/tmp/inventory.json'))['clients']['L219']['public_ip'])")
+L325_IP=$(python3 -c "import json; print(json.load(open('/tmp/inventory.json'))['clients']['L325']['public_ip'])")
+```
 
 ---
 
-## Passo 3 — entregar a chave SSH da campanha pro controle **[OPERADOR → CONTROLE]** (NOVO, achado real desta rodada)
+## Passo 3 — entregar a chave SSH da campanha pro controle **[OPERADOR → CONTROLE]**
 
 **Por que este passo existe:** `pki_relay.py`/`deliver_source.py`
-(segundo salto)/`orchestrator.py` (rodando do controle, Passo 7) TODOS
-assumem `~/.ssh/campaign_key` já presente no controle — **nenhum
-script deste pacote jamais o entregava** (a chave é um `output`
-sensível do Terraform, `tls_private_key.campaign.private_key_openssh`,
-nunca escrito em arquivo pelo próprio Terraform). Mesmo padrão real
-da v8 (`campaign_up.sh`: `scp "$TMP_KEY" "ec2-user@${CONTROL_IP}:~/.ssh/campaign_key"`).
-Sem este passo, **nenhum** passo abaixo que fala com servidor/cliente
-funciona.
+(segundo salto)/`orchestrator.py` (rodando do controle) TODOS assumem
+`~/.ssh/campaign_key` já presente no controle — **nenhum script deste
+pacote jamais o entregava** (a chave é um `output` sensível do
+Terraform, nunca escrito em arquivo pelo próprio Terraform). Mesmo
+padrão real da v8 (`campaign_up.sh`). Sem este passo, **nenhum** passo
+abaixo que fala com servidor/cliente funciona.
 
 ```
-cd ../campaign/scripts
 terraform -chdir=../../terraform output -raw campaign_private_key | \
-  python pki_relay.py --control-ip <IP-controle> --operator-key <chave-do-operador> \
-  --deliver-campaign-key --inventory-json <(echo '{}')
+  python pki_relay.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
+  --deliver-campaign-key --inventory-json /tmp/inventory.json
 ```
+(`--inventory-json` é exigido pelo argparse mas nunca lido neste modo — passar o arquivo real já gerado no Passo 2 em vez de um placeholder vazio.)
+
 **Saída esperada:** JSON com `"campaign_key_remote_path": "/home/ec2-user/.ssh/campaign_key"`.
-**Critério de abortar:** qualquer `RuntimeError` — nenhum passo seguinte pode prosseguir sem isso.
-**Nunca impresso:** o conteúdo da chave nunca aparece em nenhuma saída deste script, nem em `calls` nos testes (`test_deliver_campaign_key_um_so_salto_nunca_imprime_o_conteudo`) — só o caminho de destino.
+**Critério de abortar:** qualquer `RuntimeError`.
+**Nunca impresso:** o conteúdo da chave nunca aparece em nenhuma saída deste script (`test_deliver_campaign_key_um_so_salto_nunca_imprime_o_conteudo`).
 
 ---
 
 ## Passo 4 — Docker pronto + porta, nas 5 instâncias **[CONTROLE para servidor/clientes; OPERADOR só pro controle]**
 
-**Controle (o único que o operador pode checar direto):**
+**Controle:**
 ```
-ssh -i <chave-do-operador> ec2-user@<IP-controle> "docker info >/dev/null 2>&1 && echo 'Docker pronto (controle)'"
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" "docker info >/dev/null 2>&1 && echo 'Docker pronto (controle)'"
 ```
 
-**Servidor/clientes — via relé pelo controle, usando a chave da campanha já entregue no Passo 3 (NUNCA SSH direto do operador):**
+**Servidor/clientes — via relé, usando a chave da campanha (Passo 3).
+Correção desta rodada: o laço agora FALHA ALTO (exit code ≠ 0,
+mensagem com o(s) host(s) que não ficaram prontos) em vez de só
+seguir em frente silenciosamente se algum nunca ficar pronto:**
 ```
-ssh -i <chave-do-operador> ec2-user@<IP-controle> bash -s <<'REMOTE'
-for IP in <EIP-servidor> <IP-cliente-L0> <IP-cliente-L219> <IP-cliente-L325>; do
-  echo "=== $IP ==="
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s "$SERVER_IP" "$L0_IP" "$L219_IP" "$L325_IP" <<'REMOTE'
+FAILED=""
+for IP in "$1" "$2" "$3" "$4"; do
+  READY=0
   for i in $(seq 1 20); do
-    ssh -i ~/.ssh/campaign_key -o StrictHostKeyChecking=no ec2-user@$IP "docker info >/dev/null 2>&1" && { echo "Docker pronto"; break; }
+    ssh -i ~/.ssh/campaign_key -o StrictHostKeyChecking=no ec2-user@"$IP" "docker info >/dev/null 2>&1" && { echo "Docker pronto: $IP"; READY=1; break; }
     sleep 3
   done
+  [ "$READY" -eq 1 ] || FAILED="$FAILED $IP"
 done
+if [ -n "$FAILED" ]; then
+  echo "FALHA: Docker nao ficou pronto nos hosts:$FAILED" >&2
+  exit 1
+fi
 REMOTE
 ```
-**Saída esperada:** `"Docker pronto"` pras 5 instâncias, dentro de 20 tentativas (~60s) cada.
-**Critério de abortar:** qualquer instância sem Docker pronto depois de 20 tentativas.
+**Saída esperada:** `"Docker pronto: <IP>"` pras 5 instâncias (controle + as 4 acima).
+**Critério de abortar:** exit code ≠ 0 do bloco acima — a mensagem já diz exatamente qual(is) host(s) falhou(aram).
 
 **Porta usada = porta da regra de ingress do Security Group (confirmado no Passo 1):** SSH 22 (só controle→host); gateway 443 (só cliente→servidor, nunca SSH).
 
@@ -158,21 +202,11 @@ REMOTE
 
 ## Passo 5 — `deliver_source.py`: código-fonte e certificados **[OPERADOR → CONTROLE → servidor/clientes]**
 
-Ships `thesis/scripts/*.py`, `mock-service-os/certs` (servidor + todo
-cliente) e `thesis/results/v9/certs/generated` (só clientes) — achado
-real já corrigido na Decisão 58 (ver DECISIONS.md). Mesmo relé de 2
-saltos: hop 1 (operador→controle) e hop 2 (controle→host, com a
-chave da campanha do Passo 3) rodam dentro da MESMA chamada deste
-script, disparada **[OPERADOR]**:
-
 ```
-INVENTORY_JSON=$(terraform -chdir=../../terraform output -json inventory | python -c "import json,sys; raw=json.load(sys.stdin); print(json.dumps(raw['value'] if 'value' in raw else raw))")
-echo "$INVENTORY_JSON" > /tmp/inventory.json
-
-python deliver_source.py --control-ip <IP-controle> --operator-key <chave-do-operador> \
+python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --inventory-json /tmp/inventory.json
 ```
-**Saída esperada:** relatório por destino (`server`, `L0`, `L219`, `L325`) com `files` listando os caminhos entregues.
+**Saída esperada:** relatório por destino (`server`, `L0`, `L219`, `L325`) com `files` listando os caminhos entregues (`certs/generated` só para os 3 clientes).
 **Critério de abortar:** qualquer `RuntimeError`.
 
 ---
@@ -180,65 +214,79 @@ python deliver_source.py --control-ip <IP-controle> --operator-key <chave-do-ope
 ## Passo 6 — `deliver_source.py --to-control`: `orchestrator.py` e o que ele precisa **[OPERADOR → CONTROLE]** (1 salto só)
 
 **O que é copiado pro controle, exatamente** (`CONTROL_FILES`, `deliver_source.py`):
-- `thesis/results/v9/campaign/scripts/orchestrator.py`
-- `thesis/results/v9/campaign/scripts/cli.py`
-- `thesis/results/v9/campaign/scripts/preflight.py`
+- `thesis/results/v9/campaign/scripts/{orchestrator,cli,preflight}.py`
 - `thesis/results/v9/campaign/scripts/rehearsal_handshake.sh`
 - `thesis/results/v9/campaign/PINS.json`
 - `thesis/results/v9/integration/evaluate_criteria.py`
-- `inventory.json` (copiado em separado — não é um arquivo do repositório, é gerado por `terraform output`)
+- `inventory.json` (copiado em separado — não é um arquivo do repositório)
 
 ```
-python deliver_source.py --control-ip <IP-controle> --operator-key <chave-do-operador> \
+python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --to-control --inventory-json /tmp/inventory.json
 ```
-**Saída esperada:** `{"target": "control", "ip": "<IP-controle>", "files": [...]}`.
-**Critério de abortar:** qualquer `RuntimeError`. **Nunca fala com servidor/cliente nenhum** (confirmado por teste, `test_deliver_to_control_um_so_salto_nunca_fala_com_servidor_ou_cliente`).
+**Saída esperada:** `{"target": "control", "ip": "...", "files": [...]}`.
+**Critério de abortar:** qualquer `RuntimeError`. **Nunca fala com servidor/cliente nenhum** (`test_deliver_to_control_um_so_salto_nunca_fala_com_servidor_ou_cliente`).
 
 Depois deste passo, `orchestrator.py` existe em
-`~/thesis/results/v9/campaign/scripts/orchestrator.py` no CONTROLE —
-é de lá que ele roda nos Passos 7/8/9 abaixo, nunca do laptop do
-operador (Security Group do servidor/clientes não permite).
+`~/thesis/results/v9/campaign/scripts/orchestrator.py` no CONTROLE,
+junto com a própria cópia dele de `inventory.json` — é de lá que os
+Passos 8/9/10 abaixo leem endereços, nunca do operador.
 
 ---
 
 ## Passo 7 — `deliver_images.py`: as 4 imagens, 1º salto (operador → controle) **[OPERADOR → CONTROLE]**
 
-**Modelo restaurado da v8** (achado real: `docker save <imagem> | ssh
-<host> docker load`, Decisão 55, exigia Docker na máquina que executa
-esse comando — e essa máquina passou a ser o CONTROLE, que nunca tem
-Docker). Agora em 2 saltos reais:
-
 ```
-time python deliver_images.py --control-ip <IP-controle> --operator-key <chave-do-operador>
+time python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador>
 ```
 **O que este passo faz, na ordem:** `docker save` de cada imagem em
 `.tar` (local, no operador) → extrai o binário do gateway e confere
-sha256 contra `PINS.json` (local, no operador — nunca no controle) →
-checa espaço em disco no controle (`df`, real — o volume é `gp3` de
-30GB, confirmado em `main.tf`, folga enorme pros ~140MB totais
-medidos nesta sessão: gateway ~10MB, proxy ~9MB, pqc-signer ~59MB,
-measure ~58MB) → scp dos `.tar`+`.sha256` pro controle → `sha256sum -c`
-no controle.
+sha256 contra `PINS.json` (local, no operador) → checa espaço em
+disco no controle (`df`, real — volume `gp3` de 30GB, folga enorme
+pros ~140MB totais medidos nesta sessão: gateway ~10MB, proxy ~9MB,
+pqc-signer ~59MB, measure ~58MB) → scp pro controle → `sha256sum -c` lá.
 
-**Saída esperada:** JSON com `disk_check` (`avail_kb`/`needed_kb`),
-`images` (4 entradas, `sha256_ok: true` cada), `gateway_binary_info_delivered: true`.
-**Critério de abortar:** qualquer `RuntimeError` — nenhuma imagem incompleta/corrompida pode ficar estagiada no controle.
-
-**Tempo medido por imagem (preencher durante o ensaio real):**
-
-| Imagem | Tamanho do `.tar` (medido nesta sessão) | Tempo operador→controle |
-|---|---|---|
-| gateway | ~10MB | _a preencher_ |
-| proxy | ~9MB | _a preencher_ |
-| pqc-signer | ~59MB | _a preencher_ |
-| measure | ~58MB | _a preencher_ |
+**Saída esperada:** JSON com `disk_check`, `images` (4 entradas, `sha256_ok: true`), `gateway_binary_info_delivered: true`.
+**Critério de abortar:** qualquer `RuntimeError`.
 
 **Nenhum `docker run`, nenhuma conexão mTLS ainda — só o 1º salto da entrega.**
 
 ---
 
-## Passo 8 — `orchestrator.py --exercise-start-stop`: 2º salto (controle → host) + start_block/stop_block reais **[CONTROLE]**
+## Passo 8 — conferir `python3` e as dependências de `orchestrator.py` no controle **[CONTROLE]** (NOVO)
+
+**Por que `--help` já basta:** `cli`/`preflight`/`evaluate_criteria`
+são importados no TOPO do módulo `orchestrator.py` (fora de qualquer
+função, linhas antes de `def main()`) — se QUALQUER um desses
+imports falhar, `python3 orchestrator.py --help` nunca chega a
+imprimir o usage, quebra com o traceback de import antes disso.
+Conferido lendo os 3 arquivos linha por linha: **nenhum importa
+pacote de terceiros** — só biblioteca padrão (`argparse`/`json`/`re`/
+`subprocess`/`sys`/`pathlib`/`collections`/`random`/`datetime`/
+`time`). Não há, portanto, nenhum pacote `pip` necessário aqui.
+
+```
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
+cd ~/thesis/results/v9/campaign/scripts
+python3 --version
+python3 orchestrator.py --help >/dev/null && echo "OK: orchestrator.py importa e roda"
+REMOTE
+```
+**Saída esperada:** a versão do Python 3, depois `OK: orchestrator.py importa e roda`.
+**Se faltar algo:** como nenhum dos 3 módulos usa pacote de terceiros,
+a única causa real é `python3` ausente/quebrado no Amazon Linux 2023
+ARM64 (o controle é `t4g.micro`) — `install_common_packages.sh` já
+instala `python3-pip` (que traz `python3` como dependência) em TODA
+instância, controle incluso, então isso não deveria faltar; se
+faltar mesmo assim: `sudo dnf install -y python3`. **Nunca rode `pip
+install` aqui** — não há dependência de terceiros a instalar.
+**Critério de abortar:** qualquer traceback de import, ou `python3`
+ausente — resolver ANTES do Passo 9 (nenhum exercício real
+funcionaria mesmo assim).
+
+---
+
+## Passo 9 — `orchestrator.py --exercise-start-stop`: 2º salto (controle → host) + start_block/stop_block reais **[CONTROLE]**
 
 **Por que isto prova o 2º salto também:** `SSHExecutor._deliver_image`
 (dentro de `start_block`, chamado por este exercício) faz o resto —
@@ -249,37 +297,48 @@ docker load`, `docker image inspect` comparado contra `PINS.json`
 binário do gateway (Decisão 54), sem nenhuma execução cronometrada.
 
 ```
-ssh -i <chave-do-operador> ec2-user@<IP-controle> bash -s <<'REMOTE'
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
 cd ~/thesis/results/v9/campaign/scripts
 python3 orchestrator.py --mode ssh \
   --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
-  --exercise-start-stop --exercise-profile classico --exercise-route L0
+  --exercise-start-stop --exercise-profile classico --exercise-route L0 > /tmp/exercise_report.json
+cat /tmp/exercise_report.json
+echo "--- tempo/Image ID de entrega por imagem (2o salto, controle->host) ---"
+python3 -c "
+import json
+r = json.load(open('/tmp/exercise_report.json'))
+for v in r['image_delivery_verifications']:
+    print(f\"{v['image_key']:12s} host={v['host']:16s} elapsed={v['elapsed_seconds']:>7.1f}s \"
+          f\"tar={v['tar_bytes']} bytes ok={v['ok']} slow={v['slow']} \"
+          f\"image_id_ok={v['loaded_image_id'] == v['expected_image_id']}\")"
 REMOTE
 ```
 **Saída esperada:** JSON com `"start_block_ok": true`, `"stop_block_ok": true`,
 `gateway_binary_verifications` (1 entrada, `pin_matched: true`,
-`running_container_sha256_ok: true`), `image_delivery_verifications`
-(3 entradas — gateway/proxy/pqc-signer — `"ok": true`),
+`running_container_sha256_ok: true`), seguido da listagem de tempo/
+Image ID por imagem (gateway/proxy/pqc-signer), nenhuma com
+`slow: true`, todas com `ok: true`/`image_id_ok: true`, e
 `tcp_preflight_results` (1 entrada, `"ok": true`).
 
 Confirme manualmente, numa segunda sessão **[CONTROLE]** durante a
 chamada acima, que os 3 containers existem enquanto o comando roda:
 ```
-ssh -i <chave-do-operador> ec2-user@<IP-controle> \
-  "ssh -i ~/.ssh/campaign_key ec2-user@<EIP-servidor> docker ps -a --filter name=v9-mtls"
-ssh -i <chave-do-operador> ec2-user@<IP-controle> \
-  "ssh -i ~/.ssh/campaign_key ec2-user@<IP-cliente-L0> docker ps -a --filter name=tls_kem_proxy_run --filter name=pqc_signer_service_run"
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" "ssh -i ~/.ssh/campaign_key ec2-user@$SERVER_IP docker ps -a --filter name=v9-mtls"
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" "ssh -i ~/.ssh/campaign_key ec2-user@$L0_IP docker ps -a --filter name=tls_kem_proxy_run --filter name=pqc_signer_service_run"
 ```
-**Critério de abortar:** qualquer campo `"ok": false`/exceção. **Nenhum
-arquivo de manifesto/execução é escrito por este passo** (testado,
-`test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest`) —
+**Critério de abortar:** qualquer `"ok": false`/exceção; **OU
+qualquer entrega com `elapsed_seconds` > 600 (10 minutos, `"slow":
+true`)** — sintoma de link controle↔host degradado, nunca prosseguir
+pro resto do ensaio sem investigar antes. **Nenhum arquivo de
+manifesto/execução é escrito por este passo**
+(`test_exercise_start_stop_sobe_e_desce_sem_execucao_nem_manifest`) —
 nunca conta como nenhuma das 60/12 oficiais. **Nenhuma chamada invoca
-`docker` localmente no controle** (testado,
-`test_deliver_image_nunca_invoca_docker_localmente`).
+`docker` localmente no controle**
+(`test_deliver_image_nunca_invoca_docker_localmente`).
 
 ---
 
-## Passo 9 — handshake real por perfil (4, prova de mecanismo) **[CONTROLE]**
+## Passo 10 — handshake real por perfil (4, prova de mecanismo) **[CONTROLE]**
 
 **Testado localmente em loopback antes de ser entregue** (ainda no
 laptop do operador, pura validação Docker local, sem AWS — saída real
@@ -299,86 +358,94 @@ OK [classico]: delta 0B nos dois sentidos
 RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos
 ```
 
-**No ensaio real (AWS), o script roda DE DENTRO DO CONTROLE (achado
-real desta rodada — `GATEWAY_SSH`/`CLIENT_SSH` apontados pro
-servidor/cliente direto, do laptop do operador, violaria o Security
-Group — Passo 1). `rehearsal_handshake.sh` já chegou no controle via
-Passo 6.** `mockopin-v9-negtest`, que o script usa no cliente, não é
-pinada em `PINS.json` (motivo já registrado na Decisão 57: nenhum
-código de produção a usa) — entregue aqui por um 2º salto manual,
+**Correção desta rodada (item 2): o endereço de `GATEWAY_HOST` tem
+que ser o MESMO que a rota L0 realmente disca em produção
+(`orchestrator._server_gateway_ip`) — conferido em `outputs.tf`: L0 é
+`colocated: true` (mesma AZ ID que o servidor), então disca o IP
+PRIVADO do servidor, nunca o EIP. Calculado abaixo a partir da cópia
+local de `inventory.json` no controle (entregue no Passo 6), nunca
+digitado à mão — o mesmo vale pros endereços de `GATEWAY_SSH`/
+`CLIENT_SSH` (sempre o IP PÚBLICO, pra SSH — Decisão 43/45) e pro 2º
+salto de entrega do `negtest` abaixo, que também estavam com
+placeholders fixos antes desta correção.**
+
+`mockopin-v9-negtest` não é pinada em `PINS.json` (motivo já
+registrado na Decisão 57) — entregue aqui por um 2º salto manual,
 igual em espírito a `deliver_images.py` mas sem passar por PINS.json:
 
 ```
 # 1o salto (operador -> controle), [OPERADOR]:
 docker save mockopin-v9-negtest > /tmp/negtest.tar
-scp -i <chave-do-operador> /tmp/negtest.tar ec2-user@<IP-controle>:~/images/negtest.tar
+scp -i <chave-do-operador> /tmp/negtest.tar ec2-user@"$CONTROL_IP":~/images/negtest.tar
 
-# 2o salto (controle -> cliente L0) + o ensaio em si, tudo [CONTROLE]:
-ssh -i <chave-do-operador> ec2-user@<IP-controle> bash -s <<'REMOTE'
-scp -i ~/.ssh/campaign_key ~/images/negtest.tar ec2-user@<IP-cliente-L0>:~/negtest.tar
-ssh -i ~/.ssh/campaign_key ec2-user@<IP-cliente-L0> "docker load < ~/negtest.tar && rm -f ~/negtest.tar"
-
+# 2o salto (controle -> cliente L0) + o ensaio em si, tudo [CONTROLE] --
+# endereços recalculados AQUI a partir da copia local de inventory.json,
+# nunca recebidos como placeholder do operador:
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
 cd ~/thesis/results/v9/campaign/scripts
-GATEWAY_SSH="ssh -i ~/.ssh/campaign_key ec2-user@<EIP-servidor>" \
-CLIENT_SSH="ssh -i ~/.ssh/campaign_key ec2-user@<IP-cliente-L0>" \
-GATEWAY_HOST="<EIP-servidor>" \
+SERVER_IP=$(python3 -c "import json; print(json.load(open('inventory.json'))['server']['public_ip'])")
+L0_IP=$(python3 -c "import json; print(json.load(open('inventory.json'))['clients']['L0']['public_ip'])")
+GATEWAY_HOST_L0=$(python3 -c "
+import json
+inv = json.load(open('inventory.json'))
+c = inv['clients']['L0']
+print(inv['server']['private_ip'] if c.get('colocated') else inv['server']['public_ip'])
+")
+
+scp -i ~/.ssh/campaign_key ~/images/negtest.tar ec2-user@"$L0_IP":~/negtest.tar
+ssh -i ~/.ssh/campaign_key ec2-user@"$L0_IP" "docker load < ~/negtest.tar && rm -f ~/negtest.tar"
+
+GATEWAY_SSH="ssh -i ~/.ssh/campaign_key ec2-user@$SERVER_IP" \
+CLIENT_SSH="ssh -i ~/.ssh/campaign_key ec2-user@$L0_IP" \
+GATEWAY_HOST="$GATEWAY_HOST_L0" \
 bash rehearsal_handshake.sh
 REMOTE
 ```
-**Saída esperada:** `RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos` — igual ao teste local, agora numa rede/instâncias reais, disparado do controle.
-**Critério de abortar:** qualquer `FALHA` impressa pelo script, ou `RESULTADO FINAL: FAIL` — marca o ensaio como **reprovado neste ponto**, registrado explicitamente, antes de seguir pro passo 10.
+**Saída esperada:** `RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos` — igual ao teste local, agora numa rede/instâncias reais, disparado do controle, discando o MESMO endereço que a rota real usa.
+**Critério de abortar:** qualquer `FALHA` impressa pelo script, ou `RESULTADO FINAL: FAIL` — marca o ensaio como **reprovado neste ponto**, registrado explicitamente, antes de seguir pro passo 11.
 
 **O que este passo NÃO faz:** não conta como nenhuma das 60 execuções oficiais nem nenhuma das 12 capturas do critério 1.
 
 ---
 
-## Passo 10 — `emergency_stop.py`, modo dry **[OPERADOR]** (diagnóstico, antes de qualquer teardown)
+## Passo 11 — `emergency_stop.py`, modo dry **[OPERADOR]** (diagnóstico, antes de qualquer teardown)
 
 ```
-cd ../campaign/scripts
 python emergency_stop.py --profile mockopin-pqc
 ```
 **Saída esperada:** `instances_found`/`eips_found`/`security_groups_found`/`key_pairs_found` listando os recursos reais do ensaio (4 key pairs, corrigido na Decisão 57), e todas as listas `..._terminated`/`..._released`/`..._deleted` **vazias**.
 **Critério de abortar:** qualquer lista de ação não-vazia em modo dry.
-**Por que roda no operador:** API da AWS direta, nenhum SSH a instância alguma.
 
 ---
 
-## Passo 11 — teardown PRINCIPAL: `cleanup.py --release-eips --force` **[OPERADOR]**
+## Passo 12 — teardown PRINCIPAL: `cleanup.py --release-eips --force` **[OPERADOR]**
 
-**Por que `cleanup.py`, não `emergency_stop.py`, é o caminho principal**
-(comparado linha a linha contra `v8/campaign/scripts/campaign_down.sh`
-na Decisão 57): mesmos 5 checks estruturais, mas `cleanup.py` tem 2
-capacidades novas — detecção de drift por autodesligamento ANTES do
-destroy, e liberação ATIVA de EIPs órfãos (`--release-eips`).
-
-**Redação de erros da AWS:** já confirmada presente (Decisão 58) —
-`cli.run_terraform`/`cli.run_aws`/`cli.run_aws_json` redigem
-`stdout`/`stderr` antes de devolver ou levantar, nenhuma mudança
-necessária.
+**Por que `cleanup.py`, não `emergency_stop.py`, é o caminho
+principal** (Decisão 57): mesmos 5 checks estruturais da v8, mas
+`cleanup.py` detecta drift por autodesligamento ANTES do destroy e
+libera ATIVAMENTE EIPs órfãos.
 
 ```
 python cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force
 ```
 **Saída esperada:** JSON com `"all_clean": true`.
-**Critério de abortar:** `all_clean: false`, ou qualquer excessão — ir pro passo 12 (fallback), nunca pular direto pro passo 13.
-**Por que roda no operador:** `terraform destroy` precisa do state local; a verificação é API da AWS direta.
+**Critério de abortar:** `all_clean: false` — ir pro passo 13 (fallback), nunca pular direto pro passo 14.
 
 ---
 
-## Passo 12 — fallback: `emergency_stop.py --execute`, só se sobrou algo **[OPERADOR]**
+## Passo 13 — fallback: `emergency_stop.py --execute`, só se sobrou algo **[OPERADOR]**
 
-**Só roda se o passo 11 reportou `all_clean: false`.** Se já deu `all_clean: true`, pule direto pro passo 13.
+**Só roda se o passo 12 reportou `all_clean: false`.** Se já deu `all_clean: true`, pule direto pro passo 14.
 
 ```
 python emergency_stop.py --profile mockopin-pqc --execute
 ```
-**Saída esperada:** qualquer recurso que o passo 11 não limpou aparece em `..._terminated`/`..._released`/`..._deleted` agora.
+**Saída esperada:** qualquer recurso que o passo 12 não limpou aparece em `..._terminated`/`..._released`/`..._deleted` agora.
 **Critério de abortar:** qualquer erro de permissão persistente — investigação manual pela console AWS.
 
 ---
 
-## Passo 13 — verificação final: nada ficou na conta **[OPERADOR]**
+## Passo 14 — verificação final: nada ficou na conta **[OPERADOR]**
 
 ```
 aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" "Name=instance-state-name,Values=running,pending,stopping,stopped"
@@ -395,12 +462,12 @@ aws ec2 describe-key-pairs --profile mockopin-pqc --region sa-east-1 --filters "
 
 ## Custo estimado do ensaio
 
-~30 minutos de frota (passos 0-13, +5 min sobre a Decisão 58 pelos
-passos novos: entrega da chave da campanha, 2 saltos reais de
-entrega de imagem) — 5 instâncias: 4× `m7i-flex.large` + 1× `t4g.micro` — + 5 EIPs:
-- Compute: (4 × US$0,0958 + US$0,0084) × (30/60)h ≈ US$0,197
-- EIP: 5 × US$0,005 × (30/60)h ≈ US$0,013
+~35 minutos de frota (passos 0-14, +5 min sobre a Decisão 59 pelo
+passo novo de conferência de dependências e pela checagem extra de
+tempo/Image ID) — 5 instâncias: 4× `m7i-flex.large` + 1× `t4g.micro` — + 5 EIPs:
+- Compute: (4 × US$0,0958 + US$0,0084) × (35/60)h ≈ US$0,230
+- EIP: 5 × US$0,005 × (35/60)h ≈ US$0,015
 - EBS: negligível (apagado junto no destroy/termination)
-- **Total estimado: ≈ US$0,21**, mesmo no dobro do tempo (60 min): ≈ US$0,42.
+- **Total estimado: ≈ US$0,25**, mesmo no dobro do tempo (70 min): ≈ US$0,49.
 
-**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~2× o acima (≈US$0,42 de compute) — os EIPs seguem o mesmo risco residual já documentado, coberto tanto por `cleanup.py --release-eips` (principal) quanto por `emergency_stop.py` (fallback).
+**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~2× o acima (≈US$0,46 de compute) — os EIPs seguem o mesmo risco residual já documentado, coberto tanto por `cleanup.py --release-eips` (principal) quanto por `emergency_stop.py` (fallback).

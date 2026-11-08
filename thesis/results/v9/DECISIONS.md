@@ -7595,3 +7595,99 @@ Nenhuma correcao desta rodada muda nenhum criterio pre-registrado --
 e correcao de um bloqueio operacional real (entrega de imagem/codigo/
 chave), nunca uma mudanca de design do piloto. Continuo sem autorizar
 push nem recursos na AWS.
+
+## 60. Cinco correcoes pequenas ao roteiro/scripts da Decisao 59, mais 1 achado adicional da mesma classe: inventory.json gerado e verificado logo apos o apply (nao mais duplicado no Passo 5); handshake disca o MESMO endereco que a rota real usa (L0 e colocated, disca o IP PRIVADO do servidor, nao o EIP -- achado real, estava errado); laco de Docker pronto falha alto com o host no erro; entrega de imagem (2o salto) agora mede e reporta tempo/tamanho/Image ID por host, com criterio de abortar por demora (>10min); passo novo confere python3/dependencias de orchestrator.py no controle antes do exercicio remoto; achado adicional -- os enderecos do 2o salto do negtest e das checagens manuais de docker ps tambem estavam fixos, mesma classe de erro
+
+Nada de AWS, sem push, branch `v9/fase1-local`. Commit local.
+
+**Contexto:** Decisao 59 foi aceita na tabela/modelo de execucao;
+cinco ajustes pequenos pedidos no roteiro e nos scripts que ele
+chama, mais um achado adicional se eu encontrasse "mais uma
+divergencia parecida".
+
+**1 (inventory.json antecipado e verificado):** Passo 2 do roteiro
+agora gera `/tmp/inventory.json` logo depois do `describe-instances`
+(nao mais dentro do Passo 5) -- com uma asserção real conferindo que
+o formato bate com o que os 3 scripts leem: `inventory["server"]
+["public_ip"/"private_ip"]`, `inventory["clients"][rota]["public_ip"
+/"private_ip"/"colocated"]`, `inventory["control"]["public_ip"]`.
+Confirmado lendo `deliver_source.py`/`pki_relay.py`/`orchestrator.py`
+linha por linha: os 3 esperam o dict JA DESEMBRULHADO (`raw["value"]`
+extraido antes de salvar) -- `terraform output -json <nome>`, pra um
+output NOMEADO, sempre embrulha em `{"sensitive":..., "value":...}`.
+Variaveis (`$CONTROL_IP`/`$SERVER_IP`/`$L0_IP`/`$L219_IP`/`$L325_IP`)
+exportadas uma vez, reusadas pelo resto do roteiro -- nenhum endereco
+mais digitado a mao do Passo 2 em diante.
+
+**2 (achado real -- handshake discava o endereco errado):** o roteiro
+anterior setava `GATEWAY_HOST` pro EIP do servidor, incondicionalmente
+-- mas `outputs.tf` confirma que L0 e `colocated: true` (mesma AZ ID
+do servidor), e `orchestrator._server_gateway_ip` disca o IP PRIVADO
+do servidor pra um cliente colocalizado, nunca o EIP (Decisao 27 item
+1). Corrigido: o Passo 10 agora calcula `GATEWAY_HOST_L0` NO PROPRIO
+CONTROLE, lendo a copia local de `inventory.json` (entregue no Passo
+6) e reproduzindo a MESMA logica de `_server_gateway_ip` (`private_ip`
+se `colocated`, senao `public_ip`) -- nunca mais um valor fixo.
+
+**3 (Docker pronto falha alto):** o laco do Passo 4, que roda DO
+CONTROLE pra servidor/clientes, agora acumula os hosts que nunca
+ficaram prontos (`FAILED="$FAILED $IP"`) e, se a lista nao estiver
+vazia, imprime a mensagem com os enderecos e sai com `exit 1` --
+antes, o laco so seguia em frente silenciosamente.
+
+**4 (tempo/Image ID por entrega + criterio de abortar):**
+`SSHExecutor._deliver_image` (orchestrator.py) agora mede o tempo
+real do 2o salto (`time.monotonic()`, scp+load+inspect) e registra
+`elapsed_seconds`/`tar_bytes`/`slow` (`slow` = acima de
+`DELIVERY_SLOW_THRESHOLD_SECONDS = 600`, so um limiar de RELATORIO --
+nunca aborta por conta propria) em `image_delivery_verifications`,
+junto do Image ID ja comparado. O Passo 9 do roteiro agora imprime
+essa listagem por imagem/host e documenta o criterio de abortar
+("qualquer entrega com elapsed_seconds > 600").
+
+**5 (passo novo -- dependencias de orchestrator.py no controle):**
+achado, lendo `cli.py`/`preflight.py`/`evaluate_criteria.py` linha
+por linha: nenhum importa pacote de terceiros, so biblioteca padrao
+-- e os 3 sao importados no TOPO de `orchestrator.py`, fora de
+qualquer funcao, entao `python3 orchestrator.py --help` sozinho ja
+prova a cadeia de import inteira (se qualquer um falhasse, `--help`
+nunca chegaria a imprimir nada). Novo Passo 8, antes do exercicio
+remoto: `python3 --version` + `python3 orchestrator.py --help` no
+CONTROLE. Como nao ha pacote pip necessario, a unica causa real de
+falha seria `python3` ausente/quebrado no Amazon Linux 2023 ARM64 --
+`install_common_packages.sh` ja instala `python3-pip` (traz `python3`
+como dependencia) em toda instancia, controle incluso; se faltar
+mesmo assim, o roteiro documenta `sudo dnf install -y python3`, nunca
+`pip install` (nao ha dependencia de terceiros a instalar).
+
+**Achado adicional (pedido: "se achar mais uma divergencia
+parecida"):** corrigindo o item 2, achei a MESMA classe de erro no 2o
+salto manual de entrega do `negtest` (Passo 10) e nas checagens
+manuais de `docker ps` do Passo 9 -- os dois tinham enderecos de
+servidor/cliente FIXOS no texto do roteiro, em vez de lidos do
+inventario. Corrigidos juntos: o 2o salto do `negtest` agora calcula
+`SERVER_IP`/`L0_IP`/`GATEWAY_HOST_L0` DENTRO do bloco que roda no
+controle (mesma copia local de `inventory.json`), e as checagens de
+`docker ps` do Passo 9 usam `$SERVER_IP`/`$L0_IP` exportados no Passo
+2.
+
+**Testes:** `test_deliver_image_registra_tempo_e_tamanho_do_2o_salto`/
+`test_mutante_entrega_lenta_e_marcada_slow` (2, novos, em
+`test_orchestrator.py`) -- 141 em `thesis/results/v9/campaign/tests/`
+(139 antes desta rodada + 2 novos), todos passando. Os itens 1/2/3/5
+sao correcoes de ROTEIRO/documentacao (sem codigo Python novo alem
+do item 4) -- nenhum teste automatizado adicional pra eles, mas as
+3 asserções de formato (item 1) e a logica de `colocated` (item 2)
+sao reaproveitadas de codigo JA testado (`orchestrator._server_
+gateway_ip`, `outputs.tf`), nunca inventadas no roteiro.
+
+**Commit local** (sem push): `thesis/results/v9/campaign/scripts/
+orchestrator.py` (`DELIVERY_SLOW_THRESHOLD_SECONDS`, timing em
+`_deliver_image`), `thesis/results/v9/campaign/tests/
+test_orchestrator.py` (2 testes novos), `thesis/results/v9/campaign/
+INFRA_REHEARSAL.md` (reescrito, 15 passos).
+
+Nenhuma correcao desta rodada muda nenhum criterio pre-registrado --
+sao correcoes de endereco/robustez/relatorio no roteiro de ensaio,
+nunca uma mudanca de design do piloto. Continuo sem autorizar push
+nem recursos na AWS.
