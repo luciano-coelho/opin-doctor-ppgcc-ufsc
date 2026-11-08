@@ -30,20 +30,51 @@ NETWORK="${NETWORK:-insurance-server-lambdas_default}"
 # servidor), nunca no controle que so dispara o comando via SSH --
 # mesmo raciocinio que ja corrigiu `_launch_gateway.real_certs_mount`
 # na Decisao 58. Em modo remoto (CLIENT_SSH/GATEWAY_SSH setados), usa
-# o caminho `~`-relativo que `deliver_source.py` de fato entrega.
+# o caminho ABSOLUTO real (`/home/ec2-user/...` -- usuario de login
+# fixo em toda instancia deste projeto, confirmado em todo outro
+# lugar que faz SSH aqui) que `deliver_source.py` de fato entrega,
+# NUNCA `~` -- achado real, ao vivo (retomando esta MESMA Decisao):
+# `~` dentro de `-v "$VAR:..."` (as aspas duplas ja existiam no
+# script, pra proteger caminhos LOCAIS do Windows com espaco) nunca e
+# expandido pelo shell remoto (aspas duplas suprimem expansao de
+# til), entao o Docker recebia o til LITERAL e reprovava como "nome
+# de volume local invalido". Caminho absoluto elimina a ambiguidade
+# de aspas por completo -- nao precisa expandir nada.
 if [ -z "${CERTS_DIR-}" ]; then
   if [ -n "$CLIENT_SSH" ]; then
-    CERTS_DIR="~/thesis/results/v9/certs/generated"
+    CERTS_DIR="/home/ec2-user/thesis/results/v9/certs/generated"
   else
     CERTS_DIR="$(cd "$(dirname "$0")/../../certs/generated" && pwd)"
   fi
 fi
 if [ -z "${REAL_CERTS_DIR-}" ]; then
   if [ -n "$GATEWAY_SSH" ]; then
-    REAL_CERTS_DIR="~/mock-service-os/certs"
+    REAL_CERTS_DIR="/home/ec2-user/mock-service-os/certs"
   else
     REAL_CERTS_DIR="$(cd "$(dirname "$0")/../../../../../mock-service-os/certs" && pwd)"
   fi
+fi
+
+# Decisao 73 (achado real, ao vivo, retomando AINDA a mesma Decisao
+# 72/Passo 10 -- o fix de caminho acima era necessario mas nao
+# suficiente): `--network $NETWORK` + os `--network-alias` do gateway
+# SO existem no stack local de validacao, exatamente a mesma causa
+# raiz ja corrigida em `orchestrator._launch_gateway` (Decisao 70) --
+# este script tinha a MESMA logica duplicada, nunca recebeu o mesmo
+# tratamento. Em modo remoto, o gateway so precisa publicar a porta
+# no host (`GATEWAY_HOST` ja e um IP real, nunca um alias Docker); o
+# cliente negtest disca esse IP diretamente, nunca precisando de rede
+# Docker nenhuma (a rede default basta pra alcancar qualquer IP
+# externo).
+if [ -n "$GATEWAY_SSH" ]; then
+  GATEWAY_NETWORK_FLAGS="-p 443:443"
+else
+  GATEWAY_NETWORK_FLAGS="--network $NETWORK --network-alias mtls --network-alias matls-auth.local --network-alias auth.local --network-alias matls-api.local --network-alias api.local --network-alias directory"
+fi
+if [ -n "$CLIENT_SSH" ]; then
+  CLIENT_NETWORK_FLAGS=""
+else
+  CLIENT_NETWORK_FLAGS="--network $NETWORK"
 fi
 
 on_gateway() { if [ -n "$GATEWAY_SSH" ]; then $GATEWAY_SSH "$1"; else bash -c "$1"; fi; }
@@ -60,12 +91,25 @@ PASS=1
 for PERFIL in classico pqc hibrido-v8 hibrido-and; do
   echo "=== [$PERFIL] removendo gateway anterior (se houver) ==="
   on_gateway "docker rm -f $GATEWAY_CONTAINER >/dev/null 2>&1 || true"
+  # Decisao 74 (achado real, ao vivo, mesmo retomada -- o fix de rede
+  # da Decisao 73 era necessario mas ainda nao suficiente): em modo
+  # remoto, este passo (Passo 10) roda DEPOIS do Passo 9
+  # (--exercise-start-stop), que deixa o container `v9-mtls`
+  # (nome fixo em orchestrator.py) rodando de proposito -- `stop_
+  # block` nunca o remove, so ele ocupa a porta 443 do HOST com `-p
+  # 443:443` (Decisao 70). O container deste script tem OUTRO nome
+  # (`$GATEWAY_CONTAINER`, default `v9-mtls-ensaio`) mas disputa a
+  # MESMA porta 443 do mesmo host -- "Bind for 0.0.0.0:443 failed:
+  # port is already allocated". So remove o de orchestrator.py
+  # defensivamente em modo remoto (nome conhecido, nunca em modo
+  # local, onde nem ele nem a disputa de porta existem).
+  if [ -n "$GATEWAY_SSH" ]; then
+    on_gateway "docker rm -f v9-mtls >/dev/null 2>&1 || true"
+  fi
 
   echo "=== [$PERFIL] subindo gateway com CRYPTO_PROFILE=$PERFIL ==="
   on_gateway "export MSYS_NO_PATHCONV=1; docker run -d --name $GATEWAY_CONTAINER \
-    --network $NETWORK \
-    --network-alias mtls --network-alias matls-auth.local --network-alias auth.local \
-    --network-alias matls-api.local --network-alias api.local --network-alias directory \
+    $GATEWAY_NETWORK_FLAGS \
     -e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE=$PERFIL \
     -v \"$REAL_CERTS_DIR:/real-certs:ro\" mockopin-v9-gateway"
 
@@ -87,7 +131,7 @@ for PERFIL in classico pqc hibrido-v8 hibrido-and; do
   echo "=== [$PERFIL] disparando a conexao real (negtest -scenario matrix) ==="
   CLIENT_MODE="$PERFIL"
   if [ "$PERFIL" = "hibrido-and" ]; then CLIENT_MODE="hibrido-and-strict"; fi
-  on_client "export MSYS_NO_PATHCONV=1; docker run --rm --network $NETWORK \
+  on_client "export MSYS_NO_PATHCONV=1; docker run --rm $CLIENT_NETWORK_FLAGS \
     -v \"$CERTS_DIR:/certs:ro\" mockopin-v9-negtest \
     -scenario matrix -client-mode $CLIENT_MODE -server-mode $PERFIL \
     -target $GATEWAY_HOST:443 -cert-dir /certs"

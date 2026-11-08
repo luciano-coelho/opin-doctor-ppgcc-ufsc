@@ -8415,7 +8415,7 @@ Decisao).
 
 Seguindo pros Passos 10-14 do roteiro (mesma fleet, sem reaplicar).
 
-## 72. Terceiro achado real, mesma retomada da Fase A, Passo 10 -- `rehearsal_handshake.sh` tinha os mesmos defaults de `CERTS_DIR`/`REAL_CERTS_DIR` relativos ao script (so fazem sentido rodando LOCAL), quebrando com "No such file or directory" ao rodar do controle real; corrigido pra usar o caminho `~`-relativo real quando `CLIENT_SSH`/`GATEWAY_SSH` estao setados -- validacao ao vivo PENDENTE (perda de conectividade com a fleet antes do retry, ver nota de infraestrutura abaixo)
+## 72. Terceiro achado real, mesma retomada da Fase A, Passo 10 -- `rehearsal_handshake.sh` tinha os mesmos defaults de `CERTS_DIR`/`REAL_CERTS_DIR` relativos ao script (so fazem sentido rodando LOCAL), quebrando com "No such file or directory" ao rodar do controle real; corrigido pra usar o caminho real quando `CLIENT_SSH`/`GATEWAY_SSH` estao setados -- validado ao vivo numa fleet nova junto com as Decisoes 73/74 (ver abaixo), apos 2 achados adicionais no MESMO passo
 
 Branch `v9/fase1-local`, commit e push. Mesma fleet real das Decisoes
 70/71 (nenhuma nova instancia precisou subir pra este achado
@@ -8450,10 +8450,10 @@ certo (cliente/servidor reais) em vez de um lugar que nunca existiu
 **Corrigido, em `rehearsal_handshake.sh`:** `CERTS_DIR`/`REAL_CERTS_DIR`
 agora so caem no default antigo (relativo ao script) quando
 `CLIENT_SSH`/`GATEWAY_SSH` estao VAZIOS (modo local); quando setados
-(modo remoto real), usam `~/thesis/results/v9/certs/generated` e
-`~/mock-service-os/certs` respectivamente -- caminhos que `deliver_
-source.py` de fato entrega, expandidos pelo shell REMOTO (nunca por
-este processo), mesmo padrao ja usado em `_launch_gateway`.
+(modo remoto real), usam o caminho real que `deliver_source.py` de
+fato entrega -- caminho ABSOLUTO (`/home/ec2-user/...`), nao `~`; ver
+Decisao 73 pro motivo exato dessa escolha (achado adicional, no MESMO
+retomada, antes da validacao ao vivo fechar).
 
 **Nota de infraestrutura (nao e um bug de codigo, registrada aqui
 por transparencia):** antes de conseguir re-entregar e re-testar esta
@@ -8484,11 +8484,10 @@ pairs, 3 regioes), todas vazias.
 
 **Testes:** sem teste automatizado novo (script shell sem suite
 pytest associada neste pacote, mesma situacao de todos os outros
-scripts `.sh`) -- 158 testes inalterados. **Validacao ao vivo
-PENDENTE**: a correcao foi revisada por leitura e aplicada, mas a
-perda de conectividade acima impediu reentregar e rerodar
-`rehearsal_handshake.sh` antes da frota cair -- sera validada de
-verdade na proxima tentativa da Fase A (fleet nova).
+scripts `.sh`) -- 158 testes inalterados. **Validacao ao vivo**:
+esta correcao, por si so, ainda nao bastou (achado adicional real no
+mesmo Passo 10, ver Decisao 73) -- fechou **PASS** de verdade so
+depois dela, na fleet nova (ver Decisao 73/74).
 
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
 scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
@@ -8496,3 +8495,107 @@ scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
 
 Reaplicando uma fleet nova (`self_terminate_hours=1`) pra retomar a
 Fase A do Passo 0, conta ja confirmada limpa acima.
+
+## 73. Quarto achado real, retomando a Fase A numa fleet nova, AINDA no Passo 10 -- o fix da Decisao 72 (caminho) nao foi suficiente: `~` dentro de `-v "$VAR:..."` nunca expande (aspas duplas suprimem expansao de til), Docker reprovou com "nome de volume local invalido"; e, resolvido isso, `rehearsal_handshake.sh` tambem usava incondicionalmente `--network insurance-server-lambdas_default` pro gateway (MESMA causa raiz ja corrigida em `_launch_gateway`, Decisao 70, nunca replicada aqui) -- corrigido os dois, com o fix da Decisao 72 validado ao vivo no mesmo passo
+
+Branch `v9/fase1-local`, commit e push. Fleet NOVA (reaplicada apos a
+nota de infraestrutura da Decisao 72 -- apply real, 28 recursos, 5
+instancias, 3 regioes, conta confirmada limpa antes do apply).
+
+**Achado 1, ao vivo, retomando o Passo 10 na fleet nova:** com o fix
+da Decisao 72 entregue, `docker run -d` do gateway reprovou com
+`docker: Error response from daemon: create ~/mock-service-os/certs:
+"~/mock-service-os/certs" includes invalid characters for a local
+volume name... If you intended to pass a host directory, use
+absolute path.` O `~` da Decisao 72 nunca chegou a ser expandido:
+dentro de aspas duplas (as aspas em `-v \"$REAL_CERTS_DIR:...\"` ja
+existiam no script, protegendo caminhos LOCAIS do Windows com
+espaco), o shell REMOTO tambem nunca expande til -- Docker recebeu o
+til LITERAL e tratou como nome de volume nomeado, nao caminho.
+Diferente de `_launch_gateway` (Decisao 58), que usa o MESMO `~` SEM
+aspas por fora (`-v {real_certs_mount}:/real-certs:ro`, expande
+normal) -- este script shell tem a quebra de aspas que o Python nao
+tem.
+
+**Corrigido (Achado 1):** `CERTS_DIR`/`REAL_CERTS_DIR`, em modo
+remoto, passam a usar o caminho ABSOLUTO real (`/home/ec2-user/...`
+-- usuario de login fixo em toda instancia deste projeto, confirmado
+em todo outro ponto que faz SSH aqui), nunca `~` -- elimina a
+ambiguidade de aspas por completo, nao precisa expandir nada.
+
+**Achado 2, ao vivo, na MESMA retomada, resolvido o Achado 1:**
+`docker run -d` do gateway reprovou de novo, agora com `docker:
+Error response from daemon: network insurance-server-lambdas_default
+not found.` -- a MESMA causa raiz que a Decisao 70 ja tinha
+corrigido em `orchestrator._launch_gateway` (a rede/aliases Docker
+so existem no stack local de validacao via compose) -- so que
+`rehearsal_handshake.sh` tem a MESMA logica duplicada, nunca recebeu
+o mesmo tratamento, porque e um script separado que nunca compartilha
+codigo com `orchestrator.py`.
+
+**Por que as duas sao correcoes seguras, nunca um STOP:** nenhuma
+toca binario/certificado pinado, PINS.json ou qualquer um dos 7
+criterios pre-registrados -- so a forma como o gateway/cliente deste
+passo de PROVA DE MECANISMO (nunca uma das 60/12 execucoes oficiais)
+alcancam um ao outro pela rede real.
+
+**Corrigido (Achado 2):** novas variaveis `GATEWAY_NETWORK_FLAGS`/
+`CLIENT_NETWORK_FLAGS`, condicionais a `GATEWAY_SSH`/`CLIENT_SSH`
+estarem setados -- modo remoto: gateway usa `-p 443:443` (o cliente
+disca `GATEWAY_HOST`, um IP real, nunca um alias Docker); cliente
+negtest nao precisa de rede Docker nenhuma (`CLIENT_NETWORK_FLAGS=""`
+-- a rede default do host basta pra alcancar qualquer IP externo).
+Modo local mantem a rede/aliases antigos, sem mudanca.
+
+**Testes:** sem teste novo (mesma situacao da Decisao 72) -- 158
+inalterados.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
+(esta Decisao).
+
+## 74. Quinto achado real, AINDA a mesma retomada, AINDA o Passo 10 (resolvidos os Achados 1/2 da Decisao 73) -- `docker run -d` do gateway deste script reprovava com "port is already allocated" na porta 443: o container `v9-mtls` de `orchestrator.py`, deixado de pe de proposito pelo Passo 9 anterior (`stop_block` nunca o remove), ja ocupava a mesma porta do host via `-p 443:443` (Decisao 70) -- corrigido removendo-o defensivamente antes de subir o container deste script, so em modo remoto
+
+Branch `v9/fase1-local`, commit e push. Mesma fleet nova da Decisao
+73.
+
+**Achado, ao vivo:** com os Achados 1/2 da Decisao 73 corrigidos,
+`docker run -d` do gateway (`v9-mtls-ensaio`) reprovou com `docker:
+Error response from daemon: driver failed programming external
+connectivity on endpoint v9-mtls-ensaio (...): Bind for 0.0.0.0:443
+failed: port is already allocated.`
+
+**Causa raiz:** o Passo 9 (`--exercise-start-stop`, executado ANTES
+do Passo 10 no mesmo roteiro) sobe o gateway de `orchestrator.py`
+(nome fixo `v9-mtls`, `-p 443:443` em modo remoto desde a Decisao 70)
+e `stop_block` NUNCA o remove de proposito (fica rodando pra
+inspecao manual/proximo bloco reusar) -- quando o Passo 10 roda
+depois, na MESMA instancia de servidor, o container deste script
+(`v9-mtls-ensaio`, nome DIFERENTE) disputa a MESMA porta 443 do
+mesmo host contra o `v9-mtls` ainda vivo.
+
+**Por que e uma correcao segura, nunca um STOP:** e so sequenciamento
+operacional entre dois passos do MESMO roteiro de ensaio (nunca uma
+das 60/12 execucoes oficiais) -- nao toca nenhum criterio
+pre-registrado nem PINS.json.
+
+**Corrigido:** em modo remoto (`GATEWAY_SSH` setado), antes de subir
+seu proprio container, `rehearsal_handshake.sh` agora tambem remove
+defensivamente `v9-mtls` (nome conhecido, fixo, de `orchestrator.py`)
+-- nunca em modo local, onde nem ele nem a disputa de porta existem.
+
+**Testes:** sem teste novo -- 158 inalterados.
+
+**Validado ao vivo, de ponta a ponta, apos os 3 achados (Decisoes
+72/73/74) corrigidos:** `rehearsal_handshake.sh` fechou
+`RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos`
+pros 4 perfis (classico/pqc/hibrido-v8/hibrido-and), cada um
+reiniciando o gateway de verdade -- primeira vez, na historia deste
+pacote, que o Passo 10 fecha de ponta a ponta numa execucao real na
+AWS.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/rehearsal_handshake.sh`, `thesis/results/v9/DECISIONS.md`
+(esta Decisao).
+
+Seguindo pros Passos 11-14 do roteiro (mesma fleet, sem reaplicar).
