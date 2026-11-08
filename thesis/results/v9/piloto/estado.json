@@ -1,18 +1,24 @@
 {
-  "fase_atual": "PARADA",
-  "passo_atual": 9,
-  "custo_acumulado_usd_estimado": 0.15,
-  "teto_usd": 5.0,
-  "retentativas_por_problema": {
-    "campaign_key_crlf": 1,
-    "docker_save_windows_path": 1,
-    "deliver_images_sha_crlf": 0,
-    "redact_aws_errors_ausente": 0,
-    "python39_pep604": 0,
-    "tcp_preflight_logica": 1,
-    "image_id_cross_docker_version": 0
+  "fase_atual": "FASE_A_COMPLETA -- FASE_B_NAO_INICIADA_POR_DECISAO",
+  "fase_a": {
+    "status": "completa, verde, 15/15 passos (0-14) numa fleet real",
+    "tentativas": 2,
+    "tentativa_1": "parou no Passo 9 (Image ID cross-Docker-version) -- ver ensaio_infra/, Decisao 67",
+    "tentativa_2a_retomada": "fleet derrubada por perda de conectividade transitoria, nao-codigo, antes de validar o fix do Passo 10 -- ver Decisao 72, nota de infraestrutura",
+    "tentativa_2b_retomada": "COMPLETA -- Passos 0-14 todos verdes -- ver ensaio_infra_retomada/, Decisoes 68-74"
   },
+  "fase_b": {
+    "status": "NAO INICIADA -- decisao deliberada, nao um erro nem uma parada por bug",
+    "motivo": "pesquisa de codigo (read-only, nenhuma chamada AWS) antes de tocar a conta de novo revelou 3 lacunas reais que bloqueiam a execucao do piloto de 60 execucoes como esta hoje: (1) a tecnica de SAN real (EIP) pra criterio 1 exigiria reconstruir a imagem do gateway, proibido pela regra vigente desta rodada, e o proprio PILOT_READINESS.md (secao d/j-6) registra essa tecnica como PROPOSTA pendente de aprovacao do Luciano, nunca aplicada retroativamente -- decisao que so ele pode tomar; (2) o smoke gate (`orchestrator.run_smoke_gate`) quebra sem tratamento de erro ao calcular o diagnostico de bytes no controle (sem `cryptography` instalado, sem acesso a `certs/generated`); (3) `collect_artifacts.py` espera uma estrutura de diretorio por perfil que `run_pilot` nunca produz (saida e um diretorio unico, nao dividido por perfil) -- nenhum dos dois tem uma correcao obviamente segura sem alterar como a execucao real ou a coleta funcionam, o que levanta a regra 7(e) (duvida sobre se a correcao altera o que e medido). Nenhuma fleet de Fase B foi criada; nenhum custo adicional alem da Fase A.",
+    "decisoes_pendentes_do_luciano": [
+      "Aprovar ou rejeitar a tecnica SERVER_IPS=\"<EIP real>,::1\" pra criterio 1 (SAN real) -- exigiria rebuild do gateway, unica vez, antes do piloto comecar",
+      "Decidir como corrigir o smoke gate (instalar cryptography+entregar certs/generated no controle, ou envolver o diagnostico de bytes num try/except que degrada sem quebrar o gate oficial)",
+      "Decidir como adaptar a coleta de artefatos: mudar run_pilot pra escrever por perfil, ou adaptar collect_artifacts.py pra puxar o diretorio unico atual, ou usar scp -r simples",
+      "Confirmar se deve ser escrito um roteiro Fase B dedicado (equivalente a INFRA_REHEARSAL.md pro ensaio) antes de qualquer tentativa real do piloto -- nenhum existe hoje, so o dossie de prontidao (PILOT_READINESS.md), que descreve a sequencia em prosa, nao em comandos"
+    ]
+  },
+  "custo_acumulado_usd_estimado": 0.55,
+  "teto_usd": 5.0,
   "recursos_vivos": false,
-  "conta_limpa_confirmada": true,
-  "parada_motivo": "Image ID pos docker-load diverge entre versoes de Docker diferentes (operador 29.9.1 vs controle/host 25.0.16) -- mecanismo pre-registrado de pin por Image ID (Decisao 55) nao sobrevive a essa diferenca de versao, mesmo com binario identico confirmado"
+  "conta_limpa_confirmada": true
 }

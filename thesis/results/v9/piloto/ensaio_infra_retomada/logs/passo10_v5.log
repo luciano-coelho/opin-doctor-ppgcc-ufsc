@@ -1,0 +1,46 @@
+=== [classico] removendo gateway anterior (se houver) ===
+=== [classico] subindo gateway com CRYPTO_PROFILE=classico ===
+cdccd691741d1291ed08c5e7e4e637d419e748f389790f56183171d9b4636578
+=== [classico] esperando o gateway ficar pronto (limite: 30 tentativas, 1s cada) ===
+=== [classico] disparando a conexao real (negtest -scenario matrix) ===
+RESULT matrix client=classico server=classico outcome=SUCCESS curve=CurveP384 dualAuthenticated=false error=none
+=== [classico] extraindo a linha 'connection OK' (grep, nunca tail -1) ===
+2026/11/08 17:37:04 gateway: classico connection OK remoteAddr=172.31.0.219:46454 sni="mtls" curve=CurveP384 dualAuthenticated=false clientCert="classico_client" handshakeBytesIn=1513 handshakeBytesOut=1640
+=== [classico] handshakeBytesIn=1513 (esperado 1513, delta 0) | handshakeBytesOut=1640 (esperado 1640, delta 0) ===
+OK [classico]: delta 0B nos dois sentidos
+
+=== [pqc] removendo gateway anterior (se houver) ===
+=== [pqc] subindo gateway com CRYPTO_PROFILE=pqc ===
+f128be8c05bbe8dd6fa95e7ce4f041ff85e17feabb25672ad979dae0b8ec9f78
+=== [pqc] esperando o gateway ficar pronto (limite: 30 tentativas, 1s cada) ===
+=== [pqc] disparando a conexao real (negtest -scenario matrix) ===
+RESULT matrix client=pqc server=pqc outcome=SUCCESS curve=MLKEM1024 dualAuthenticated=false error=none
+=== [pqc] extraindo a linha 'connection OK' (grep, nunca tail -1) ===
+2026/11/08 17:37:09 gateway: pqc connection OK remoteAddr=172.31.0.219:46464 sni="mtls" curve=MLKEM1024 dualAuthenticated=false clientCert="pqc_client" handshakeBytesIn=10728 handshakeBytesOut=10878
+=== [pqc] handshakeBytesIn=10728 (esperado 10728, delta 0) | handshakeBytesOut=10878 (esperado 10878, delta 0) ===
+OK [pqc]: delta 0B nos dois sentidos
+
+=== [hibrido-v8] removendo gateway anterior (se houver) ===
+=== [hibrido-v8] subindo gateway com CRYPTO_PROFILE=hibrido-v8 ===
+42a651ced9afee52ba3cf3c5f32d93d4e69ace62f3b84f310b4b95bcf7a2faa3
+=== [hibrido-v8] esperando o gateway ficar pronto (limite: 30 tentativas, 1s cada) ===
+=== [hibrido-v8] disparando a conexao real (negtest -scenario matrix) ===
+RESULT matrix client=hibrido-v8 server=hibrido-v8 outcome=SUCCESS curve=SecP384r1MLKEM1024 dualAuthenticated=false error=none
+=== [hibrido-v8] extraindo a linha 'connection OK' (grep, nunca tail -1) ===
+2026/11/08 17:37:14 gateway: hibrido-v8 connection OK remoteAddr=172.31.0.219:43526 sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" handshakeBytesIn=8397 handshakeBytesOut=8552
+=== [hibrido-v8] handshakeBytesIn=8397 (esperado 8397, delta 0) | handshakeBytesOut=8552 (esperado 8552, delta 0) ===
+OK [hibrido-v8]: delta 0B nos dois sentidos
+
+=== [hibrido-and] removendo gateway anterior (se houver) ===
+=== [hibrido-and] subindo gateway com CRYPTO_PROFILE=hibrido-and ===
+cb7dc2c1bb03514b16b0be82132324ffc0364a31f9dbc23f1b67caa9d016ac2a
+=== [hibrido-and] esperando o gateway ficar pronto (limite: 30 tentativas, 1s cada) ===
+=== [hibrido-and] disparando a conexao real (negtest -scenario matrix) ===
+RESULT matrix client=hibrido-and-strict server=hibrido-and outcome=SUCCESS curve=SecP384r1MLKEM1024 dualAuthenticated=true error=none
+=== [hibrido-and] extraindo a linha 'connection OK' (grep, nunca tail -1) ===
+2026/11/08 17:37:18 gateway: hibrido-and connection OK remoteAddr=172.31.0.219:43532 sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=true clientCert="hibrido_and_rsa_client" handshakeBytesIn=11902 handshakeBytesOut=12177
+=== [hibrido-and] handshakeBytesIn=11902 (esperado 11902, delta 0) | handshakeBytesOut=12177 (esperado 12177, delta 0) ===
+OK [hibrido-and]: delta 0B nos dois sentidos
+
+RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos
+EXIT=0
