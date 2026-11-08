@@ -1,0 +1,56 @@
+Warning: Permanently added '56.126.119.97' (ED25519) to the list of known hosts.
+
+*** PORTA DE FUMACA REPROVADA -- PAUSADO. ***
+Nao executado: nenhum destroy automatico. Decisao do Luciano:
+  (a) corrigir e repetir --smoke dentro da janela de 4h, ou
+  (b) mandar destruir (cleanup.py).
+{
+  "smoke": true,
+  "smoke_ok": false,
+  "aborted_before_execution": true,
+  "capture_preflight": {
+    "go": false,
+    "checks": [
+      {
+        "check": "pre-requisitos de captura (criterio 1)",
+        "ok": false,
+        "host": "54.233.136.98",
+        "tcpdump_path": "/usr/sbin/tcpdump",
+        "sudo_nopasswd": true,
+        "measure_image_id": null,
+        "measure_image_id_note": "informativo apenas, nunca verificado (Decisao 68)",
+        "measure_layers": null,
+        "expected_measure_layers": [
+          "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
+          "sha256:83ca9b2ed5a63f78f13fda7f13eea8be41f42be50edf3c6030df0694b8dc995e",
+          "sha256:a0eeff0354ba2609a4d391bf9c9190cbc2d25e5ce83efc3948d2ff1fa3eb81ae",
+          "sha256:f4c10c89cc9d4228137716e3c9889082ca3765c8ae05b7373052b5fdb1dff440",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+          "sha256:c2ac5374e10d1afa93b641f2f1202122991e556c1375285f59958320380dba8a"
+        ],
+        "layers_ok": false,
+        "measure_config_subset": null,
+        "expected_measure_config": {
+          "Entrypoint": [
+            "/usr/local/bin/measure.sh"
+          ],
+          "Cmd": null,
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          ],
+          "ExposedPorts": null
+        },
+        "config_ok": false,
+        "tmp_writable": true,
+        "primary_iface": "enp39s0",
+        "missing": [
+          "imagem docker mockopin-v9-measure ausente (entregue por docker save/load, Decisao 55 item 2 -- nunca docker build na instancia)"
+        ]
+      }
+    ]
+  },
+  "smoke_failures": [],
+  "total_execucoes": 0,
+  "expected_total": 12,
+  "note": "pre-requisitos de captura (criterio 1) reprovaram -- nenhuma execucao rodou (Decisao 53, item 4c): [{'host': '54.233.136.98', 'missing': ['imagem docker mockopin-v9-measure ausente (entregue por docker save/load, Decisao 55 item 2 -- nunca docker build na instancia)']}]"
+}

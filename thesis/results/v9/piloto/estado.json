@@ -1,5 +1,5 @@
 {
-  "fase_atual": "FASE_A_COMPLETA -- FASE_B_NAO_INICIADA_POR_DECISAO",
+  "fase_atual": "FASE_A_COMPLETA -- FASE_B_PARADA_NO_PASSO_10_POR_GAP_DE_INFRAESTRUTURA",
   "fase_a": {
     "status": "completa, verde, 15/15 passos (0-14) numa fleet real",
     "tentativas": 2,
@@ -8,16 +8,17 @@
     "tentativa_2b_retomada": "COMPLETA -- Passos 0-14 todos verdes -- ver ensaio_infra_retomada/, Decisoes 68-74"
   },
   "fase_b": {
-    "status": "NAO INICIADA -- decisao deliberada, nao um erro nem uma parada por bug",
-    "motivo": "pesquisa de codigo (read-only, nenhuma chamada AWS) antes de tocar a conta de novo revelou 3 lacunas reais que bloqueiam a execucao do piloto de 60 execucoes como esta hoje: (1) a tecnica de SAN real (EIP) pra criterio 1 exigiria reconstruir a imagem do gateway, proibido pela regra vigente desta rodada, e o proprio PILOT_READINESS.md (secao d/j-6) registra essa tecnica como PROPOSTA pendente de aprovacao do Luciano, nunca aplicada retroativamente -- decisao que so ele pode tomar; (2) o smoke gate (`orchestrator.run_smoke_gate`) quebra sem tratamento de erro ao calcular o diagnostico de bytes no controle (sem `cryptography` instalado, sem acesso a `certs/generated`); (3) `collect_artifacts.py` espera uma estrutura de diretorio por perfil que `run_pilot` nunca produz (saida e um diretorio unico, nao dividido por perfil) -- nenhum dos dois tem uma correcao obviamente segura sem alterar como a execucao real ou a coleta funcionam, o que levanta a regra 7(e) (duvida sobre se a correcao altera o que e medido). Nenhuma fleet de Fase B foi criada; nenhum custo adicional alem da Fase A.",
+    "status": "PARADA no Passo 10 (segunda retomada, fleet real nova) -- gap de infraestrutura real, nunca um erro de omissao",
+    "resposta_do_luciano_as_3_lacunas_anteriores": "aplicada integralmente: SAN real descartada e verificada por conteudo (Decisao 75); smoke gate corrigido (ssl stdlib + certs/generated entregue ao controle + excecao nunca quebra o gate, Decisao 76); operator-IP pre-check criado (Decisao 77); collect_artifacts.py reescrito pra estrutura flat real (Decisao 78); consolidate_v9_pilot.py criado e caminho de dados completo provado localmente, coerente (Decisao 79); PILOT_RUNBOOK.md escrito (Decisao 80). Suite verde (175 testes) antes de tocar a AWS.",
+    "tentativa_1_passo10": "capture_ready_check() reprovava sempre numa fleet nova -- so lia se mockopin-v9-measure existia no servidor, nunca entregava (Decisao 81, achado real, corrigido ao vivo, redelivery feito, retry imediato)",
+    "tentativa_2_passo10": "PAROU -- a camada de negocio do gateway (HTTP_MODE=business) proxyia JWKS/AS/API pra hostnames (auth/mockapi) que so existem como alias de rede Docker na validacao LOCAL; nenhuma instancia EC2 real jamais recebeu/orquestrou esse backend (nenhum script v9 entrega essas imagens, elas nem existem localmente hoje) -- confirmado lendo o log real do gateway (dial tcp: lookup auth ... no such host) e confirmando que a v8 ja resolvia isso com 4 imagens de servidor extras (deliver_images.sh), nunca portadas pra v9. Ver Decisao 82.",
     "decisoes_pendentes_do_luciano": [
-      "Aprovar ou rejeitar a tecnica SERVER_IPS=\"<EIP real>,::1\" pra criterio 1 (SAN real) -- exigiria rebuild do gateway, unica vez, antes do piloto comecar",
-      "Decidir como corrigir o smoke gate (instalar cryptography+entregar certs/generated no controle, ou envolver o diagnostico de bytes num try/except que degrada sem quebrar o gate oficial)",
-      "Decidir como adaptar a coleta de artefatos: mudar run_pilot pra escrever por perfil, ou adaptar collect_artifacts.py pra puxar o diretorio unico atual, ou usar scp -r simples",
-      "Confirmar se deve ser escrito um roteiro Fase B dedicado (equivalente a INFRA_REHEARSAL.md pro ensaio) antes de qualquer tentativa real do piloto -- nenhum existe hoje, so o dossie de prontidao (PILOT_READINESS.md), que descreve a sequencia em prosa, nao em comandos"
+      "Portar o backend auth/mockapi/mongo_seed da v8 pra v9 (reconstruir as imagens, novo mecanismo de entrega, orquestrar no servidor junto com o gateway) -- caminho mais completo, mais caro em tempo",
+      "Decidir se o piloto v9 pode/deve medir so a camada mTLS sem o fluxo de negocio completo (JWKS/AS/RS) -- mudaria o que e medido (criterios 4/6 dependem das 40/44 chamadas HTTP completas), provavelmente exige re-registrar criterios",
+      "Uma terceira opcao que o Luciano prefira (ex.: um stub minimo de AS/API, mais simples que portar a v8 inteira, se julgar que isso nao altera o que e medido de forma relevante)"
     ]
   },
-  "custo_acumulado_usd_estimado": 0.55,
+  "custo_acumulado_usd_estimado": 0.70,
   "teto_usd": 5.0,
   "recursos_vivos": false,
   "conta_limpa_confirmada": true

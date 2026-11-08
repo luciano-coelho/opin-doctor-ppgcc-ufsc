@@ -9031,3 +9031,113 @@ scripts/orchestrator.py`,
 
 Reentregando `orchestrator.py` pro controle (mesma fleet, sem
 reaplicar) e repetindo o Passo 10.
+
+## 82. PARADA real na Fase B, Passo 10 (retomada) -- a camada de negocio do gateway (HTTP_MODE=business) nunca teve, em lugar nenhum deste pacote v9, um caminho de entrega do backend AS/API real pra nenhuma instancia -- toda execucao real que exige JWKS falha com DNS nao resolvido
+
+**Resultado do Passo 10 reaplicado (apos o fix da Decisao 81):** o
+preflight de captura passou; as 12 execucoes comecaram; a sondagem
+de prontidao (`readiness_probe`, que dispara o fluxo REAL completo
+via `campaign_client_runner.py`/`opin_flow.py` -- JWKS, AS, RS, nunca
+so o handshake mTLS) falhou pra `hibrido-v8`/`L0` nas duas tentativas
+internas de `latency_automation.run_once_timed_with_retry`:
+
+```
+RuntimeError: readiness_probe hibrido-v8/L0: execucao de settling falhou:
+settling_hibrido-v8_L0 failed on both attempts -- stopping (not retrying
+further; this is no longer the known rare race, treat as a new failure).
+Last error: Expecting value: line 1 column 1 (char 0)
+```
+
+**Causa raiz, confirmada lendo o log real do gateway no servidor
+(nunca suposta):**
+
+```
+2026/11/08 19:31:00 http: proxy error: dial tcp: lookup auth on 172.31.0.2:53: no such host
+2026/11/08 19:31:00 INFO access log ... host=auth.local request=/jwks method=GET status=502 ...
+```
+
+O handshake mTLS em si sempre passa ("connection OK", 3x nos
+primeiros segundos) -- quem falha e a camada de NEGOCIO
+(`HTTP_MODE=business`, `business.go`, reinstada pela Decisao 17 "pra
+rodar o fluxo real de 44 chamadas HTTP de ponta a ponta"): toda
+chamada pra `auth.local/*` e um reverse proxy de verdade pra
+`AUTH_URI` (default `http://auth:3000`, `business.go` linha 40) --
+"auth" e um hostname que SO existe como alias de rede Docker na
+validacao LOCAL (`insurance-server-lambdas_default`, mesma rede que
+a Decisao 70 ja tinha identificado como exclusiva da validacao
+local). Numa instancia EC2 real, "auth" nunca resolve (resolver DNS
+da VPC devolve NXDOMAIN) -- NENHUMA chamada que precise de JWKS (ou
+de `api.local`/`matls-api.local`, proxy pra `API_GATEWAY_URI`)
+jamais funcionaria numa execucao real, nao so nesta.
+
+**Por que isto nunca foi pego antes:** `INFRA_REHEARSAL.md`
+(`--exercise-start-stop`) nunca chama `readiness_probe`/
+`run_execution` -- so `start_block`/`stop_block`. `rehearsal_
+handshake.sh` (Passo 10 daquele roteiro) testa SO o handshake mTLS
+(negtest), nunca o fluxo HTTP de negocio. Este Passo 10 da Fase B
+(porta de fumaca, que chama `run_pilot`->`readiness_probe`->
+`campaign_client_runner.py`->`opin_flow.py`, o fluxo de negocio REAL)
+e, confirmado buscando no historico completo deste projeto, A
+PRIMEIRA VEZ que qualquer chamada HTTP de negocio real roda contra
+uma instancia EC2 de verdade.
+
+**Confirmado, lendo `thesis/results/v8/campaign/scripts/
+deliver_images.sh`:** a v8 JA resolveu este EXATO problema pra campanha
+dela -- entrega 4 imagens de SERVIDOR (`insurance-server-lambdas-mtls`,
+`insurance-server-lambdas-auth`, `raidiam-insurance-lambdas` [a API],
+`insurance-server-lambdas-mongo_seed`) pra cada servidor real, via o
+MESMO rele de 2 saltos. v9 nunca portou esse mecanismo -- `PINS.json`/
+`deliver_images.py` entregam SO gateway/proxy/pqc-signer/measure,
+nunca auth/mockapi/mongo_seed. Essas imagens tambem NAO existem hoje
+localmente (`docker images` nao lista nenhuma `insurance-server-
+lambdas-*`) -- precisariam ser (re)construidas (`docker-compose build`
+dentro de `mock-service-os/`) antes de qualquer entrega.
+
+**Por que isto e uma PARADA, nunca uma correcao-e-repete (regra
+6/7(e) desta autorizacao):** nao e um bug de 1-2 linhas como as
+Decisoes 70-74/81 -- exige: (1) (re)construir 3-4 imagens Docker
+inteiras nunca antes construidas nesta rodada; (2) um mecanismo NOVO
+de entrega (`deliver_images.py`/`PINS.json` nunca as conheceram);
+(3) orquestrar os containers desse backend no servidor junto com o
+gateway (`_launch_gateway`/`start_block` nunca sobem nada alem de
+gateway/proxy/pqc-signer hoje); (4) decidir `AUTH_URI`/`API_GATEWAY_
+URI` corretos pra esse novo arranjo. Qualquer uma dessas mudancas
+altera DIRETAMENTE o que e executado durante uma medicao real --
+exatamente a "duvida sobre se a correcao altera o que e medido" que
+a regra 7(e) pede pra tratar com parada, nunca com tentativa dentro
+da mesma sessao.
+
+**Acao tomada, seguindo a regra 6 (fleet nunca ociosa):** nenhuma
+nova tentativa dentro desta fleet -- teardown imediato (`emergency_
+stop.py` modo dry confirmou os 5 instances/5 EIPs/3 SGs/4 key pairs
+esperados; `cleanup.py --tf-dir ../../terraform --profile mockopin-pqc
+--release-eips --force` reportou `"all_clean": true`, zero drift);
+verificacao final independente (12 chamadas `describe-*`, 3 regioes)
+confirmada vazia.
+
+**Decisoes pendentes do Luciano (nenhuma tomada por conta propria):**
+1. Portar o backend auth/mockapi/mongo_seed da v8 pra v9 (reconstruir
+   as imagens, novo mecanismo de entrega, novo passo de orquestracao
+   no servidor) -- o caminho mais completo, mas o mais caro em tempo.
+2. Decidir se o piloto v9 pode/deve medir so a camada mTLS (sem o
+   fluxo de negocio completo) -- exigiria mudar `opin_flow.py`/
+   `campaign_client_runner.py` pra pular JWKS/AS/RS nesse modo, o que
+   muda o que e medido (criterio 4/6 dependem do fluxo completo,
+   40/44 chamadas HTTP) -- provavelmente inviavel sem re-registrar
+   criterios.
+3. Alguma terceira opcao que o Luciano prefira (ex.: um stub minimo
+   de AS/API, mais simples que portar a v8 inteira, se ele julgar que
+   isso nao altera o que e medido de forma relevante).
+
+**Testes:** nenhum novo (achado de infraestrutura/arquitetura, nunca
+um bug de codigo corrigivel com os testes existentes deste pacote --
+nenhuma funcao Python precisa mudar ate que o Luciano decida o
+caminho).
+
+**Custo desta tentativa:** fleet viva de aproximadamente 25-30
+minutos (apply real ~19:1x UTC, teardown confirmado ~19:3x UTC) --
+bem dentro do teto de US$5, soma-se ao gasto da Fase A (~US$0,55).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/DECISIONS.md`
+(esta Decisao), evidencia em `thesis/results/v9/piloto/
+ensaio_fase_b_real/`.

@@ -1,0 +1,15 @@
+Warning: Permanently added '56.126.119.97' (ED25519) to the list of known hosts.
+Traceback (most recent call last):
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 1369, in <module>
+    main()
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 1351, in main
+    manifest = run_smoke_gate(executor, args.seed, Path(args.out))
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 1239, in run_smoke_gate
+    manifest = run_pilot(executor, seed, out_dir, n_per_profile=SMOKE_N_PER_PROFILE, smoke=True,
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 1114, in run_pilot
+    combined_log_lines.append(executor.readiness_probe(profile, route))
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 871, in readiness_probe
+    raise RuntimeError(f"readiness_probe {profile}/{route}: execucao de settling falhou: {proc.stderr}")
+RuntimeError: readiness_probe hibrido-v8/L0: execucao de settling falhou: Warning: Permanently added '52.67.128.62' (ED25519) to the list of known hosts.
+settling_hibrido-v8_L0 failed on both attempts -- stopping (not retrying further; this is no longer the known rare race, treat as a new failure). Last error: Expecting value: line 1 column 1 (char 0)
+

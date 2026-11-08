@@ -1,0 +1,20 @@
+{
+  "subpasta": "ensaio_fase_b_real",
+  "descricao": "Primeira tentativa real da Fase B (piloto de 60 execucoes) numa fleet AWS real, autorizada pelo Luciano apos aprovar as respostas as 3 lacunas da retomada da Fase A (SAN real descartada, smoke gate corrigido, collect_artifacts.py reescrito -- Decisoes 75-80). Passos 0-9 do PILOT_RUNBOOK.md fecharam verdes (apply 28 recursos, chave da campanha entregue, Docker pronto nas 5 instancias, codigo/certificados entregues a servidor/clientes/controle, 4 imagens pinadas entregues e verificadas por sha256, python3/orchestrator.py confirmados no controle). Passo 10 (porta de fumaca) reprovou DUAS vezes: a 1a por um achado real corrigido ao vivo (Decisao 81, capture_ready_check nunca entregava a imagem mockopin-v9-measure que ele mesmo checava); a 2a por um gap de infraestrutura muito mais fundamental (Decisao 82) -- a camada de negocio do gateway (HTTP_MODE=business) proxyia chamadas JWKS/AS/API pra hostnames (auth/mockapi) que so existem como alias de rede Docker na validacao LOCAL, nunca entregues/orquestrados em nenhuma instancia EC2 real por nenhum script deste pacote v9 (a v8 ja resolvia isso com 4 imagens de servidor extras, nunca portadas pra v9).",
+  "data_utc": "2026-11-08",
+  "resultado": "PARADA no Passo 10 (retomada) -- backend AS/API de negocio nunca entregue/orquestrado em nenhuma instancia real; decisao de como prosseguir pendente do Luciano (Decisao 82, 3 opcoes descritas).",
+  "decisoes_relacionadas": [75, 76, 77, 78, 79, 80, 81, 82],
+  "fleet": "fleet real desta tentativa (terraform apply, self_terminate_hours=4), derrubada apos a parada -- aproximadamente 25-30 minutos de vida",
+  "conta_confirmada_limpa": true,
+  "arquivos": [
+    "logs/passo6_deliver_source.log",
+    "logs/passo8_deliver_images.log",
+    "logs/passo10_smoke_v1_capture_preflight_falhou.log",
+    "logs/passo10_smoke_v2_auth_dns_falhou.log",
+    "logs/gateway_log_auth_dns_failure.log",
+    "logs/passo14_emergency_dry.log",
+    "logs/passo14_cleanup.log",
+    "logs/passo15_verificacao_final.log"
+  ],
+  "ver_tambem": "thesis/results/v9/DECISIONS.md, Decisoes 81 e 82 (narrativa completa, causa raiz, 3 opcoes pendentes do Luciano)"
+}
