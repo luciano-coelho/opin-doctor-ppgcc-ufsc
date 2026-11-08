@@ -322,11 +322,14 @@ class SSHExecutor:
         # depender do nome. Numa instancia EC2 real, `gw_ip` ja e um
         # IP de verdade (Decisao 27/43/45) -- este bloco nunca executa.
         self.local_shim_bridge_join = local_shim_bridge_join
-        # Decisao 83: backend de negocio (auth/mongo_seed/mockapi +
-        # psql/localstack/mongodb) entregue UMA vez por fleet (nunca
+        # Decisao 83/87: backend de negocio -- as 3 imagens CUSTOM
+        # (auth/mongo_seed/mockapi) entregues UMA vez por fleet (nunca
         # por bloco -- essas imagens nunca trocam de CRYPTO_PROFILE em
-        # si), e amostras de CPU/memoria do servidor pra comparar com o
-        # que a v8 ja mediu (mesmo formato de sempre, campaign_run.py.
+        # si); psql/localstack/mongodb (estoque, ja pinadas por digest
+        # exato no proprio docker-compose.yml) sao puladas direto pelo
+        # `docker compose up`, nunca por este mecanismo (Decisao 87).
+        # Amostras de CPU/memoria do servidor pra comparar com o que a
+        # v8 ja mediu (mesmo formato de sempre, campaign_run.py.
         # _sample_cpu_mem_steal() -- /proc/stat+/proc/meminfo, nunca
         # `docker stats`).
         self._backend_delivered = False
@@ -600,15 +603,22 @@ class SSHExecutor:
             )
 
     def _deliver_backend_images(self):
-        """Decisao 83 (pedido do Luciano, apos a Decisao 82): entrega
-        as 6 imagens do backend de negocio da v8 (psql/localstack/
-        mongodb/auth/mongo_seed/mockapi) ao SERVIDOR, UMA vez por
-        fleet -- mesmo mecanismo de sempre (`_deliver_image`, save/
-        load + verificacao por conteudo contra PINS.json, Decisao 68),
-        nenhum mecanismo novo. Idempotente via guarda explicita (nunca
-        reentrega 6 imagens de varios GB a cada bloco -- so gateway/
-        proxy/pqc-signer trocam de verdade por bloco, o backend nunca
-        muda de binario, so de conteudo seedado pelo proprio compose)."""
+        """Decisao 83/87 (pedido do Luciano, apos a Decisao 82): entrega
+        as 3 imagens CUSTOM do backend de negocio da v8 (auth/mongo_
+        seed/mockapi) ao SERVIDOR, UMA vez por fleet -- mesmo mecanismo
+        de sempre (`_deliver_image`, save/load + verificacao por
+        conteudo contra PINS.json, Decisao 68), nenhum mecanismo novo.
+        psql/localstack/mongodb (estoque) NUNCA passam por aqui --
+        Decisao 87, achado real: `docker save` de uma imagem referenciada
+        SO por digest nunca preserva nome/digest atraves de save/load
+        (confirmado ao vivo num docker:25-dind limpo -- so um Image ID
+        solto sobrevive) -- `docker compose up` ja resolve essas 3
+        corretamente (pull direto do registry publico, mesmo digest
+        exato que o `docker-compose.yml` ja fixa). Idempotente via
+        guarda explicita (nunca reentrega a cada bloco -- so gateway/
+        proxy/pqc-signer trocam de verdade por bloco, o backend custom
+        nunca muda de binario, so de conteudo seedado pelo proprio
+        compose)."""
         if self._backend_delivered:
             return
         for key in deliver_images.BACKEND_IMAGE_KEYS:
@@ -804,9 +814,9 @@ class SSHExecutor:
         self._tcp_preflight(route)
         self._block_start_utc[(profile, route)] = datetime.now(timezone.utc)
         if not self.local_shim_bridge_join:
-            # Decisao 83: as 6 imagens do backend (Decisao 68, mesmo
-            # mecanismo de sempre) -- uma vez por fleet, nunca por
-            # bloco (nunca trocam de CRYPTO_PROFILE em si).
+            # Decisao 83/87: as 3 imagens CUSTOM do backend (Decisao
+            # 68, mesmo mecanismo de sempre) -- uma vez por fleet,
+            # nunca por bloco (nunca trocam de CRYPTO_PROFILE em si).
             self._deliver_backend_images()
             self.cpu_mem_samples.append(
                 {"label": "antes_do_backend", "profile": profile, "route": route,

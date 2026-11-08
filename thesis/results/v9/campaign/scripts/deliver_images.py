@@ -45,12 +45,24 @@ GATEWAY_IMAGE = "mockopin-v9-gateway"
 TOOLCHAIN_IMAGE = "mockopin-v9-toolchain"
 REMOTE_STAGING_DIR = "~/images"
 ALL_IMAGE_KEYS = ("gateway", "proxy", "pqc-signer", "measure")
-# Decisao 83 (pedido do Luciano): backend de negocio da v8 (auth/
-# mockapi, serve JWKS/token/API) portado pro piloto v9 -- entregue SO
-# ao SERVIDOR (nunca a cliente nenhum), uma vez por fleet (nunca por
-# bloco/perfil -- essas imagens nunca trocam de CRYPTO_PROFILE em si,
-# so o CONTEUDO que `docker compose up` gera/seeda muda).
-BACKEND_IMAGE_KEYS = ("psql", "localstack", "mongodb", "auth", "mongo_seed", "mockapi")
+# Decisao 87 (achado real, ao vivo, corrigindo a Decisao 83): so as 3
+# imagens CUSTOM do backend (auth/mongo_seed/mockapi -- as que
+# Luciano pediu explicitamente, "imagens extras de servidor") vao por
+# aqui. psql/localstack/mongodb sao imagens ESTOQUE, ja pinadas por
+# digest exato DENTRO do proprio `docker-compose.yml` -- confirmado
+# ao vivo (teste num docker:25-dind limpo) que `docker save` de uma
+# referencia SO por digest (`repo@sha256:...`, nunca tagueada por
+# nome) NUNCA preserva nenhuma referencia nomeavel atraves de save/
+# load (`docker load` devolve so um Image ID solto, "<none>:<none>"
+# -- nem RepoTags nem RepoDigests sobrevivem) -- entregar essas 3 por
+# aqui e verificar identidade por nome depois do load NUNCA funciona.
+# O proprio `docker compose up` ja resolve essas 3 corretamente (pull
+# direto do registry publico, mesmo digest exato que o compose.yml
+# fixa -- conteudo deterministico de qualquer jeito, pull ou load) --
+# entregue SO ao SERVIDOR (nunca a cliente nenhum), uma vez por fleet
+# (nunca por bloco/perfil -- essas imagens nunca trocam de CRYPTO_
+# PROFILE em si, so o CONTEUDO que `docker compose up` gera/seeda).
+BACKEND_IMAGE_KEYS = ("auth", "mongo_seed", "mockapi")
 
 
 def load_pins():

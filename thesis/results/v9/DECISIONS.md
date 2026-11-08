@@ -9487,3 +9487,79 @@ scripts/deliver_images.py`,
 `thesis/results/v9/DECISIONS.md` (esta Decisao).
 
 Reentregando as imagens restantes (mesma fleet, sem reaplicar).
+
+## 87. Achado real, ao vivo, executando a Fase B de novo (Passo 10) -- imagens estoque (psql/localstack/mongodb) nunca deveriam passar pelo mecanismo de save/load por nome
+
+Branch `v9/fase1-local`. Apos o achado da Decisao 86 (corrigido,
+imagens restantes entregues, sha256_ok:true pras 5), o Passo 10
+(porta de fumaca) reprovou de novo, agora dentro de `start_block`:
+
+```
+RuntimeError: _deliver_image(psql, <servidor>): identidade nao
+confere (layers_ok=False, config_ok=False, binary_ok=True) --
+abortando ANTES de qualquer execucao
+```
+
+**Investigado ao vivo, nunca suposto:** reproduzido localmente num
+`docker:25-dind` LIMPO (container novo, nunca usado antes): `docker
+save postgres@sha256:ca0bd...` (referencia SO por digest, nunca
+tagueada por nome) + `docker load` no dind -> `docker images
+--digests` mostra `<none> <none> <none>` -- NENHUMA referencia
+nomeavel sobrevive a save/load, so o Image ID solto ("Loaded image
+ID: sha256:..."). `docker image inspect postgres@sha256:...` no dind
+devolve `Error response from daemon: No such image` -- exatamente o
+`actual_layers=None`/`config=None` (comando falhou, nunca um
+mismatch de conteudo de verdade) que produz `layers_ok=False,
+config_ok=False` sem quebrar o processo.
+
+**Causa raiz:** `psql`/`localstack`/`mongodb` (Decisao 83) sao
+imagens ESTOQUE, referenciadas em PINS.json SO por digest
+(`postgres@sha256:...` etc, pra bater exatamente com o que
+`docker-compose.yml` ja fixa) -- mas o mecanismo de entrega/
+verificacao por NOME (`_deliver_image`, Decisao 68) exige uma
+referencia nomeavel sobrevivendo ao `docker load`, o que NUNCA
+acontece pra uma imagem so-por-digest, confirmado ao vivo acima.
+
+**Correcao -- nunca retaguear e forcar, reconsiderado o desenho
+(mais simples, mais correto):** `psql`/`localstack`/`mongodb` SAEM
+do mecanismo de 2 saltos por completo -- removidas de `PINS.json`
+(nunca precisaram de um pin PROPRIO: o digest exato ja esta fixado
+DENTRO do `docker-compose.yml`, a fonte de verdade correta) e de
+`deliver_images.py.BACKEND_IMAGE_KEYS` (agora so `auth`/`mongo_seed`/
+`mockapi` -- EXATAMENTE as 3 imagens CUSTOM que o Luciano pediu
+explicitamente, "imagens extras de servidor (auth, mockapi,
+mongo_seed)"). O proprio `docker compose up` ja resolve as 3
+ESTOQUE corretamente -- pull direto do registro publico (SG de
+egresso aberto, confirmado em `main.tf`), mesmo digest exato que o
+compose.yml ja fixa, conteudo deterministico de qualquer jeito (pull
+ou load). Nenhuma imagem CUSTOM pinada foi tocada -- `auth`/`mongo_
+seed`/`mockapi` ja estavam entregues e verificadas (sha256_ok: true)
+na mesma fleet, nunca precisaram reentrega.
+
+**Achado colateral, corrigido no mesmo passo:** a propria edicao
+desta correcao (script Python escrevendo PINS.json em modo texto no
+Windows) reintroduziu CRLF no arquivo -- pego de imediato pelo
+`test_no_crlf_sweep.py` (Decisao 69) antes de qualquer commit,
+corrigido escrevendo em binario.
+
+**Por que e uma correcao segura, nunca um STOP:** simplifica o
+desenho (3 imagens entregues por 2 saltos, nunca 6), nunca toca
+nenhuma verificacao de conteudo das imagens CUSTOM, e o pin das 3
+ESTOQUE continua existindo -- so no lugar certo (`docker-compose.
+yml`, onde sempre esteve, nunca duplicado em PINS.json). Nenhum
+criterio pre-registrado muda.
+
+**Testes:** suite inteira roda inalterada (`test_orchestrator.py`
+computa `BACKEND_IMAGE_KEYS` dinamicamente, nunca hardcoded -- os
+testes se adaptam automaticamente a lista menor). 202 testes no
+total (inalterado).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PINS.json`, `thesis/results/v9/campaign/scripts/
+{orchestrator.py,deliver_images.py}`,
+`thesis/results/v9/campaign/DEPENDENCY_MAP.md`,
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+Reentregando so o CODIGO (orchestrator.py/deliver_images.py/PINS.json
+-- as imagens CUSTOM ja estao no controle, verificadas) e repetindo
+o Passo 10.

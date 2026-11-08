@@ -32,10 +32,16 @@ a última (AUTH_URI/API_GATEWAY_URI) foi corrigida pela própria Decisão
 | `auth` | `insurance-server-lambdas-auth` (reconstruída) | `localstack` (healthy), `mongodb` (started) | `curl -sf http://127.0.0.1:3000/jwks` |
 | `mockapi` | `raidiam-insurance-lambdas` (existente, ver Decisão 83 exceção) | `psql` (healthy) | `docker logs ...mockapi-1 \| grep "Startup completed"` |
 | `mongo_seed` | `insurance-server-lambdas-mongo_seed` (reconstruída) | `mongodb` | nenhum (job que roda e sai) |
-| `psql`/`localstack`/`mongodb` | imagens estoque, pinadas por digest exato | — | healthchecks nativos do próprio `docker-compose.yml` |
+| `psql`/`localstack`/`mongodb` | imagens estoque, pinadas por digest exato DENTRO do `docker-compose.yml` | — | healthchecks nativos do próprio `docker-compose.yml` |
 
-Todas as 6 entregues ao SERVIDOR por `deliver_images.py` (1º salto) +
-`SSHExecutor._deliver_backend_images` (2º salto, uma vez por fleet).
+As 3 CUSTOM (`auth`/`mongo_seed`/`mockapi`) entregues ao SERVIDOR por
+`deliver_images.py` (1º salto) + `SSHExecutor._deliver_backend_images`
+(2º salto, uma vez por fleet). As 3 ESTOQUE (`psql`/`localstack`/
+`mongodb`) NUNCA passam por esse mecanismo (Decisão 87, achado real:
+`docker save` de uma imagem referenciada só por digest nunca
+preserva nome/digest através de save/load, confirmado ao vivo num
+`docker:25-dind` limpo) — `docker compose up` as resolve direto
+(pull do registro público, mesmo digest exato já fixado no compose).
 `docker-compose.yml` + configs pequenos entregues por
 `deliver_source.py.SERVER_ONLY_FILES` (Decisão 83).
 
