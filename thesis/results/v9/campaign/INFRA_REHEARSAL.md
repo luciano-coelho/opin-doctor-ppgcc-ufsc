@@ -1,23 +1,23 @@
-# Ensaio de infraestrutura — 15 minutos, sem experimento
+# Ensaio de infraestrutura — ~20 minutos, sem experimento
 
-Decisão 56, item 3. Roteiro para o Luciano executar (este processo
-nunca roda nenhum passo abaixo) — usa as MESMAS credenciais e o
-MESMO profile AWS CLI já usados na v8 (`mockopin-pqc`). Objetivo:
-provar `terraform apply`/`destroy` reais, `docker save`/`load` com
-conferência de Image ID, e a parada de emergência (`emergency_stop.py`)
-contra recursos REAIS — nunca uma execução de experimento (nenhum
-perfil medido, nenhuma conexão mTLS real contada).
+Decisão 57 (revisão do roteiro da Decisão 56, item 3). Roteiro para
+o Luciano executar (este processo nunca roda nenhum passo abaixo) —
+usa as MESMAS credenciais e o MESMO profile AWS CLI já usados na v8
+(`mockopin-pqc`). Objetivo: provar `terraform apply`/`destroy`
+reais, `docker save`/`load` com conferência de Image ID, um
+handshake real por perfil (prova de mecanismo, não experimento), e a
+parada de emergência — nunca uma execução de experimento (nenhuma
+das 60 execuções oficiais, nenhuma das 12 capturas do critério 1).
 
-**Duração alvo: 15 minutos de janela medida (passos 0-6) + ~5 minutos
-pro passo 7 (prova de handshake, proposto nesta rodada) = ~20 minutos
-no total.** `self_terminate_hours` reduzido pra **1h** só pro ensaio
-(rede de segurança — nunca pretendido pra durar isso; a limpeza
-manual do passo 6 é o teardown real, obrigatório mesmo que o ensaio
-termine antes do autodesligamento).
+**Duração alvo: ~20 minutos de janela medida, ordem estritamente
+linear (0→8, cada passo depende só do anterior).** `self_terminate_hours`
+reduzido pra **1h** só pro ensaio (rede de segurança — nunca
+pretendido pra durar isso; os passos 6-8 são o teardown real,
+obrigatórios mesmo que o ensaio termine antes do autodesligamento).
 
 ---
 
-## Passo 0 — pré-requisitos (antes de começar a contar os 15 minutos)
+## Passo 0 — pré-requisitos
 
 ```
 export TF_VAR_operator_ip_cidr="$(curl -s https://checkip.amazonaws.com)/32"
@@ -26,19 +26,41 @@ cd thesis/results/v9/terraform
 terraform init
 ```
 **Saída esperada:** `Terraform has been successfully initialized!`
-**Critério de abortar:** qualquer erro de init/provider — nunca prossegue pro apply.
+**Critério de abortar:** qualquer erro de init/provider.
 
 ---
 
-## Passo 1 — `terraform apply` real, com `self_terminate_hours=1`
+## Passo 1 — `terraform plan`, depois `terraform apply` (`self_terminate_hours=1`)
+
+**Contagem de recursos, derivada lendo `main.tf`/`modules/campaign_instance/main.tf`
+diretamente (nunca suposta) — confirme o `terraform plan` real contra
+isto:**
+
+| Recurso | Quantidade | Onde |
+|---|---|---|
+| `tls_private_key.campaign` | 1 | `main.tf` |
+| `aws_key_pair` | 4 | 3 regionais (`campaign_sa_east_1`/`eu_north_1`/`ap_southeast_1`) + 1 do operador |
+| `aws_security_group.this` | 5 | 1 por módulo (`control`, `client_l0`, `client_eu_north_1`, `client_ap_southeast_1`, `server_sa_east_1`) |
+| `aws_vpc_security_group_ingress_rule.ssh` | 5 | 1 por módulo (cada um tem exatamente 1 entrada em `ssh_ingress_cidrs`) |
+| `aws_vpc_security_group_ingress_rule.gateway` | 3 | só `server_sa_east_1` (`role=="server"`) — 1 entrada por cliente (L0/L219/L325) |
+| `aws_instance.this` | 5 | 1 por módulo |
+| `aws_eip.this` | 5 | 1 por módulo |
+| **Total** | **28** | |
+
+```
+terraform plan -var="self_terminate_hours=1"
+```
+**Saída esperada:** `Plan: 28 to add, 0 to change, 0 to destroy.` — se o número real divergir de 28, **pare e reconcilie antes do apply** (não assuma que a tabela acima está errada nem que o plan está errado — leia o motivo da diferença).
 
 ```
 terraform apply -var="self_terminate_hours=1" -auto-approve
 ```
-**Saída esperada:** `Apply complete! Resources: N added, 0 changed, 0 destroyed.` — N deve corresponder exatamente aos recursos de `main.tf` (5 instâncias + 5 EIPs + 5 security groups + regras de ingress + 3 key pairs regionais + 1 key pair do operador).
-**Critério de abortar:** qualquer erro de apply (quota, permissão, AMI) — rodar `terraform destroy -auto-approve` imediatamente e parar o ensaio.
+**Saída esperada:** `Apply complete! Resources: 28 added, 0 changed, 0 destroyed.`
+**Critério de abortar:** qualquer erro de apply, ou um `plan`/`apply` com N ≠ 28 sem explicação encontrada — rodar `terraform destroy -auto-approve` imediatamente e parar o ensaio.
 
-## Passo 2 — conferir que as 5 instâncias subiram
+---
+
+## Passo 2 — confirmar as 5 instâncias: `running`, Docker pronto, porta certa
 
 ```
 terraform output -json inventory
@@ -46,44 +68,138 @@ aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 \
   --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" \
   --query "Reservations[].Instances[].State.Name"
 ```
-(repetir `describe-instances` para `eu-north-1`/`ap-southeast-1`, 1 instância cada)
+(repetir para `eu-north-1`/`ap-southeast-1`, 1 instância cada — total 5: 3 em sa-east-1, 1 em cada uma das outras duas)
 
-**Saída esperada:** `inventory` com os 5 IPs públicos/privados; cada `describe-instances` devolve `"running"` para as instâncias daquela região (3 em sa-east-1, 1 em cada uma das outras duas — total 5).
-**Critério de abortar:** qualquer instância em `"pending"` por mais de 2 minutos ou em qualquer estado que não seja `running`/`pending` — destruir e parar.
+**Saída esperada:** `inventory` com os 5 IPs; cada `describe-instances` devolve `"running"`.
+**Critério de abortar:** qualquer instância fora de `running`/`pending` por mais de 2 minutos.
 
-## Passo 3 — `docker save | load`, conferindo o Image ID contra PINS.json
+**Docker pronto, em CADA uma das 5 instâncias** (user_data já instala Docker — `install_common_packages.sh` — mas a instância pode ainda estar processando o `user_data` quando `running` aparece):
+```
+for IP in <os 5 IPs públicos>; do
+  echo "=== $IP ==="
+  for i in $(seq 1 20); do
+    ssh -i <chave-da-campanha-ou-operador> ec2-user@$IP "docker info >/dev/null 2>&1" && { echo "Docker pronto"; break; }
+    sleep 3
+  done
+done
+```
+**Saída esperada:** `"Docker pronto"` pras 5, dentro de 20 tentativas (~60s) cada.
+**Critério de abortar:** qualquer instância sem Docker pronto depois de 20 tentativas — SSH funcionando mas Docker nunca sobe é sinal de `user_data` falhado, investigar antes de prosseguir.
 
-Local (máquina do Luciano, mesma que já tem as 3 imagens construídas):
+**Porta usada no ensaio = porta da regra de ingress do Security Group, confirmado em `main.tf`:** SSH usa 22 (`aws_vpc_security_group_ingress_rule.ssh`, `from_port=22 to_port=22`); o gateway usa 443 (`aws_vpc_security_group_ingress_rule.gateway`, `from_port=443 to_port=443`, só no servidor) — os Passos 3/4 abaixo discam exatamente a porta 443, nenhuma outra.
+
+---
+
+## Passo 3 — `docker save | load`: gateway pro servidor, negtest pro cliente L0
+
+Local (máquina do Luciano, já com as imagens construídas):
 ```
 python -c "import json; print(json.load(open('../PINS.json'))['images']['gateway']['image_id'])"
-docker save mockopin-v9-gateway | ssh -i <chave-da-campanha> ec2-user@<IP-do-servidor> docker load
-ssh -i <chave-da-campanha> ec2-user@<IP-do-servidor> "docker image inspect mockopin-v9-gateway --format '{{.Id}}'"
+docker save mockopin-v9-gateway | ssh -i <chave-da-campanha> ec2-user@<EIP-servidor> docker load
+ssh -i <chave-da-campanha> ec2-user@<EIP-servidor> "docker image inspect mockopin-v9-gateway --format '{{.Id}}'"
+
+docker save mockopin-v9-negtest | ssh -i <chave-da-campanha> ec2-user@<IP-cliente-L0> docker load
 ```
-**Saída esperada:** o `.Id` devolvido pela instância é **idêntico, caractere a caractere**, ao `image_id` impresso do `PINS.json` local.
-**Critério de abortar:** qualquer divergência de Image ID — a instância NUNCA deve rodar essa imagem; investigar antes de prosseguir (mas o ensaio já provou o que precisava: o mecanismo de conferência funciona).
+**Saída esperada:** o `.Id` do gateway na instância é **idêntico** ao `image_id` do `PINS.json` local.
+**Critério de abortar:** qualquer divergência de Image ID no gateway — nunca rodar essa imagem.
 
-(Repetir o mesmo padrão para `mockopin-v9-proxy` num cliente, se o tempo do ensaio permitir — não obrigatório pros 15 minutos, o gateway já prova o mecanismo.)
+**`mockopin-v9-negtest` NÃO é pinada em `PINS.json`, de propósito — e está certo que não seja:** confirmado por grep, nenhum arquivo do orquestrador real (`orchestrator.py`/`preflight.py`) referencia `negtest` em nenhum lugar — é uma ferramenta de teste negativo/diagnóstico (Decisão 19/52), usada só em validações manuais e neste ensaio, nunca no caminho medido do piloto (que usa `mockopin-v9-proxy` via `opin_flow.py`, não `negtest`). Pinar um artefato que nenhum código de produção carrega não protegeria nada — por isso não há conferência de Image ID pra ela aqui, só o `docker load` em si (que já falha alto se o tar estiver corrompido).
 
-**Nenhum `docker run`, nenhuma conexão mTLS, nenhum perfil ativado — o ensaio para aqui, nunca ativa o gateway de verdade.**
+**Nenhum `docker run`, nenhuma conexão mTLS ainda — só a entrega das imagens.**
 
-## Passo 4 — `emergency_stop.py`, modo dry (sem `--execute`)
+---
+
+## Passo 4 — handshake real por perfil (4, prova de mecanismo, nunca experimento)
+
+Script de verdade, **testado localmente em loopback antes de ser
+entregue** — saída real desta sessão:
+
+```
+$ GATEWAY_SSH="" CLIENT_SSH="" GATEWAY_HOST="mtls" bash rehearsal_handshake.sh
+=== [classico] removendo gateway anterior (se houver) ===
+=== [classico] subindo gateway com CRYPTO_PROFILE=classico ===
+=== [classico] esperando o gateway ficar pronto (limite: 30 tentativas, 1s cada) ===
+=== [classico] disparando a conexao real (negtest -scenario matrix) ===
+RESULT matrix client=classico server=classico outcome=SUCCESS curve=CurveP384 dualAuthenticated=false error=none
+=== [classico] extraindo a linha 'connection OK' (grep, nunca tail -1) ===
+gateway: classico connection OK remoteAddr=172.21.0.6:35062 sni="mtls" curve=CurveP384 dualAuthenticated=false clientCert="classico_client" handshakeBytesIn=1513 handshakeBytesOut=1640
+=== [classico] handshakeBytesIn=1513 (esperado 1513, delta 0) | handshakeBytesOut=1640 (esperado 1640, delta 0) ===
+OK [classico]: delta 0B nos dois sentidos
+... (pqc, hibrido-v8, hibrido-and: mesmo padrão, mesmo resultado) ...
+RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos
+```
+**Os 4 perfis passaram, delta 0B nos dois sentidos, confirmado real nesta sessão** (gateway reconstruído a cada perfil, `negtest -scenario matrix` discando de verdade via rede Docker, nunca simulado).
+
+No ensaio real (AWS), rodar o MESMO script, parametrizado pros hosts reais:
+```
+EIP_SERVIDOR=$(terraform output -json inventory | python -c "import json,sys; print(json.load(sys.stdin)['server']['public_ip'])")
+IP_CLIENTE_L0=$(terraform output -json inventory | python -c "import json,sys; print(json.load(sys.stdin)['clients']['L0']['public_ip'])")
+
+GATEWAY_SSH="ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR" \
+CLIENT_SSH="ssh -i <chave-da-campanha> ec2-user@$IP_CLIENTE_L0" \
+GATEWAY_HOST="$EIP_SERVIDOR" \
+bash rehearsal_handshake.sh
+```
+**Saída esperada:** `RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos` — igual ao teste local, agora numa rede/instâncias reais.
+**Critério de abortar:** qualquer `FALHA` impressa pelo script, ou `RESULTADO FINAL: FAIL` — não é motivo de destruir às pressas (é um achado sobre o mecanismo, não da infraestrutura), mas marca o ensaio como **reprovado neste ponto**, registrado explicitamente, antes de seguir pro passo 5.
+
+**O que este passo NÃO faz:** não conta como nenhuma das 60 execuções oficiais nem nenhuma das 12 capturas do critério 1.
+
+---
+
+## Passo 5 — `emergency_stop.py`, modo dry (diagnóstico, antes de qualquer teardown)
 
 ```
 cd ../campaign/scripts
 python emergency_stop.py --profile mockopin-pqc
 ```
-**Saída esperada:** JSON com `instances_found`/`eips_found`/`security_groups_found`/`key_pairs_found` listando os recursos reais do ensaio (tag `Project=mockopin-pqc-v9-piloto`), e `instances_terminated`/`eips_released`/etc. todos **vazios** (`[]`) — modo dry nunca age.
-**Critério de abortar:** se QUALQUER lista de `..._terminated`/`..._released`/`..._deleted` vier não-vazia em modo dry — bug real, parar e investigar antes de usar `--execute` em qualquer cenário real.
+**Saída esperada:** `instances_found`/`eips_found`/`security_groups_found`/`key_pairs_found` listando os recursos reais do ensaio (**4 key pairs agora aparecem de verdade** — corrigido nesta rodada, ver nota abaixo), e todas as listas `..._terminated`/`..._released`/`..._deleted` **vazias** — modo dry nunca age.
+**Critério de abortar:** qualquer lista de ação não-vazia em modo dry — bug real, investigar antes de usar `--execute` em qualquer cenário.
 
-## Passo 5 — `emergency_stop.py --execute`, sobre os recursos do ENSAIO
+**Achado e corrigido nesta rodada:** nenhum `aws_key_pair` (nem aqui, nem na v8 original) tinha tag `Project` — `emergency_stop.py` (que filtra tudo por tag) nunca teria encontrado nenhuma key pair, mesmo com as 4 existindo de verdade. `main.tf` corrigido (tags adicionadas às 4, aditivo, nunca muda `key_name`/`public_key` nem o comportamento de nenhum outro recurso) — confirme no passo acima que `key_pairs_found` lista as 4 agora.
+
+---
+
+## Passo 6 — teardown PRINCIPAL: `cleanup.py --release-eips --force`
+
+**Por que `cleanup.py`, não `emergency_stop.py`, é o caminho principal:**
+comparado linha a linha contra `v8/campaign/scripts/campaign_down.sh`
+(o teardown real da v8): os 5 checks de verificação são estruturalmente
+IDÊNTICOS (mesmo tipo de filtro por recurso — tag para
+instâncias/volumes/EIPs, padrão de NOME para security groups/key
+pairs — só a constante de nome mudou, `mockopin-pqc-campaign*` →
+`mockopin-pqc-v9-piloto*`), MAS `cleanup.py` tem 2 capacidades NOVAS
+que a v8 nunca teve: detecção de drift por autodesligamento ANTES do
+destroy, e liberação ATIVA de EIPs órfãos (`--release-eips`) — a v8
+real só FALHA e exige intervenção manual se um EIP sobra, nunca o
+libera sozinha. Isso é uma mudança de lógica real (capacidade nova,
+não só renomeação) — por isso o caminho principal passa a ser
+`cleanup.py`, mais capaz, nunca o `emergency_stop.py` (mais novo,
+pior testado contra a AWS real).
+
+```
+python cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force
+```
+**Saída esperada:** JSON com `"all_clean": true` — `cleanup.py` já roda `terraform destroy` E verifica as 5 categorias internamente, nas 3 regiões, incluindo a liberação de qualquer EIP órfão encontrado.
+**Critério de abortar:** `all_clean: false`, ou qualquer excessão — não destruir mais nada manualmente ainda, ir pro passo 7 (fallback), nunca pular direto pro passo 8.
+
+---
+
+## Passo 7 — fallback: `emergency_stop.py --execute`, só se sobrou algo
+
+**Só roda se o passo 6 reportou `all_clean: false`.** Se o passo 6
+já deu `all_clean: true`, pule direto pro passo 8 (nada a fazer aqui
+— registre isso no relatório do ensaio).
 
 ```
 python emergency_stop.py --profile mockopin-pqc --execute
 ```
-**Saída esperada:** as mesmas 5 instâncias/5 EIPs/5 security groups/4 key pairs do passo 4, agora em `..._terminated`/`..._released`/`..._deleted` — e o relatório não deve listar nenhum ID que não apareceu no passo 4 (mesma tag, mesma lista).
-**Critério de abortar:** qualquer erro de permissão (ver `security_groups_errors`, se um SG ainda estiver em uso porque uma instância não terminou a tempo — o script já espera até 2 minutos, mas registra o erro em vez de travar) — se aparecer, esperar mais e rodar de novo só a etapa de security groups, nunca prosseguir pro passo 6 com recursos ainda presos.
+**Saída esperada:** qualquer recurso que o passo 6 não limpou aparece em `..._terminated`/`..._released`/`..._deleted` agora (com as tags do passo 5, incluindo as 4 key pairs corrigidas).
+**Critério de abortar:** qualquer erro de permissão persistente — nesse ponto, investigação manual pela console AWS é o próximo passo, nunca mais automação.
 
-## Passo 6 — verificação final: nada ficou na conta
+---
+
+## Passo 8 — verificação final: nada ficou na conta
 
 ```
 aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" "Name=instance-state-name,Values=running,pending,stopping,stopped"
@@ -91,72 +207,20 @@ aws ec2 describe-addresses --profile mockopin-pqc --region sa-east-1 --filters "
 aws ec2 describe-security-groups --profile mockopin-pqc --region sa-east-1 --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto"
 aws ec2 describe-key-pairs --profile mockopin-pqc --region sa-east-1 --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto"
 ```
-(repetir as 4 chamadas para `eu-north-1`/`ap-southeast-1`)
+(repetir as 4 chamadas para `eu-north-1`/`ap-southeast-1` — 12 chamadas no total, 4 tipos × 3 regiões)
 
-**Saída esperada:** as 12 chamadas (4 tipos × 3 regiões) devolvem listas **vazias**.
-**Critério de abortar/alerta:** qualquer recurso ainda presente — não é motivo de pânico (o `terraform state` ainda existe, `terraform destroy` normal cobre o resto), mas precisa ser investigado antes de considerar o ensaio limpo. Se `emergency_stop.py` já limpou tudo, este passo é só a confirmação formal — `terraform destroy` depois dele deve reportar `0 destroyed` adicionais (ou dar erro de recurso já removido, esperado e inofensivo nesse caso específico).
-
-```
-terraform destroy -auto-approve
-```
-(fecha o state do Terraform, mesmo que `emergency_stop.py` já tenha limpo os recursos reais — mantém o state consistente com a conta)
-
-## Passo 7 — prova de handshake real por perfil (4, sem experimento)
-
-**Numerado 7 porque foi proposto nesta rodada, DEPOIS dos passos 0-6
-originais — mas roda CRONOLOGICAMENTE entre o passo 3 e o passo 4**
-(depois do `docker load` confirmado, antes de qualquer
-`emergency_stop.py`; nunca depois do passo 6, que já destruiu tudo).
-Não existia no roteiro original — proposto agora porque nenhum passo
-anterior liga o gateway, disca de verdade, ou confere o delta de
-bytes contra o EIP real. Usa a MESMA imagem já pinada (passo 3,
-construída com certificados de SAN placeholder, formato
-`<IP>,::1`) — nunca reconstrói nem repina nada, porque o valor do IP
-no SAN nunca precisa bater com o EIP de verdade (Decisão 30 do
-pré-registro: a verificação do certificado checa só o DNS "mtls" via
-hostname, nunca o endereço IP do SAN — confirmado no código,
-`cert.VerifyHostname("mtls")`). Este passo demonstra isso ao vivo,
-não só cita a decisão.
-
-```
-EIP_SERVIDOR=$(terraform output -json inventory | python -c "import json,sys; print(json.load(sys.stdin)['server']['public_ip'])")
-
-# confere o que esta de fato gravado no SAN do certificado JA EMBUTIDO
-# na imagem pinada -- nunca precisa bater com $EIP_SERVIDOR.
-docker run --rm --entrypoint sh mockopin-v9-gateway -c \
-  "cat /certs/classico_server.crt" | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"
-
-ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR \
-  "docker run -d --name v9-mtls-ensaio -p 443:443 -e HTTP_MODE=business -e CRYPTO_PROFILE=classico mockopin-v9-gateway"
-
-for PERFIL in classico pqc hibrido-v8 hibrido-and; do
-  ssh -i <chave-da-campanha> ec2-user@<IP-do-cliente-L0> \
-    "docker run --rm --network host mockopin-v9-negtest -scenario matrix -client-mode $PERFIL -server-mode $PERFIL -target $EIP_SERVIDOR:443 -cert-dir /certs"
-  ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR "docker logs v9-mtls-ensaio 2>&1 | tail -1"
-done
-
-ssh -i <chave-da-campanha> ec2-user@$EIP_SERVIDOR "docker rm -f v9-mtls-ensaio"
-```
-(repetir o `docker run -d` do gateway trocando `CRYPTO_PROFILE` antes de cada perfil, igual ao `_launch_gateway` real — simplificado aqui numa única linha por brevidade do roteiro)
-
-**Saída esperada, por perfil:**
-- O SAN impresso no início do passo mostra um IP que **não precisa, e normalmente não vai, ser igual a `$EIP_SERVIDOR`** — registrar os dois valores lado a lado no relatório do ensaio, exatamente para mostrar a diferença, não para forçar que batam.
-- `RESULT matrix client=<perfil> server=<perfil> outcome=SUCCESS curve=... dualAuthenticated=...` — a conexão TEM que fechar com sucesso MESMO com o SAN do certificado apontando para um IP diferente do EIP real que o `-target` discou.
-- A linha `connection OK` do gateway mostra `handshakeBytesIn=X handshakeBytesOut=Y` — comparar os 4 pares contra `BASELINE_HANDSHAKE_BYTES` (`evaluate_criteria.py`): **delta esperado 0B nos 4 perfis, nos 2 sentidos** (a mesma evidência da Decisão 55/56, agora numa rede e numa instância reais, não loopback local).
-
-**Critério de abortar:** qualquer `outcome=FAIL`, ou qualquer delta != 0B contra o baseline — não é motivo de destruir às pressas (não é um erro de infraestrutura, é um achado sobre o mecanismo que precisa de investigação antes do piloto de verdade rodar), mas o ensaio deve ser marcado como **reprovado neste ponto**, registrado explicitamente no relatório, antes de seguir para o passo 4.
-
-**O que este passo NÃO faz:** não conta como nenhuma das 60 execuções oficiais nem como nenhuma das 12 capturas do critério 1 — é só prova de mecanismo, 4 conexões soltas, nunca um bloco cronometrado.
+**Saída esperada:** as 12 chamadas devolvem listas **vazias**. Se o passo 6 já deu `all_clean: true`, este passo é só a confirmação formal e independente (API direta, não reaproveita o JSON do `cleanup.py`).
+**Critério de abortar/alerta:** qualquer recurso ainda presente — investigar antes de considerar o ensaio limpo.
 
 ---
 
 ## Custo estimado do ensaio
 
-~20 minutos de frota (passos 0-7, incluindo o novo passo 7) — 5
-instâncias: 4× `m7i-flex.large` + 1× `t4g.micro` — + 5 EIPs:
+~20 minutos de frota (passos 0-8) — 5 instâncias: 4× `m7i-flex.large`
++ 1× `t4g.micro` — + 5 EIPs:
 - Compute: (4 × US$0,0958 + US$0,0084) × (20/60)h ≈ US$0,131
 - EIP: 5 × US$0,005 × (20/60)h ≈ US$0,008
-- EBS: negligível nessa janela (apagado junto no destroy/termination)
-- **Total estimado: ≈ US$0,14**, mesmo se o ensaio levar o dobro do previsto (40 min): ≈ US$0,28. Dentro de qualquer alerta de orçamento razoável (item g do `PILOT_READINESS.md`).
+- EBS: negligível (apagado junto no destroy/termination)
+- **Total estimado: ≈ US$0,14**, mesmo no dobro do tempo (40 min): ≈ US$0,28.
 
-**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~4× o acima (≈US$0,56 de compute) — ainda pequeno, e os EIPs seguem o mesmo risco residual já documentado (órfãos até liberação manual/`emergency_stop.py`).
+**Se algo falhar e o self_terminate de 1h disparar antes da limpeza manual:** custo sobe para ~4× o acima (≈US$0,56 de compute) — os EIPs seguem o mesmo risco residual já documentado, agora coberto tanto por `cleanup.py --release-eips` (principal) quanto por `emergency_stop.py` (fallback).

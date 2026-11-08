@@ -7215,3 +7215,89 @@ PILOT_READINESS.md` (secao d ganha o achado do item 2),
 
 Nenhum item exigiu emenda ao pre-registro. Continuo sem autorizar
 push nem recursos na AWS.
+
+## 57. Correcao do roteiro do ensaio: ordem linear (0-8), terraform plan com contagem derivada de 28 recursos, Docker pronto + porta conferida contra o SG, negtest entregue ao cliente (nunca pinado, com motivo), script real de handshake testado em loopback (4/4 PASS), achado real -- nenhum aws_key_pair tinha tag (nem na v8) -- corrigido em main.tf, cleanup.py vira o teardown principal (mais capaz que a v8 real), emergency_stop so como fallback
+
+Nada de AWS, sem push, branch `v9/fase1-local`. Commit local.
+
+**1-3 (ordem/contagem/prontidao):** `INFRA_REHEARSAL.md` reescrito em
+ordem estritamente linear (0 a 8, sem "numerado X mas roda entre Y e
+Z"). Passo 1 ganha `terraform plan` com a contagem de recursos
+DERIVADA de ler `main.tf`/`modules/campaign_instance/main.tf` linha
+por linha (nunca suposta): `tls_private_key`(1) + `aws_key_pair`(4) +
+`aws_security_group`(5) + `ingress.ssh`(5) + `ingress.gateway`(3, so
+servidor) + `aws_instance`(5) + `aws_eip`(5) = **28**. Passo 2 ganha
+espera por `docker info` pronto nas 5 instancias (limite de 20
+tentativas) e confirma a porta usada (443, gateway; 22, SSH) contra
+as regras reais de `aws_vpc_security_group_ingress_rule` do `main.tf`.
+
+**4 (entrega + pin do negtest):** Passo 3 entrega `mockopin-v9-negtest`
+pro cliente L0 (`docker save`/`load`), alem do gateway pro servidor.
+**`negtest` NUNCA e pinada em PINS.json, por motivo confirmado:** grep
+em `orchestrator.py`/`preflight.py` nao acha NENHUMA referencia a
+`negtest` -- nenhum codigo do piloto real a usa, so validacao manual/
+este ensaio. Pinar um artefato que nenhum caminho de producao carrega
+nao protegeria nada.
+
+**5 (script real de handshake, testado antes de entregar):**
+`thesis/results/v9/campaign/scripts/rehearsal_handshake.sh` (novo) --
+la por verdade, pra cada um dos 4 perfis: remove o gateway anterior,
+sobe com o `CRYPTO_PROFILE` certo, espera ficar pronto (30 tentativas),
+disca com `negtest -scenario matrix`, extrai a linha "connection OK"
+com `grep` (nunca `tail -1`), compara `handshakeBytesIn/Out` contra
+`BASELINE_HANDSHAKE_BYTES` (Decisao 14). **Testado localmente em
+loopback antes de ser entregue -- rodado de verdade nesta sessao:**
+```
+RESULTADO FINAL: PASS -- 4/4 perfis, delta 0B nos dois sentidos
+```
+A imagem do gateway TEM shell (`sh`, confirmado rodando
+`docker run --entrypoint sh mockopin-v9-gateway -c "echo shell-ok"`
+de verdade) -- o passo de ler o certificado via `cat` dentro do
+container continua valido, nenhuma troca pra `docker create`+`cp`
+foi necessaria.
+
+**6 (cleanup.py vs v8, teardown principal trocado):** Comparado
+linha a linha contra `v8/campaign/scripts/campaign_down.sh` real.
+**Os 5 checks de verificacao sao estruturalmente IDENTICOS** (mesmo
+TIPO de filtro por recurso -- tag pra instancias/volumes/EIPs, padrao
+de NOME pra security groups/key pairs -- confirmado nos dois
+arquivos, so a constante mudou: `mockopin-pqc-campaign*` ->
+`mockopin-pqc-v9-piloto*`). **Mas ha mudanca de logica real:**
+`cleanup.py` tem 2 capacidades que a v8 NUNCA teve -- deteccao de
+drift por autodesligamento ANTES do destroy, e liberacao ATIVA de
+EIPs orfaos (`--release-eips`); a v8 real so FALHA e exige
+intervencao manual se um EIP sobra, nunca libera por conta propria.
+**Por isso o teardown principal do roteiro passa a ser `cleanup.py
+--release-eips --force`** (mais capaz, testado contra o padrao
+provado da v8 nos 5 checks centrais), com `emergency_stop.py
+--execute` SO como fallback se `cleanup.py` reportar `all_clean:
+false` -- `emergency_stop.py` em modo dry continua rodando ANTES de
+qualquer teardown, como diagnostico.
+
+**Achado real no caminho (corrigido):** NENHUM `aws_key_pair` tinha
+`tags` -- nem aqui, nem na v8 original (confirmado nos dois
+`main.tf`). Isso fazia `emergency_stop.py` (que filtra por tag)
+nunca encontrar nenhuma key pair, mesmo as 4 existindo de verdade --
+`cleanup.py` nunca teve esse problema (usa padrao de NOME pra key
+pairs, igual a v8, nunca tag). Corrigido em `thesis/results/v9/
+terraform/main.tf`: tags aditivas nas 4 `aws_key_pair` (nunca muda
+`key_name`/`public_key`) -- `terraform validate` confirma a sintaxe
+(sem chamada a AWS).
+
+**Testes:** sem mudanca de codigo testavel em Python alem do que ja
+passava -- 108 em `thesis/results/v9/campaign/tests/` + 7 em
+`thesis/scripts/tests/`, inalterados, todos passando. O novo
+`rehearsal_handshake.sh` e um script shell, testado por execucao
+real (mostrada acima), nao por pytest.
+
+**Commit local** (sem push): `thesis/results/v9/campaign/
+INFRA_REHEARSAL.md` (reescrito), `thesis/results/v9/campaign/
+scripts/rehearsal_handshake.sh` (novo), `thesis/results/v9/terraform/
+main.tf` (tags aditivas nas key pairs).
+
+Nenhum item exigiu emenda ao pre-registro -- a correcao do roteiro e
+documentacao/script de validacao, a tag nas key pairs e aditiva
+(nunca muda nome/chave/comportamento de nenhum recurso), a troca de
+teardown principal e uma escolha operacional baseada em evidencia
+(cleanup.py mais capaz que a v8), nunca uma mudanca de criterio.
+Continuo sem autorizar push nem recursos na AWS.

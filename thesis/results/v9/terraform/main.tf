@@ -6,20 +6,32 @@ resource "tls_private_key" "campaign" {
   algorithm = "ED25519"
 }
 
+# Decisao 57 (achado real, item 2 de uma rodada de reconciliacao de
+# contagem): NENHUM aws_key_pair, nem aqui nem na v8 (confirmado,
+# v8/campaign/terraform/main.tf tem o mesmo padrao sem tags), tinha
+# bloco `tags`. Isso faz `emergency_stop.py` (que filtra TODO recurso
+# por `tag:Project`, nunca por nome) nunca encontrar nenhuma key pair
+# -- `key_pairs_found` ficaria sempre `[]`, mesmo com as 4 key pairs
+# reais existindo. Corrigido aqui (aditivo, nunca muda `key_name`/
+# `public_key`) -- v8 nunca teve um `emergency_stop.py` equivalente,
+# entao esse gap nunca tinha sido exercitado ate agora.
 resource "aws_key_pair" "campaign_sa_east_1" {
   provider   = aws.sa_east_1
   key_name   = "mockopin-pqc-v9-piloto"
   public_key = tls_private_key.campaign.public_key_openssh
+  tags       = { Project = "mockopin-pqc-v9-piloto", Role = "campaign-key" }
 }
 resource "aws_key_pair" "campaign_eu_north_1" {
   provider   = aws.eu_north_1
   key_name   = "mockopin-pqc-v9-piloto"
   public_key = tls_private_key.campaign.public_key_openssh
+  tags       = { Project = "mockopin-pqc-v9-piloto", Role = "campaign-key" }
 }
 resource "aws_key_pair" "campaign_ap_southeast_1" {
   provider   = aws.ap_southeast_1
   key_name   = "mockopin-pqc-v9-piloto"
   public_key = tls_private_key.campaign.public_key_openssh
+  tags       = { Project = "mockopin-pqc-v9-piloto", Role = "campaign-key" }
 }
 
 # O controle usa a chave JA EXISTENTE do operador (nao a exclusiva da
@@ -28,6 +40,7 @@ resource "aws_key_pair" "operator_sa_east_1" {
   provider   = aws.sa_east_1
   key_name   = "mockopin-pqc-v9-piloto-operator"
   public_key = var.operator_ssh_public_key
+  tags       = { Project = "mockopin-pqc-v9-piloto", Role = "campaign-key-operator" }
 }
 
 # ============================================================
