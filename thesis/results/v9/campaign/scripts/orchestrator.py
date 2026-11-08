@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import cli  # noqa: E402
+import preflight  # noqa: E402  -- Decisao 53, item 4: pre-requisitos de captura por host
 
 _INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "integration"
 sys.path.insert(0, str(_INTEGRATION_DIR))
@@ -164,6 +165,12 @@ class LocalExecutor:
 
     def dedicated_capture(self, profile, route):
         return _dedicated_capture_block(profile)
+
+    def capture_ready_check(self):
+        """Decisao 53, item 4c: LocalExecutor nunca tem infraestrutura
+        real pra checar (sem SSH, sem instancia) -- sempre `go=True`,
+        sem nenhum host. So o SSHExecutor de fato roda os 5 probes."""
+        return {"go": True, "checks": []}
 
 
 import re as _re
@@ -302,6 +309,40 @@ class SSHExecutor:
                 parsed.append(m.groupdict())
         return raw_lines, parsed
 
+    def _launch_gateway(self, profile, keylog=False):
+        """Decisao 52 (Emenda 14): fatorado de `start_block` pra ser
+        reusado por `dedicated_capture` tambem -- o UNICO lugar que
+        decide se o gateway sobe com `KEYLOG_PATH` ou nao.
+        `keylog=False` (usado por `start_block`, toda janela
+        CRONOMETRADA) nunca passa a flag -- o gateway nunca escreve
+        keylog ali, nenhum I/O extra por handshake durante qualquer
+        das 60 execucoes reais. `keylog=True` (usado SO por
+        `dedicated_capture`, Decisao 52 item 2) reinicia o MESMO
+        container com a flag acrescentada -- a reinicializacao
+        acontece inteiramente DENTRO do laco separado de capturas
+        dedicadas de `run_pilot` (depois que as 60 execucoes e seus
+        `stop_block` ja terminaram, nunca entre elas), entao nenhum
+        dado ja medido e alterado por ela."""
+        keylog_flag = "-e KEYLOG_PATH=/tmp/v9_keylog.txt " if keylog else ""
+        cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
+        cli.run_ssh(self._server_ip(),
+                    f"docker run -d --name {self.gateway_container} "
+                    f"--network insurance-server-lambdas_default "
+                    f"--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
+                    f"--network-alias matls-api.local --network-alias api.local --network-alias directory "
+                    f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
+                    f"{keylog_flag}"
+                    f"-v $(pwd)/../../mock-service-os/certs:/real-certs:ro mockopin-v9-gateway",
+                    key_path=self.key_path)
+        # Espera o gateway de verdade terminar de subir (carregar os
+        # certs, abrir :443) antes do proxy tentar discar -- achado ao
+        # vivo (Decisao 49): sem isso, a primeira chamada do proxy
+        # pode cair numa janela em que o container ja existe mas ainda
+        # nao esta aceitando conexao, devolvendo 502 rio abaixo.
+        cli.run_ssh(self._server_ip(),
+                    f"for i in $(seq 1 30); do docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && break; sleep 1; done",
+                    key_path=self.key_path)
+
     def start_block(self, profile, route):
         """Decisao 49: reusa o padrao real de `start_block_proxies`
         (v8) -- troca o perfil do GATEWAY e sobe proxy+signer
@@ -362,35 +403,7 @@ class SSHExecutor:
                         f"docker logs insurance-server-lambdas-mockapi-1 2>&1 | grep -q 'Startup completed' && break; "
                         f"sleep 1; done",
                         key_path=self.key_path, connect_timeout=90)
-        cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
-        cli.run_ssh(self._server_ip(),
-                    f"docker run -d --name {self.gateway_container} "
-                    f"--network insurance-server-lambdas_default "
-                    f"--network-alias mtls --network-alias matls-auth.local --network-alias auth.local "
-                    f"--network-alias matls-api.local --network-alias api.local --network-alias directory "
-                    f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
-                    # Decisao 52 (item 4): KEYLOG_PATH sempre ligado, em
-                    # TODO bloco (nao so quando dedicated_capture vai
-                    # rodar) -- aditivo, nao muda nenhum comportamento
-                    # do gateway em si (so grava um arquivo extra que
-                    # mais ninguem le se dedicated_capture nao for
-                    # chamado). E o MESMO arquivo que dedicated_capture
-                    # vai ler depois, via `docker exec`, pra decifrar o
-                    # pcap com tshark -- sem precisar de volume
-                    # compartilhado nenhum (o arquivo nunca sai do
-                    # filesystem do proprio container do gateway antes
-                    # de ser copiado por `docker cp`/`docker exec cat`).
-                    f"-e KEYLOG_PATH=/tmp/v9_keylog.txt "
-                    f"-v $(pwd)/../../mock-service-os/certs:/real-certs:ro mockopin-v9-gateway",
-                    key_path=self.key_path)
-        # Espera o gateway de verdade terminar de subir (carregar os
-        # certs, abrir :443) antes do proxy tentar discar -- achado ao
-        # vivo (Decisao 49): sem isso, a primeira chamada do proxy
-        # pode cair numa janela em que o container ja existe mas ainda
-        # nao esta aceitando conexao, devolvendo 502 rio abaixo.
-        cli.run_ssh(self._server_ip(),
-                    f"for i in $(seq 1 30); do docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && break; sleep 1; done",
-                    key_path=self.key_path)
+        self._launch_gateway(profile)
         if self.local_shim_bridge_join:
             cli.run_ssh(self._server_ip(), f"docker network connect bridge {self.gateway_container}", key_path=self.key_path)
             ip_proc = cli.run_ssh(
@@ -498,6 +511,13 @@ class SSHExecutor:
             raise RuntimeError(f"_primary_iface({host}): nao consegui descobrir a interface primaria (saida vazia, stderr={proc.stderr!r})")
         return iface
 
+    def capture_ready_check(self):
+        """Decisao 53, item 4c: fail-closed, chamado pelo smoke gate
+        ANTES de qualquer execucao -- hoje, so o servidor roda tcpdump/
+        docker exec/tshark de verdade (ver `dedicated_capture`), entao
+        a lista de hosts e so `[self._server_ip()]`."""
+        return preflight.run_capture_preflight([self._server_ip()], key_path=self.key_path)
+
     def dedicated_capture(self, profile, route):
         """Decisao 52 (pedido independente, item 4) -- substitui o
         placeholder da Decisao 49 (que so lia um arquivo que nunca era
@@ -529,7 +549,25 @@ class SSHExecutor:
         (mesmo padrao e mesma garantia de `readiness_probe` -- roda
         FORA de qualquer marcador INICIO/FIM, nunca entra nas
         contagens dos criterios 4/6), disparada do CLIENTE enquanto o
-        tcpdump do servidor esta rodando."""
+        tcpdump do servidor esta rodando.
+
+        **KEYLOG_PATH, Emenda 14 (correcao desta rodada):** `run_pilot`
+        roda as 12 capturas dedicadas num laco SEPARADO, depois que as
+        60 execucoes (e os `stop_block` de cada bloco) ja terminaram --
+        entao o gateway que esta rodando neste ponto pode ser de
+        QUALQUER perfil (o ultimo bloco da grade), nunca garantido ser
+        o perfil desta captura especifica. Por isso esta funcao chama
+        `start_block` (sobe backend/proxy/signer certos pro PERFIL
+        desta captura, SEM keylog) e, so entao, `_launch_gateway(...,
+        keylog=True)` reinicia so o gateway, acrescentando
+        KEYLOG_PATH -- a UNICA chamada deste modulo que liga essa flag.
+        As duas reinicializacoes acontecem inteiramente dentro deste
+        laco de capturas dedicadas, nunca entre uma execucao
+        cronometrada e outra -- nenhum dado das 60 execucoes (ja
+        gravado antes deste laco comecar) e alterado por elas."""
+        self.start_block(profile, route)
+        self._launch_gateway(profile, keylog=True)
+
         server_ip = self._server_ip()
         pcap_path = f"/tmp/criterio1_{profile}_{route}.pcap"
         keylog_path = f"/tmp/criterio1_keylog_{profile}_{route}.txt"
@@ -584,6 +622,7 @@ class SSHExecutor:
                 f"dedicated_capture {profile}/{route}: tshark nao extraiu nenhuma mensagem de handshake "
                 f"(pcap vazio ou keylog nao decifrou) -- stdout={tshark_proc.stdout!r} stderr={tshark_proc.stderr!r}"
             )
+        self.stop_block(profile, route)
         return f"== Perfil: {profile} ==\n" + "\n".join(lines) + "\n== fim =="
 
 
@@ -692,8 +731,36 @@ def run_smoke_gate(executor, seed: int, out_dir: Path) -> dict:
     execucao-unica dando FAIL) e motivo pra abortar o piloto inteiro
     e destruir -- nunca prosseguir pras 60 execucoes reais sobre uma
     infraestrutura que a propria porta de fumaca ja mostrou com
-    problema."""
-    manifest = run_pilot(executor, seed, out_dir, n_per_profile=SMOKE_N_PER_PROFILE, smoke=True)
+    problema.
+
+    Decisao 53 (pedido independente, item 4): dois acrescimos.
+    **4c, fail-closed ANTES de qualquer execucao:** `capture_ready_
+    check()` roda primeiro -- se reprovar (tcpdump/sudo/imagem/
+    interface ausentes), a porta de fumaca aborta imediatamente, SEM
+    rodar nenhuma das 12 execucoes, com a lista exata do que falta.
+    **4b, prova da captura em si:** depois das 12 execucoes (ainda
+    `skip_dedicated_captures=True` -- as 12 capturas OFICIAIS do
+    criterio 1 continuam responsabilidade separada, Decisao 41), roda
+    UMA `dedicated_capture` de prova por PERFIL (4, nao 12 -- so pra
+    validar o MECANISMO fim a fim antes de confiar nas 60/12 oficiais),
+    escrita num diretorio PROPRIO (`smoke_capture_proof/`), nunca
+    confundida com `criterio1_capturas/`."""
+    capture_preflight = executor.capture_ready_check()
+    if not capture_preflight["go"]:
+        missing_summary = [
+            {"host": c.get("host"), "missing": c.get("missing")}
+            for c in capture_preflight["checks"] if not c.get("ok", True)
+        ]
+        return {
+            "smoke": True, "smoke_ok": False, "aborted_before_execution": True,
+            "capture_preflight": capture_preflight,
+            "smoke_failures": [], "total_execucoes": 0, "expected_total": SMOKE_EXPECTED_TOTAL,
+            "note": ("pre-requisitos de captura (criterio 1) reprovaram -- nenhuma execucao rodou "
+                     f"(Decisao 53, item 4c): {missing_summary}"),
+        }
+
+    manifest = run_pilot(executor, seed, out_dir, n_per_profile=SMOKE_N_PER_PROFILE, smoke=True,
+                          skip_dedicated_captures=True)
     execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
     failures = []
     for entry in execucoes:
@@ -701,7 +768,26 @@ def run_smoke_gate(executor, seed: int, out_dir: Path) -> dict:
         if counts != _EXPECTED_HTTP:
             failures.append({"profile": entry["profile"], "route": entry["route"],
                               "esperado": _EXPECTED_HTTP, "obtido": counts})
-    manifest["smoke_ok"] = manifest["total_execucoes"] == SMOKE_EXPECTED_TOTAL and not failures
+
+    capture_proof_dir = out_dir / "smoke_capture_proof"
+    capture_proof_dir.mkdir(parents=True, exist_ok=True)
+    capture_proof_rows = []
+    for profile in PROFILES:
+        route = ROUTES[0]  # qualquer rota prova o MECANISMO -- nunca uma das 12 capturas oficiais
+        try:
+            block = executor.dedicated_capture(profile, route)
+            row = ec._message_sizes_for_profile(block, profile)
+            (capture_proof_dir / f"{profile}.log").write_text(block, encoding="utf-8")
+            capture_proof_rows.append({"profile": profile, "ok": row["ok"]})
+        except Exception as e:  # noqa: BLE001 -- captura/decifragem real pode falhar de varios jeitos; nunca estoura o smoke gate inteiro sem reportar qual perfil
+            capture_proof_rows.append({"profile": profile, "ok": False, "note": f"{type(e).__name__}: {e}"})
+    capture_proof_ok = all(r["ok"] for r in capture_proof_rows)
+
+    manifest["capture_preflight"] = capture_preflight
+    manifest["capture_proof_dir"] = str(capture_proof_dir)
+    manifest["capture_proof_rows"] = capture_proof_rows
+    manifest["capture_proof_ok"] = capture_proof_ok
+    manifest["smoke_ok"] = (manifest["total_execucoes"] == SMOKE_EXPECTED_TOTAL and not failures and capture_proof_ok)
     manifest["smoke_failures"] = failures
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest

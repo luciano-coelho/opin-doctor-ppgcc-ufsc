@@ -183,6 +183,98 @@ def check_budget_alert_exists(profile) -> dict:
     return {"check": "alerta de orcamento", "ok": len(budgets) > 0, "count": len(budgets)}
 
 
+# Decisao 53 (pedido independente, item 4a): pre-requisitos da
+# CAPTURA dedicada (criterio 1) em CADA instancia do piloto -- so
+# podem ser checados DEPOIS que a instancia existe (via SSH), nunca
+# antes do apply (diferente de todo check acima, que e so API da AWS,
+# antes de qualquer instancia). Por isso isto NUNCA entra em
+# `run_preflight` (que nao recebe IP de instancia nenhum) -- e uma
+# porta de entrada SEPARADA, chamada pelo smoke gate (item 4b) depois
+# que o terraform apply ja rodou, antes de qualquer execucao real.
+_CAPTURE_PROBE_SCRIPT = r"""
+set -u
+echo "TCPDUMP_PATH=$(command -v tcpdump || true)"
+if sudo -n true 2>/dev/null; then echo "SUDO_NOPASSWD=1"; else echo "SUDO_NOPASSWD=0"; fi
+echo "MEASURE_IMAGE_ID=$(docker image inspect mockopin-v9-measure --format '{{.Id}}' 2>/dev/null || true)"
+if touch /tmp/.v9_keylog_preflight_check 2>/dev/null; then
+  rm -f /tmp/.v9_keylog_preflight_check
+  echo "TMP_WRITABLE=1"
+else
+  echo "TMP_WRITABLE=0"
+fi
+echo "PRIMARY_IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -1)"
+"""
+
+
+def check_capture_prerequisites(host, key_path=None, connect_timeout=20) -> dict:
+    """Decisao 53, item 4a. Roda os 5 probes combinados numa UNICA
+    chamada SSH (eficiencia -- 1 round-trip em vez de 5) e reprova com
+    mensagem clara se qualquer um faltar: `tcpdump` instalado, sudo
+    sem senha disponivel (exigido pelo `tcpdump` real dentro de
+    `dedicated_capture`, mesma convencao do `campaign_run.py` real da
+    v8 -- unico lugar deste projeto que precisa de `sudo`), a imagem
+    `mockopin-v9-measure` presente (construida a partir do codigo
+    fonte deste repositorio, nunca baixada de um registry -- precisa
+    que o repositorio ja tenha sido sincronizado pra instancia antes
+    deste check, mesma dependencia que todo outro `docker build`
+    deste projeto; NAO verificado aqui, so a PRESENCA final), `/tmp`
+    gravavel (mesma pasta onde o pcap/keylog temporarios do host
+    seriam escritos) e a interface primaria identificavel pela rota
+    default (nunca loopback -- mesmo metodo de
+    `SSHExecutor._primary_iface`)."""
+    try:
+        proc = cli.run_ssh(host, _CAPTURE_PROBE_SCRIPT, key_path=key_path, connect_timeout=connect_timeout)
+    except Exception as e:  # noqa: BLE001 -- rede de seguranca: SSH indisponivel nunca estoura, so reprova
+        return {"check": "pre-requisitos de captura (criterio 1)", "ok": False,
+                "note": f"SSH para {host} falhou: {type(e).__name__}: {e}"}
+
+    fields = {}
+    for line in proc.stdout.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            fields[k.strip()] = v.strip()
+
+    tcpdump_ok = bool(fields.get("TCPDUMP_PATH"))
+    sudo_ok = fields.get("SUDO_NOPASSWD") == "1"
+    measure_image_ok = bool(fields.get("MEASURE_IMAGE_ID"))
+    tmp_writable_ok = fields.get("TMP_WRITABLE") == "1"
+    iface = fields.get("PRIMARY_IFACE", "")
+    iface_ok = bool(iface) and iface != "lo"
+
+    missing = []
+    if not tcpdump_ok:
+        missing.append("tcpdump nao encontrado no PATH")
+    if not sudo_ok:
+        missing.append("sudo sem senha indisponivel (exigido pelo tcpdump real de dedicated_capture)")
+    if not measure_image_ok:
+        missing.append("imagem docker mockopin-v9-measure ausente (precisa ser construida a partir do codigo fonte sincronizado nesta instancia)")
+    if not tmp_writable_ok:
+        missing.append("/tmp nao gravavel")
+    if not iface_ok:
+        missing.append(f"interface primaria nao identificada pela rota default (valor lido: {iface!r})")
+
+    return {
+        "check": "pre-requisitos de captura (criterio 1)", "ok": not missing,
+        "host": host, "tcpdump_path": fields.get("TCPDUMP_PATH") or None,
+        "sudo_nopasswd": sudo_ok, "measure_image_id": fields.get("MEASURE_IMAGE_ID") or None,
+        "tmp_writable": tmp_writable_ok, "primary_iface": iface or None,
+        "missing": missing,
+    }
+
+
+def run_capture_preflight(hosts, key_path=None) -> dict:
+    """Decisao 53, item 4c: fail-closed, mensagem clara, ANTES de
+    qualquer execucao -- `hosts` e a lista de instancias que vao
+    rodar `dedicated_capture` de verdade (hoje, so o servidor -- um
+    por rota, mas o servidor e compartilhado entre rotas no piloto
+    L0/L219/L325 de hoje, entao normalmente uma lista de 1). Chamado
+    pelo smoke gate (`run_smoke_gate`) antes das 12 execucoes, nunca
+    depois."""
+    checks = [check_capture_prerequisites(h, key_path=key_path) for h in hosts]
+    go = all(c["ok"] for c in checks)
+    return {"go": go, "checks": checks}
+
+
 def run_preflight(profile, regions, instance_types_by_region, ami_pattern_by_region,
                    client_python_exe=_VENV_PYTHON_DEFAULT) -> dict:
     checks = [check_identity(profile), check_client_python_environment(client_python_exe)]

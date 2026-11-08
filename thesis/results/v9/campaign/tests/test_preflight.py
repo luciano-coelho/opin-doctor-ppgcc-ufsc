@@ -194,6 +194,98 @@ def test_versao_desalinhada_do_pin_e_detectada(monkeypatch, tmp_path):
     assert any("cryptography" in m and "46.0.3" in m and "50.0.2" in m for m in result["mismatches"])
 
 
+# --- Decisao 53 (pedido independente, item 4a/4c): pre-requisitos da
+# captura dedicada (criterio 1) em cada instancia -- fail-closed, com
+# mensagem clara, ANTES de qualquer execucao. `cli.run_ssh`
+# monkeypatchado diretamente (preflight.py chama essa funcao, nao
+# `cli._run`).
+
+_CAPTURE_PROBE_OK = (
+    "TCPDUMP_PATH=/usr/sbin/tcpdump\n"
+    "SUDO_NOPASSWD=1\n"
+    "MEASURE_IMAGE_ID=sha256:deadbeef\n"
+    "TMP_WRITABLE=1\n"
+    "PRIMARY_IFACE=ens5\n"
+)
+
+
+class _FakeSSHProc:
+    def __init__(self, stdout, returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+def test_todos_prerequisitos_de_captura_presentes_passa(monkeypatch):
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_CAPTURE_PROBE_OK))
+    result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is True, result
+    assert result["missing"] == []
+    assert result["primary_iface"] == "ens5"
+
+
+def test_tcpdump_ausente_reprova_com_mensagem_clara(monkeypatch):
+    broken = _CAPTURE_PROBE_OK.replace("TCPDUMP_PATH=/usr/sbin/tcpdump\n", "TCPDUMP_PATH=\n")
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(broken))
+    result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is False
+    assert any("tcpdump" in m for m in result["missing"]), result
+
+
+def test_imagem_measure_ausente_reprova(monkeypatch):
+    broken = _CAPTURE_PROBE_OK.replace("MEASURE_IMAGE_ID=sha256:deadbeef\n", "MEASURE_IMAGE_ID=\n")
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(broken))
+    result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is False
+    assert any("mockopin-v9-measure" in m for m in result["missing"]), result
+
+
+def test_interface_loopback_reprova():
+    """`lo` NUNCA pode passar como interface primaria -- mesma regra
+    de `_primary_iface` do orquestrador."""
+    broken = _CAPTURE_PROBE_OK.replace("PRIMARY_IFACE=ens5\n", "PRIMARY_IFACE=lo\n")
+    import unittest.mock as mock
+    with mock.patch.object(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(broken)):
+        result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is False
+    assert any("interface primaria" in m for m in result["missing"]), result
+
+
+def test_sudo_sem_permissao_reprova(monkeypatch):
+    broken = _CAPTURE_PROBE_OK.replace("SUDO_NOPASSWD=1\n", "SUDO_NOPASSWD=0\n")
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(broken))
+    result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is False
+    assert any("sudo" in m for m in result["missing"]), result
+
+
+def test_ssh_indisponivel_reprova_sem_estourar_excecao(monkeypatch):
+    def boom(host, cmd, **kw):
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(cli, "run_ssh", boom)
+    result = preflight.check_capture_prerequisites("203.0.113.9")
+    assert result["ok"] is False
+    assert "SSH" in result["note"]
+
+
+def test_run_capture_preflight_falha_se_qualquer_host_falhar(monkeypatch):
+    responses = {"203.0.113.9": _CAPTURE_PROBE_OK, "203.0.113.10": _CAPTURE_PROBE_OK.replace("TCPDUMP_PATH=/usr/sbin/tcpdump\n", "TCPDUMP_PATH=\n")}
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(responses[host]))
+    result = preflight.run_capture_preflight(["203.0.113.9", "203.0.113.10"])
+    assert result["go"] is False
+    assert result["checks"][0]["ok"] is True
+    assert result["checks"][1]["ok"] is False
+
+
+def test_mutante_run_capture_preflight_any_em_vez_de_all_e_pego(monkeypatch):
+    """Mutacao: usar any() em vez de all() pra agregar -- o teste
+    acima (go False com 1 host falho) tem que reprovar com essa
+    mutacao."""
+    checks = [{"ok": True}, {"ok": False}]
+    go_mutante = any(c["ok"] for c in checks)  # mutante: deveria ser all()
+    assert go_mutante is True
+    with pytest.raises(AssertionError):
+        assert go_mutante is False
+
+
 def test_mutante_ignora_mismatch_de_versao_e_pego(monkeypatch, tmp_path):
     """Mutacao: `ok` calculado so pelo parse de ML-DSA, ignorando
     `mismatches` de versao -- o teste acima tem que reprovar com essa

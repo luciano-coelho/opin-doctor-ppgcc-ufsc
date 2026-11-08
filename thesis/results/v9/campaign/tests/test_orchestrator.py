@@ -216,6 +216,91 @@ def test_porta_de_fumaca_passa_com_dados_bons(tmp_path):
     assert manifest["smoke_failures"] == []
 
 
+# --- Decisao 53 (pedido independente, item 4b/4c): preflight de
+# captura ANTES de qualquer execucao, e prova da captura em si (1 por
+# PERFIL, 4 no total -- nunca confundida com as 12 oficiais do
+# criterio 1 nem com as 12/60 execucoes).
+
+def test_porta_de_fumaca_aborta_antes_de_qualquer_execucao_se_prerequisito_de_captura_faltar(tmp_path, monkeypatch):
+    executor = orch.LocalExecutor()
+    monkeypatch.setattr(executor, "capture_ready_check",
+                         lambda: {"go": False, "checks": [{"check": "x", "ok": False, "host": "203.0.113.9", "missing": ["tcpdump nao encontrado no PATH"]}]})
+    manifest = orch.run_smoke_gate(executor, seed=1, out_dir=tmp_path)
+    assert manifest["smoke_ok"] is False
+    assert manifest["aborted_before_execution"] is True
+    assert manifest["total_execucoes"] == 0
+    assert "tcpdump" in manifest["note"]
+    assert not (tmp_path / "piloto_calls.json").exists(), "nenhum artefato de execucao deveria existir -- abortou ANTES de qualquer execucao"
+
+
+def test_mutante_porta_de_fumaca_ignora_capture_preflight_e_pego(tmp_path, monkeypatch):
+    """Mutacao: ignora o resultado de `capture_ready_check()` -- o
+    teste acima (aborted_before_execution=True, 0 execucoes) tem que
+    reprovar com essa mutacao, confirmando que o gate e de fato load-
+    bearing (sem ele, as 12 execucoes rodariam mesmo faltando tcpdump)."""
+    executor = orch.LocalExecutor()
+    monkeypatch.setattr(executor, "capture_ready_check", lambda: {"go": False, "checks": []})
+
+    def mutant_run_smoke_gate(executor, seed, out_dir):
+        # mutante: nunca olha capture_ready_check(), vai direto pras 12 execucoes
+        return orch.run_pilot(executor, seed, out_dir, n_per_profile=orch.SMOKE_N_PER_PROFILE,
+                               smoke=True, skip_dedicated_captures=True)
+
+    mutant_manifest = mutant_run_smoke_gate(executor, 1, tmp_path)
+    assert mutant_manifest["total_execucoes"] == 12  # mutante rodou tudo mesmo devendo abortar
+    with pytest.raises(AssertionError):
+        assert mutant_manifest["total_execucoes"] == 0
+
+
+def test_porta_de_fumaca_roda_prova_de_captura_por_perfil_4_nao_12(tmp_path):
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["capture_proof_ok"] is True
+    assert len(manifest["capture_proof_rows"]) == len(orch.PROFILES) == 4
+    assert {r["profile"] for r in manifest["capture_proof_rows"]} == set(orch.PROFILES)
+    proof_dir = Path(manifest["capture_proof_dir"])
+    assert proof_dir.name == "smoke_capture_proof"
+    proof_files = sorted(p.name for p in proof_dir.glob("*.log"))
+    assert proof_files == sorted(f"{p}.log" for p in orch.PROFILES), proof_files
+    # nunca confundida com as 12 capturas oficiais do criterio 1
+    assert proof_dir != Path(manifest["capturas_dir"])
+
+
+def test_porta_de_fumaca_capture_proof_falha_se_qualquer_perfil_falhar(tmp_path, monkeypatch):
+    real_dedicated_capture = orch.LocalExecutor.dedicated_capture
+
+    def broken_dedicated_capture(self, profile, route):
+        if profile == "hibrido-and":
+            raise RuntimeError("tshark nao decifrou nada -- simulado")
+        return real_dedicated_capture(self, profile, route)
+
+    monkeypatch.setattr(orch.LocalExecutor, "dedicated_capture", broken_dedicated_capture)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["capture_proof_ok"] is False
+    assert manifest["smoke_ok"] is False
+    broken_row = next(r for r in manifest["capture_proof_rows"] if r["profile"] == "hibrido-and")
+    assert broken_row["ok"] is False
+    assert "tshark" in broken_row["note"]
+
+
+def test_mutante_smoke_ok_ignora_capture_proof_e_pego(tmp_path, monkeypatch):
+    """Mutacao: `smoke_ok` calculado sem o `capture_proof_ok` -- o
+    teste acima (smoke_ok False quando a prova de captura falha) tem
+    que reprovar com essa mutacao."""
+    real_dedicated_capture = orch.LocalExecutor.dedicated_capture
+
+    def broken_dedicated_capture(self, profile, route):
+        if profile == "hibrido-and":
+            raise RuntimeError("simulado")
+        return real_dedicated_capture(self, profile, route)
+
+    monkeypatch.setattr(orch.LocalExecutor, "dedicated_capture", broken_dedicated_capture)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    smoke_ok_mutante = manifest["total_execucoes"] == orch.SMOKE_EXPECTED_TOTAL and not manifest["smoke_failures"]  # mutante: ignora capture_proof_ok
+    assert smoke_ok_mutante is True
+    with pytest.raises(AssertionError):
+        assert smoke_ok_mutante is False
+
+
 def test_porta_de_fumaca_aborta_se_qualquer_execucao_falhar(tmp_path, monkeypatch):
     """Mutacao direta no Executor: UMA das 12 execucoes (L219/pqc)
     devolve contagens HTTP erradas -- smoke_ok tem que virar False e
@@ -608,3 +693,74 @@ def test_mutante_dedicated_capture_sem_checar_iface_vazia_e_pego(monkeypatch):
     assert mutant_raised is False
     with pytest.raises(AssertionError):
         assert mutant_raised is True
+
+
+# --- Decisao 52, Emenda 14 (pedido independente, item 2a): KEYLOG_PATH
+# tem que ficar DESLIGADO durante qualquer janela cronometrada (start_
+# block/run_execution/readiness_probe) e SO ligado durante dedicated_
+# capture -- achado nesta rodada: a primeira versao ligava a flag em
+# TODO `start_block`, incondicionalmente, o que ligaria o keylog
+# durante as 60 execucoes reais tambem (I/O extra por handshake nunca
+# presente antes). Corrigido: `_launch_gateway(profile, keylog=False)`
+# e o default (usado por `start_block`); SO `dedicated_capture` chama
+# `_launch_gateway(profile, keylog=True)`, reiniciando o MESMO
+# container -- e isso acontece dentro do laco de capturas dedicadas de
+# `run_pilot`, que so comeca depois que TODAS as 60 execucoes (e seus
+# `stop_block`) ja terminaram (ver run_pilot, linhas do loop principal
+# vs o loop de `dedicated_capture` em separado) -- nunca entre uma
+# execucao cronometrada e outra.
+
+def test_start_block_nunca_liga_keylog_path(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("hibrido-and", "L0")
+    flat = [" ".join(c) for c in calls]
+    gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
+    assert gateway_launches, flat
+    assert all("KEYLOG_PATH" not in c for c in gateway_launches), gateway_launches
+
+
+def test_run_execution_nunca_menciona_keylog(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.run_execution("hibrido-and", "L0", 1)
+    flat = [" ".join(c) for c in calls]
+    assert not any("KEYLOG_PATH" in c for c in flat), flat
+
+
+def test_dedicated_capture_liga_keylog_so_na_propria_reinicializacao(monkeypatch):
+    """A PRIMEIRA subida do gateway (via start_block, chamado por
+    dedicated_capture pra garantir o perfil certo) nao tem KEYLOG_PATH;
+    a SEGUNDA (via _launch_gateway(..., keylog=True), a reinicializacao
+    dedicada) tem. As duas tem que existir E diferir."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.dedicated_capture("hibrido-and", "L0")
+    flat = [" ".join(c) for c in calls]
+    gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
+    assert len(gateway_launches) == 2, gateway_launches
+    assert "KEYLOG_PATH" not in gateway_launches[0], gateway_launches[0]
+    assert "KEYLOG_PATH=/tmp/v9_keylog.txt" in gateway_launches[1], gateway_launches[1]
+
+
+def test_mutante_keylog_sempre_ligado_e_pego(monkeypatch):
+    """Mutacao: reproduz o bug ORIGINAL desta rodada -- KEYLOG_PATH
+    incondicional em `_launch_gateway` -- confirma que o teste acima
+    depende de fato da correcao."""
+    def mutant_launch_gateway(self, profile, keylog=False):
+        cli.run_ssh(self._server_ip(), f"docker run -d --name {self.gateway_container} -e KEYLOG_PATH=/tmp/v9_keylog.txt mockopin-v9-gateway", key_path=self.key_path)
+
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
+    monkeypatch.setattr(orch.SSHExecutor, "_launch_gateway", mutant_launch_gateway)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")
+    flat = [" ".join(c) for c in calls]
+    gateway_launches = [c for c in flat if "docker run -d --name v9-mtls" in c]
+    mutant_has_keylog_in_start_block = any("KEYLOG_PATH" in c for c in gateway_launches)
+    assert mutant_has_keylog_in_start_block is True  # mutante liga indevidamente
+    with pytest.raises(AssertionError):
+        assert mutant_has_keylog_in_start_block is False

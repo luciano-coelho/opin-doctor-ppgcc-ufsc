@@ -6481,3 +6481,295 @@ confirmou que o pre-registro ja previa exatamente o que foi
 implementado, e os itens 2-4 foram prova/correcao de implementacao,
 nunca mudanca de desenho. Continuo sem autorizar push nem recursos na
 AWS.
+
+## 53. Cinco pontos antes da data do piloto: criterio de emenda esclarecido e Emenda 14 registrada (3 correcoes da Decisao 52 nunca deveriam ter ficado de fora), KEYLOG_PATH confirmado desligado em toda janela cronometrada com teste real, correcao de uma alegacao errada da Decisao 52 (get_local_leg_cert_paths nunca foi "morta"), preflight de captura + prova por perfil no smoke gate, causa raiz do desvio de +22/28B isolada no ClientHello
+
+Resposta aos 5 pontos pedidos. Nada de AWS, sem push, branch
+`v9/fase1-local`.
+
+**1. Criterio de emenda -- as 3 correcoes faltantes viram Emenda 14.**
+
+Existem DOIS criterios distintos neste projeto, nunca confundidos
+antes desta rodada:
+
+a) **O criterio do PROPRIO pre-registro** (`v9-prereg`, secao final,
+citado literalmente): "Emenda de criterio, depois da tag `v9-prereg`:
+exige decisao nova, datada, com motivo... Qualquer mudanca num dos 7
+criterios acima (limiar, metodo, rota, N) DEPOIS que a tag existir
+precisa de uma nova entrada numerada". **Este criterio e estrito:**
+so protege o TEXTO dos 7 criterios de ir/nao-ir (Decisao 21), nunca
+qualquer linha de codigo do projeto.
+
+b) **A instrucao operacional do Luciano pra esta fase de
+implementacao**, dada explicitamente na Decisao 51 e CONFIRMADA ali
+mesmo: "Confirmado com o Luciano que isso dispensa consulta previa
+(item (d) do pedido: 'se for apenas bug de implementacao, registre
+como Emenda numerada')." A propria Decisao 51 e explicita que a
+correcao do alg mismatch NAO tocava nenhum dos 7 criterios ("Isso
+nunca toca os 7 criterios, baselines ou tolerancias do pre-registro
+v9-prereg"), mas foi registrada como Emenda 13 mesmo assim -- por
+causa do criterio (b), nunca do (a).
+
+**Conclusao: o criterio (b) e o que de fato rege este projeto nas
+rodadas de implementacao, e ele NAO sustenta a diferenca entre a
+Emenda 13 e as 3 correcoes desta rodada -- as 3 sao, pela MESMA regra,
+"bug de implementacao" e deveriam ter sido Emendas tambem.** Registro
+agora:
+
+**Emenda 14 (datada 2026-11-07, retroativa a esta mesma sessao --
+cobre as 3 correcoes do commit `ec37ec2c`, Decisao 52):**
+
+| # | Correcao | Arquivo | Motivo | Efeito sobre medicoes |
+|---|---|---|---|---|
+| 14.1 | `get_client_cert_paths("hibrido-and")` passa a devolver o cert hybrid, nao o classico | `thesis/scripts/opin_flow.py` | hibrido-and reusa a identidade de app do hybrid integralmente (Decisao 17) -- o `else` generico nunca deveria ter pego este perfil | **NENHUM** -- confirmado com teste (item 3 abaixo): esta funcao e so alcancavel pelo ramo NAO-V9_HARNESS de `start_tls_kem_proxy`, nunca executado pelo piloto real (V9_HARNESS=1 sempre) |
+| 14.2 | `get_local_leg_cert_paths("hibrido-and")` adicionada a tupla, preserva o placeholder classico (nao herda o efeito da 14.1) | `thesis/scripts/opin_flow.py` | mesma razao que "hybrid" ja estava na tupla (separacao de pool de conexao, nunca ML-DSA) | **NENHUM sobre bytes/contagens** -- o cert desta funcao e cosmetico (nunca verificado pelo listener local, confirmado no proprio docstring), MAS a funcao EM SI roda em toda execucao real (correcao a uma alegacao errada da Decisao 52 -- ver item 3) |
+| 14.3 | `KEYLOG_PATH` passa a ser lido tambem em `runBusinessMode` (gateway Go) | `thesis/results/v9/integration/gateway/business_server.go` | o unico modo que o piloto usa (`HTTP_MODE=business`) nunca lia a env var -- `nil` hardcoded | **NENHUM sobre handshake/rede** -- so liga/desliga a ESCRITA de um arquivo de chaves de sessao; nunca participa de nenhuma decisao de aceitar/rejeitar conexao nem de nenhum byte na rede |
+
+Nenhuma das 3 mudou qualquer limiar/metodo/rota/N dos 7 criterios
+(confirmado, item (a) acima tambem continua intacto) nem qualquer
+comportamento MEDIDO do piloto (confirmado coluna "efeito" -- 2 delas
+sao mortas ou cosmeticas, a terceira e so instrumentacao OFF por
+padrao, ver item 2 abaixo).
+
+**2. KEYLOG_PATH e o gateway Go.**
+
+**(a) Desligado em toda janela cronometrada, provado com teste.**
+Achado real nesta rodada (nao hipotese): a primeira versao da
+Decisao 52 ligava `KEYLOG_PATH` em TODO `start_block` -- ou seja, em
+TODA execucao cronometrada, nao so durante `dedicated_capture`. Isso
+teria introduzido I/O extra por handshake (escrita de chave de
+sessao em disco) em todas as 60 execucoes reais, nunca presente antes
+desta rodada -- um efeito de MEDICAO real, nao so teorico.
+**Corrigido:** `_launch_gateway(profile, keylog=False)` (novo metodo,
+fatorado de `start_block`) e o UNICO lugar que decide a flag --
+`start_block` sempre chama com `keylog=False` (nunca liga); SO
+`dedicated_capture` chama com `keylog=True`, reiniciando o MESMO
+container SO quando vai capturar. Garantia: variavel de ambiente
+(`-e KEYLOG_PATH=...`), setada so na segunda chamada a
+`_launch_gateway`, nunca a primeira. Testes novos (`test_orchestrator.py`):
+`test_start_block_nunca_liga_keylog_path` (verde), `test_run_execution_
+nunca_menciona_keylog` (verde), `test_dedicated_capture_liga_keylog_
+so_na_propria_reinicializacao` (confirma as DUAS chamadas existem e
+diferem), `test_mutante_keylog_sempre_ligado_e_pego` (mutante que
+reproduz o bug ORIGINAL desta rodada -- confirma que os testes acima
+dependem de fato da correcao).
+
+**(b) Reinicializacao do gateway acontece fora de qualquer janela
+cronometrada, nunca altera dado ja medido.** Estrutural, nao so por
+convencao: `run_pilot` roda o loop de blocos (as 60 execucoes +
+`stop_block` de cada bloco) INTEIRO primeiro; SO DEPOIS, num loop
+SEPARADO (`if not skip_dedicated_captures: for profile... dedicated_
+capture(...)`), as capturas dedicadas rodam. `dedicated_capture`
+agora chama `self.start_block(profile, route)` (reconstroi o
+backend/proxy/signer certos pro PERFIL desta captura -- achado
+real: sem isso, o gateway que estaria rodando nesse ponto seria o do
+ULTIMO bloco da grade, nao necessariamente o perfil certo) e so
+ENTAO `_launch_gateway(..., keylog=True)`. As duas reinicializacoes
+ocorrem dentro deste segundo loop, que so comeca depois que TODOS os
+dados das 60 execucoes ja foram escritos em disco (`piloto_calls.
+json`/`criterio6_execucoes.json`) -- reiniciar o container depois
+disso NUNCA pode alterar um dado ja persistido. `dedicated_capture`
+termina com `self.stop_block(...)`, limpeza simetrica.
+
+**(c) Hash/identidade do binario do gateway -- NAO ha hash pre-
+registrado pra comparar, mas ha um MECANISMO pre-registrado pra
+garantir integridade, e ele continua correto.** Procurado em todo o
+`v9-prereg` congelado: nenhum hash literal de nenhum build do
+`gateway` foi registrado em nenhum momento anterior -- nao ha "hash
+antigo" pra comparar contra um "novo". O que EXISTE, pre-registrado
+(secao de entrega da PKI/binario/coleta): **"Entrega do binario:
+mesmo caminho -- operador `scp` o `gateway`/`proxy` (mais o
+`.sha256`) pro controle, controle `scp` pra cada instancia de
+destino... cada instancia roda `sha256sum -c` antes de usar."** Esse
+mecanismo SEMPRE recalcula o hash a partir do binario que sera
+efetivamente usado (nunca reutiliza um valor antigo) -- minha
+correcao do `KEYLOG_PATH` muda o binario compilado (qualquer mudanca
+de fonte muda), e o mecanismo pre-registrado captura isso
+corretamente por construcao, sem precisar de nenhuma acao extra
+minha. **Achado honesto, separado:** o `SSHExecutor` atual
+(`orchestrator.py`) NUNCA implementou esse mecanismo de `scp`+
+`sha256sum -c` pro gateway -- ele assume uma imagem Docker ja
+construida na instancia (`docker run ... mockopin-v9-gateway`), sem
+verificacao de hash nenhuma. Gap PRE-EXISTENTE (nao causado por esta
+rodada), registrado aqui por completude, nao corrigido agora (exige
+decidir ENTRE o mecanismo pre-registrado de binario+sha256 OU
+formalizar o build-por-imagem-Docker como o metodo real -- decisao
+de desenho, nao bug de implementacao, fora do escopo desta rodada).
+
+**3. Teste para a alegacao "morto no piloto" -- e uma correcao real da Decisao 52.**
+
+`thesis/scripts/tests/test_profile_cert_dispatch.py`, 3 testes novos:
+
+- `test_get_client_cert_paths_nunca_chamada_sob_v9_harness` --
+  **VERDE.** Prova que `get_client_cert_paths` e genuinamente morta
+  sob `V9_HARNESS=1` (so alcancavel pelo ramo nao-harness de
+  `start_tls_kem_proxy`, que o piloto real nunca executa).
+- `test_experimento_descartavel_get_client_cert_paths_E_chamada_sem_
+  v9_harness` -- **VERMELHO, de proposito (experimento descartavel
+  pedido).** A MESMA asserção, agora sem `V9_HARNESS` -- reprova,
+  confirmando que o teste verde acima nao e vacuo (a funcao nao e
+  "morta" em geral, so dentro do ramo certo).
+- `test_get_local_leg_cert_paths_e_live_sob_v9_harness_correcao_da_
+  decisao_52` -- **achado: a Decisao 52 errou.** Ela alegou que as
+  DUAS funcoes eram mortas sob `V9_HARNESS=1`. Falso pra
+  `get_local_leg_cert_paths`: `run_insurance_flow()`/`run_person_
+  flow()` chamam essa funcao SEM NENHUMA guarda de `V9_HARNESS`,
+  logo ela roda em TODA execucao real, harness ligado ou nao.
+  Confirmado executando `run_insurance_flow("hibrido-and")` de
+  verdade (rede bloqueada de proposito logo depois, so pra isolar o
+  que importa) -- `get_local_leg_cert_paths` foi chamada ANTES de
+  qualquer tentativa de rede. **Correcao da Decisao 52 registrada
+  aqui, nao escondida:** a correcao 14.2 nunca foi "morta" -- e
+  cosmetica (o cert dela nunca e verificado pelo listener local), mas
+  roda de verdade. A tabela da Emenda 14 (item 1 acima) ja reflete
+  essa correcao.
+
+**4. Captura na topologia da AWS -- preflight + prova no smoke gate.**
+
+**(a) Preflight novo**, `thesis/results/v9/campaign/scripts/
+preflight.py`: `check_capture_prerequisites(host)` -- 1 chamada SSH
+combinando 5 probes (`tcpdump` no PATH, `sudo -n true` pra confirmar
+sudo sem senha -- exigido pelo `tcpdump` real de `dedicated_capture`,
+mesma convencao do `campaign_run.py` real da v8 citada na propria
+Decisao 46/Terraform; imagem `mockopin-v9-measure` presente via
+`docker image inspect`; `/tmp` gravavel; interface primaria via `ip
+-o -4 route show to default`, nunca `lo`). `run_capture_preflight
+(hosts)` agrega varios hosts, fail-closed (`go` so `True` se TODOS
+passarem). **Como a imagem chega na instancia, documentado
+honestamente:** construida a partir do codigo fonte sincronizado
+(mesma convencao de TODO outro `docker build` deste projeto, nunca
+baixada de um registry) -- o check so confirma PRESENCA final, nao a
+origem; o passo de sincronizar+buildar ainda nao existe no deploy
+real (gap separado, fora desta rodada, mesma familia do achado do
+item 2c).
+
+**(b) Smoke gate ganha a prova.** `run_smoke_gate` agora: (1) chama
+`executor.capture_ready_check()` PRIMEIRO -- `LocalExecutor` sempre
+`go=True` (sem infraestrutura real pra checar), `SSHExecutor` chama
+`preflight.run_capture_preflight([self._server_ip()], ...)` de
+verdade; (2) SO DEPOIS rodam as 12 execucoes (agora com
+`skip_dedicated_captures=True` explicito -- corrige uma divergencia
+que ja existia entre o docstring de `run_pilot`, que dizia que a
+porta de fumaca pulava essa parte, e o codigo, que nunca pulava de
+fato); (3) depois das 12, roda `dedicated_capture` UMA vez por
+PERFIL (4, nunca 12) numa rota representativa, escreve em
+`smoke_capture_proof/` (nunca `criterio1_capturas/`), valida cada
+bloco com o avaliador REAL (`ec._message_sizes_for_profile`).
+`smoke_ok` agora exige as 3 coisas: 12/12 execucoes, 0 falhas, E
+`capture_proof_ok`.
+
+**(c) Fail-closed, mensagem clara, antes de qualquer execucao --
+testado.** `test_porta_de_fumaca_aborta_antes_de_qualquer_execucao_
+se_prerequisito_de_captura_faltar`: com `capture_ready_check()`
+reprovando, `aborted_before_execution=True`, `total_execucoes=0`,
+nenhum arquivo de execucao e escrito, a mensagem cita exatamente o
+que falta (ex.: "tcpdump nao encontrado no PATH"). Mutante
+(`test_mutante_porta_de_fumaca_ignora_capture_preflight_e_pego`)
+confirma que o gate e load-bearing -- sem ele, as 12 execucoes
+rodariam mesmo faltando `tcpdump`.
+
+**Diff resumido** (`preflight.py`): +90 linhas (`_CAPTURE_PROBE_
+SCRIPT`, `check_capture_prerequisites`, `run_capture_preflight`,
+nunca tocando `run_preflight` nem nenhum check existente).
+**Diff resumido** (`orchestrator.py`): `_launch_gateway` fatorado de
+`start_block` (item 2), `capture_ready_check` novo nos dois
+Executors, `dedicated_capture` (SSHExecutor) ganha `start_block`+
+`_launch_gateway(keylog=True)`+`stop_block` no inicio/fim, `run_
+smoke_gate` reescrito (preflight + capture proof, item 4).
+
+**O que so a AWS confirma (nao mudou desde a Decisao 52, registrado
+de novo por completude):** a interface REAL (`ens5` ou equivalente,
+nao `eth0` do bridge Docker local), o trafego cruzando DUAS
+instancias EC2 de verdade, a tolerancia de bytes exata do piloto
+(SAN com EIP real), e agora tambem: se `mockopin-v9-measure` de fato
+constroi/chega em cada instancia (mecanismo de sincronizacao ainda
+nao implementado, item 4a).
+
+**5. Desvio do handshakeBytesIn (+22/+28B) -- causa isolada, nao so suposta.**
+
+Capturado de novo, agora olhando CADA mensagem individualmente (nao
+so o agregado) contra os baselines REAIS de `evaluate_criteria.py`
+(`HANDSHAKE_MESSAGE_BASELINE`/`CLIENTHELLO_BASELINE`), pro perfil
+Hibrido-v8:
+
+| Mensagem (cliente) | Observado (raw) | Baseline (raw) | Desvio |
+|---|---|---|---|
+| ClientHello | **1900** | **1872** | **+28B** |
+| Certificate_cliente | 6140 | 6140 | 0 |
+| CertificateVerify_cliente | 260 | 260 | 0 |
+| Finished_cliente | 32 | 32 | 0 |
+
+**O desvio esta 100% concentrado no ClientHello -- todas as outras
+mensagens bateram EXATO, 0B de diferenca.** Causa isolada no codigo,
+nao suposta: `thesis/results/v9/integration/negtest/main.go`'s
+`baseConfig()` (usada pra disparar a conexao desta validacao local,
+via `-scenario matrix`) seta `MinVersion: tls.VersionTLS12` pra
+TODOS os perfis, genericamente -- enquanto `proxy/main.go`'s
+`singleChainClientConfig()` (o cliente REAL do piloto) recebe
+`minVersion` POR PERFIL, e `hibrido-v8`/`pqc` sao chamados com
+`tls.VersionTLS13` explicitamente (so `classico` usa `TLS12`). Um
+`ClientHello` que declara suporte a TLS 1.2 TEM que anunciar a lista
+de cipher suites legados e signature_algorithms adicionais validos
+pra 1.2 -- exatamente o que infla o `ClientHello` em ~22-28B,
+variando por perfil conforme o conteudo exato dessa lista extra.
+**Nao e NewSessionTicket (isso e pos-handshake, nunca contado em
+`handshakeBytesIn/Out`, que fecha a snapshot logo depois de
+`Handshake()` retornar) nem overhead de registro TLS 1.3 (confirmado
+registro a registro: cada record AEAD tem 17B de overhead -- 1B
+content-type + 16B tag -- IDENTICO nos dois lados, ja embutido nos
+dois numeros, nunca a causa da DIFERENCA entre eles).**
+
+**Conclusao: este desvio e um artefato do METODO DE VALIDACAO (negtest
+usado como disparador de conexao pra esta captura local), nunca uma
+propriedade do cliente real do piloto** (`opin_flow.py`/proxy, que
+pina `MinVersion` corretamente por perfil) -- nao deveria aparecer
+numa medicao feita com o cliente de verdade.
+
+**Tolerancia pre-registrada para `handshakeBytesIn/Out` -- NAO
+EXISTE, declarado explicitamente.** O que o pre-registro define
+(Decisao 20/29/30) e tolerancia para o criterio 1 (tamanhos POR
+MENSAGEM, via tshark): hoje, **0B pro ClientHello, ±4B pra
+Certificate, 0B pras demais** -- mas isso mede uma grandeza
+DIFERENTE (o campo `tls.handshake.length` de cada mensagem
+decifrada), nao o contador agregado `handshakeBytesIn/Out` que o
+proprio gateway loga (bytes BRUTOS na conexao TCP, incluindo
+overhead de registro/AEAD). Nenhuma tolerancia foi pre-registrada
+pra este segundo numero especificamente.
+
+**Proposta, sem aplicar retroativamente:** adotar a MESMA tolerancia
+0B que criterion_1 ja usa pro ClientHello (a unica mensagem onde
+algum desvio historicamente apareceu), propagada pro agregado -- ou
+seja, `handshakeBytesIn/Out` medido com o CLIENTE REAL do piloto
+deveria bater EXATO (0B) contra os valores historicos (8.397/8.552,
+11.902/12.177), ja que todas as mensagens individuais ja sao exigidas
+em 0B/±4B e o agregado e so a soma delas mais o overhead de protocolo
+fixo (identico entre execucoes). Proposta registrada aqui pro
+Luciano decidir -- NAO aplicada a nenhum criterio existente nesta
+rodada, e a medicao real (quando feita com o cliente de verdade, nao
+negtest) precisa ser refeita antes de declarar esta tolerancia
+cumprida ou nao.
+
+**Testes:** 88 no total entre os pacotes tocados nesta rodada -- 81
+em `thesis/results/v9/campaign/tests/` (68 antes + 13 novos: 4
+KEYLOG_PATH, 8 preflight de captura, 5 smoke gate/captura -- a conta
+exata esta nos nomes dos testes acima, alguns cobrem mais de um
+ponto), mais 7 em `thesis/scripts/tests/test_profile_cert_dispatch.py`
+(4 antes + 3 novos do item 3). Todos passando.
+
+**Commit local** (sem push), branch `v9/fase1-local`: arquivos
+tocados -- `thesis/results/v9/campaign/scripts/preflight.py` (novo:
+`check_capture_prerequisites`/`run_capture_preflight`), `thesis/
+results/v9/campaign/scripts/orchestrator.py` (`_launch_gateway`,
+`capture_ready_check` nos dois Executors, `dedicated_capture`
+reestruturado, `run_smoke_gate` reescrito), `thesis/results/v9/
+campaign/tests/test_orchestrator.py` (+17), `thesis/results/v9/
+campaign/tests/test_preflight.py` (+8), `thesis/scripts/tests/
+test_profile_cert_dispatch.py` (+3, docstring corrigido).
+
+Emenda 14 registrada (item 1). Nenhum outro item exigiu emenda --
+item 2 foi correcao de implementacao (instrumentacao OFF por
+padrao, nunca afetando medicao), item 3 confirmou e corrigiu uma
+alegacao da Decisao 52 (nunca mudou desenho), item 4 acrescentou
+checagem/prova (aditivo, nunca mudou um criterio existente), item 5
+e diagnostico + proposta NAO aplicada. Continuo sem autorizar push
+nem recursos na AWS.
