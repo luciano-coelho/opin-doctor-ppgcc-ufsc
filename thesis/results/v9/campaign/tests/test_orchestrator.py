@@ -1044,18 +1044,22 @@ def test_tcp_preflight_roda_do_cliente_antes_de_qualquer_entrega(monkeypatch):
     # do controle/operador -- mesma exigencia literal da v8 real.
     assert any("203.0.113.60" in c and "/dev/tcp/" in c for c in flat), flat
     assert executor.tcp_preflight_results == [
-        {"route": "L0", "gateway_ip": "10.0.1.50", "ok": True, "output": "OK"}
+        {"route": "L0", "gateway_ip": "10.0.1.50", "ok": True, "outcome": "OK", "output": "OK"}
     ]
 
 
-def test_tcp_preflight_aborta_antes_de_qualquer_entrega_se_sem_alcance(monkeypatch):
+def test_tcp_preflight_aborta_se_timeout_de_verdade(monkeypatch):
+    """So TIMEOUT (nenhuma resposta, SG/VPC bloqueando de verdade)
+    reprova -- Decisao 65: REFUSED (RST rapido, nada escutando ainda
+    na 443) e um resultado ESPERADO antes do gateway subir, nunca um
+    sintoma de rede errada."""
     calls = []
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "/dev/tcp/" in remote_cmd:
-            return _SimpleProc(stdout="FAIL\n")
+            return _SimpleProc(stdout="TIMEOUT\n")
         return _SimpleProc(stdout='{"calls": [], "call_count": 0, "retries": []}')
 
     monkeypatch.setattr(cli, "_run", fake_run)
@@ -1064,8 +1068,32 @@ def test_tcp_preflight_aborta_antes_de_qualquer_entrega_se_sem_alcance(monkeypat
         executor.start_block("classico", "L0")
     flat = [" ".join(c) for c in calls]
     assert not any("docker save" in c for c in flat), (
-        "nenhuma entrega de imagem pode acontecer se a sondagem TCP falhar -- " + str(flat)
+        "nenhuma entrega de imagem pode acontecer se a sondagem TCP der timeout de verdade -- " + str(flat)
     )
+
+
+def test_tcp_preflight_passa_com_connection_refused(monkeypatch):
+    """Achado real (execucao real do piloto, Decisao 65): no primeiro
+    bloco de qualquer rota o gateway AINDA NAO EXISTE (e o primeiro
+    passo de start_block, de proposito) -- a porta 443 responde
+    "connection refused" (RST), nunca um timeout. Isso tem que PASSAR
+    (prova que o Security Group deixou o pacote passar), nunca
+    abortar."""
+    calls = []
+    base_fake = _fake_run_factory(calls)
+
+    def fake_run(argv, timeout=None):
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "/dev/tcp/" in remote_cmd:
+            calls.append(argv)
+            return _SimpleProc(stdout="REFUSED\n")
+        return base_fake(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor.start_block("classico", "L0")  # nao deveria levantar
+    assert executor.tcp_preflight_results[0]["ok"] is True
+    assert executor.tcp_preflight_results[0]["outcome"] == "REFUSED"
 
 
 def test_tcp_preflight_roda_so_uma_vez_por_rota(monkeypatch):

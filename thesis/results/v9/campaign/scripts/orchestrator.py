@@ -612,22 +612,48 @@ class SSHExecutor:
         rota (nao por bloco/perfil -- a rota e o SG nunca mudam entre
         perfis), ANTES de qualquer entrega de imagem/verificacao cara
         -- barato, falha rapido se o Security Group/VPC estiver
-        errado, sem esperar o resto do `start_block` pra descobrir."""
+        errado, sem esperar o resto do `start_block` pra descobrir.
+
+        Decisao 65 (achado real, ao vivo, na propria execucao do
+        piloto): v8 tinha o `mtls` como servico de docker-compose
+        PERSISTENTE (nunca recriado por `switch_crypto_profile.py`),
+        entao a porta 443 sempre estava de pe quando `preflight_tcp.py`
+        rodava. Na v9, `_launch_gateway` faz `docker rm -f`+`docker run`
+        a cada troca de perfil -- no PRIMEIRO bloco de qualquer rota
+        (ou num exercicio isolado como `--exercise-start-stop`), o
+        gateway AINDA NAO EXISTE quando este metodo roda (ele e o
+        PRIMEIRO passo de `start_block`, de proposito). "Connection
+        refused" (RST rapido) e um resultado DIFERENTE de um timeout
+        real: RST prova que o pacote chegou ao kernel do servidor e
+        foi rejeitado so porque nada escuta ainda na porta --
+        exatamente o esperado antes do gateway subir, e uma prova
+        POSITIVA de que o Security Group/VPC deixou o pacote passar.
+        So um TIMEOUT de verdade (nenhuma resposta, pacote descartado
+        em silencio) e evidencia real de SG/VPC errado -- so esse caso
+        aborta agora."""
         if route in self._tcp_preflight_done:
             return
         gw_ip = self._server_gateway_ip(route)
         timeout = 5
-        cmd = f"timeout {timeout} bash -c 'echo > /dev/tcp/{gw_ip}/443' && echo OK || echo FAIL"
+        cmd = (
+            f"timeout {timeout} bash -c 'echo > /dev/tcp/{gw_ip}/443' >/dev/null 2>&1; RC=$?; "
+            f"if [ $RC -eq 0 ]; then echo OK; elif [ $RC -eq 124 ]; then echo TIMEOUT; else echo REFUSED; fi"
+        )
         proc = cli.run_ssh(self._client_ip(route), cmd, key_path=self.key_path)
-        ok = "OK" in (proc.stdout or "")
-        self.tcp_preflight_results.append({"route": route, "gateway_ip": gw_ip, "ok": ok,
+        outcome = (proc.stdout or "").strip()
+        # OK (gateway ja escutando) ou REFUSED (caminho de rede
+        # confirmado, so falta a app subir) sao os dois resultados
+        # ESPERADOS antes do primeiro _launch_gateway -- so TIMEOUT
+        # (SG/VPC bloqueando de verdade, sem resposta nenhuma) reprova.
+        ok = outcome in ("OK", "REFUSED")
+        self.tcp_preflight_results.append({"route": route, "gateway_ip": gw_ip, "ok": ok, "outcome": outcome,
                                             "output": (proc.stdout + proc.stderr).strip()})
         self._tcp_preflight_done.add(route)
         if not ok:
             raise RuntimeError(
-                f"_tcp_preflight {route}: cliente nao alcancou {gw_ip}:443 por TCP puro -- "
-                f"provavel Security Group/VPC errado, abortando ANTES de qualquer entrega de imagem "
-                f"(saida: {(proc.stdout + proc.stderr).strip()!r})"
+                f"_tcp_preflight {route}: cliente nao alcancou {gw_ip}:443 por TCP puro (timeout, nenhuma "
+                f"resposta) -- provavel Security Group/VPC errado, abortando ANTES de qualquer entrega de "
+                f"imagem (saida: {(proc.stdout + proc.stderr).strip()!r})"
             )
 
     def start_block(self, profile, route):

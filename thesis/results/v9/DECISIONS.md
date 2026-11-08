@@ -7989,3 +7989,44 @@ scripts/deliver_source.py` (`CONTROL_FILES` +1), `thesis/results/v9/
 campaign/scripts/orchestrator.py` (`from __future__ import
 annotations`), `thesis/results/v9/integration/evaluate_criteria.py`
 (idem), `thesis/results/v9/DECISIONS.md` (esta Decisao).
+
+## 66. Achado real no Passo 9 (--exercise-start-stop) -- `_tcp_preflight` reprovava sempre no PRIMEIRO bloco de qualquer rota, porque checava a porta 443 antes do gateway existir; corrigido pra distinguir "connection refused" (rede OK, app ainda nao subiu -- esperado) de timeout de verdade (unico caso que ainda reprova)
+
+Branch `v9/fase1-local`, commit e push.
+
+**Achado, ao vivo, retomando o Passo 9:** `_tcp_preflight` abortou
+com "cliente nao alcancou ...:443" -- saida real: `bash: connect:
+Connection refused`. Investigando: a v8 real tinha o `mtls` como
+servico de docker-compose PERSISTENTE (nunca recriado por
+`switch_crypto_profile.py`), entao a porta 443 sempre estava de pe
+quando `preflight_tcp.py` (o original) rodava. A v9's `_launch_
+gateway` faz `docker rm -f`+`docker run` a cada troca de perfil --
+`_tcp_preflight`, sendo o PRIMEIRO passo de `start_block` de
+proposito, roda ANTES do gateway jamais ter subido no primeiro
+bloco de qualquer rota (ou num exercicio isolado como `--exercise-
+start-stop`) -- "connection refused" e exatamente o esperado nesse
+momento, nunca um sintoma de Security Group errado.
+
+**Distincao que estava faltando:** "connection refused" (RST
+rapido) PROVA que o pacote chegou ao kernel do servidor e foi
+rejeitado so porque nada escuta ainda -- evidencia POSITIVA de que
+o Security Group deixou o trafego passar. So um TIMEOUT de verdade
+(nenhuma resposta, pacote descartado em silencio) e evidencia real
+de SG/VPC errado.
+
+**Corrigido:** o comando remoto agora distingue os 3 casos (`$?` do
+`timeout` real: `0`=OK, `124`=TIMEOUT, qualquer outro=REFUSED) --
+`ok = outcome in ("OK", "REFUSED")`, so `TIMEOUT` aborta.
+`tcp_preflight_results` ganha o campo `outcome` (alem de `ok`), pra
+auditoria mostrar qual dos 3 aconteceu de verdade.
+
+**Testes:** `test_tcp_preflight_aborta_se_timeout_de_verdade`
+(renomeado/corrigido -- simula TIMEOUT explicito, nao mais "FAIL"
+generico) + `test_tcp_preflight_passa_com_connection_refused` (novo
+-- prova que REFUSED passa e deixa o bloco inteiro prosseguir) -- 145
+no total (144 antes + 1 novo).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/orchestrator.py` (`_tcp_preflight` corrigido),
+`thesis/results/v9/campaign/tests/test_orchestrator.py` (2 testes),
+`thesis/results/v9/DECISIONS.md` (esta Decisao).
