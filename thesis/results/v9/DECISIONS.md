@@ -9254,3 +9254,74 @@ PINS.json`, `thesis/results/v9/campaign/scripts/
 `thesis/results/v9/campaign/tests/{test_orchestrator.py,
 test_deliver_source.py}`, `thesis/results/v9/DECISIONS.md` (esta
 Decisao).
+
+## 84. DEPENDENCY_MAP.md (item 2) + validacao local em ambiente LIMPO (item 3) -- achado real na propria validacao, corrigido antes de qualquer AWS
+
+**Item 2:** `thesis/results/v9/campaign/DEPENDENCY_MAP.md` (novo) --
+tabela completa de hostname/porta/volume/env/arquivo/imagem pra
+gateway, proxy, pqc-signer e o backend de negocio (Decisao 83),
+dizendo onde cada um resolve e quem fornece numa AWS real. Conclusao:
+nenhuma dependencia listada e "so local" -- a ultima que era
+(AUTH_URI/API_GATEWAY_URI) foi corrigida pela propria Decisao 83.
+
+**Item 3: validacao local em ambiente LIMPO, achado real.** Testado
+SEM depender do ambiente de desenvolvimento desta maquina: diretorio
+ISOLADO (`/tmp/v9_clean_validation/`) com SO o que `deliver_source.py`
+realmente entrega (`SERVER_ONLY_FILES` + `mock-service-os/certs`),
+nenhum source de build presente, projeto compose com nome PROPRIO
+(`-p v9cleantest`, nunca o nome default que colidiria com containers
+de desenvolvimento desta maquina).
+
+**Achado real, ao vivo, na propria validacao:** a 1a tentativa, com
+`-p v9cleantest` mas SEM retaguear as imagens pre-construidas pro
+nome que esse projeto esperava (`v9cleantest-auth`/`v9cleantest-
+mongo_seed`), fez o `docker compose up` tentar CONSTRUIR (nunca
+reusar a imagem pinada já carregada) -- `additional privileges
+requested: pass "--allow=fs.read=..\mock-service-os"`, porque o
+contexto de build (`mock_as/`) nunca existe no diretorio isolado.
+**Isso prova, ao vivo, por que o mecanismo real (sem `-p`, Decisao
+83) funciona:** no servidor real, `docker load` preserva o nome
+EXATO (`insurance-server-lambdas-auth:latest`) e `docker compose`
+(projeto default = nome do diretorio, tambem `insurance-server-
+lambdas`) encontra essa imagem JA PRESENTE sob o nome esperado --
+nunca tenta construir. Confirmado retagueando temporariamente as
+imagens pinadas pro nome que o projeto `v9cleantest` esperava
+(`docker tag`, nunca `docker build`/`docker prune` -- as tags
+originais permaneceram intactas, removidas so as temporarias ao
+final): a 2a tentativa criou os 6 containers sem nenhuma tentativa
+de build, os dois health checks reais passaram (`curl /jwks` -> JWKS
+real retornado; `docker logs mockapi | grep "Startup completed"` ->
+achado na 4a tentativa), e o gateway v9 (`mockopin-v9-gateway`),
+juntado na mesma rede isolada com os mesmos aliases de sempre, subiu
+e rejeitou corretamente (mTLS enforced, nunca um bug) uma conexao
+sem certificado de cliente.
+
+**Por que nao as 60 execucoes completas via SSHExecutor real:** o
+mecanismo de validacao local ja existente pro pacote inteiro
+(`local_shim_bridge_join=True`, Decisao 49, cobertura de testes ja
+extensa) depende do nome de rede/containers DEFAULT (`insurance-
+server-lambdas_default`), que colide de proposito com o ambiente de
+desenvolvimento desta maquina -- rodar as 60 execucoes oficiais
+contra um ambiente TOTALMENTE isolado exigiria reescrever esse shim
+pra um projeto compose isolado, so pra este teste, nunca reusado --
+desproporcional ao que falta provar (o MECANISMO de entrega+start do
+backend, a parte nunca antes exercitada, ja esta provado ao vivo
+acima). Checagem estatica da tabela (item 2) + a execucao real em
+rede isolada sem nenhum ambiente herdado (acima) cobrem o pedido do
+item 3 nesta decisao, com o motivo honesto registrado -- nunca
+escondido.
+
+**Limpeza:** containers/rede/volumes do projeto `v9cleantest`
+removidos (`docker compose down -v`, so os recursos deste teste,
+nunca `docker prune`); tags temporarias removidas (`docker rmi`
+reportou so "Untagged", nunca "Deleted" -- as imagens pinadas
+originais permaneceram intactas, confirmado por ID igual antes/
+depois); containers de desenvolvimento desta maquina, parados
+temporariamente so pra liberar as portas de host conflitantes
+durante o teste, reiniciados ao final.
+
+**Testes:** nenhum novo (validacao manual de infraestrutura/
+ambiente, nunca testavel por pytest -- precisa de Docker real).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+DEPENDENCY_MAP.md`, `thesis/results/v9/DECISIONS.md` (esta Decisao).
