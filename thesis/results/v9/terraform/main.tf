@@ -106,17 +106,25 @@ locals {
 # ============================================================
 
 module "control" {
-  source               = "./modules/campaign_instance"
-  providers            = { aws = aws.sa_east_1 }
-  name_tag             = "control"
-  role                 = "control"
-  instance_type        = var.control_instance_type
-  ami_id               = local.pinned_ami_arm64_sa_east_1
-  vpc_id               = data.aws_vpc.sa_east_1.id
-  subnet_id            = data.aws_subnets.sa_east_1_default.ids[0]
-  key_name             = aws_key_pair.operator_sa_east_1.key_name
-  ssh_ingress_cidrs    = { "operator" = var.operator_ip_cidr }
-  self_terminate_hours = 0 # isento, Decisao 26 item 3
+  source            = "./modules/campaign_instance"
+  providers         = { aws = aws.sa_east_1 }
+  name_tag          = "control"
+  role              = "control"
+  instance_type     = var.control_instance_type
+  ami_id            = local.pinned_ami_arm64_sa_east_1
+  vpc_id            = data.aws_vpc.sa_east_1.id
+  subnet_id         = data.aws_subnets.sa_east_1_default.ids[0]
+  key_name          = aws_key_pair.operator_sa_east_1.key_name
+  ssh_ingress_cidrs = { "operator" = var.operator_ip_cidr }
+  # Decisao 50: NAO mais isento -- rede de seguranca de ULTIMO
+  # RECURSO, 5h (acima de qualquer piloto real, ~2h) com terminate,
+  # pro risco residual que a Decisao 49 item 4 registrou (controle
+  # era o UNICO recurso sem nenhum autodesligamento). NUNCA substitui
+  # o destroy final nem a liberacao de EIP do cleanup.py -- so impede
+  # o controle (e o EIP dele) de rodar indefinidamente numa sessao
+  # abandonada sem ninguem rodar cleanup.py.
+  self_terminate_hours                 = 5
+  instance_initiated_shutdown_behavior = "terminate"
 }
 
 # ============================================================

@@ -5908,3 +5908,185 @@ seguranca de ultimo recurso, nunca como substituto do `cleanup.py`.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat. Nenhum push sem autorizacao explicita.
+
+## 50. Diagnostico completo do "Unknown key type" (nao era bug de codigo -- era o interpretador Python errado); 3 dos 4 perfis (classico/pqc/hibrido-v8) provados de ponta a ponta pelo shim ssh, com os numeros reais exatos; hibrido-and achou um gap NOVO e distinto (alg mismatch no /token), registrado honesto, nao resolvido; versoes de pacote Python alinhadas ao requirements.txt pinado; controle ganha autodesligamento de seguranca de 5h com terminate
+
+**1. Diagnostico do "Unknown key type: 2.16.840.1.101.3.4.3.18" --
+NAO e bug, nem da v8 nem da v9. Era o interpretador Python errado.**
+
+**Ponto exato da chamada:** `thesis/scripts/opin_flow.py:917`, dentro
+de `_verify_cert_signed_by_mldsa65`:
+```python
+pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_encode(issuer_cert.public_key().public_bytes_raw())}
+```
+`issuer_cert.public_key()` e quem de fato aciona o dispatch OID->tipo
+de chave da biblioteca `cryptography` -- e quem levantava o
+`ValueError` quando o certificado da CA real (ML-DSA-65, OID
+2.16.840.1.101.3.4.3.18/FIPS 204) nao era reconhecido.
+
+**Existia na v8 ou foi introduzido na v9?** Pre-existente, da PROPRIA
+v8: `git log -S "_verify_cert_signed_by_mldsa65"` aponta pro commit
+`a9924fab9` (2026-10-25, "feat(v8): opin_flow.py now verifies every
+signed artifact it receives..."). **Nunca mudou na v9.** A v8 real
+rodou isso 720 vezes sem erro porque o AMBIENTE PYTHON era o certo --
+nunca por o codigo ser diferente.
+
+**Causa raiz real, confirmada: eu estava chamando o cliente com o
+Python ERRADO.** `thesis/scripts/requirements.txt` fixa
+`cryptography==50.0.2` (hash-pinado, com a propria justificativa no
+cabecalho: **"Pinned to the exact versions validated for the pqc
+CRYPTO_PROFILE... presenting an ML-DSA-65 client certificate requires
+routing TLS through cryptography's bundled OpenSSL"**) -- e existe um
+venv dedicado em `thesis/scripts/.venv/` exatamente pra isso
+(`README.md`, secao "Virtual environment"). **Eu tinha rodado contra
+`/c/Python313/python` (Python de sistema desta maquina, nunca
+gerenciado por este projeto), que tinha `cryptography==46.0.3`** --
+versao sem suporte X.509 pra ML-DSA. Confirmado diretamente:
+```
+.venv\Scripts\python.exe -c "from cryptography import x509; ...
+  cert.public_key()"
+-> <class '...MLDSA65PublicKey'>, 1952 bytes -- EXATAMENTE o que o
+   proprio docstring da funcao real ja dizia ("confirmed live,
+   returns exactly the 1952 raw bytes").
+```
+**Nenhuma correcao de codigo necessaria -- nenhum reroteamento pro
+Go/gateway/proxy.** O design ja existente (o docstring da propria
+funcao, nunca lido com atencao antes desta rodada) JA delega a
+VERIFICACAO da assinatura pro `pqc-signer` (Go) -- `cryptography` e
+usada so pra EXTRAIR os bytes crus da chave publica do certificado,
+o que a versao certa faz sem problema. A correcao foi usar o
+interpretador certo (`thesis/scripts/.venv/Scripts/python.exe`), nunca
+o Python do sistema -- `cli.py`/o script de validacao atualizados
+pra isso.
+
+**2. Porta de fumaca + blocos de 5, pelo shim real -- 3 dos 4 perfis
+com sucesso TOTAL e IDENTICO; o 4o achou um problema NOVO, distinto,
+nao resolvido.**
+
+**classico, pqc e hibrido-v8 -- bloco de 5 execucoes cada, 100%
+reais, OS MESMOS 3 numeros EXATOS nos 3 perfis, nas 15 execucoes
+(5x3) individualmente:**
+```
+criterio4: {"http":44,"jwts":28,"jwks":4,"ca":4,"mtls":6} -- "ok":true, em TODAS as 15
+criterio5 (zero erros): pass=true, errors_found=[] -- nos 3 perfis
+```
+Prova que a correcao do item 1, mais a traducao de nome de perfil e
+o ciclo de vida de bloco ja corrigidos na Decisao 49, produzem dados
+IDENTICOS aos historicamente medidos (Decisao 17/18), nos 3 perfis
+que completaram.
+
+**hibrido-and -- achado NOVO, DIFERENTE do "Unknown key type",
+honestamente nao resolvido nesta rodada.** Mesmo com o backend no
+perfil certo (`hybrid`, ver correcao abaixo) e um restart limpo de
+toda a stack, `/token` reprova com `401`:
+```
+auth: path=/token method=POST error={"error":"invalid_client",
+  "error_description":"client authentication failed"} detail=alg mismatch
+```
+**Achado parcial, registrado honesto:** `opin_flow.py`'s
+`load_client_signing_key()` (linha ~586-607) so tem ramos explicitos
+pra `"pqc"` e `"hybrid"` -- `"hibrido-and"` cai no `else` (assinatura
+classica PS256 com a chave real de `client_one.jwks`), que **por
+construcao devolve o MESMO alg/kid que o proprio ramo "hybrid" usa
+pro `client_assertion`** (o docstring da funcao confirma: "hybrid...
+kid is the CLASSIC key's kid... alg: 'PS256'"). **Isso significa que
+a causa do "alg mismatch" especifica do hibrido-and NAO esta
+confirmada nesta rodada** -- pode ser outra coisa (ex.: o cert TLS
+"hibrido_and_rsa_client" interagindo com alguma verificacao de
+identidade cruzada entre a camada TLS e a camada JWT que este
+diagnostico nao teve tempo de isolar). **Nao escondido, nao
+contornado:** fica registrado como gap aberto, precisa de uma rodada
+dedicada pra isolar.
+
+**Achados operacionais extras, achados ao vivo, corrigidos:**
+- **Mapa de perfil do BACKEND, separado do mapa do CLIENTE** (achado
+  real): `auth`/`mongo_seed`/`mockapi` (`mock-service-os/mock_as`) so
+  conhecem `crypto-profiles/{classic,pqc,hybrid}.json` -- NAO existe
+  `hibrido-and.json`. Hibrido-AND nunca teve esquema de JWT proprio
+  (so adiciona autenticacao TLS dupla) -- confirmado tambem no carve-
+  out interno do gateway (Decisao 44, so usa `op_hybrid.crt`, nunca um
+  arquivo separado). Novo `BACKEND_CRYPTO_PROFILE_ENV` (orchestrator.py):
+  mapeia hibrido-and -> "hybrid" pro switch do backend, nunca
+  "hibrido-and" (que travava o `configuration.js` tentando ler um
+  arquivo inexistente).
+- **Espera de prontidao do backend**, necessaria pra qualquer troca
+  de perfil (nao so hibrido-and): `auth` (rapido, ~3-20s) E `mockapi`
+  (Java/Micronaut, ~30s de verdade) -- sem esperar os dois, a primeira
+  chamada cai em 401 (auth ainda de boot) ou 502 (mockapi ainda de
+  boot).
+
+**Resultado liquido desta rodada: 9 das 12 execucoes da porta de
+fumaca completas de verdade (classico/pqc/hibrido-v8 x L0, com os
+numeros reais identicos aos ja medidos), nao as 12 -- o pedido
+original era 4 perfis, 3 chegaram.**
+
+**3. Versoes de pacote Python -- comparadas e alinhadas.**
+
+`install_common_packages.sh` (modulo Terraform, Decisao 46) so
+instala `python3-pip` (a FERRAMENTA) via `dnf` -- as dependencias de
+verdade (`cryptography`, `PyJWT`, `requests`, `pyOpenSSL`, ...) sao
+instaladas DEPOIS, por `deliver_source.sh` (`pip3 install --user -r
+requirements.txt`, fora do escopo desta rodada -- script separado,
+ja existente). `thesis/scripts/requirements.txt` fixa versoes com
+HASH (`pip install --require-hashes`), explicitamente geradas via
+`pip download --platform ... --python-version 3.9.25` pras DUAS
+arquiteturas reais da frota (x86_64 servidor/clientes, aarch64
+controle) -- nunca pra Windows (meu ambiente de dev).
+
+**Diferenca real encontrada, corrigida:** meu venv local
+(`thesis/scripts/.venv/`) estava com versoes ANTIGAS/DIFERENTES do
+pin atual -- `cryptography==50.0.0` (pin: `50.0.2`), `PyJWT==2.13.0`
+(pin: `2.15.1`), `requests==2.34.2` (pin: `2.32.5`, mais NOVA que o
+pin, nao mais antiga). **Corrigido:** reinstalado pra bater
+EXATAMENTE com os numeros de versao do `requirements.txt` (o hash
+em si nao pode ser conferido no Windows -- os hashes pinados sao de
+wheels Linux cp39, esta maquina baixa um wheel Windows cp311/abi3,
+artefato binario DIFERENTE por construcao, nunca um problema de
+integridade). Reconfirmado depois: parsing de ML-DSA-65 continua
+funcionando com as versoes exatas do pin.
+```
+cryptography 50.0.2, pyjwt 2.15.1, requests 2.32.5, pyOpenSSL 26.4.0
+ML-DSA parse OK: MLDSA65PublicKey
+```
+**Nenhuma mudanca no `requirements.txt` foi necessaria** -- ele já
+estava certo; so o venv local desta maquina tinha ficado desatualizado
+em relacao a ele.
+
+**4. Controle -- autodesligamento de seguranca de 5h, com terminate,
+registrado.**
+
+`thesis/results/v9/terraform/main.tf`, modulo `control`:
+`self_terminate_hours = 5` (antes: `0`, isento) +
+`instance_initiated_shutdown_behavior = "terminate"` (antes: nao
+setado, default AWS "stop"). **Motivo:** fecha o risco residual que
+a Decisao 49 item 4 listou (o controle era o UNICO recurso do piloto
+sem rede de seguranca automatica nenhuma). **5h, nao um numero
+menor:** o piloto real dura ~2h -- 5h da margem generosa (2,5x) sem
+nunca disparar numa sessao normal, mesmo com atraso; o mecanismo de
+deadline RENOVAVEL (`safety_timer.sh.tftpl`, ja copiado verbatim da
+v8, Decisao 46) deixa o orquestrador renovar o prazo se precisar de
+mais tempo, igual a qualquer outra instancia do piloto -- 5h e so o
+piso de ULTIMO RECURSO pra uma sessao ABANDONADA, nunca um limite
+operacional normal. **Nao substitui nada:** o destroy final apos as
+60 execucoes continua obrigatorio (Decisao 43/45/48/49), e a liberacao
+de EIPs pelo `cleanup.py` continua obrigatoria -- este autodesligamento
+so adiciona uma rede de seguranca a MAIS pro controle especificamente,
+igual a que servidor/clientes ja tinham desde a Decisao 23. `terraform
+fmt`/`validate` confirmados limpos depois da mudanca.
+
+**Itens ainda otimistas, reportados explicitamente:**
+- **Hibrido-AND continua sem funcionar de ponta a ponta** nesta
+  validacao local -- achado NOVO (alg mismatch, item 2), raiz nao
+  isolada. Nao da pra afirmar que os 4 perfis funcionam at e isso ser
+  resolvido numa rodada futura dedicada.
+- A porta de fumaca completa (12/12) nunca foi alcancada -- 9/12.
+- O mecanismo de troca de perfil do BACKEND (auth/mongo_seed/mockapi)
+  usado nesta validacao (`docker compose --force-recreate`) e so pra
+  o ambiente LOCAL -- pro piloto remoto de verdade, o servidor roda
+  UM perfil fixo por bloco inteiro desde o deploy (Decisao 23), nunca
+  troca em tempo real -- esse mecanismo de troca nunca precisa existir
+  la, so aqui.
+- `dedicated_capture` (criterio 1) continua fora do escopo testado.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat. Nenhum push sem autorizacao explicita.

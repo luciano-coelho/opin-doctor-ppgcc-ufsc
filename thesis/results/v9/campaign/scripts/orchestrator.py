@@ -183,6 +183,21 @@ import re as _re
 # rodaria sem proxy, contra o alvo errado -- bug real, nunca
 # exercitado antes desta rodada.
 CLIENT_CRYPTO_PROFILE_ENV = {"classico": "classic", "pqc": "pqc", "hibrido-v8": "hybrid", "hibrido-and": "hibrido-and"}
+# Decisao 50 (revisao independente): achado real, distinto do mapa do
+# CLIENTE acima -- o BACKEND local (`auth`/`mongo_seed`/`mockapi`,
+# `mock-service-os/mock_as`) so conhece 3 perfis de JWT/assinatura
+# ("classic"/"pqc"/"hybrid", `crypto-profiles/*.json` -- confirmado,
+# nao existe `hibrido-and.json`). Hibrido-AND nunca introduziu um
+# esquema de assinatura/JWT proprio -- AND e so o mecanismo de
+# AUTENTICACAO TLS (par de certificados no handshake); pro lado da
+# aplicacao (JWKS, algoritmo de assinatura, client_one), hibrido-and
+# reusa INTEGRALMENTE a config "hybrid" (confirmado tambem no carve-
+# out interno do gateway, Decisao 44: `op_hybrid.crt`, nunca um
+# "op_hibrido_and.crt" separado). Setar CRYPTO_PROFILE=hibrido-and
+# pro BACKEND faria `configuration.js` tentar ler
+# `crypto-profiles/hibrido-and.json` (inexistente) e travar -- achado
+# ao vivo, nao suposto.
+BACKEND_CRYPTO_PROFILE_ENV = {"classico": "classic", "pqc": "pqc", "hibrido-v8": "hybrid", "hibrido-and": "hybrid"}
 _INTERNAL_CALLER_SNI = "matls-api.local"  # mesma convencao de evaluate_criteria.py
 
 _CONNECTION_OK_LOG_RE = _re.compile(
@@ -320,10 +335,10 @@ class SSHExecutor:
             # exceto por excluir "mtls", que a v9 substitui pelo seu
             # proprio container acima) que `switch_crypto_profile.py`
             # real usa.
-            client_profile = CLIENT_CRYPTO_PROFILE_ENV[profile]
+            backend_profile = BACKEND_CRYPTO_PROFILE_ENV[profile]
             cli.run_ssh(self._server_ip(),
                         f'cd "$(pwd)/../../insurance-server-lambdas" && '
-                        f"CRYPTO_PROFILE={client_profile} docker compose --profile main "
+                        f"CRYPTO_PROFILE={backend_profile} docker compose --profile main "
                         f"up -d --force-recreate auth mongo_seed mockapi && "
                         # Decisao 49: switch_crypto_profile.py real espera health
                         # de verdade (chronyc/psql/retry) -- aqui, so um poll
