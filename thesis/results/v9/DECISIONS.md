@@ -7820,3 +7820,42 @@ infraestrutura; Fase B -- piloto de 60 execucoes; Fase C --
 consolidacao) sob os limites exatos que o Luciano fixou, sem pedir
 confirmacao a cada passo -- so em paradas que os proprios limites
 exigem.
+
+## 62. Achado real na execucao real da Fase A (apply real, 5 instancias no ar) -- `deliver_campaign_key` escrevia a chave com CRLF (quebra de linha do Windows), rejeitada pelo ssh/scp reais do destino ("invalid format"); corrigido pra escrever em binario, sem traducao de newline nenhuma
+
+Nada fora do escopo autorizado. Branch `v9/fase1-local`, commit e
+push (regra 5 do Luciano -- toda correcao ganha Decisao + commit).
+
+**Achado, ao vivo, no Passo 4 do ensaio real (checagem de Docker
+pronto nos 4 hosts via rele pelo controle):** as 4 tentativas de SSH
+do controle pros hosts reais falharam com `Load key "/home/ec2-user/
+.ssh/campaign_key": invalid format` / `Permission denied`. A chave
+JA tinha sido entregue com sucesso no Passo 3 (`deliver_campaign_key`,
+sem erro reportado) -- o problema era o CONTEUDO do arquivo, nao a
+entrega em si.
+
+**Causa raiz:** `Path.write_text(pem, encoding="utf-8")`, em modo
+TEXTO, no Python do Windows, traduz todo `\n` pro newline padrao do
+SO (`\r\n`) antes de escrever -- uma chave SSH com CRLF no meio e
+invalida pro parser de chave do OpenSSH real (confirmado ao vivo, nao
+suposto). Nunca apareceu nos testes porque os testes stubam `cli._run`
+inteiro -- nenhum deles escreve o arquivo de verdade e tenta usa-lo
+com um `ssh`/`scp` real depois.
+
+**Corrigido:** `deliver_campaign_key` agora normaliza (`\r\n` -> `\n`,
+se algum vier de algum pipe antes) e escreve com `Path.write_bytes`
+(binario, nunca `write_text`) -- bytes exatos, nenhuma traducao de
+newline possivel. 2 testes novos
+(`test_deliver_campaign_key_grava_bytes_sem_cr`, confirma `b"\r\n"`
+ausente do arquivo capturado antes do `TemporaryDirectory` remove-lo).
+
+**Retentativa 1/3 pra este problema** (regra 3 do Luciano) -- re-rodando
+o Passo 3 (entrega da chave) e o Passo 4 (Docker pronto) de novo, com
+o fix.
+
+**Testes:** 142/142 (140 antes + 2 novos), todos passando.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/pki_relay.py` (fix), `thesis/results/v9/campaign/tests/
+test_pki_relay.py` (2 testes novos), `thesis/results/v9/DECISIONS.md`
+(esta Decisao).

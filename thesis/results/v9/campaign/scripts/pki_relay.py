@@ -53,7 +53,17 @@ def deliver_campaign_key(control_ip, operator_key_path, campaign_private_key_pem
     deste modulo, so o CAMINHO de destino."""
     with tempfile.TemporaryDirectory(prefix="v9_campaign_key_") as tmp:
         local_key_path = Path(tmp) / "campaign_key"
-        local_key_path.write_text(campaign_private_key_pem, encoding="utf-8")
+        # Achado real (execucao real do piloto): `write_text` em modo
+        # texto, no Windows, traduz todo "\n" pra "\r\n" (newline
+        # default do SO) -- uma chave SSH com CRLF e rejeitada pelo
+        # proprio ssh/scp do destino ("invalid format"). Normaliza
+        # primeiro (caso o PEM recebido ja venha com \r\n de algum
+        # pipe) e escreve em BINARIO, byte a byte, sem nenhuma
+        # traducao de newline.
+        normalized = campaign_private_key_pem.replace("\r\n", "\n")
+        if not normalized.endswith("\n"):
+            normalized += "\n"
+        local_key_path.write_bytes(normalized.encode("utf-8"))
         local_key_path.chmod(0o600)
 
         mkdir_proc = cli.run_ssh(control_ip, "mkdir -p ~/.ssh && chmod 700 ~/.ssh", key_path=operator_key_path)

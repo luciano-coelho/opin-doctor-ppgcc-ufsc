@@ -106,6 +106,29 @@ def test_deliver_campaign_key_um_so_salto_nunca_imprime_o_conteudo(monkeypatch):
     assert any("@203.0.113.5:" in a for a in scp_calls[0])
 
 
+def test_deliver_campaign_key_grava_bytes_sem_cr(monkeypatch):
+    """Achado real (execucao real desta rodada): `write_text` em modo
+    texto, no Windows, traduz \\n pra \\r\\n -- uma chave SSH com CRLF
+    e rejeitada pelo ssh/scp real do destino ("invalid format"). O
+    arquivo local tem que sair sempre com \\n puro, byte a byte, mesmo
+    recebendo um PEM com \\r\\n (ex.: de algum pipe que introduza isso
+    antes de chegar aqui) -- capturado DENTRO do fake, antes do `with
+    TemporaryDirectory` remover o arquivo."""
+    captured = {}
+
+    def fake_run(argv, timeout=None):
+        if argv[0] == "scp":
+            local_path = Path(argv[-2])
+            captured["bytes"] = local_path.read_bytes()
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    pem_com_crlf = "-----BEGIN FAKE KEY-----\r\nconteudo\r\n-----END FAKE KEY-----\r\n"
+    pki_relay.deliver_campaign_key("203.0.113.5", "/fake/operator_key", pem_com_crlf)
+    assert b"\r\n" not in captured["bytes"], "o arquivo local nunca pode conter CRLF -- ssh/scp real rejeita a chave"
+    assert captured["bytes"].count(b"\n") == 3
+
+
 def test_deliver_campaign_key_arquivo_local_e_removido_depois(monkeypatch):
     captured_paths = []
 
