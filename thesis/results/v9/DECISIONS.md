@@ -11053,3 +11053,114 @@ registrado aqui pra nunca repetir.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 103. Consolidacao final da Fase B (pedido do Luciano): checagem estatica RSA-2048/sem InsecureSkipVerify/sem VerifyClientCertIfGiven no codigo atual; status final das 5 lacunas da v8; reanalise honesta do residuo historico de ~14% do T_fluxo (Fato F); lista consolidada de desvios metodologicos pra secao de metodologia da tese
+
+**(a) Checagem estatica, codigo ATUAL (nao so na data da T4), `grep`
+direto, nunca suposto:**
+- `rsa.GenerateKey(rand.Reader, 2048)` -- **9 ocorrencias** em todo o
+  codigo Go da v9 (`certs/main.go` x3, `integration/bench/main.go`,
+  `integration/interop/main.go` x3, `integration/negtest/main.go`
+  x2), **nenhuma com `4096`** -- a UNICA ocorrencia do numero `4096`
+  em todo arquivo `.go` da v9 e um buffer de bytes nao-relacionado
+  (`integration/proxy/main.go:188`, `make([]byte, 4096)`) mais um
+  comentario confirmando a ausencia. **CONFIRMADO: RSA-2048 em
+  todo o codigo, nunca RSA-4096.**
+- `InsecureSkipVerify` -- **zero ocorrencias funcionais** em todo
+  `integration/*.go` -- a UNICA linha que contem a string e um
+  COMENTARIO (`proxy/main.go:216`) documentando explicitamente que
+  foi REMOVIDO. **CONFIRMADO: ausente.**
+- `VerifyClientCertIfGiven` -- **zero ocorrencias**, em lugar nenhum.
+  **CONFIRMADO: ausente.**
+- `RequireAndVerifyClientCert` -- presente em `gateway/main.go` (2x,
+  os dois listeners TLS reais) e `interop/run.go` -- **CONFIRMADO: a
+  configuracao correta e segura esta em uso.**
+
+**(b) As 5 lacunas da v8 (Decisao 18), status FINAL apos a Fase B
+real:**
+
+| # | Lacuna | Status FINAL | Evidencia numerica |
+|---|---|---|---|
+| 1 | RSA-4096 (atipico) | **FECHADO, reconfirmado** | checagem estatica (a) acima, codigo atual -- 9/9 `rsa.GenerateKey` com 2048, 0 com 4096 |
+| 2 | Cliente nunca verificava o servidor (`InsecureSkipVerify`) | **Fix aplicado e exercitado no caminho feliz, nos 4 perfis -- caminho de rejeicao (teste negativo) permanece fora do escopo.** As 60 execucoes reais da Fase B (Decisao 101) confirmam 0 erros com o certificado CORRETO do gateway, nos 4 perfis -- nunca testamos um certificado ERRADO sendo corretamente rejeitado. | 60/60 execucoes reais, 0 erros (Decisao 101); `negtest/main.go` existe no repositorio mas nunca foi exercitado contra o piloto real |
+| 3 | Servidor com certificado de cliente OPCIONAL (`VerifyClientCertIfGiven`) | **Fix aplicado e exercitado no caminho feliz, nos 4 perfis -- caminho de rejeicao (teste negativo) permanece fora do escopo**, MESMA ressalva do item 2. | mesma evidencia do item 2 -- `RequireAndVerifyClientCert` confirmado em uso (checagem (a)), nunca testado que REJEITA um cliente sem certificado nos 4 perfis fora do Hibrido-AND (que ja tem isso coberto por `dual_test.go`, T3) |
+| 4 | Contador de handshake contaminado | **FECHADO** (ja estava, reconfirmado pela Fase B: consistencia `raw_in==gateway_in`/`raw_out==gateway_out` EXATA nas 12 capturas oficiais, Decisao 101/criterio 1) | 12/12 capturas, 100% consistencia byte a byte |
+| 5 | Tamanho por mensagem e residuo de tempo nunca medidos/isolados | **PARCIAL, avancado mas nao fechado** -- tamanho por mensagem: **FECHADO** (12/12 capturas reais, Decisao 101, criterio 1 PASS); residuo de TEMPO: ver item (c) abaixo -- a hipotese de RTT-extra-por-initcwnd agora esta DESCARTADA com dados reais confirmados (nao so assumida), mas o residuo de ~14% do T_fluxo da v8 (fase "HTTP calls", Fato F) continua SEM causa isolada, MESMA conclusao do relatorio final da v8 | ver (c) |
+
+**(c) Reanalise honesta do residuo historico da v8 (~14% do T_fluxo,
+Fato F, `v8/Consolidated_Metrics_Report_FINAL.md` Secao 6) com os
+componentes reais da v9 -- NUNCA uma atribuicao forcada:**
+
+Numeros reais da v8 (sa-east-1/L0, rota de referencia quase-RTT-zero):
+HTTP calls 361,9/335,4/410,7ms; Signing 16,2/26,9/44,7ms;
+Verification 25,1/26,3/28,2ms; Setup/teardown (fixo) 1.071,2/1.095,2/
+1.071,6ms; **Residuo 240,1/260,3/253,9ms = 13,8%/15,0%/14,0% do
+T_fluxo** (Classico/PQC/Hibrido). O proprio relatorio da v8 ja
+investigou isso (timeline completo de uma execucao real de RTT alto)
+e concluiu "mais consistente com sequenciamento do lado do cliente
+(as 6 conexoes nao ficam ocupadas continuamente nem rodam em
+paralelo) do que com RTTs extras de rede dentro do handshake de UMA
+conexao" -- **nao atribuido com confianca**.
+
+**Testado com os componentes reais da v9:**
+1. **Hipotese RTT-extra-por-initcwnd: AGORA DESCARTADA com dados
+   REAIS confirmados, nao so assumidos.** A formula da Decisao 14
+   (`RTTs extras = max(0, ceil(bytes_do_flight/cwnd_bytes)-1)`) ja
+   mostrava 0 RTTs extras pros 4 perfis com `initcwnd=10` assumido --
+   a Decisao 102 agora CONFIRMA empiricamente (`ss -ti` real + pcap
+   real, nao suposicao) que as instancias reais do piloto genuinamente
+   tem `initcwnd=10`. **Conclusao: 0ms dos 240-260ms de residuo pode
+   vir desse mecanismo, pra NENHUM dos 4 perfis, em NENHUMA das rotas
+   do piloto** -- reforca (nao prova de novo pra v8 literalmente, sao
+   instancias diferentes, mas remove a mesma classe de duvida que a
+   v8 tinha) a conclusao do proprio relatorio da v8 de que o residuo
+   NAO e de origem em RTT extra de rede.
+2. **Microbenchmarks de CPU da v9 (Decisao 14) sao ORDENS DE
+   GRANDEZA menores que as FASES "signing"/"verification" da v8 --
+   acharam que as duas tabelas NAO SAO a mesma grandeza, nao podem ser
+   somadas direto.** Custo de assinatura+verificacao RSA-2048 PURO
+   (so a operacao criptografica, N=2000): ~858us (0,858ms) -- contra
+   os 16,2ms (Classico) que a FASE "signing" da v8 relata, ~19x maior.
+   Isso significa que a FASE "signing" da v8 **nunca mediu so a
+   operacao criptografica pura** -- inclui overhead do `crypto/tls` do
+   Go, I/O de buffer, ou fronteira de medicao mais larga que a
+   operacao isolada. **Conclusao honesta: os componentes de CPU da v9
+   NAO PODEM ser somados aritmeticamente ao residuo da v8 pra
+   "explicar" uma fracao dele -- as duas tabelas medem grandezas
+   diferentes, uma tentativa de soma direta produziria um numero
+   sem sentido.**
+3. **Custo de ticket: NUNCA se aplica a este residuo.** A v9 roda
+   com `TICKETS_DISABLED=true` (confirmado no ambiente real do piloto,
+   Decisao 101/env do gateway) -- o residuo da v9, se houvesse, NUNCA
+   incluiria custo de ticket. A v8 historica pode ou nao ter tido
+   tickets contribuindo pro SEU residuo original -- **assimetria real
+   entre os dois setups, declarada aqui, nunca escondida.**
+
+**Conclusao final, honesta, NUNCA forcada:** os componentes reais da
+v9 nao atribuem o residuo historico de ~14% da v8 a uma causa
+especifica nova -- continuam a MESMA conclusao do relatorio final da
+v8 ("not attributed", sequenciamento do lado do cliente, nao rede).
+O que a v9 ACRESCENTA de real: a hipotese de RTT-extra-por-initcwnd
+agora esta descartada com confirmacao empirica (nao suposicao), e a
+incompatibilidade de escala entre os microbenchmarks de CPU da v9 e
+as fases de tempo da v8 fica documentada explicitamente (impede uma
+soma aritmetica invalida que um leitor apressado poderia tentar). A
+lacuna #5 fica **PARCIAL, nao FECHADA** -- mantida honestamente, nunca
+fechada a forca.
+
+**(d) Lista CONSOLIDADA de desvios metodologicos desta Fase B, pra
+secao de metodologia da tese (cross-referenciada, nenhum escondido):**
+
+| Decisao | Desvio | Motivo | Declarado pra tese? |
+|---|---|---|---|
+| 61 | Image ID do `gateway` em `PINS.json` re-pinado (imagem original nao existe mais localmente) | binario/certificados/camada base confirmados identicos por CONTEUDO (nunca reconstruidos) -- so o Image ID (ja sabido nao-reproduzivel entre versoes de Docker, Decisao 68) mudou | Sim -- nunca afeta o que e medido, so a verificacao de identidade da imagem |
+| 75 | SAN com IP real (`SERVER_IPS`) descartada, nunca aplicada ao piloto | certificados entregues confirmados identicos aos ja embutidos nas imagens pinadas | Sim |
+| 91 | Metodo de classificacao de mensagens do criterio 1 (por direcao/stream, nunca por coocorrencia na mesma linha) | rede real fragmenta o flight do servidor em mais de uma linha do tshark -- loopback nunca mostrou isso | Sim -- correcao de MECANISMO, nunca do criterio/limiares |
+| 93 | `CERTIFICATE_BASELINE` recalibrado por DERIVACAO (formula RFC 8446 a partir do DER real) em vez do valor antigo | Decisao 75 (mesma sessao) revertera a premissa que motivou o valor antigo, sem reconferir o baseline | **Sim, desvio formal do pre-registro, declarado explicitamente** |
+| 97 | Canal pcap do criterio 7 mede SYN-ACK saindo -> ACK voltando (nunca SYN chegando -> SYN-ACK saindo) | metodo antigo media so tempo de processamento local do servidor, nunca RTT de rede real | Sim -- correcao de MECANISMO, nunca do limiar (±10%, piso de L0) |
+| 98 | MSS efetivo do criterio 2 vem da concordancia `ss -ti`/maior payload real do pcap (nunca do MSS anunciado no SYN-ACK) | SYN-ACK anuncia capacidade LOCAL da NIC (jumbo), nunca o MSS que de fato e usado no caminho real (PMTU discovery) | **Sim, desvio formal do pre-registro (Decisao 34), declarado explicitamente** |
+| 99 | Criterio 1 reretenta a captura (ate 3x) quando a decifragem sai incompleta | achado real em L0 (Decisao 95) -- keylog podia nao estar totalmente sincronizado em disco | Sim -- nunca retenta por divergencia de TAMANHO, so por decifragem incompleta |
+| 102 | `bytes_sent_within_first_rtt_window` conta por timestamp de envio dentro de 1 RTT (nunca por numero de pacote de ACK) | metodo antigo (Decisao 94) ainda discordava sob RTT real com ACKs em cluster -- confirmado por conteudo do pcap, nunca pacing como a Decisao 101 relatou por engano | Sim -- Emenda de METODO, validada com verdade conhecida antes de aplicar ao dado real |
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
