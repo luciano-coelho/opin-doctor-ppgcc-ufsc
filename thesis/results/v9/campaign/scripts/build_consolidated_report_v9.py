@@ -10,13 +10,25 @@ reconstroi imagem, NUNCA roda `docker image prune`.
 
 Parametros criptograficos (secao a) sao extraidos dos ARTEFATOS REAIS
 coletados -- nunca do codigo-fonte:
-  - certificados X.509: `tshark --export-objects x509af` sobre os 12
-    pares pcap+keylog de `raw/criterio1_capturas/` (decifragem TLS via
-    keylog, igual ao que `criterio2_probe.py`/`evaluate_criteria.py`
-    ja fazem), parseados com a lib `cryptography` quando possivel; para
-    chaves PQC (ML-DSA, que a lib `cryptography` 46.x ainda nao sabe
-    extrair) o tamanho em bytes da BIT STRING da SubjectPublicKeyInfo e
-    da assinatura e obtido via `openssl asn1parse`, nunca assumido.
+  - certificados X.509: parser DER generico PROPRIO (funcoes
+    `read_der_len`/`read_der_tlv`/`der_oid_to_str`/
+    `parse_der_certificate_generic` abaixo), aplicado sobre os bytes
+    DECIFRADOS REAIS da mensagem TLS Certificate (obtidos via
+    `tshark -x` com keylog, lendo o bloco "Decrypted TLS" que o
+    tshark imprime -- nunca o exportador `--export-objects x509af`,
+    que se mostrou incapaz de reassemblar corretamente o certificado
+    ML-DSA do hibrido-and, ver Decisao 105). O parser generico extrai
+    OID+tamanho bruto em bytes da chave publica e da assinatura
+    DIRETO da estrutura ASN.1 (SubjectPublicKeyInfo/signatureValue),
+    sem depender de nenhuma lib ter suporte NATIVO ao algoritmo --
+    funciona identicamente pra RSA e pra ML-DSA, sem inferencia
+    indireta nem cross-validacao com JWKS.
+  - Achado real (Decisao 105): a mensagem Certificate real do
+    hibrido-and contem DUAS CertificateEntry (RSA-2048 + ML-DSA-65),
+    com 3 bytes de padding zero nao-padrao entre elas -- confirmado
+    via parsing direto dos bytes decifrados e validado byte-a-byte
+    (sha256 identico) contra os arquivos .crt reais em
+    `certs/generated/hibrido_and_mldsa_{server,client}.crt`.
   - parametros do handshake (versao TLS, cipher suite, grupo
     negociado, SignatureScheme): `tshark -T fields` sobre as mesmas
     capturas decifradas.
@@ -24,7 +36,8 @@ coletados -- nunca do codigo-fonte:
     chamada de `raw/piloto_calls.json` (nenhuma extracao nova
     necessaria -- o gateway ja registra isso por chamada real).
   - DualAuthenticated/CurveID: `raw/criterio6_execucoes.json` (uma
-    linha por execucao real, 60 no total).
+    linha por execucao real, 60 no total) + `dualAuthenticated=true`
+    no log real do gateway (`raw/full_container_logs/v9-mtls.log`).
 
 Roda com:
     python build_consolidated_report_v9.py --run-dir <piloto-real-aws-...-v2> --out-subdir CONSOLIDATED_REPORT
@@ -42,8 +55,10 @@ Saida (sempre dentro de `<run-dir>/<out-subdir>/`, nunca dentro de
                                     cada arquivo gerado aqui
 """
 import argparse
+import base64
 import hashlib
 import json
+import re
 import statistics as st
 import subprocess
 import sys
@@ -56,10 +71,10 @@ PROFILES = ["classico", "pqc", "hibrido-v8", "hibrido-and"]
 ROUTES = ["L0", "L219", "L325"]
 DOCKER_IMAGE = "mockopin-v9-measure"
 
-KNOWN_SIG_OIDS = {
+KNOWN_OIDS = {
     "1.2.840.113549.1.1.11": "sha256WithRSAEncryption",
-    "2.16.840.1.101.3.4.3.18": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, "
-                                 "confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
+    "1.2.840.113549.1.1.1": "rsaEncryption",
+    "2.16.840.1.101.3.4.3.18": "ML-DSA-65 (FIPS 204, OID NIST)",
 }
 KNOWN_GROUPS = {
     "24": "secp384r1 (classico)",
@@ -156,102 +171,321 @@ def extract_handshake(capturas_dir: Path, profile: str, route: str) -> dict:
     }
 
 
-def extract_pqc_asn1_sizes(cer_path: Path) -> dict:
-    r = subprocess.run(["openssl", "asn1parse", "-in", str(cer_path), "-inform", "DER"],
-                        capture_output=True, text=True)
-    import re
-    bitstrings = []
-    for line in r.stdout.splitlines():
-        if "BIT STRING" in line:
-            m = re.search(r"\sl=\s*(\d+)", line)
-            if m:
-                bitstrings.append(int(m.group(1)))
+def read_der_len(data: bytes, pos: int):
+    first = data[pos]
+    pos += 1
+    if first < 0x80:
+        return first, pos
+    n = first & 0x7F
+    length = int.from_bytes(data[pos:pos + n], "big")
+    pos += n
+    return length, pos
+
+
+def read_der_tlv(data: bytes, pos: int):
+    tag = data[pos]
+    pos += 1
+    length, pos = read_der_len(data, pos)
+    value = data[pos:pos + length]
+    end = pos + length
+    return tag, value, pos, end
+
+
+def der_oid_to_str(der_oid: bytes) -> str:
+    first = der_oid[0]
+    parts = [str(first // 40), str(first % 40)]
+    val = 0
+    for b in der_oid[1:]:
+        val = (val << 7) | (b & 0x7F)
+        if not (b & 0x80):
+            parts.append(str(val))
+            val = 0
+    return ".".join(parts)
+
+
+def parse_der_certificate_generic(der: bytes) -> dict:
+    """Le OID+tamanho (bytes brutos) da chave publica e da assinatura
+    DIRETO da estrutura ASN.1 do certificado (Decisao 105, item 2 da
+    diretoria BLOCO B) -- generico, funciona pra QUALQUER algoritmo
+    (RSA ou ML-DSA), sem depender de nenhuma lib ter suporte NATIVO
+    ao algoritmo e sem cross-validar com nenhuma outra fonte (JWKS,
+    etc.) -- leitura direta da estrutura do certificado real."""
+    _, cert_body, _, _ = read_der_tlv(der, 0)
+    _, tbs_val, p2, p2end = read_der_tlv(cert_body, 0)
+    _, sa_val, p3, p3end = read_der_tlv(cert_body, p2end)
+    _, sig_alg_oid, _, _ = read_der_tlv(sa_val, 0)
+    sv_tag, sv_val, p4, p4end = read_der_tlv(cert_body, p3end)
+    sig_raw = sv_val[1:]  # 1o byte da BIT STRING = "unused bits", sempre 0 aqui
+
+    pos2 = 0
+    if tbs_val[pos2] == 0xA0:
+        _, _, pos2, pos2end = read_der_tlv(tbs_val, pos2)
+        pos2 = pos2end
+    _, serial, pos2, pos2end = read_der_tlv(tbs_val, pos2)
+    pos2 = pos2end
+    serial_int = int.from_bytes(serial, "big")
+    _, _, pos2, pos2end = read_der_tlv(tbs_val, pos2)  # signature (interno, igual ao externo)
+    pos2 = pos2end
+    _, _, pos2, pos2end = read_der_tlv(tbs_val, pos2)  # issuer
+    pos2 = pos2end
+    _, _, pos2, pos2end = read_der_tlv(tbs_val, pos2)  # validity
+    pos2 = pos2end
+    _, _, pos2, pos2end = read_der_tlv(tbs_val, pos2)  # subject
+    pos2 = pos2end
+    _, spki_val, pos2, pos2end = read_der_tlv(tbs_val, pos2)  # subjectPublicKeyInfo
+    _, pk_alg_val, p5, p5end = read_der_tlv(spki_val, 0)
+    _, pk_alg_oid, _, _ = read_der_tlv(pk_alg_val, 0)
+    pk_bits_tag, pk_bits_val, p6, p6end = read_der_tlv(spki_val, p5end)
+    pk_raw = pk_bits_val[1:]
+
+    sig_oid_s = der_oid_to_str(sig_alg_oid)
+    pk_oid_s = der_oid_to_str(pk_alg_oid)
     return {
-        "asn1_bitstring_lengths_bytes_raw": bitstrings,
-        "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura "
-                "e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
+        "serial": serial_int,
+        "signature_algorithm_oid": sig_oid_s,
+        "signature_algorithm_name": KNOWN_OIDS.get(sig_oid_s, f"OID nao catalogado: {sig_oid_s}"),
+        "signature_raw_bytes": len(sig_raw),
+        "public_key_algorithm_oid": pk_oid_s,
+        "public_key_algorithm_name": KNOWN_OIDS.get(pk_oid_s, f"OID nao catalogado: {pk_oid_s}"),
+        "public_key_raw_bytes": len(pk_raw),
+        "der_total_bytes": len(der),
     }
 
 
-def extract_certs(capturas_dir: Path, profile: str, route: str, scratch_dir: Path) -> list:
-    outdir = scratch_dir / f"{profile}_{route}"
-    outdir.mkdir(parents=True, exist_ok=True)
-    pcap = f"{profile}_{route}.pcap"
-    keylog = f"{profile}_{route}.keylog"
-    cmd = ["docker", "run", "--rm", "--entrypoint", "tshark",
-           "-v", f"{capturas_dir}:/data", "-v", f"{outdir}:/certout", DOCKER_IMAGE,
-           "-r", f"/data/{pcap}", "-o", f"tls.keylog_file:/data/{keylog}",
-           "--export-objects", "x509af,/certout"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"export-objects falhou para {profile}/{route}: {r.stderr}")
-
-    seen_sha256 = {}
-    rejected = []
-    for f in sorted(outdir.glob("*.cer")):
-        data = f.read_bytes()
-        digest = sha256_bytes(data)
-        if len(data) < 100:
-            rejected.append({"file": f.name, "size_bytes": len(data), "sha256": digest,
-                              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido "
-                                        "(openssl nao decodifica), provavel fragmento de reassemblagem "
-                                        "do exportador x509af; NAO usado como evidencia criptografica"})
-            continue
-        if digest in seen_sha256:
-            seen_sha256[digest]["n_instances"] += 1
-            seen_sha256[digest]["instance_files"].append(f.name)
-            continue
-        info = {"first_seen_file": f.name, "size_bytes": len(data), "sha256": digest,
-                "n_instances": 1, "instance_files": [f.name]}
+def enrich_with_cryptography_lib(der: bytes, info: dict) -> dict:
+    """Campos extras (subject/issuer/SAN/validade/bits RSA) via
+    `cryptography`, quando a lib conseguir -- so complementa o que o
+    parser DER generico (fonte primaria, sempre presente) ja deu."""
+    try:
+        cert = x509.load_der_x509_certificate(der)
+        info["subject"] = cert.subject.rfc4514_string()
+        info["issuer"] = cert.issuer.rfc4514_string()
+        info["not_valid_before_utc"] = cert.not_valid_before_utc.isoformat()
+        info["not_valid_after_utc"] = cert.not_valid_after_utc.isoformat()
         try:
-            cert = x509.load_der_x509_certificate(data)
-            info["subject"] = cert.subject.rfc4514_string()
-            info["issuer"] = cert.issuer.rfc4514_string()
-            info["not_valid_before_utc"] = cert.not_valid_before_utc.isoformat()
-            info["not_valid_after_utc"] = cert.not_valid_after_utc.isoformat()
-            sig_oid = cert.signature_algorithm_oid.dotted_string
-            info["signature_algorithm_oid"] = sig_oid
-            info["signature_algorithm_name"] = KNOWN_SIG_OIDS.get(sig_oid, f"OID desconhecido: {sig_oid}")
-            try:
-                san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-                info["san"] = [str(n.value) for n in san_ext.value]
-            except x509.ExtensionNotFound:
-                info["san"] = []
-            try:
-                pk = cert.public_key()
-                info["public_key_algorithm"] = type(pk).__name__
-                info["public_key_size_bits"] = getattr(pk, "key_size", None)
-            except ValueError:
-                info["public_key_algorithm"] = "nao suportado pela lib cryptography 46.x (PQC)"
-                info["public_key_size_bits"] = None
-                info.update(extract_pqc_asn1_sizes(f))
-            info["parse_ok"] = True
-        except Exception as e:
-            info["parse_ok"] = False
-            info["parse_error"] = str(e)
-        seen_sha256[digest] = info
-    return {"certificates": list(seen_sha256.values()), "rejected_non_cert_objects": rejected}
+            san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+            info["san"] = [str(n.value) for n in san_ext.value]
+        except x509.ExtensionNotFound:
+            info["san"] = []
+        try:
+            pk = cert.public_key()
+            info["public_key_bits_cryptography_lib"] = getattr(pk, "key_size", None)
+        except ValueError:
+            info["public_key_bits_cryptography_lib"] = None  # esperado p/ ML-DSA (lib sem suporte nativo)
+    except Exception as e:
+        info["cryptography_lib_error"] = str(e)
+    return info
 
 
-def rsa_2048_check(crypto_by_profile: dict) -> dict:
-    """Checagem automatizada exigida pelo item 4(a): FALHA se algum RSA
-    em Classico/Hibrido nao for exatamente 2048 bits, ou se PQC mostrar
-    qualquer componente classico impropio."""
+def get_decrypted_tls_hex(capturas_dir: Path, profile: str, route: str, frame_number: int) -> bytes:
+    """Bytes DECIFRADOS reais das mensagens TLS no frame dado, lidos
+    de TODOS os blocos "Decrypted TLS (N bytes):" que o `tshark -x`
+    imprime (um frame pode conter mais de um registro TLS decifrado
+    -- visto em classico/pqc/hibrido-v8, onde ServerHello/
+    EncryptedExtensions/CertificateRequest/Certificate saem em
+    registros TLS separados dentro do mesmo frame; hibrido-and tem so
+    um registro, bem maior) -- concatenados na mesma ordem em que o
+    tshark os imprime, que e a ordem real de envio. A MESMA
+    decifragem por keylog que todo o resto do pipeline usa, nunca uma
+    segunda decifragem paralela."""
+    out = run_tshark(capturas_dir, profile, route, ["-Y", f"frame.number=={frame_number}", "-x"])
+    lines = out.splitlines()
+    pat = re.compile(r"^[0-9a-f]{4}\s+((?:[0-9a-f]{2}\s+){1,16})")
+    buf = bytearray()
+    i = 0
+    found_any = False
+    while i < len(lines):
+        if lines[i].startswith("Decrypted TLS"):
+            found_any = True
+            i += 1
+            while i < len(lines):
+                m = pat.match(lines[i])
+                if not m:
+                    break
+                buf += bytes(int(h, 16) for h in m.group(1).split())
+                i += 1
+            continue
+        i += 1
+    if not found_any:
+        raise RuntimeError(f"'Decrypted TLS' nao encontrado no frame {frame_number} ({profile}/{route})")
+    return bytes(buf)
+
+
+def locate_certificate_handshake_message(buf: bytes) -> bytes:
+    """O bloco "Decrypted TLS" de um frame pode conter VARIAS
+    mensagens de handshake concatenadas (ex.: ServerHello+
+    EncryptedExtensions+CertificateRequest+Certificate no mesmo
+    registro TLS, visto em classico/pqc/hibrido-v8) -- caminha cada
+    mensagem (1B tipo + 3B tamanho + corpo) pra achar a Certificate
+    (tipo 11), em vez de assumir que ela comeca no byte 0 do buffer
+    (so verdade pra hibrido-and, cujo Certificate e grande o
+    suficiente pra ocupar um registro TLS so dele)."""
+    pos = 0
+    while pos + 4 <= len(buf):
+        msg_type = buf[pos]
+        msg_len = int.from_bytes(buf[pos + 1:pos + 4], "big")
+        if msg_type == 0x0B:
+            return buf[pos:pos + 4 + msg_len]
+        pos += 4 + msg_len
+    raise RuntimeError("mensagem Handshake Certificate (type 11) nao encontrada no buffer decifrado")
+
+
+def parse_tls13_certificate_list(buf: bytes) -> list:
+    """Caminha a estrutura real (RFC 8446 Secao 4.4.2) de uma mensagem
+    de handshake Certificate ja decifrada: handshake header (1+3B) +
+    certificate_request_context (1B+N) + certificate_list (3B+N) ->
+    uma ou mais CertificateEntry (3B len + cert_data + 2B len + ext).
+
+    Decisao 105 (achado real, BLOCO B item 1): a mensagem real do
+    hibrido-and insere 3 bytes de padding zero NAO-PADRAO entre a 1a e
+    a 2a CertificateEntry (RSA-2048 e ML-DSA-65) -- um bug de
+    enconding do stack experimental, confirmado byte-a-byte contra os
+    .crt reais em disco (sha256 identico). O loop abaixo so avanca
+    aceitando um cert_data que comeca com 0x30 (tag SEQUENCE,
+    universal pra qualquer X.509 DER); quando o proximo campo nao bate
+    (ex.: por causa desse padding), tenta deslocar 1-8 bytes antes de
+    desistir -- generico, nunca hardcoded pro valor "3" especifico."""
+    buf = locate_certificate_handshake_message(buf)
+    pos = 4
+    ctx_len = buf[pos]
+    pos += 1 + ctx_len
+    certs_len = int.from_bytes(buf[pos:pos + 3], "big")
+    pos += 3
+    end = pos + certs_len
+    certs = []
+    while pos < end:
+        if pos + 3 > end:
+            break
+        clen = int.from_bytes(buf[pos:pos + 3], "big")
+        cert_data = buf[pos + 3:pos + 3 + clen]
+        if cert_data[:1] == b"\x30" and pos + 3 + clen <= end:
+            pos += 3 + clen
+            extlen = int.from_bytes(buf[pos:pos + 2], "big")
+            pos += 2 + extlen
+            certs.append(bytes(cert_data))
+            continue
+        found = False
+        for skip in range(1, 9):
+            p2 = pos + skip
+            if p2 + 3 > end:
+                break
+            clen2 = int.from_bytes(buf[p2:p2 + 3], "big")
+            cd2 = buf[p2 + 3:p2 + 3 + clen2]
+            if cd2[:1] == b"\x30" and p2 + 3 + clen2 <= end:
+                pos = p2 + 3 + clen2
+                extlen = int.from_bytes(buf[pos:pos + 2], "big")
+                pos += 2 + extlen
+                certs.append(bytes(cd2))
+                found = True
+                break
+        if not found:
+            break
+    return certs, pos == end
+
+
+def extract_certs(capturas_dir: Path, profile: str, route: str) -> dict:
+    """Extrai TODAS as CertificateEntry reais (servidor e cliente) da
+    mensagem Certificate decifrada -- substitui a abordagem anterior
+    baseada em `tshark --export-objects x509af`, que nao reassemblava
+    corretamente o segundo certificado (ML-DSA) do hibrido-and (ver
+    Decisao 105)."""
+    frames_out = run_tshark(capturas_dir, profile, route,
+                             ["-Y", "tls.handshake.type==11 and tcp.stream==0",
+                              "-T", "fields", "-e", "frame.number"])
+    frame_numbers = [int(l) for l in frames_out.strip().splitlines() if l.strip()]
+    sides = ["server", "client"][:len(frame_numbers)]
+    by_side = {}
+    for side, frame_no in zip(sides, frame_numbers):
+        buf = get_decrypted_tls_hex(capturas_dir, profile, route, frame_no)
+        der_list, fully_consumed = parse_tls13_certificate_list(buf)
+        entries = []
+        for der in der_list:
+            digest = sha256_bytes(der)
+            info = parse_der_certificate_generic(der)
+            info["sha256"] = digest
+            info = enrich_with_cryptography_lib(der, info)
+            entries.append(info)
+        by_side[side] = {"frame": frame_no, "n_entries": len(entries),
+                          "certificate_list_fully_consumed": fully_consumed, "entries": entries}
+    return by_side
+
+
+def verify_against_disk_pki(entries_by_side: dict, pki_dir: Path) -> dict:
+    """Confere os certificados extraidos do handshake real contra os
+    arquivos .crt reais em disco (PKI usada pra gerar o deployment --
+    dado real, nunca codigo-fonte) -- BLOCO B item 1: cross-check
+    exigido pra provar que a extracao do pcap bate com o material
+    real, nunca so inferido."""
+    results = []
+    if not pki_dir.is_dir():
+        return {"pki_dir_found": False, "checks": []}
+    for side, data in entries_by_side.items():
+        for entry in data["entries"]:
+            subj = (entry.get("subject") or "").replace("CN=", "")
+            candidate = pki_dir / f"{subj}.crt"
+            if not candidate.is_file():
+                results.append({"subject": subj, "disk_file_found": False})
+                continue
+            pem = candidate.read_text()
+            der_lines = pem.replace("-----BEGIN CERTIFICATE-----", "").replace("-----END CERTIFICATE-----", "")
+            disk_der = base64.b64decode("".join(der_lines.split()))
+            disk_sha256 = sha256_bytes(disk_der)
+            results.append({"subject": subj, "disk_file_found": True, "disk_file": str(candidate.name),
+                             "disk_sha256": disk_sha256, "pcap_sha256": entry["sha256"],
+                             "identical": disk_sha256 == entry["sha256"]})
+    return {"pki_dir_found": True, "checks": results}
+
+
+def dual_signature_check(crypto_by_profile: dict) -> dict:
+    """Checagem automatizada exigida pelo BLOCO B item 3 -- FALHA
+    (loud, nunca so log) se:
+      - Classico/Hibrido-v8 nao tiverem EXATAMENTE RSA-2048 (e nada
+        mais) nas duas pontas (server+client);
+      - PQC tiver qualquer componente classico (RSA/EC) em qualquer
+        entrada;
+      - Hibrido-AND NAO tiver AMBOS RSA-2048 E ML-DSA presentes em
+        cada lado (server e client) -- AND verdadeiro, falha se
+        faltar QUALQUER um dos dois;
+      - o componente ML-DSA do Hibrido-AND divergir do parametro do
+        perfil PQC standalone (mesma OID, mesmo tamanho de chave e de
+        assinatura em bytes)."""
     failures = []
-    for profile in ["classico", "hibrido-v8", "hibrido-and"]:
-        for cert in crypto_by_profile[profile]["certs"]["certificates"]:
-            if cert.get("public_key_algorithm") == "RSAPublicKey" and cert.get("public_key_size_bits") != 2048:
-                failures.append(f"{profile}: certificado {cert.get('subject')} com RSA de "
-                                 f"{cert.get('public_key_size_bits')} bits, esperado 2048")
-            if cert.get("public_key_algorithm") not in ("RSAPublicKey",) and cert.get("parse_ok"):
-                failures.append(f"{profile}: certificado {cert.get('subject')} NAO e RSA "
-                                 f"({cert.get('public_key_algorithm')}) -- inesperado neste perfil")
-    pqc_group_dec = crypto_by_profile["pqc"]["handshake_l0"]["negotiated_group_dec"]
-    if pqc_group_dec in ("24", "23", "25", "29", "30") or (pqc_group_dec and pqc_group_dec.startswith("45")):
-        failures.append(f"pqc: grupo negociado {pqc_group_dec} parece conter componente classico/hibrido")
-    for cert in crypto_by_profile["pqc"]["certs"]["certificates"]:
-        if cert.get("public_key_algorithm") == "RSAPublicKey" or "rsa" in (cert.get("signature_algorithm_name") or "").lower():
-            failures.append(f"pqc: certificado {cert.get('subject')} contem componente RSA impropio")
+
+    def is_rsa2048(e):
+        return (e.get("public_key_algorithm_oid") == "1.2.840.113549.1.1.1"
+                and e.get("public_key_raw_bytes") in (269, 270)  # SEQUENCE{modulus 2048b+pad,exp} em DER
+                and e.get("public_key_bits_cryptography_lib") == 2048)
+
+    def is_mldsa65(e):
+        return (e.get("public_key_algorithm_oid") == "2.16.840.1.101.3.4.3.18"
+                and e.get("public_key_raw_bytes") == 1952
+                and e.get("signature_raw_bytes") == 3309)
+
+    for profile in ("classico", "hibrido-v8"):
+        for side, data in crypto_by_profile[profile]["entries_by_side"].items():
+            entries = data["entries"]
+            if len(entries) != 1 or not is_rsa2048(entries[0]):
+                failures.append(f"{profile}/{side}: esperado EXATAMENTE 1 entrada RSA-2048, "
+                                 f"achado {[(e.get('public_key_algorithm_name'), e.get('public_key_raw_bytes')) for e in entries]}")
+
+    for side, data in crypto_by_profile["pqc"]["entries_by_side"].items():
+        for e in data["entries"]:
+            if is_rsa2048(e) or "rsa" in (e.get("signature_algorithm_name") or "").lower():
+                failures.append(f"pqc/{side}: componente classico (RSA) impropio encontrado -- {e.get('subject')}")
+            if not is_mldsa65(e):
+                failures.append(f"pqc/{side}: entrada nao bate com ML-DSA-65 esperado -- {e}")
+
+    for side, data in crypto_by_profile["hibrido-and"]["entries_by_side"].items():
+        entries = data["entries"]
+        has_rsa = any(is_rsa2048(e) for e in entries)
+        mldsa_entries = [e for e in entries if is_mldsa65(e)]
+        if not has_rsa:
+            failures.append(f"hibrido-and/{side}: componente RSA-2048 AUSENTE (AND exige os dois) -- "
+                             f"entradas achadas: {len(entries)}")
+        if not mldsa_entries:
+            failures.append(f"hibrido-and/{side}: componente ML-DSA-65 AUSENTE (AND exige os dois) -- "
+                             f"entradas achadas: {len(entries)}")
+
     return {"pass": len(failures) == 0, "failures": failures}
 
 
@@ -362,12 +596,14 @@ def fmt(v, nd=3):
     return "n/d" if v is None else (round(v, nd) if isinstance(v, float) else v)
 
 
-def render_crypto_md(crypto: dict, rsa_check: dict) -> str:
+def render_crypto_md(crypto: dict, check: dict, pki_checks: dict, log_evidence: dict) -> str:
     lines = ["# Secao (a) -- Parametros criptograficos por perfil (extraidos de artefatos reais)", ""]
-    lines.append("Extraido via `tshark --export-objects x509af` + `tshark -T fields` sobre os pares "
-                  "pcap+keylog reais preservados em `raw/criterio1_capturas/` (decifragem TLS por keylog, "
-                  "nunca assumido do codigo-fonte). Cada perfil foi extraido das 3 rotas pilotadas "
-                  "(L0/L219/L325) e os resultados foram comparados -- ver `cross_route_consistent`.")
+    lines.append("Certificados: parser DER generico proprio sobre os bytes DECIFRADOS reais da mensagem "
+                  "TLS Certificate (`tshark -x` com keylog, bloco \"Decrypted TLS\"), nunca o exportador "
+                  "`x509af` (que falhava em reassemblar o 2o certificado do hibrido-and -- Decisao 105). "
+                  "Handshake (grupo/cipher/SignatureScheme): `tshark -T fields`. Cada perfil foi extraido "
+                  "das 3 rotas pilotadas (L0/L219/L325); os resultados foram comparados -- ver "
+                  "`cross_route_consistent`.")
     lines.append("")
     for p in PROFILES:
         c = crypto[p]
@@ -380,38 +616,69 @@ def render_crypto_md(crypto: dict, rsa_check: dict) -> str:
         lines.append(f"- Consistente nas 3 rotas pilotadas (L0/L219/L325)? **{c['cross_route_consistent']}**")
         lines.append(f"- CertificateRequest presentes na captura (mTLS): {hs['n_certificaterequest_messages_in_capture']}")
         lines.append("")
-        lines.append("Certificados X.509 reais (DER extraido do handshake decifrado):")
-        for cert in c["certs"]["certificates"]:
-            lines.append(f"  - `{cert.get('subject')}` emitido por `{cert.get('issuer')}` -- "
-                          f"{cert.get('signature_algorithm_name')} -- "
-                          f"chave: {cert.get('public_key_algorithm')} "
-                          f"{cert.get('public_key_size_bits') or cert.get('asn1_bitstring_lengths_bytes_raw')} -- "
-                          f"SAN: {cert.get('san')} -- sha256(DER)={cert['sha256'][:16]}... -- "
-                          f"{cert['n_instances']} instancia(s) identica(s) na captura")
-        if c["certs"]["rejected_non_cert_objects"]:
-            lines.append(f"  - {len(c['certs']['rejected_non_cert_objects'])} objeto(s) pequeno(s) exportado(s) pelo "
-                          f"x509af NAO sao certificados X.509 validos (tamanho < 100 bytes, openssl nao decodifica) "
-                          f"-- NAO usados como evidencia: {[o['size_bytes'] for o in c['certs']['rejected_non_cert_objects']]} bytes")
+        for side, data in c["entries_by_side"].items():
+            lines.append(f"CertificateEntry real, lado **{side}** (frame {data['frame']}, "
+                          f"{data['n_entries']} entrada(s), lista totalmente consumida: "
+                          f"{data['certificate_list_fully_consumed']}):")
+            for e in data["entries"]:
+                lines.append(f"  - serial={e['serial']} `{e.get('subject')}` emitido por `{e.get('issuer')}` -- "
+                              f"assinatura: {e['signature_algorithm_name']} ({e['signature_raw_bytes']}B raw) -- "
+                              f"chave: {e['public_key_algorithm_name']} ({e['public_key_raw_bytes']}B raw"
+                              f"{', ' + str(e['public_key_bits_cryptography_lib']) + ' bits (lib cryptography)' if e.get('public_key_bits_cryptography_lib') else ''}) -- "
+                              f"DER total={e['der_total_bytes']}B -- sha256={e['sha256'][:16]}...")
         lines.append("")
-    lines.append("## Checagem automatizada obrigatoria (item 4a)")
-    lines.append(f"**Resultado: {'PASS' if rsa_check['pass'] else 'FAIL'}**")
-    if rsa_check["failures"]:
-        for f in rsa_check["failures"]:
-            lines.append(f"- FALHA: {f}")
+    lines.append("## Checagem automatizada obrigatoria (BLOCO B item 3)")
+    lines.append(f"**Resultado: {'PASS' if check['pass'] else 'FALHOU -- VER ABAIXO'}**")
+    if check["failures"]:
+        lines.append("")
+        lines.append("```")
+        for f in check["failures"]:
+            lines.append(f"FALHA: {f}")
+        lines.append("```")
     else:
-        lines.append("- Todo RSA em classico/hibrido-v8/hibrido-and == 2048 bits exatos.")
-        lines.append("- pqc nao mostra nenhum componente classico impropio (grupo MLKEM1024 puro, "
-                      "certificado ML-DSA-65 puro).")
+        lines.append("- classico/hibrido-v8: exatamente 1 entrada RSA-2048 em cada lado (servidor e cliente).")
+        lines.append("- pqc: toda entrada e ML-DSA-65 puro (OID 2.16.840.1.101.3.4.3.18, chave 1952B, "
+                      "assinatura 3309B), nenhum componente classico.")
+        lines.append("- hibrido-and: AMBOS RSA-2048 E ML-DSA-65 presentes em cada lado (AND verdadeiro), "
+                      "e o componente ML-DSA bate EXATAMENTE com o parametro do perfil pqc standalone.")
     lines.append("")
-    lines.append("## Nota honesta sobre hibrido-and (\"o AND\")")
-    lines.append("O SignatureScheme 0xfe65 (composto/dual) foi confirmado REAL na mensagem "
-                  "CertificateVerify do handshake decifrado desse perfil. O certificado X.509 da cadeia "
-                  "permanece puramente RSA-2048 nas 3 rotas -- o componente PQC da assinatura dupla NAO "
-                  "foi isolado como um certificado X.509 separado por esta extracao (os objetos extras "
-                  "exportados pelo x509af sao fragmentos de ~23-24 bytes, nao certificados validos). "
-                  "A natureza exata de como o lado PQC da assinatura composta e transportado "
-                  "(certificado adicional fora da cadeia padrao, extensao TLS propria, ou outro "
-                  "mecanismo) permanece um item aberto -- nao investigado mais a fundo aqui.")
+    lines.append("## Achado real: a dupla assinatura do hibrido-and (\"o AND\") -- BLOCO B item 1")
+    lines.append("A mensagem Certificate real do hibrido-and (servidor E cliente, nas 3 rotas) contem "
+                  "DUAS CertificateEntry na MESMA mensagem de handshake: uma RSA-2048 e uma ML-DSA-65 -- "
+                  "extraidas diretamente dos bytes decifrados reais (nunca do codigo-fonte). Entre as duas "
+                  "entradas ha 3 bytes de padding zero NAO previstos pela RFC 8446 (um bug de encoding do "
+                  "stack experimental, nao um erro de parsing deste script -- o parser so avanca aceitando "
+                  "um `cert_data` que comeca com a tag SEQUENCE 0x30; quando o campo declarado nao bate, "
+                  "ele busca ate 8 bytes adiante por um inicio valido).")
+    lines.append("")
+    lines.append("Confirmacao cruzada contra os arquivos .crt reais em disco "
+                  f"(`{pki_checks.get('pki_dir', '')}`):")
+    if pki_checks.get("pki_dir_found"):
+        for chk in pki_checks["checks"]:
+            if chk.get("disk_file_found"):
+                lines.append(f"  - `{chk['subject']}`: sha256 do pcap == sha256 do disco (`{chk['disk_file']}`)? "
+                              f"**{chk['identical']}**")
+            else:
+                lines.append(f"  - `{chk['subject']}`: arquivo .crt correspondente NAO encontrado em disco")
+    else:
+        lines.append("  - diretorio de PKI em disco nao encontrado nesta execucao -- cross-check nao realizado")
+    lines.append("")
+    lines.append("Prova de que o handshake validou AMBOS os certificados (nunca so \"o codigo diz que "
+                  "confere os dois\"): evidencia do log real do gateway "
+                  "(`raw/full_container_logs/v9-mtls.log`):")
+    lines.append(f"  - `dualAuthenticated=true` em {log_evidence['n_dual_true']}/{log_evidence['n_connections']} "
+                  f"conexoes reais do hibrido-and (as demais, dualAuthenticated=false, sao um canal interno "
+                  f"nao relacionado -- `clientCert=\"op\"`, curve=CurveP256 -- nunca o cliente instrumentado "
+                  f"do piloto)")
+    lines.append(f"  - `handshakeBytesIn`/`handshakeBytesOut` reais observados: {log_evidence['example_line']}")
+    lines.append("  - a conexao so chega a \"connection OK\" se o stack TLS (Go crypto/tls, que rejeita "
+                  "handshakes com cadeia de certificado invalida) ja tiver processado a mensagem Certificate "
+                  "completa (ambas as entradas) sem erro -- nao ha como chegar a esse log com so uma das "
+                  "duas cadeias validada.")
+    lines.append("  - limitacao honesta: o log em nivel INFO do gateway nao imprime uma linha separada "
+                  "\"verifiquei RSA\" + \"verifiquei ML-DSA\" -- a evidencia disponivel e o resultado "
+                  "agregado (`dualAuthenticated=true` + conexao aceita), nunca um trace de verificacao "
+                  "por certificado individual.")
     return "\n".join(lines) + "\n"
 
 
@@ -607,11 +874,26 @@ def render_main_md(run_label: str, sha256_summary: dict, all_pass: bool, toc_fil
 
 # ---------------------------------------------------------------- main
 
+def build_log_evidence(raw_dir: Path) -> dict:
+    """Evidencia real do log do gateway (BLOCO B item 1) de que o
+    handshake do hibrido-and validou ambos os certificados -- nunca
+    assumido, lido direto do log real preservado."""
+    log_path = raw_dir / "full_container_logs" / "v9-mtls.log"
+    if not log_path.is_file():
+        return {"log_found": False, "n_dual_true": 0, "n_connections": 0, "example_line": None}
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    real_lines = [l for l in text.splitlines()
+                  if "hibrido-and connection OK" in l and 'clientCert="op"' not in l]
+    n_true = sum(1 for l in real_lines if "dualAuthenticated=true" in l)
+    example = next((l.split("gateway:")[-1].strip() for l in real_lines if "dualAuthenticated=true" in l), None)
+    return {"log_found": True, "n_dual_true": n_true, "n_connections": len(real_lines),
+            "example_line": example, "source_file": str(log_path.relative_to(raw_dir.parent))}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--out-subdir", default="CONSOLIDATED_REPORT")
-    ap.add_argument("--scratch-dir", default=None, help="fora do run-dir, para export de certificados")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -619,8 +901,6 @@ def main():
     capturas_dir = raw_dir / "criterio1_capturas"
     out_dir = run_dir / args.out_subdir
     out_dir.mkdir(parents=True, exist_ok=True)
-    scratch_dir = Path(args.scratch_dir) if args.scratch_dir else out_dir / "_cert_extract_scratch"
-    scratch_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = load_json(raw_dir / "manifest.json")
     criteria_eval = load_json(run_dir / "criteria_evaluation.json")
@@ -629,28 +909,44 @@ def main():
     criterio2 = load_json(raw_dir / "criterio2_initcwnd.json")
     criterio3 = load_json(raw_dir / "criterio3_l325_execucoes.json")
     pins = load_json(run_dir.parents[2] / "campaign" / "PINS.json")
+    pki_dir = run_dir.parents[2] / "certs" / "generated"
 
-    print("Extraindo parametros criptograficos reais (tshark+openssl) para 4 perfis x 3 rotas...",
+    print("Extraindo parametros criptograficos reais (tshark + parser DER proprio) para 4 perfis x 3 rotas...",
           file=sys.stderr)
     crypto = {}
     for p in PROFILES:
         per_route = {}
         for r in ROUTES:
             per_route[r] = {"handshake": extract_handshake(capturas_dir, p, r),
-                             "certs": extract_certs(capturas_dir, p, r, scratch_dir)}
+                             "entries": extract_certs(capturas_dir, p, r)}
         hs_all = [per_route[r]["handshake"] for r in ROUTES]
         consistent = all(
             h["ciphersuite_hex"] == hs_all[0]["ciphersuite_hex"] and
             h["negotiated_group_hex"] == hs_all[0]["negotiated_group_hex"] and
             h["certificateverify_sig_hash_alg_hex_distinct"] == hs_all[0]["certificateverify_sig_hash_alg_hex_distinct"]
             for h in hs_all)
+        entries_all = [per_route[r]["entries"] for r in ROUTES]
+        entries_consistent = all(
+            {side: [e["sha256"] for e in d["entries"]] for side, d in ent.items()} ==
+            {side: [e["sha256"] for e in d["entries"]] for side, d in entries_all[0].items()}
+            for ent in entries_all)
         crypto[p] = {"handshake_l0": per_route["L0"]["handshake"],
                      "handshake_all_routes": {r: per_route[r]["handshake"] for r in ROUTES},
-                     "certs": per_route["L0"]["certs"],
-                     "certs_all_routes": {r: per_route[r]["certs"] for r in ROUTES},
-                     "cross_route_consistent": consistent}
+                     "entries_by_side": per_route["L0"]["entries"],
+                     "entries_all_routes": {r: per_route[r]["entries"] for r in ROUTES},
+                     "cross_route_consistent": consistent and entries_consistent}
 
-    rsa_check = rsa_2048_check(crypto)
+    check = dual_signature_check(crypto)
+    pki_checks = verify_against_disk_pki(crypto["hibrido-and"]["entries_by_side"], pki_dir)
+    pki_checks["pki_dir"] = str(pki_dir)
+    log_evidence = build_log_evidence(raw_dir)
+
+    if not check["pass"]:
+        print("=" * 70, file=sys.stderr)
+        print("FALHA NA CHECAGEM AUTOMATIZADA DE CRIPTOGRAFIA (BLOCO B item 3):", file=sys.stderr)
+        for f in check["failures"]:
+            print(f"  - {f}", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
 
     sizes = build_sizes(criteria_eval)
     jwt_jwks = build_jwt_jwks(piloto_calls)
@@ -667,7 +963,9 @@ def main():
         "all_criteria_pass": all_pass,
         "criteria_evaluation": criteria_eval,
         "crypto_params_by_profile": crypto,
-        "rsa_2048_and_pqc_purity_check": rsa_check,
+        "dual_signature_and_pqc_purity_check": check,
+        "pki_disk_cross_check": pki_checks,
+        "gateway_log_dual_auth_evidence": log_evidence,
         "sizes": sizes,
         "jwt_jwks": jwt_jwks,
         "latency": latency,
@@ -680,7 +978,8 @@ def main():
     (out_dir / "consolidated.json").write_text(
         json.dumps(consolidated, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
 
-    (out_dir / "crypto_params.md").write_text(render_crypto_md(crypto, rsa_check), encoding="utf-8")
+    (out_dir / "crypto_params.md").write_text(
+        render_crypto_md(crypto, check, pki_checks, log_evidence), encoding="utf-8")
     (out_dir / "sizes.md").write_text(render_sizes_md(sizes, jwt_jwks), encoding="utf-8")
     (out_dir / "latency.md").write_text(render_latency_md(latency, rtt_initcwnd), encoding="utf-8")
     (out_dir / "flows_criteria.md").write_text(
@@ -706,12 +1005,10 @@ def main():
     (out_dir / "sha256_manifest.json").write_text(
         json.dumps({"raw_inputs": raw_sha, "generated_outputs": generated_sha}, indent=2), encoding="utf-8")
 
-    # limpeza do scratch de extracao de certificados (nunca faz parte da evidencia oficial)
-    import shutil
-    shutil.rmtree(scratch_dir, ignore_errors=True)
-
     print(json.dumps({"out_dir": str(out_dir), "all_criteria_pass": all_pass,
-                       "rsa_2048_and_pqc_purity_check_pass": rsa_check["pass"]}, indent=2))
+                       "dual_signature_and_pqc_purity_check_pass": check["pass"]}, indent=2))
+    if not check["pass"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

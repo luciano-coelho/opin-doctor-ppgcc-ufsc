@@ -1,6 +1,6 @@
 {
   "run_label": "piloto-real-aws-2026-11-09-v2",
-  "generated_at_utc": "2026-11-09T17:27:57.660622+00:00",
+  "generated_at_utc": "2026-11-09T18:37:46.628823+00:00",
   "all_criteria_pass": true,
   "criteria_evaluation": [
     {
@@ -3475,94 +3475,26 @@
           "n_certificaterequest_messages_in_capture": 6
         }
       },
-      "certs": {
-        "certificates": [
-          {
-            "first_seen_file": "02(1).cer",
-            "size_bytes": 900,
-            "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
-            "n_instances": 6,
-            "instance_files": [
-              "02(1).cer",
-              "02(2).cer",
-              "02(3).cer",
-              "02(4).cer",
-              "02(5).cer",
-              "02.cer"
-            ],
-            "subject": "CN=classico_server",
-            "issuer": "CN=classico_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "mtls",
-              "auth.local",
-              "matls-auth.local",
-              "api.local",
-              "matls-api.local",
-              "directory",
-              "directory.local",
-              "keystore",
-              "127.0.0.1",
-              "::1"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          },
-          {
-            "first_seen_file": "03(1).cer",
-            "size_bytes": 787,
-            "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
-            "n_instances": 6,
-            "instance_files": [
-              "03(1).cer",
-              "03(2).cer",
-              "03(3).cer",
-              "03(4).cer",
-              "03(5).cer",
-              "03.cer"
-            ],
-            "subject": "CN=classico_client",
-            "issuer": "CN=classico_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "opin-client-one"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          }
-        ],
-        "rejected_non_cert_objects": []
-      },
-      "certs_all_routes": {
-        "L0": {
-          "certificates": [
+      "entries_by_side": {
+        "server": {
+          "frame": 6,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "02(1).cer",
-              "size_bytes": 900,
+              "serial": 2,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 900,
               "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
-              "n_instances": 6,
-              "instance_files": [
-                "02(1).cer",
-                "02(2).cer",
-                "02(3).cer",
-                "02(4).cer",
-                "02(5).cer",
-                "02.cer"
-              ],
               "subject": "CN=classico_server",
               "issuer": "CN=classico_ca",
               "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "mtls",
                 "auth.local",
@@ -3575,170 +3507,226 @@
                 "127.0.0.1",
                 "::1"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
+              "public_key_bits_cryptography_lib": 2048
+            }
+          ]
+        },
+        "client": {
+          "frame": 9,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "03(1).cer",
-              "size_bytes": 787,
+              "serial": 3,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 787,
               "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
-              "n_instances": 6,
-              "instance_files": [
-                "03(1).cer",
-                "03(2).cer",
-                "03(3).cer",
-                "03(4).cer",
-                "03(5).cer",
-                "03.cer"
-              ],
               "subject": "CN=classico_client",
               "issuer": "CN=classico_ca",
               "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "opin-client-one"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
+              "public_key_bits_cryptography_lib": 2048
             }
-          ],
-          "rejected_non_cert_objects": []
+          ]
+        }
+      },
+      "entries_all_routes": {
+        "L0": {
+          "server": {
+            "frame": 6,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 2,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 900,
+                "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
+                "subject": "CN=classico_server",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 9,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 3,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 787,
+                "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
+                "subject": "CN=classico_client",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         },
         "L219": {
-          "certificates": [
-            {
-              "first_seen_file": "02(1).cer",
-              "size_bytes": 900,
-              "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
-              "n_instances": 6,
-              "instance_files": [
-                "02(1).cer",
-                "02(2).cer",
-                "02(3).cer",
-                "02(4).cer",
-                "02(5).cer",
-                "02.cer"
-              ],
-              "subject": "CN=classico_server",
-              "issuer": "CN=classico_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "03(1).cer",
-              "size_bytes": 787,
-              "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
-              "n_instances": 6,
-              "instance_files": [
-                "03(1).cer",
-                "03(2).cer",
-                "03(3).cer",
-                "03(4).cer",
-                "03(5).cer",
-                "03.cer"
-              ],
-              "subject": "CN=classico_client",
-              "issuer": "CN=classico_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 6,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 2,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 900,
+                "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
+                "subject": "CN=classico_server",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 9,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 3,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 787,
+                "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
+                "subject": "CN=classico_client",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         },
         "L325": {
-          "certificates": [
-            {
-              "first_seen_file": "02(1).cer",
-              "size_bytes": 900,
-              "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
-              "n_instances": 6,
-              "instance_files": [
-                "02(1).cer",
-                "02(2).cer",
-                "02(3).cer",
-                "02(4).cer",
-                "02(5).cer",
-                "02.cer"
-              ],
-              "subject": "CN=classico_server",
-              "issuer": "CN=classico_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "03(1).cer",
-              "size_bytes": 787,
-              "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
-              "n_instances": 6,
-              "instance_files": [
-                "03(1).cer",
-                "03(2).cer",
-                "03(3).cer",
-                "03(4).cer",
-                "03(5).cer",
-                "03.cer"
-              ],
-              "subject": "CN=classico_client",
-              "issuer": "CN=classico_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 6,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 2,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 900,
+                "sha256": "3fcd60adeda39407e795320bf3cd9a78be98d15748de7d57a6f51ae16d15a343",
+                "subject": "CN=classico_server",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 9,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 3,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 787,
+                "sha256": "5095d5fee97f012a03d7e837860b7de1817eb922d1f3818389b97220923b6033",
+                "subject": "CN=classico_client",
+                "issuer": "CN=classico_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         }
       },
       "cross_route_consistent": true
@@ -3810,104 +3798,26 @@
           "n_certificaterequest_messages_in_capture": 6
         }
       },
-      "certs": {
-        "certificates": [
-          {
-            "first_seen_file": "0f(1).cer",
-            "size_bytes": 5619,
-            "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
-            "n_instances": 6,
-            "instance_files": [
-              "0f(1).cer",
-              "0f(2).cer",
-              "0f(3).cer",
-              "0f(4).cer",
-              "0f(5).cer",
-              "0f.cer"
-            ],
-            "subject": "CN=pqc_server",
-            "issuer": "CN=pqc_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-            "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-            "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-            "san": [
-              "mtls",
-              "auth.local",
-              "matls-auth.local",
-              "api.local",
-              "matls-api.local",
-              "directory",
-              "directory.local",
-              "keystore",
-              "127.0.0.1",
-              "::1"
-            ],
-            "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-            "public_key_size_bits": null,
-            "asn1_bitstring_lengths_bytes_raw": [
-              1953,
-              3310
-            ],
-            "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-            "parse_ok": true
-          },
-          {
-            "first_seen_file": "10(1).cer",
-            "size_bytes": 5506,
-            "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
-            "n_instances": 6,
-            "instance_files": [
-              "10(1).cer",
-              "10(2).cer",
-              "10(3).cer",
-              "10(4).cer",
-              "10(5).cer",
-              "10.cer"
-            ],
-            "subject": "CN=pqc_client",
-            "issuer": "CN=pqc_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-            "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-            "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-            "san": [
-              "opin-client-one"
-            ],
-            "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-            "public_key_size_bits": null,
-            "asn1_bitstring_lengths_bytes_raw": [
-              1953,
-              3310
-            ],
-            "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-            "parse_ok": true
-          }
-        ],
-        "rejected_non_cert_objects": []
-      },
-      "certs_all_routes": {
-        "L0": {
-          "certificates": [
+      "entries_by_side": {
+        "server": {
+          "frame": 11,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "0f(1).cer",
-              "size_bytes": 5619,
+              "serial": 15,
+              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "signature_raw_bytes": 3309,
+              "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "public_key_raw_bytes": 1952,
+              "der_total_bytes": 5619,
               "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
-              "n_instances": 6,
-              "instance_files": [
-                "0f(1).cer",
-                "0f(2).cer",
-                "0f(3).cer",
-                "0f(4).cer",
-                "0f(5).cer",
-                "0f.cer"
-              ],
               "subject": "CN=pqc_server",
               "issuer": "CN=pqc_ca",
               "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
               "san": [
                 "mtls",
                 "auth.local",
@@ -3920,200 +3830,226 @@
                 "127.0.0.1",
                 "::1"
               ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
-            },
+              "public_key_bits_cryptography_lib": null
+            }
+          ]
+        },
+        "client": {
+          "frame": 16,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "10(1).cer",
-              "size_bytes": 5506,
+              "serial": 16,
+              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "signature_raw_bytes": 3309,
+              "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "public_key_raw_bytes": 1952,
+              "der_total_bytes": 5506,
               "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
-              "n_instances": 6,
-              "instance_files": [
-                "10(1).cer",
-                "10(2).cer",
-                "10(3).cer",
-                "10(4).cer",
-                "10(5).cer",
-                "10.cer"
-              ],
               "subject": "CN=pqc_client",
               "issuer": "CN=pqc_ca",
               "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
               "san": [
                 "opin-client-one"
               ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
+              "public_key_bits_cryptography_lib": null
             }
-          ],
-          "rejected_non_cert_objects": []
+          ]
+        }
+      },
+      "entries_all_routes": {
+        "L0": {
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 15,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5619,
+                "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
+                "subject": "CN=pqc_server",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 16,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 16,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5506,
+                "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
+                "subject": "CN=pqc_client",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         },
         "L219": {
-          "certificates": [
-            {
-              "first_seen_file": "0f(1).cer",
-              "size_bytes": 5619,
-              "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
-              "n_instances": 6,
-              "instance_files": [
-                "0f(1).cer",
-                "0f(2).cer",
-                "0f(3).cer",
-                "0f(4).cer",
-                "0f(5).cer",
-                "0f.cer"
-              ],
-              "subject": "CN=pqc_server",
-              "issuer": "CN=pqc_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "10(1).cer",
-              "size_bytes": 5506,
-              "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
-              "n_instances": 6,
-              "instance_files": [
-                "10(1).cer",
-                "10(2).cer",
-                "10(3).cer",
-                "10(4).cer",
-                "10(5).cer",
-                "10.cer"
-              ],
-              "subject": "CN=pqc_client",
-              "issuer": "CN=pqc_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 15,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5619,
+                "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
+                "subject": "CN=pqc_server",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 19,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 16,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5506,
+                "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
+                "subject": "CN=pqc_client",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         },
         "L325": {
-          "certificates": [
-            {
-              "first_seen_file": "0f(1).cer",
-              "size_bytes": 5619,
-              "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
-              "n_instances": 6,
-              "instance_files": [
-                "0f(1).cer",
-                "0f(2).cer",
-                "0f(3).cer",
-                "0f(4).cer",
-                "0f(5).cer",
-                "0f.cer"
-              ],
-              "subject": "CN=pqc_server",
-              "issuer": "CN=pqc_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "10(1).cer",
-              "size_bytes": 5506,
-              "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
-              "n_instances": 6,
-              "instance_files": [
-                "10(1).cer",
-                "10(2).cer",
-                "10(3).cer",
-                "10(4).cer",
-                "10(5).cer",
-                "10.cer"
-              ],
-              "subject": "CN=pqc_client",
-              "issuer": "CN=pqc_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
-              "signature_algorithm_name": "ML-DSA-65 (FIPS 204 -- OID NIST; nao resolvido pela lib cryptography, confirmado por tamanho de chave/assinatura, ver extract_pqc_asn1_sizes)",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "nao suportado pela lib cryptography 46.x (PQC)",
-              "public_key_size_bits": null,
-              "asn1_bitstring_lengths_bytes_raw": [
-                1953,
-                3310
-              ],
-              "note": "DER BIT STRING inclui 1 byte de 'unused bits' no inicio; tamanho real da chave/assinatura e length-1. 1a BIT STRING = SubjectPublicKeyInfo (chave publica); demais = assinaturas.",
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 15,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5619,
+                "sha256": "1a63b339beb9972fbe01b228f94fc5f04b49e2734d559590dff705cbe0420fcf",
+                "subject": "CN=pqc_server",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 20,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 16,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5506,
+                "sha256": "a48b3ea711d8ee44983367f3b224ef940358742175da4369dc2dce1bb32dd606",
+                "subject": "CN=pqc_client",
+                "issuer": "CN=pqc_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         }
       },
       "cross_route_consistent": true
@@ -4185,94 +4121,26 @@
           "n_certificaterequest_messages_in_capture": 6
         }
       },
-      "certs": {
-        "certificates": [
-          {
-            "first_seen_file": "06(1).cer",
-            "size_bytes": 6242,
-            "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
-            "n_instances": 6,
-            "instance_files": [
-              "06(1).cer",
-              "06(2).cer",
-              "06(3).cer",
-              "06(4).cer",
-              "06(5).cer",
-              "06.cer"
-            ],
-            "subject": "CN=hibrido_v8_server",
-            "issuer": "CN=hibrido_v8_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-            "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "mtls",
-              "auth.local",
-              "matls-auth.local",
-              "api.local",
-              "matls-api.local",
-              "directory",
-              "directory.local",
-              "keystore",
-              "127.0.0.1",
-              "::1"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          },
-          {
-            "first_seen_file": "07(1).cer",
-            "size_bytes": 6131,
-            "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
-            "n_instances": 6,
-            "instance_files": [
-              "07(1).cer",
-              "07(2).cer",
-              "07(3).cer",
-              "07(4).cer",
-              "07(5).cer",
-              "07.cer"
-            ],
-            "subject": "CN=hibrido_v8_client",
-            "issuer": "CN=hibrido_v8_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-            "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "opin-client-one"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          }
-        ],
-        "rejected_non_cert_objects": []
-      },
-      "certs_all_routes": {
-        "L0": {
-          "certificates": [
+      "entries_by_side": {
+        "server": {
+          "frame": 11,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "06(1).cer",
-              "size_bytes": 6242,
+              "serial": 6,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 6242,
               "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
-              "n_instances": 6,
-              "instance_files": [
-                "06(1).cer",
-                "06(2).cer",
-                "06(3).cer",
-                "06(4).cer",
-                "06(5).cer",
-                "06.cer"
-              ],
               "subject": "CN=hibrido_v8_server",
               "issuer": "CN=hibrido_v8_ca",
               "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
               "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "mtls",
                 "auth.local",
@@ -4285,170 +4153,226 @@
                 "127.0.0.1",
                 "::1"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
+              "public_key_bits_cryptography_lib": 2048
+            }
+          ]
+        },
+        "client": {
+          "frame": 14,
+          "n_entries": 1,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "07(1).cer",
-              "size_bytes": 6131,
+              "serial": 7,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 6131,
               "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
-              "n_instances": 6,
-              "instance_files": [
-                "07(1).cer",
-                "07(2).cer",
-                "07(3).cer",
-                "07(4).cer",
-                "07(5).cer",
-                "07.cer"
-              ],
               "subject": "CN=hibrido_v8_client",
               "issuer": "CN=hibrido_v8_ca",
               "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
               "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "opin-client-one"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
+              "public_key_bits_cryptography_lib": 2048
             }
-          ],
-          "rejected_non_cert_objects": []
+          ]
+        }
+      },
+      "entries_all_routes": {
+        "L0": {
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 6,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6242,
+                "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
+                "subject": "CN=hibrido_v8_server",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 14,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 7,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6131,
+                "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
+                "subject": "CN=hibrido_v8_client",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         },
         "L219": {
-          "certificates": [
-            {
-              "first_seen_file": "06(1).cer",
-              "size_bytes": 6242,
-              "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
-              "n_instances": 6,
-              "instance_files": [
-                "06(1).cer",
-                "06(2).cer",
-                "06(3).cer",
-                "06(4).cer",
-                "06(5).cer",
-                "06.cer"
-              ],
-              "subject": "CN=hibrido_v8_server",
-              "issuer": "CN=hibrido_v8_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "07(1).cer",
-              "size_bytes": 6131,
-              "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
-              "n_instances": 6,
-              "instance_files": [
-                "07(1).cer",
-                "07(2).cer",
-                "07(3).cer",
-                "07(4).cer",
-                "07(5).cer",
-                "07.cer"
-              ],
-              "subject": "CN=hibrido_v8_client",
-              "issuer": "CN=hibrido_v8_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 6,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6242,
+                "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
+                "subject": "CN=hibrido_v8_server",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 17,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 7,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6131,
+                "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
+                "subject": "CN=hibrido_v8_client",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         },
         "L325": {
-          "certificates": [
-            {
-              "first_seen_file": "06(1).cer",
-              "size_bytes": 6242,
-              "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
-              "n_instances": 6,
-              "instance_files": [
-                "06(1).cer",
-                "06(2).cer",
-                "06(3).cer",
-                "06(4).cer",
-                "06(5).cer",
-                "06.cer"
-              ],
-              "subject": "CN=hibrido_v8_server",
-              "issuer": "CN=hibrido_v8_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "07(1).cer",
-              "size_bytes": 6131,
-              "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
-              "n_instances": 6,
-              "instance_files": [
-                "07(1).cer",
-                "07(2).cer",
-                "07(3).cer",
-                "07(4).cer",
-                "07(5).cer",
-                "07.cer"
-              ],
-              "subject": "CN=hibrido_v8_client",
-              "issuer": "CN=hibrido_v8_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
-              "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": []
+          "server": {
+            "frame": 11,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 6,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6242,
+                "sha256": "b3ec3fdd388ae58c19c24c0bea941f954735a78073f5a2327f0a1fd722cb24e6",
+                "subject": "CN=hibrido_v8_server",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          },
+          "client": {
+            "frame": 17,
+            "n_entries": 1,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 7,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 6131,
+                "sha256": "f4ae36e6c96d25f901a3821536639c5160b6c77a156a71392d2f8d9ad8ade96f",
+                "subject": "CN=hibrido_v8_client",
+                "issuer": "CN=hibrido_v8_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:42+00:00",
+                "not_valid_after_utc": "2031-11-06T19:44:42+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              }
+            ]
+          }
         }
       },
       "cross_route_consistent": true
@@ -4520,167 +4444,26 @@
           "n_certificaterequest_messages_in_capture": 6
         }
       },
-      "certs": {
-        "certificates": [
-          {
-            "first_seen_file": "0a(1).cer",
-            "size_bytes": 914,
-            "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
-            "n_instances": 6,
-            "instance_files": [
-              "0a(1).cer",
-              "0a(2).cer",
-              "0a(3).cer",
-              "0a(4).cer",
-              "0a(5).cer",
-              "0a.cer"
-            ],
-            "subject": "CN=hibrido_and_rsa_server",
-            "issuer": "CN=hibrido_and_rsa_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "mtls",
-              "auth.local",
-              "matls-auth.local",
-              "api.local",
-              "matls-api.local",
-              "directory",
-              "directory.local",
-              "keystore",
-              "127.0.0.1",
-              "::1"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          },
-          {
-            "first_seen_file": "0b(1).cer",
-            "size_bytes": 801,
-            "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
-            "n_instances": 6,
-            "instance_files": [
-              "0b(1).cer",
-              "0b(2).cer",
-              "0b(3).cer",
-              "0b(4).cer",
-              "0b(5).cer",
-              "0b.cer"
-            ],
-            "subject": "CN=hibrido_and_rsa_client",
-            "issuer": "CN=hibrido_and_rsa_ca",
-            "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-            "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-            "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-            "signature_algorithm_name": "sha256WithRSAEncryption",
-            "san": [
-              "opin-client-one"
-            ],
-            "public_key_algorithm": "RSAPublicKey",
-            "public_key_size_bits": 2048,
-            "parse_ok": true
-          }
-        ],
-        "rejected_non_cert_objects": [
-          {
-            "file": "(null)(1).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(10).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(11).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(2).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(3).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(4).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(5).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(6).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(7).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(8).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null)(9).cer",
-            "size_bytes": 23,
-            "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          },
-          {
-            "file": "(null).cer",
-            "size_bytes": 24,
-            "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-            "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-          }
-        ]
-      },
-      "certs_all_routes": {
-        "L0": {
-          "certificates": [
+      "entries_by_side": {
+        "server": {
+          "frame": 11,
+          "n_entries": 2,
+          "certificate_list_fully_consumed": true,
+          "entries": [
             {
-              "first_seen_file": "0a(1).cer",
-              "size_bytes": 914,
+              "serial": 10,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 914,
               "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
-              "n_instances": 6,
-              "instance_files": [
-                "0a(1).cer",
-                "0a(2).cer",
-                "0a(3).cer",
-                "0a(4).cer",
-                "0a(5).cer",
-                "0a.cer"
-              ],
               "subject": "CN=hibrido_and_rsa_server",
               "issuer": "CN=hibrido_and_rsa_ca",
               "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "mtls",
                 "auth.local",
@@ -4693,397 +4476,467 @@
                 "127.0.0.1",
                 "::1"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
+              "public_key_bits_cryptography_lib": 2048
             },
             {
-              "first_seen_file": "0b(1).cer",
-              "size_bytes": 801,
-              "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
-              "n_instances": 6,
-              "instance_files": [
-                "0b(1).cer",
-                "0b(2).cer",
-                "0b(3).cer",
-                "0b(4).cer",
-                "0b(5).cer",
-                "0b.cer"
+              "serial": 12,
+              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "signature_raw_bytes": 3309,
+              "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "public_key_raw_bytes": 1952,
+              "der_total_bytes": 5647,
+              "sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+              "subject": "CN=hibrido_and_mldsa_server",
+              "issuer": "CN=hibrido_and_mldsa_ca",
+              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+              "san": [
+                "mtls",
+                "auth.local",
+                "matls-auth.local",
+                "api.local",
+                "matls-api.local",
+                "directory",
+                "directory.local",
+                "keystore",
+                "127.0.0.1",
+                "::1"
               ],
+              "public_key_bits_cryptography_lib": null
+            }
+          ]
+        },
+        "client": {
+          "frame": 17,
+          "n_entries": 2,
+          "certificate_list_fully_consumed": true,
+          "entries": [
+            {
+              "serial": 11,
+              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+              "signature_algorithm_name": "sha256WithRSAEncryption",
+              "signature_raw_bytes": 256,
+              "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+              "public_key_algorithm_name": "rsaEncryption",
+              "public_key_raw_bytes": 270,
+              "der_total_bytes": 801,
+              "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
               "subject": "CN=hibrido_and_rsa_client",
               "issuer": "CN=hibrido_and_rsa_ca",
               "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
               "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
               "san": [
                 "opin-client-one"
               ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": [
-            {
-              "file": "(null)(1).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
+              "public_key_bits_cryptography_lib": 2048
             },
             {
-              "file": "(null)(10).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(11).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(2).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(3).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(4).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(5).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(6).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(7).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(8).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(9).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
+              "serial": 13,
+              "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "signature_raw_bytes": 3309,
+              "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+              "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+              "public_key_raw_bytes": 1952,
+              "der_total_bytes": 5534,
+              "sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+              "subject": "CN=hibrido_and_mldsa_client",
+              "issuer": "CN=hibrido_and_mldsa_ca",
+              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+              "san": [
+                "opin-client-one"
+              ],
+              "public_key_bits_cryptography_lib": null
             }
           ]
+        }
+      },
+      "entries_all_routes": {
+        "L0": {
+          "server": {
+            "frame": 11,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 10,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 914,
+                "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
+                "subject": "CN=hibrido_and_rsa_server",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 12,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5647,
+                "sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+                "subject": "CN=hibrido_and_mldsa_server",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 17,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 11,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 801,
+                "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
+                "subject": "CN=hibrido_and_rsa_client",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 13,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5534,
+                "sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+                "subject": "CN=hibrido_and_mldsa_client",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         },
         "L219": {
-          "certificates": [
-            {
-              "first_seen_file": "0a(1).cer",
-              "size_bytes": 914,
-              "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
-              "n_instances": 6,
-              "instance_files": [
-                "0a(1).cer",
-                "0a(2).cer",
-                "0a(3).cer",
-                "0a(4).cer",
-                "0a(5).cer",
-                "0a.cer"
-              ],
-              "subject": "CN=hibrido_and_rsa_server",
-              "issuer": "CN=hibrido_and_rsa_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "0b(1).cer",
-              "size_bytes": 801,
-              "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
-              "n_instances": 6,
-              "instance_files": [
-                "0b(1).cer",
-                "0b(2).cer",
-                "0b(3).cer",
-                "0b(4).cer",
-                "0b(5).cer",
-                "0b.cer"
-              ],
-              "subject": "CN=hibrido_and_rsa_client",
-              "issuer": "CN=hibrido_and_rsa_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": [
-            {
-              "file": "(null)(1).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(10).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(11).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(2).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(3).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(4).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(5).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(6).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(7).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(8).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(9).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            }
-          ]
+          "server": {
+            "frame": 11,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 10,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 914,
+                "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
+                "subject": "CN=hibrido_and_rsa_server",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 12,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5647,
+                "sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+                "subject": "CN=hibrido_and_mldsa_server",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 22,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 11,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 801,
+                "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
+                "subject": "CN=hibrido_and_rsa_client",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 13,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5534,
+                "sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+                "subject": "CN=hibrido_and_mldsa_client",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         },
         "L325": {
-          "certificates": [
-            {
-              "first_seen_file": "0a(1).cer",
-              "size_bytes": 914,
-              "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
-              "n_instances": 6,
-              "instance_files": [
-                "0a(1).cer",
-                "0a(2).cer",
-                "0a(3).cer",
-                "0a(4).cer",
-                "0a(5).cer",
-                "0a.cer"
-              ],
-              "subject": "CN=hibrido_and_rsa_server",
-              "issuer": "CN=hibrido_and_rsa_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "mtls",
-                "auth.local",
-                "matls-auth.local",
-                "api.local",
-                "matls-api.local",
-                "directory",
-                "directory.local",
-                "keystore",
-                "127.0.0.1",
-                "::1"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            },
-            {
-              "first_seen_file": "0b(1).cer",
-              "size_bytes": 801,
-              "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
-              "n_instances": 6,
-              "instance_files": [
-                "0b(1).cer",
-                "0b(2).cer",
-                "0b(3).cer",
-                "0b(4).cer",
-                "0b(5).cer",
-                "0b.cer"
-              ],
-              "subject": "CN=hibrido_and_rsa_client",
-              "issuer": "CN=hibrido_and_rsa_ca",
-              "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
-              "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
-              "signature_algorithm_oid": "1.2.840.113549.1.1.11",
-              "signature_algorithm_name": "sha256WithRSAEncryption",
-              "san": [
-                "opin-client-one"
-              ],
-              "public_key_algorithm": "RSAPublicKey",
-              "public_key_size_bits": 2048,
-              "parse_ok": true
-            }
-          ],
-          "rejected_non_cert_objects": [
-            {
-              "file": "(null)(1).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(10).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(11).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(2).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(3).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(4).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(5).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(6).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(7).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(8).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null)(9).cer",
-              "size_bytes": 23,
-              "sha256": "dab5d4a9c44099789f25b59f923a3bd8f8b3f51c26600c7b959466bbb4221035",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            },
-            {
-              "file": "(null).cer",
-              "size_bytes": 24,
-              "sha256": "304e9a33847694f622705bf30d5ee9f89817533724d1462f1558f1e9bc511936",
-              "reason": "menor que 100 bytes -- nao e um certificado X.509 valido (openssl nao decodifica), provavel fragmento de reassemblagem do exportador x509af; NAO usado como evidencia criptografica"
-            }
-          ]
+          "server": {
+            "frame": 11,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 10,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 914,
+                "sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
+                "subject": "CN=hibrido_and_rsa_server",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 12,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5647,
+                "sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+                "subject": "CN=hibrido_and_mldsa_server",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "mtls",
+                  "auth.local",
+                  "matls-auth.local",
+                  "api.local",
+                  "matls-api.local",
+                  "directory",
+                  "directory.local",
+                  "keystore",
+                  "127.0.0.1",
+                  "::1"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          },
+          "client": {
+            "frame": 22,
+            "n_entries": 2,
+            "certificate_list_fully_consumed": true,
+            "entries": [
+              {
+                "serial": 11,
+                "signature_algorithm_oid": "1.2.840.113549.1.1.11",
+                "signature_algorithm_name": "sha256WithRSAEncryption",
+                "signature_raw_bytes": 256,
+                "public_key_algorithm_oid": "1.2.840.113549.1.1.1",
+                "public_key_algorithm_name": "rsaEncryption",
+                "public_key_raw_bytes": 270,
+                "der_total_bytes": 801,
+                "sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
+                "subject": "CN=hibrido_and_rsa_client",
+                "issuer": "CN=hibrido_and_rsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": 2048
+              },
+              {
+                "serial": 13,
+                "signature_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "signature_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "signature_raw_bytes": 3309,
+                "public_key_algorithm_oid": "2.16.840.1.101.3.4.3.18",
+                "public_key_algorithm_name": "ML-DSA-65 (FIPS 204, OID NIST)",
+                "public_key_raw_bytes": 1952,
+                "der_total_bytes": 5534,
+                "sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+                "subject": "CN=hibrido_and_mldsa_client",
+                "issuer": "CN=hibrido_and_mldsa_ca",
+                "not_valid_before_utc": "2026-11-07T19:44:43+00:00",
+                "not_valid_after_utc": "2031-11-06T20:44:43+00:00",
+                "san": [
+                  "opin-client-one"
+                ],
+                "public_key_bits_cryptography_lib": null
+              }
+            ]
+          }
         }
       },
       "cross_route_consistent": true
     }
   },
-  "rsa_2048_and_pqc_purity_check": {
+  "dual_signature_and_pqc_purity_check": {
     "pass": true,
     "failures": []
+  },
+  "pki_disk_cross_check": {
+    "pki_dir_found": true,
+    "checks": [
+      {
+        "subject": "hibrido_and_rsa_server",
+        "disk_file_found": true,
+        "disk_file": "hibrido_and_rsa_server.crt",
+        "disk_sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
+        "pcap_sha256": "11fc683e8ffb6719bb819446fe393b16440cc4a96cc8fdd9234d5d0c8e3ca368",
+        "identical": true
+      },
+      {
+        "subject": "hibrido_and_mldsa_server",
+        "disk_file_found": true,
+        "disk_file": "hibrido_and_mldsa_server.crt",
+        "disk_sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+        "pcap_sha256": "ad8ccd2bb9c8b0c88c015514004747ef6898fdf608a288ea78754fe3aa607b74",
+        "identical": true
+      },
+      {
+        "subject": "hibrido_and_rsa_client",
+        "disk_file_found": true,
+        "disk_file": "hibrido_and_rsa_client.crt",
+        "disk_sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
+        "pcap_sha256": "e4942918c44139b9ff3a7945e50b79ba1a18b4876b895d750b8e258e98abb31a",
+        "identical": true
+      },
+      {
+        "subject": "hibrido_and_mldsa_client",
+        "disk_file_found": true,
+        "disk_file": "hibrido_and_mldsa_client.crt",
+        "disk_sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+        "pcap_sha256": "021f4d0acea4bb8852a89fb661ade0647fb0f26b7b95962228327eafe57428c3",
+        "identical": true
+      }
+    ],
+    "pki_dir": "C:\\Users\\lucia_csx8nlz\\MockOPIN\\thesis\\results\\v9\\certs\\generated"
+  },
+  "gateway_log_dual_auth_evidence": {
+    "log_found": true,
+    "n_dual_true": 6,
+    "n_connections": 6,
+    "example_line": "hibrido-and connection OK remoteAddr=54.151.227.69:54652 sni=\"mtls\" curve=SecP384r1MLKEM1024 dualAuthenticated=true clientCert=\"hibrido_and_rsa_client\" handshakeBytesIn=11902 handshakeBytesOut=12177",
+    "source_file": "raw\\full_container_logs\\v9-mtls.log"
   },
   "sizes": {
     "message_sizes_by_profile_route": [

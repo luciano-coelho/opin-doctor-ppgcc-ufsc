@@ -1,6 +1,6 @@
 # v9 -- Relatorio Final Consolidado (piloto-real-aws-2026-11-09-v2)
 
-Gerado em: 2026-11-09T17:27:57.866936+00:00
+Gerado em: 2026-11-09T18:37:46.948299+00:00
 
 Regenere TUDO com: `python campaign/scripts/build_consolidated_report_v9.py --run-dir thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09-v2 --out-subdir CONSOLIDATED_REPORT`
 
@@ -17,6 +17,6 @@ Regenere TUDO com: `python campaign/scripts/build_consolidated_report_v9.py --ru
 - [sha256_manifest.json](./sha256_manifest.json)
 
 ## sha256 (resumo -- ver sha256_manifest.json para a lista completa)
-- Arquivos de entrada (`raw/`): 95
+- Arquivos de entrada (`raw/`): 119
 - Arquivos gerados por este relatorio: 7
-- sha256 do proprio `consolidated.json`: `6879dbabcb9d957ca79124c9cf5fdbd5215f648d75c32f9b0447faf425a6e1ca`
+- sha256 do proprio `consolidated.json`: `af679247ab53d5b18bc4da5e94bdda22f5e619142629dc129815d54fcb5c309a`
