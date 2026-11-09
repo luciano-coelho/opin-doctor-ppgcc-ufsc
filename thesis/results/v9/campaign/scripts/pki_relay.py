@@ -159,8 +159,22 @@ def main():
     pki_dir = Path(args.pki_dir)
     ca_files = sorted(pki_dir.glob("*ca*.crt"))
 
-    targets = [{"name": "server", "ip": inventory["server"]["public_ip"],
-                "files": [pki_dir / "server.crt", pki_dir / "server.key", *ca_files]}]
+    # Generalizacao N-servidores (Decisao 107): mesmo raciocinio de
+    # `deliver_source.deliver_source` -- `inventory["server"]`
+    # (singular) e o piloto, reproduzido byte a byte (mesmo "name"
+    # "server", mesmo par "server.crt"/"server.key"); `inventory
+    # ["servers"]` (plural, dict por regiao-servidor) e a campanha
+    # oficial, um alvo de PKI por servidor, arquivo nomeado pelo
+    # proprio id do servidor (ex. "sa-east-1.crt").
+    if "servers" in inventory:
+        targets = [
+            {"name": server_id, "ip": server["public_ip"],
+             "files": [pki_dir / f"{server_id}.crt", pki_dir / f"{server_id}.key", *ca_files]}
+            for server_id, server in inventory["servers"].items()
+        ]
+    else:
+        targets = [{"name": "server", "ip": inventory["server"]["public_ip"],
+                    "files": [pki_dir / "server.crt", pki_dir / "server.key", *ca_files]}]
     for route, client in inventory["clients"].items():
         targets.append({"name": route, "ip": client["public_ip"],
                          "files": [pki_dir / f"{route}.crt", pki_dir / f"{route}.key", *ca_files]})

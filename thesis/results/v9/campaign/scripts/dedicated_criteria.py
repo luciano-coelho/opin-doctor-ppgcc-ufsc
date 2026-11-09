@@ -40,25 +40,55 @@ _REMOTE_CRITERIO2_OUT = "/tmp/criterio2_initcwnd.json"
 _REMOTE_PRODUCERS_DIR = "~/thesis/results/v9/integration/producers"
 
 
-def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -> dict:
-    """Sobe `criterio2_probe.py` no SERVIDOR (background), dispara UMA
-    conexao de teste do CLIENTE da `route` dada (`/dev/tcp` puro,
-    mesmo mecanismo que `_tcp_preflight` ja usa -- nunca `nc`, nem
-    sempre instalado), espera o arquivo aparecer, traz o JSON de
-    volta pro `out_dir`."""
-    server_ip = executor._server_ip()
-    iface_proc = cli.run_ssh(server_ip, "ip -o -4 route show to default | awk '{print $5}' | head -1",
+def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE, direction: str = "server-to-client",
+                   label: str | None = None) -> dict:
+    """Sobe `criterio2_probe.py` num dos dois lados (background),
+    dispara UMA conexao de teste do OUTRO lado (`/dev/tcp` puro, mesmo
+    mecanismo que `_tcp_preflight` ja usa -- nunca `nc`, nem sempre
+    instalado), espera o arquivo aparecer, traz o JSON de volta pro
+    `out_dir`.
+
+    `direction="server-to-client"` (default, piloto, igual sempre):
+    probe escuta no SERVIDOR, o CLIENTE dispara -- mede o initcwnd do
+    SERVIDOR. `direction="client-to-server"` (gap fechado, pedido do
+    Luciano): INVERTE os papeis -- o probe escuta no CLIENTE, o
+    SERVIDOR dispara -- mede o initcwnd do CLIENTE. Exige uma regra de
+    ingress nova na porta do probe, do servidor pro cliente (ver
+    `terraform_campanha_oficial/main.tf`, variavel `criterio2_reverse_
+    ingress_cidrs` do modulo) -- nunca existe no piloto, por isso este
+    `direction` so faz sentido em modo campanha.
+
+    `label` (None = piloto, caminhos remotos/locais FIXOS, identicos a
+    sempre -- compatibilidade, item 1): identifica a combinacao rota+
+    direcao nos nomes de arquivo, pra rodar varias vezes (por servidor/
+    rota/direcao) sem colidir -- campanha oficial sempre passa um."""
+    if direction == "server-to-client":
+        listener_host = executor._server_ip(route)
+        trigger_host = executor._client_ip(route)
+        target_ip = executor._server_gateway_ip(route)
+    elif direction == "client-to-server":
+        listener_host = executor._client_ip(route)
+        trigger_host = executor._server_ip(route)
+        target_ip = executor._client_ip(route)
+    else:
+        raise ValueError(f"run_criterio2: direction invalida: {direction!r} (server-to-client ou client-to-server)")
+
+    remote_out = _REMOTE_CRITERIO2_OUT if label is None else f"/tmp/criterio2_initcwnd_{label}.json"
+    remote_pcap = "/tmp/criterio2.pcap" if label is None else f"/tmp/criterio2_{label}.pcap"
+    remote_log = "/tmp/criterio2_probe.log" if label is None else f"/tmp/criterio2_probe_{label}.log"
+
+    iface_proc = cli.run_ssh(listener_host, "ip -o -4 route show to default | awk '{print $5}' | head -1",
                               key_path=executor.key_path)
     iface = (iface_proc.stdout or "").strip()
     if not iface:
-        raise RuntimeError("run_criterio2: nao consegui descobrir a interface primaria do servidor")
+        raise RuntimeError("run_criterio2: nao consegui descobrir a interface primaria do host que escuta")
 
-    rm_proc = cli.run_ssh(server_ip, f"rm -f {_REMOTE_CRITERIO2_OUT} /tmp/criterio2_probe.log", key_path=executor.key_path)
+    rm_proc = cli.run_ssh(listener_host, f"rm -f {remote_out} {remote_log}", key_path=executor.key_path)
     launch_cmd = (
         f"cd {_REMOTE_PRODUCERS_DIR} && "
         f"nohup python3 criterio2_probe.py --listen-port {CRITERIO2_LISTEN_PORT} --iface {iface} "
         f"--route {route} --instance-type m7i-flex.large --profile classico "
-        f"--out {_REMOTE_CRITERIO2_OUT} > /tmp/criterio2_probe.log 2>&1 &"
+        f"--pcap {remote_pcap} --out {remote_out} > {remote_log} 2>&1 &"
     )
     # Decisao 94 (achado real, ao vivo, na primeira execucao real deste
     # script, Passo 11.5): o processo em segundo plano SEMPRE iniciava
@@ -80,7 +110,7 @@ def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -
     start_proc = None
     for attempt in range(3):
         try:
-            start_proc = cli.run_ssh(server_ip, launch_cmd, key_path=executor.key_path)
+            start_proc = cli.run_ssh(listener_host, launch_cmd, key_path=executor.key_path)
             break
         except subprocess.TimeoutExpired:
             if attempt == 2:
@@ -90,34 +120,33 @@ def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -
                 )
             time.sleep(15)
     if start_proc.returncode != 0:
-        raise RuntimeError(f"run_criterio2: falhou subindo o probe no servidor: {cli.redact(start_proc.stderr)}")
-    time.sleep(2)  # da tempo do probe abrir a porta e comecar o tcpdump antes do cliente discar
+        raise RuntimeError(f"run_criterio2: falhou subindo o probe: {cli.redact(start_proc.stderr)}")
+    time.sleep(2)  # da tempo do probe abrir a porta e comecar o tcpdump antes do outro lado discar
 
-    gw_ip = executor._server_gateway_ip(route)
-    client_ip = executor._client_ip(route)
     connect_proc = cli.run_ssh(
-        client_ip,
-        f"timeout 20 bash -c 'cat < /dev/tcp/{gw_ip}/{CRITERIO2_LISTEN_PORT} > /dev/null'",
+        trigger_host,
+        f"timeout 20 bash -c 'cat < /dev/tcp/{target_ip}/{CRITERIO2_LISTEN_PORT} > /dev/null'",
         key_path=executor.key_path, connect_timeout=30,
     )
     if connect_proc.returncode != 0:
-        raise RuntimeError(f"run_criterio2: conexao de teste do cliente falhou: {cli.redact(connect_proc.stderr)}")
+        raise RuntimeError(f"run_criterio2: conexao de teste falhou: {cli.redact(connect_proc.stderr)}")
 
     for _ in range(10):
-        check = cli.run_ssh(server_ip, f"test -f {_REMOTE_CRITERIO2_OUT} && echo FOUND", key_path=executor.key_path)
+        check = cli.run_ssh(listener_host, f"test -f {remote_out} && echo FOUND", key_path=executor.key_path)
         if "FOUND" in (check.stdout or ""):
             break
         time.sleep(1)
     else:
-        log_proc = cli.run_ssh(server_ip, "cat /tmp/criterio2_probe.log 2>/dev/null", key_path=executor.key_path)
+        log_proc = cli.run_ssh(listener_host, f"cat {remote_log} 2>/dev/null", key_path=executor.key_path)
         raise RuntimeError(
-            f"run_criterio2: {_REMOTE_CRITERIO2_OUT} nunca apareceu no servidor -- "
+            f"run_criterio2: {remote_out} nunca apareceu -- "
             f"log do probe: {cli.redact(log_proc.stdout)}"
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    local_path = out_dir / "criterio2_initcwnd.json"
-    scp_proc = cli.run_scp(f"ec2-user@{server_ip}:{_REMOTE_CRITERIO2_OUT}", str(local_path), key_path=executor.key_path)
+    out_name = "criterio2_initcwnd.json" if label is None else f"criterio2_initcwnd_{label}.json"
+    local_path = out_dir / out_name
+    scp_proc = cli.run_scp(f"ec2-user@{listener_host}:{remote_out}", str(local_path), key_path=executor.key_path)
     if scp_proc.returncode != 0:
         raise RuntimeError(f"run_criterio2: scp do resultado falhou: {cli.redact(scp_proc.stderr)}")
 
@@ -128,12 +157,38 @@ def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -
     # Trazido agora pra DENTRO do MESMO `out_dir` que o manifesto
     # global ja cobre -- vira evidencia bruta preservada por construcao,
     # nunca um passo separado de verificacao.
-    pcap_local_path = out_dir / "criterio2_probe.pcap"
-    pcap_scp_proc = cli.run_scp(f"ec2-user@{server_ip}:/tmp/criterio2.pcap", str(pcap_local_path), key_path=executor.key_path)
+    pcap_name = "criterio2_probe.pcap" if label is None else f"criterio2_probe_{label}.pcap"
+    pcap_local_path = out_dir / pcap_name
+    pcap_scp_proc = cli.run_scp(f"ec2-user@{listener_host}:{remote_pcap}", str(pcap_local_path), key_path=executor.key_path)
     if pcap_scp_proc.returncode != 0:
         raise RuntimeError(f"run_criterio2: scp do pcap bruto falhou: {cli.redact(pcap_scp_proc.stderr)}")
 
     return json.loads(local_path.read_text(encoding="utf-8"))
+
+
+def run_criterio2_campaign(executor, out_dir: Path, routes=None) -> dict:
+    """Pedido do Luciano (generalizacao N-servidores): o probe do
+    criterio 2 rodava SO 1 vez, SO em L219, SO na direcao servidor->
+    cliente -- 2 gaps declarados como limitacao, nunca fechados (L325
+    nunca testado; cliente->servidor nunca medido). Fecha os dois:
+    roda uma vez por ROTA dada (default -- `campaign_topology.
+    CAMPAIGN_ROUTES` com RTT>0, ou seja, tudo exceto as 3 L0 -- inclui
+    L325 explicitamente) E nas duas direcoes (precisa da regra de
+    ingress reversa, ver docstring de `run_criterio2`). Cada chamada
+    usa um `label` unico (`{route}_{direction}`), nunca colide.
+    Qualquer falha individual e registrada, nunca aborta as outras --
+    o resultado final diz exatamente quais rodaram e quais nao."""
+    import campaign_topology as ct
+    routes = routes if routes is not None else [r for r in ct.CAMPAIGN_ROUTES if ct.CAMPAIGN_NOMINAL_RTT_MS[r] > 0]
+    results = {}
+    for route in routes:
+        for direction in ("server-to-client", "client-to-server"):
+            label = f"{route}_{direction}"
+            try:
+                results[label] = {"ok": True, "data": run_criterio2(executor, out_dir, route=route, direction=direction, label=label)}
+            except Exception as e:  # noqa: BLE001 -- registra QUALQUER falha individual, nunca aborta as outras rotas/direcoes
+                results[label] = {"ok": False, "error": str(e)}
+    return results
 
 
 def run_criterio7(executor, out_dir: Path, routes=("L0", "L219", "L325")) -> dict:
@@ -212,25 +267,37 @@ def collect_full_logs(executor, out_dir: Path) -> dict:
     `out_dir` que `collect_artifacts.py` ja hasheia por completo (`find
     . -type f`) -- vira evidencia bruta coberta pelo manifesto sha256
     existente, por construcao, nunca um segundo sistema de verificacao
-    paralelo."""
+    paralelo.
+
+    Generalizacao pra N servidores (pedido do Luciano): piloto
+    (`executor.route_server is None`) continua 1 servidor so, nomes de
+    arquivo SEM sufixo -- identico a antes. Campanha oficial (N
+    servidores): um conjunto de logs POR servidor, nome prefixado pelo
+    id do servidor (nunca colide entre eles)."""
     out_dir = Path(out_dir)
     logs_dir = out_dir / "full_container_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    server_ip = executor._server_ip()
+
+    if getattr(executor, "route_server", None) is None:
+        server_ips_by_label = {"": executor._server_ip()}
+    else:
+        server_ips_by_label = {f"{server_id}_": ip["public_ip"] for server_id, ip in executor.inventory["servers"].items()}
 
     written = {}
-    for container in (executor.gateway_container,) + _BACKEND_CONTAINERS:
-        proc = cli.run_ssh(server_ip, f"docker logs -t {container} 2>&1", key_path=executor.key_path)
-        (logs_dir / f"{container}.log").write_text(proc.stdout or "", encoding="utf-8")
-        written[container] = {"bytes": len(proc.stdout or ""), "rc": proc.returncode}
+    for label, server_ip in server_ips_by_label.items():
+        for container in (executor.gateway_container,) + _BACKEND_CONTAINERS:
+            proc = cli.run_ssh(server_ip, f"docker logs -t {container} 2>&1", key_path=executor.key_path)
+            key = f"{label}{container}"
+            (logs_dir / f"{key}.log").write_text(proc.stdout or "", encoding="utf-8")
+            written[key] = {"bytes": len(proc.stdout or ""), "rc": proc.returncode, "server_ip": server_ip}
 
-    # Diagnostico leve de cada instancia (servidor + os clientes da
+    # Diagnostico leve de cada instancia (servidor(es) + clientes da
     # fleet) -- best-effort, NUNCA fail-closed (nenhum achado real
     # ate agora dependeu disto; registrado so pela completude literal
     # do pedido, "logs de todas as instancias"). `dmesg` sem
     # permissao/ausente escreve uma nota explicita, nunca quebra a
     # coleta dos containers (que SAO fail-closed, ver acima).
-    instance_ips = {"server": server_ip}
+    instance_ips = {f"server_{label.rstrip('_') or 'unico'}": ip for label, ip in server_ips_by_label.items()}
     instance_ips.update({f"client_{route}": executor._client_ip(route) for route in executor.inventory.get("clients", {})})
     for name, ip in instance_ips.items():
         try:

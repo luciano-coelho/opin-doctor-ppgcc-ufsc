@@ -2,6 +2,20 @@ variable "name_tag" {
   type = string
 }
 
+# Generalizacao pra N servidores (campanha oficial, Decisao 107):
+# default = literal que TODO recurso deste modulo ja tinha hardcoded
+# -- nunca muda o plano do piloto (nenhum chamador do piloto passa
+# este valor, entao o default se aplica, byte a byte igual a antes).
+# A campanha oficial (terraform_campanha_oficial/) passa a PROPRIA
+# tag explicitamente -- achado real desta rodada: sem isso, os
+# recursos da conta nova sairiam com a tag ERRADA (a do piloto),
+# nunca batendo a condicao `aws:RequestTag/Project` da politica IAM
+# de menor privilegio (RunInstances/etc. seriam negados).
+variable "project_tag" {
+  type    = string
+  default = "mockopin-pqc-v9-piloto"
+}
+
 variable "role" {
   description = "\"server\", \"client\", or \"control\" -- only \"server\" opens the gateway port; only \"control\" allows SSH from outside the campaign's own key pair's holders."
   type        = string
@@ -35,6 +49,20 @@ variable "key_name" {
 variable "ssh_ingress_cidrs" {
   description = "/32s allowed on port 22, keyed by a static, literal label (e.g. \"control\", \"operator\") -- NOT by the CIDR value itself, which may be unknown until apply (DECISIONS.md: for_each needs its KEYS known at plan time, not its values). For server/client roles, this is the control instance's own EIP /32 only (key \"control\"). For the control role, this is the operator's own /32, discovered at apply time and passed in -- never written to a versioned file (key \"operator\")."
   type        = map(string)
+}
+
+# Generalizacao N-servidores (Decisao 107): a direcao cliente->
+# servidor do criterio 2 precisa que o SERVIDOR consiga abrir uma
+# conexao de teste NO CLIENTE (papeis invertidos de `criterio2_probe`)
+# -- nenhuma regra de ingress cobria isso antes (so gateway_ingress_
+# cidrs, servidor-role, porta 443/9876 vindo do CLIENTE). Default {}
+# -- nenhum chamador do piloto passa isto, nenhuma mudanca no plano
+# dele. Aplicavel ao role "client" (nunca "server", simetrico a
+# gateway_ingress_cidrs).
+variable "criterio2_reverse_ingress_cidrs" {
+  description = "Porta do probe do criterio 2 (9876), aberta no CLIENTE, scoped ao /32 do SERVIDOR -- so usado na direcao client-to-server da campanha oficial."
+  type        = map(string)
+  default     = {}
 }
 
 variable "gateway_ingress_cidrs" {

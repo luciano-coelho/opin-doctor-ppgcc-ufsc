@@ -27,10 +27,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
+import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da campanha oficial, nunca duplicada
 
 REGIONS = ["sa-east-1", "eu-north-1", "ap-southeast-1"]
 PROJECT_TAG = "mockopin-pqc-v9-piloto"
 EXPECTED_RUNNING_INSTANCES = 5  # controle + servidor + L0 + L219 + L325
+# Pedido do Luciano (generalizacao do orquestrador pra N servidores,
+# item 2): a campanha oficial tem 12 instancias (1 controle + 3
+# servidores + 8 clientes) -- nunca redeclarado a mao, so a contagem
+# das listas que ja sao a fonte unica (campaign_topology.py).
+CAMPAIGN_EXPECTED_RUNNING_INSTANCES = 1 + len(ct.CAMPAIGN_SERVERS) + len(ct.CAMPAIGN_ROUTES)
 
 
 def _describe_instances(region, profile):
@@ -41,20 +47,26 @@ def _describe_instances(region, profile):
             if i["State"]["Name"] not in ("terminated", "shutting-down")]
 
 
-def count_running_instances_all_regions(profile) -> dict:
-    """Snapshot ANTES do destroy -- base da deteccao de drift (item 1)."""
-    return {region: len(_describe_instances(region, profile)) for region in REGIONS}
+def count_running_instances_all_regions(profile, regions=None) -> dict:
+    """Snapshot ANTES do destroy -- base da deteccao de drift (item 1).
+    `regions=None` continua as 3 do piloto (REGIONS, nunca mudado --
+    compatibilidade do item 1 do Luciano); a campanha oficial passa
+    `campaign_topology.CAMPAIGN_REGIONS` (7) explicitamente."""
+    regions = regions if regions is not None else REGIONS
+    return {region: len(_describe_instances(region, profile)) for region in regions}
 
 
-def check_self_terminate_drift(profile) -> dict:
-    counts = count_running_instances_all_regions(profile)
+def check_self_terminate_drift(profile, regions=None, expected_running=None) -> dict:
+    regions = regions if regions is not None else REGIONS
+    expected_running = expected_running if expected_running is not None else EXPECTED_RUNNING_INSTANCES
+    counts = count_running_instances_all_regions(profile, regions=regions)
     total = sum(counts.values())
-    drifted = total < EXPECTED_RUNNING_INSTANCES
+    drifted = total < expected_running
     return {
         "counts_by_region": counts, "total_running": total,
-        "expected": EXPECTED_RUNNING_INSTANCES, "drift_detected": drifted,
+        "expected": expected_running, "drift_detected": drifted,
         "note": (
-            f"{EXPECTED_RUNNING_INSTANCES - total} instancia(s) esperada(s) ja nao aparecem rodando -- "
+            f"{expected_running - total} instancia(s) esperada(s) ja nao aparecem rodando -- "
             "provavel autodesligamento por tempo ja disparado em pelo menos uma. O terraform destroy "
             "a seguir e OBRIGATORIO do mesmo jeito (Decisao 45: so ele libera o(s) aws_eip)."
         ) if drifted else "nenhum drift -- todas as instancias esperadas ainda aparecem rodando.",
@@ -107,7 +119,8 @@ def release_orphaned_eips(region, profile, orphaned_eips, actually_release=False
     return allocation_ids
 
 
-def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None, force=False, reason=None) -> dict:
+def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None, force=False, reason=None,
+                  regions=None, expected_running=None) -> dict:
     """Pedido do Luciano (item 0, regra fail-closed nova): o teardown
     (`terraform destroy`, logo abaixo) so pode rodar depois que os
     brutos estejam coletados e VERIFICADOS por sha256 -- 12 pcaps, 12
@@ -141,13 +154,14 @@ def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None,
                 "certeza que os dados nao sao necessarios."
             )
 
-    drift = check_self_terminate_drift(profile)
+    regions = regions if regions is not None else REGIONS
+    drift = check_self_terminate_drift(profile, regions=regions, expected_running=expected_running)
     destroy_rc, destroy_out, destroy_err = terraform_destroy(tf_dir)
     if destroy_rc != 0:
         raise RuntimeError(f"terraform destroy falhou: {destroy_err}")
 
     regions_report = {}
-    for region in REGIONS:
+    for region in regions:
         report = verify_region(region, profile)
         if report["orphaned_eips"]:
             report["eips_released"] = release_orphaned_eips(region, profile, report["orphaned_eips"], actually_release=release_eips)
@@ -170,9 +184,17 @@ def main():
     ap.add_argument("--pull-verified-marker")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--reason", help="obrigatorio com --force -- motivo explicito (excecao de custo/seguranca, regra 7)")
+    # Pedido do Luciano (item 2): fonte UNICA das 7 regioes da campanha
+    # oficial -- nunca uma segunda lista hardcoded aqui. Sem a flag,
+    # comportamento do piloto inalterado (REGIONS, 3 regioes).
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa as 7 regioes/12 instancias da campanha oficial (campaign_topology.py) em vez das 3 do piloto")
     args = ap.parse_args()
+    regions = ct.CAMPAIGN_REGIONS if args.campaign else None
+    expected_running = CAMPAIGN_EXPECTED_RUNNING_INSTANCES if args.campaign else None
     result = full_cleanup(args.tf_dir, args.profile, release_eips=args.release_eips,
-                           pull_verified_marker=args.pull_verified_marker, force=args.force, reason=args.reason)
+                           pull_verified_marker=args.pull_verified_marker, force=args.force, reason=args.reason,
+                           regions=regions, expected_running=expected_running)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     sys.exit(0 if result["all_clean"] else 1)
 

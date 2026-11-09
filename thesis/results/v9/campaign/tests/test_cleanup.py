@@ -98,7 +98,7 @@ def test_sem_drift_quando_5_instancias_presentes(monkeypatch):
 def test_destroy_falho_levanta_antes_de_verificar_regioes(monkeypatch, tmp_path):
     marker = tmp_path / ".pull-verified"
     marker.write_text("ok", encoding="utf-8")
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
     monkeypatch.setattr(cli, "run_terraform", lambda args, cwd, timeout=120: (1, "", "destroy failed"))
     verify_calls = []
     monkeypatch.setattr(cleanup, "verify_region", lambda region, profile: verify_calls.append(region))
@@ -136,19 +136,19 @@ def test_mutante_clean_sempre_true_e_pego_pelo_teste_de_instancia_rodando(monkey
 # mandava `--force` como o comando PRINCIPAL, nunca exercitando o gate).
 
 def test_force_sem_reason_falha_alto(tmp_path, monkeypatch):
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
     with pytest.raises(RuntimeError, match="reason"):
         cleanup.full_cleanup(str(tmp_path), "fake-profile", force=True)
 
 
 def test_force_com_reason_vazia_falha_alto(tmp_path, monkeypatch):
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
     with pytest.raises(RuntimeError, match="reason"):
         cleanup.full_cleanup(str(tmp_path), "fake-profile", force=True, reason="   ")
 
 
 def test_force_com_reason_explicita_prossegue_e_reporta(monkeypatch, tmp_path):
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
     monkeypatch.setattr(cli, "run_terraform", lambda args, cwd, timeout=120: (0, "destroyed", ""))
     monkeypatch.setattr(cli, "run_aws_json", _fake_run_aws_json_factory(_empty_region_responses()))
 
@@ -162,7 +162,7 @@ def test_force_com_reason_explicita_prossegue_e_reporta(monkeypatch, tmp_path):
 def test_sem_force_nunca_reporta_forced(monkeypatch, tmp_path):
     marker = tmp_path / ".pull-verified"
     marker.write_text("ok", encoding="utf-8")
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
     monkeypatch.setattr(cli, "run_terraform", lambda args, cwd, timeout=120: (0, "destroyed", ""))
     monkeypatch.setattr(cli, "run_aws_json", _fake_run_aws_json_factory(_empty_region_responses()))
 
@@ -178,7 +178,7 @@ def test_mutante_force_sem_exigir_reason_e_pego(tmp_path, monkeypatch):
     real desta rodada: o gate nunca era de fato exercitado). O teste
     real acima (`test_force_sem_reason_falha_alto`) reprova com essa
     mutacao."""
-    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile: {"drift_detected": False})
+    monkeypatch.setattr(cleanup, "check_self_terminate_drift", lambda profile, **kw: {"drift_detected": False})
 
     def mutant_full_cleanup_sem_exigir_reason(tf_dir, profile, force=False, pull_verified_marker=None):
         if not force:

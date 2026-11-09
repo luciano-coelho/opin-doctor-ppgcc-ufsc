@@ -154,6 +154,45 @@ def test_deliver_campaign_key_falha_no_scp_nunca_e_engolida(monkeypatch):
         pki_relay.deliver_campaign_key("203.0.113.5", "/fake/operator_key", "conteudo falso\n")
 
 
+# --- Generalizacao N-servidores (Decisao 107): inventory["servers"]
+# (plural) -- `main()` monta um alvo de PKI por servidor, nomeado
+# pelo proprio id, em vez do unico alvo "server" fixo do piloto.
+
+def test_main_modo_campanha_monta_um_alvo_pki_por_servidor(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+
+    pki_dir = tmp_path / "pki"
+    pki_dir.mkdir()
+    for name in ("sa-east-1.crt", "sa-east-1.key", "us-east-1.crt", "us-east-1.key",
+                 "sa-east-1_L0.crt", "sa-east-1_L0.key", "ca_root.crt"):
+        (pki_dir / name).write_text("conteudo falso, nunca uma chave real", encoding="utf-8")
+
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        '{"servers": {"sa-east-1": {"public_ip": "203.0.113.10"}, '
+        '"us-east-1": {"public_ip": "203.0.113.20"}}, '
+        '"clients": {"sa-east-1_L0": {"public_ip": "203.0.113.60"}}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", [
+        "pki_relay.py", "--control-ip", "203.0.113.5", "--operator-key", "/fake/operator_key",
+        "--pki-dir", str(pki_dir), "--inventory-json", str(inventory_path),
+    ])
+    pki_relay.main()
+
+    relay_cmds = [c[-1] for c in calls if c and c[0] == "ssh" and "scp -i" in c[-1] and "shred" in c[-1]]
+    assert len(relay_cmds) == 3, "um rele por servidor (2) + um por cliente (1)"
+    assert any("@203.0.113.10:" in c for c in relay_cmds), "sa-east-1 nunca recebeu o rele de PKI"
+    assert any("@203.0.113.20:" in c for c in relay_cmds), "us-east-1 nunca recebeu o rele de PKI"
+
+
 def test_mutante_shred_antes_do_scp_e_detectado(monkeypatch, pki_files):
     """Mutacao: shred() escrito ANTES do scp pro destino (ordem
     errada no `&&`) -- o teste de ordem acima deve reprovar."""

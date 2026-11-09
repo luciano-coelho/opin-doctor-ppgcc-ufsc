@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
+import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da campanha oficial, nunca duplicada
 
 REGIONS = ["sa-east-1", "eu-north-1", "ap-southeast-1"]
 
@@ -161,10 +162,24 @@ def check_revoke_ingress(region, profile, sg_id, rule_id):
 
 
 def run_all_checks(profile, vpc_id_by_region=None, instance_id=None, key_name=None,
-                    sg_id=None, allocation_id=None, rule_id=None) -> dict:
+                    sg_id=None, allocation_id=None, rule_id=None, regions=None) -> dict:
+    """`regions=None` continua as 3 do piloto (REGIONS, compatibilidade
+    -- item 1 do Luciano). Pedido do Luciano (item 2, fonte unica das
+    regioes): a campanha oficial pode passar `campaign_topology.
+    CAMPAIGN_REGIONS` (7) aqui. LIMITACAO HONESTA, registrada: os
+    checks em si (`check_run_instances` etc.) dependem de AMI/VPC-id
+    POR REGIAO (`PINNED_AMI_X86`, `--vpc-id-*`) que so tem entrada pras
+    3 regioes do piloto -- rodar com as 7 regioes da campanha sem
+    tambem estender esses dois dicionarios reportaria "nao testado"
+    pras 4 regioes novas, nunca um falso PASS (fail-closed, mas
+    incompleto). A politica IAM da conta nova ja foi validada por
+    outro caminho, com DRY-RUN E APPLY+DESTROY REAIS nas 7 regioes
+    (ver a adaptacao do Terraform multi-regiao) -- este script
+    continua coberto so pro piloto por enquanto."""
     vpc_id_by_region = vpc_id_by_region or {}
+    regions = regions if regions is not None else REGIONS
     results = {}
-    for region in REGIONS:
+    for region in regions:
         vpc_id = vpc_id_by_region.get(region)
         results[region] = {
             "ec2:RunInstances": check_run_instances(region, profile),
@@ -202,6 +217,10 @@ def main():
     ap.add_argument("--vpc-id-sa-east-1")
     ap.add_argument("--vpc-id-eu-north-1")
     ap.add_argument("--vpc-id-ap-southeast-1")
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa as 7 regioes da campanha oficial (campaign_topology.py) -- ver limitacao "
+                          "honesta na docstring de run_all_checks: so as regioes com --vpc-id-* dado tem "
+                          "cobertura completa, as demais saem 'nao testado'")
     args = ap.parse_args()
 
     vpc_id_by_region = {
@@ -209,9 +228,11 @@ def main():
         "eu-north-1": args.vpc_id_eu_north_1,
         "ap-southeast-1": args.vpc_id_ap_southeast_1,
     }
+    regions = ct.CAMPAIGN_REGIONS if args.campaign else None
     result = run_all_checks(
         args.profile, vpc_id_by_region=vpc_id_by_region, instance_id=args.instance_id,
         key_name=args.key_name, sg_id=args.sg_id, allocation_id=args.allocation_id, rule_id=args.rule_id,
+        regions=regions,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     if result["not_tested"]:

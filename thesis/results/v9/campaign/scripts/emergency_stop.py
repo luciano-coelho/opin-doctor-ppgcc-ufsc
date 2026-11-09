@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
+import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da campanha oficial, nunca duplicada
 
 REGIONS = ["sa-east-1", "eu-north-1", "ap-southeast-1"]
 PROJECT_TAG = "mockopin-pqc-v9-piloto"
@@ -133,11 +134,16 @@ def stop_region(region, profile, execute=False, wait_fn=time.sleep) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="mockopin-pqc")
-    ap.add_argument("--regions", nargs="+", default=REGIONS)
+    ap.add_argument("--regions", nargs="+", default=None)
     ap.add_argument("--execute", action="store_true", help="sem isso, so lista o que seria feito (dry, default)")
+    # Pedido do Luciano (item 2): fonte UNICA das 7 regioes da
+    # campanha oficial -- nunca uma segunda lista hardcoded aqui.
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa as 7 regioes da campanha oficial (campaign_topology.py) em vez das 3 do piloto")
     args = ap.parse_args()
+    regions = args.regions if args.regions is not None else (ct.CAMPAIGN_REGIONS if args.campaign else REGIONS)
 
-    reports = [stop_region(r, args.profile, execute=args.execute) for r in args.regions]
+    reports = [stop_region(r, args.profile, execute=args.execute) for r in regions]
     print(json.dumps(reports, indent=2, ensure_ascii=False))
     if not args.execute:
         print("\nMODO DRY (padrao) -- nada foi destruido. Rode com --execute pra agir de verdade.", file=sys.stderr)

@@ -378,3 +378,54 @@ def test_mutante_collect_full_logs_so_gateway_perde_auth_mongo_mockapi(tmp_path,
     result = mutant_collect(executor, out_dir)
     assert set(result["containers"]) == {"v9-mtls"}  # nunca os outros 3 -- exatamente a lacuna da regra nova
     assert not (out_dir / "full_container_logs" / "insurance-server-lambdas-auth-1.log").exists()
+
+
+# --- Generalizacao N-servidores (pedido do Luciano): collect_full_logs
+# precisa cobrir TODOS os servidores da campanha oficial, nunca so 1.
+
+def test_collect_full_logs_cobre_todos_os_servidores_em_modo_campanha(tmp_path, monkeypatch):
+    def fake_run(argv, timeout=None):
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "docker logs -t v9-mtls" in remote_cmd:
+            return FakeProc(stdout="log gateway\n")
+        return FakeProc(stdout="")
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {
+        "control": {"public_ip": "203.0.113.10"},
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.50"},
+            "us-east-1": {"public_ip": "203.0.113.51"},
+        },
+        "clients": {"L219": {"public_ip": "203.0.113.70"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
+    out_dir = tmp_path / "out"
+    result = dc.collect_full_logs(executor, out_dir)
+
+    logs_dir = out_dir / "full_container_logs"
+    assert (logs_dir / "sa-east-1_v9-mtls.log").is_file()
+    assert (logs_dir / "us-east-1_v9-mtls.log").is_file()
+    assert (logs_dir / "sa-east-1_insurance-server-lambdas-auth-1.log").is_file()
+    assert (logs_dir / "us-east-1_insurance-server-lambdas-auth-1.log").is_file()
+    assert set(result["containers"].keys()) == {
+        "sa-east-1_v9-mtls", "sa-east-1_insurance-server-lambdas-auth-1",
+        "sa-east-1_insurance-server-lambdas-mongo_seed-1", "sa-east-1_insurance-server-lambdas-mockapi-1",
+        "us-east-1_v9-mtls", "us-east-1_insurance-server-lambdas-auth-1",
+        "us-east-1_insurance-server-lambdas-mongo_seed-1", "us-east-1_insurance-server-lambdas-mockapi-1",
+    }
+
+
+def test_mutante_collect_full_logs_so_1_servidor_em_modo_campanha_perderia_logs(tmp_path, monkeypatch):
+    """Mutante = o comportamento ANTIGO: so `executor._server_ip()`
+    (que em modo campanha levanta sem `route`) -- confirma que a
+    generalizacao real acima e genuinamente necessaria, nunca uma
+    coincidencia."""
+    inventory = {
+        "control": {"public_ip": "203.0.113.10"},
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50"}, "us-east-1": {"public_ip": "203.0.113.51"}},
+        "clients": {"L219": {"public_ip": "203.0.113.70"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
+    with pytest.raises(KeyError):
+        executor._server_ip()  # mutante: o jeito antigo de pegar "o" servidor quebra em modo campanha

@@ -1518,7 +1518,7 @@ def test_deliver_backend_images_entrega_as_6_imagens_uma_vez(monkeypatch):
     executor._deliver_backend_images()
     delivered_keys = {v["image_key"] for v in executor.image_delivery_verifications}
     assert delivered_keys == set(orch.deliver_images.BACKEND_IMAGE_KEYS)
-    assert executor._backend_delivered is True
+    assert executor._backend_delivered == {executor._server_ip()}
 
 
 def test_deliver_backend_images_e_idempotente_nunca_reentrega(monkeypatch):
@@ -2026,7 +2026,7 @@ def test_mutante_keylog_sempre_ligado_e_pego(monkeypatch):
     """Mutacao: reproduz o bug ORIGINAL desta rodada -- KEYLOG_PATH
     incondicional em `_launch_gateway` -- confirma que o teste acima
     depende de fato da correcao."""
-    def mutant_launch_gateway(self, profile, keylog=False):
+    def mutant_launch_gateway(self, profile, keylog=False, route=None):
         cli.run_ssh(self._server_ip(), f"docker run -d --name {self.gateway_container} -e KEYLOG_PATH=/tmp/v9_keylog.txt mockopin-v9-gateway", key_path=self.key_path)
 
     calls = []
@@ -2174,3 +2174,133 @@ def test_mutante_dedicated_capture_sem_checar_decifragem_aceitaria_captura_parci
 
     real = ec.capture_decryption_complete(lines_1_de_6)
     assert real["complete"] is False  # o codigo real rejeita a MESMA captura
+
+
+# --- Achado 10 (implementado, pedido do Luciano, generalizacao pra N
+# servidores): sampler periodico real de CPU/steal, porta fiel do
+# mecanismo da v8 (_cpu_mem_sampler_start_cmd/_steal_pct_from_cpu_
+# jsonl de campaign_run.py), SO em modo campanha -- nunca no piloto.
+
+def test_steal_pct_from_cpu_jsonl_formula_real(tmp_path):
+    """Dados reais no formato que o sampler escreve -- 3 campos de
+    /proc/stat (user/nice/system/idle/iowait/irq/softirq/steal),
+    delta cumulativo entre a 1a e a ULTIMA linha, nunca uma razao
+    desde o boot."""
+    jsonl_path = tmp_path / "test.cpu_mem.jsonl"
+    lines = [
+        json.dumps({"sampled_at_utc": "t0", "proc_stat_line": "cpu 100 0 50 1000 0 0 0 10", "proc_meminfo_raw": ""}),
+        json.dumps({"sampled_at_utc": "t1", "proc_stat_line": "cpu 150 0 70 1100 0 0 0 30", "proc_meminfo_raw": ""}),
+        json.dumps({"sampled_at_utc": "t2", "proc_stat_line": "cpu 200 0 90 1200 0 0 0 60", "proc_meminfo_raw": ""}),
+    ]
+    jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # 1a linha: total=100+0+50+1000+0+0+0+10=1160, steal=10
+    # ultima linha: total=200+0+90+1200+0+0+0+60=1550, steal=60
+    # dtotal=1550-1160=390, dsteal=60-10=50 -> 100*50/390 = 12.8205...%
+    result = orch._steal_pct_from_cpu_jsonl(jsonl_path)
+    assert result == pytest.approx(100 * 50 / 390)
+
+
+def test_steal_pct_from_cpu_jsonl_menos_de_2_linhas_e_none(tmp_path):
+    jsonl_path = tmp_path / "test.cpu_mem.jsonl"
+    jsonl_path.write_text(json.dumps({"proc_stat_line": "cpu 1 1 1 1 1 1 1 1"}) + "\n", encoding="utf-8")
+    assert orch._steal_pct_from_cpu_jsonl(jsonl_path) is None
+
+
+def test_steal_pct_from_cpu_jsonl_arquivo_ausente_e_none(tmp_path):
+    assert orch._steal_pct_from_cpu_jsonl(tmp_path / "nao-existe.jsonl") is None
+
+
+def test_mutante_steal_pct_razao_desde_o_boot_e_pego(tmp_path):
+    """Mutante: usa a ULTIMA linha sozinha (razao desde o boot) em vez
+    do delta entre 1a e ultima -- confirma que o teste real acima
+    depende de fato do delta, nunca aceitaria o mutante por acidente."""
+    jsonl_path = tmp_path / "test.cpu_mem.jsonl"
+    lines = [
+        json.dumps({"proc_stat_line": "cpu 100 0 50 1000 0 0 0 10"}),
+        json.dumps({"proc_stat_line": "cpu 150 0 70 1100 0 0 0 30"}),
+        json.dumps({"proc_stat_line": "cpu 200 0 90 1200 0 0 0 60"}),
+    ]
+    jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    last = json.loads(lines[-1])
+    fields = [int(x) for x in last["proc_stat_line"].split()[1:11]]
+    mutant_result = 100 * fields[7] / sum(fields)  # razao desde o boot, nunca delta
+    real_result = orch._steal_pct_from_cpu_jsonl(jsonl_path)
+    assert mutant_result != real_result
+
+
+def test_sampler_de_steal_nunca_roda_no_piloto(monkeypatch):
+    """Gate explicito (compatibilidade, item 1): route_server=None
+    (piloto) -- start_block/stop_block NUNCA chamam o sampler, zero
+    chamada SSH nova, cpu_steal_samples fica vazio sempre."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    assert executor.route_server is None
+    executor.start_block("classico", "L0")
+    executor.stop_block("classico", "L0")
+    assert executor.cpu_steal_samples == []
+    assert executor._cpu_steal_sampler_paths == {}
+    flat = [" ".join(c) for c in calls]
+    assert not any("cpu_mem.jsonl" in c or "cpu_mem.pid" in c for c in flat), (
+        "o piloto nunca pode ganhar chamadas novas do sampler de steal -- achado de compatibilidade"
+    )
+
+
+def test_sampler_de_steal_roda_em_modo_campanha(monkeypatch):
+    """Modo campanha (route_server setado): start_block dispara o
+    sampler, stop_block para e traz o resultado -- cpu_steal_samples
+    ganha uma entrada real por bloco."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_pre = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_pre is not None:
+            return tcp_pre
+        if "jwks" in remote_cmd or "Startup completed" in remote_cmd:
+            return _SimpleProc(stdout="")
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout="gateway: OK\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
+        return _SimpleProc()
+
+    def fake_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        if "cpu_mem.jsonl" in src:
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+            Path(dst).write_text(
+                json.dumps({"proc_stat_line": "cpu 100 0 50 1000 0 0 0 10"}) + "\n" +
+                json.dumps({"proc_stat_line": "cpu 200 0 90 1200 0 0 0 60"}) + "\n",
+                encoding="utf-8",
+            )
+        return _SimpleProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "run_scp", fake_scp)
+    inventory = {
+        "control": {"public_ip": "203.0.113.10", "private_ip": "10.0.0.10"},
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50", "private_ip": "10.0.0.50"}},
+        "clients": {"L219": {"public_ip": "203.0.113.70", "private_ip": "10.0.2.70", "colocated": False}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
+    executor.start_block("classico", "L219")
+    assert ("classico", "L219") in executor._cpu_steal_sampler_paths
+    executor.stop_block("classico", "L219")
+    assert executor._cpu_steal_sampler_paths == {}
+    assert len(executor.cpu_steal_samples) == 1
+    sample = executor.cpu_steal_samples[0]
+    assert sample["profile"] == "classico" and sample["route"] == "L219"
+    assert sample["server"] == "203.0.113.50"
+    assert sample["steal_pct"] == pytest.approx(100 * 50 / 390)

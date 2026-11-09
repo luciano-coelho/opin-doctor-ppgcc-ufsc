@@ -30,7 +30,7 @@ resource "aws_security_group" "this" {
   }
 
   tags = {
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }
@@ -81,7 +81,7 @@ resource "aws_vpc_security_group_ingress_rule" "ssh" {
   ip_protocol       = "tcp"
   cidr_ipv4         = each.value
   tags = {
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }
@@ -95,7 +95,7 @@ resource "aws_vpc_security_group_ingress_rule" "gateway" {
   ip_protocol       = "tcp"
   cidr_ipv4         = each.value
   tags = {
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }
@@ -114,7 +114,27 @@ resource "aws_vpc_security_group_ingress_rule" "criterio2_probe" {
   ip_protocol       = "tcp"
   cidr_ipv4         = each.value
   tags = {
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
+    Role    = "campaign-${var.role}"
+  }
+}
+
+# Generalizacao N-servidores (Decisao 107): direcao cliente->servidor
+# do criterio 2 -- o SERVIDOR precisa alcancar a porta 9876 do
+# CLIENTE. Aplicavel so ao role "client" (simetrico ao bloco
+# `criterio2_probe` acima, que e so pro role "server"); `for_each`
+# vazio ({}) pro piloto e pra qualquer chamador que nunca passe esta
+# variavel -- nenhum recurso novo nesse caso, plano identico a antes.
+resource "aws_vpc_security_group_ingress_rule" "criterio2_probe_reverse" {
+  for_each          = var.role == "client" ? var.criterio2_reverse_ingress_cidrs : {}
+  security_group_id = aws_security_group.this.id
+  description       = "Criterio 2 (initcwnd real, direcao cliente->servidor) -- porta dedicada do produtor, scoped ao servidor /32"
+  from_port         = 9876
+  to_port           = 9876
+  ip_protocol       = "tcp"
+  cidr_ipv4         = each.value
+  tags = {
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }
@@ -202,7 +222,7 @@ resource "aws_instance" "this" {
 
   tags = {
     Name    = "mockopin-pqc-campaign-${var.name_tag}"
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }
@@ -213,7 +233,7 @@ resource "aws_eip" "this" {
 
   tags = {
     Name    = "mockopin-pqc-campaign-${var.name_tag}"
-    Project = "mockopin-pqc-v9-piloto"
+    Project = var.project_tag
     Role    = "campaign-${var.role}"
   }
 }

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
+import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da campanha oficial, nunca duplicada
 
 VCPU_QUOTA_CODE = "L-1216C47A"  # Running On-Demand Standard (A,C,D,H,I,M,R,T,Z)
 
@@ -345,18 +346,24 @@ def run_preflight(profile, regions, instance_types_by_region, ami_pattern_by_reg
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="mockopin-pqc")
-    ap.add_argument("--regions", nargs="+", default=["sa-east-1", "eu-north-1", "ap-southeast-1"])
+    ap.add_argument("--regions", nargs="+", default=None)
     ap.add_argument("--server-client-instance-type", default="m7i-flex.large")
     ap.add_argument("--control-instance-type", default="t4g.micro")
     ap.add_argument("--client-python-exe", default=str(_VENV_PYTHON_DEFAULT),
                      help="o MESMO interprete que o orquestrador vai usar na instancia cliente -- nunca o Python de sistema (Decisao 50)")
+    # Pedido do Luciano (item 2): fonte UNICA das 7 regioes da
+    # campanha oficial -- nunca uma segunda lista hardcoded aqui.
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa as 7 regioes da campanha oficial (campaign_topology.py) em vez das 3 do piloto")
     args = ap.parse_args()
+    regions = args.regions if args.regions is not None else (ct.CAMPAIGN_REGIONS if args.campaign else
+                                                               ["sa-east-1", "eu-north-1", "ap-southeast-1"])
 
-    instance_types_by_region = {r: [args.server_client_instance_type] for r in args.regions}
-    instance_types_by_region[args.regions[0]] = [args.server_client_instance_type, args.control_instance_type]
-    ami_pattern_by_region = {r: "al2023-ami-*-kernel-*-x86_64" for r in args.regions}
+    instance_types_by_region = {r: [args.server_client_instance_type] for r in regions}
+    instance_types_by_region[regions[0]] = [args.server_client_instance_type, args.control_instance_type]
+    ami_pattern_by_region = {r: "al2023-ami-*-kernel-*-x86_64" for r in regions}
 
-    result = run_preflight(args.profile, args.regions, instance_types_by_region, ami_pattern_by_region,
+    result = run_preflight(args.profile, regions, instance_types_by_region, ami_pattern_by_region,
                             client_python_exe=args.client_python_exe)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     sys.exit(0 if result["go"] else 1)

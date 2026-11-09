@@ -120,6 +120,28 @@ def _connection_ok_line(sni="mtls", remote="10.0.0.1:443"):
     return f'gateway: PERFIL connection OK remoteAddr={remote} sni="{sni}"'
 
 
+def _steal_pct_from_cpu_jsonl(path: Path):
+    """Achado 10 (implementado, pedido do Luciano) -- mesma formula
+    EXATA de `campaign_run.py._steal_pct_from_cpu_jsonl` da v8 real:
+    delta cumulativo de jiffies entre a PRIMEIRA e a ULTIMA amostra do
+    arquivo (nunca uma razao desde o boot). `None` se o arquivo faltar,
+    tiver menos de 2 linhas, ou os campos nao fecharem -- nunca um
+    numero inventado."""
+    if not Path(path).is_file():
+        return None
+    lines = [l for l in Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+    if len(lines) < 2:
+        return None
+    try:
+        first, last = json.loads(lines[0]), json.loads(lines[-1])
+        f0 = [int(x) for x in first["proc_stat_line"].split()[1:11]]
+        f1 = [int(x) for x in last["proc_stat_line"].split()[1:11]]
+    except (json.JSONDecodeError, KeyError, ValueError, IndexError):
+        return None
+    dtotal, dsteal = sum(f1) - sum(f0), f1[7] - f0[7]
+    return 100 * dsteal / dtotal if dtotal > 0 else None
+
+
 def _dedicated_capture_block(profile: str) -> str:
     """Monta o bloco 'tamanho POR MENSAGEM' pra UM perfil, nos
     EXATOS baselines medidos que `evaluate_criteria.py` ja usa
@@ -281,8 +303,17 @@ class SSHExecutor:
     PQC_SIGNER_CONTAINER = "pqc_signer_service_run"
 
     def __init__(self, inventory, key_path=None, gateway_container="v9-mtls", local_shim_bridge_join=False,
-                 images_staging_dir=None):
+                 images_staging_dir=None, route_server=None):
         self.inventory = inventory
+        # Generalizacao pra N servidores (campanha oficial, pedido do
+        # Luciano): None (default) = piloto, 1 servidor so,
+        # inventory["server"] (singular) -- caminho INTOCADO, byte a
+        # byte igual ao de sempre. dict rota->id_de_servidor (ex.:
+        # campaign_topology.CAMPAIGN_ROUTE_SERVER) = campanha oficial,
+        # inventory["servers"] (plural, um dict por servidor) -- toda
+        # resolucao de "qual servidor" passa por `_server_key(route)`,
+        # nunca mais por `inventory["server"]` direto.
+        self.route_server = route_server
         self.key_path = key_path
         self.gateway_container = gateway_container
         self._block_start_utc = {}
@@ -332,11 +363,34 @@ class SSHExecutor:
         # v8 ja mediu (mesmo formato de sempre, campaign_run.py.
         # _sample_cpu_mem_steal() -- /proc/stat+/proc/meminfo, nunca
         # `docker stats`).
-        self._backend_delivered = False
+        # Conjunto de IPs de servidor ja entregues (piloto: no maximo
+        # 1 elemento, mesmo comportamento de sempre; campanha oficial:
+        # ate N, um guard de idempotencia POR servidor).
+        self._backend_delivered = set()
         self.cpu_mem_samples = []
+        # Achado 10 (implementado, pedido do Luciano, modo campanha so
+        # -- ver `_cpu_steal_sampler_start`): resultados do sampler
+        # periodico real (steal% por bloco, janela inteira) + os
+        # caminhos remotos em voo entre start_block/stop_block.
+        self.cpu_steal_samples = []
+        self._cpu_steal_sampler_paths = {}
 
-    def _server_ip(self):
-        return self.inventory["server"]["public_ip"]
+    def _server_key(self, route=None) -> dict:
+        """Resolve qual entrada do inventario usar pro servidor.
+        Piloto (`self.route_server is None`): sempre a entrada UNICA
+        `inventory["server"]`, `route` nunca importa -- caminho
+        INTOCADO. Campanha oficial (`self.route_server` setado): usa
+        `route` pra achar o id do servidor certo em `inventory
+        ["servers"]` -- `route` passa a ser OBRIGATORIO (sem ele, nao
+        ha como saber qual dos N servidores, fail-closed por
+        TypeError/KeyError explicito, nunca um default silencioso)."""
+        if self.route_server is None:
+            return self.inventory["server"]
+        server_id = self.route_server[route]
+        return self.inventory["servers"][server_id]
+
+    def _server_ip(self, route=None):
+        return self._server_key(route)["public_ip"]
 
     def _client_ip(self, route):
         return self.inventory["clients"][route]["public_ip"]
@@ -350,7 +404,8 @@ class SSHExecutor:
         este metodo so decide o alvo de GATEWAY/443 que o PROXIO
         DENTRO do cliente disca, nunca o alvo de SSH."""
         client = self.inventory["clients"][route]
-        return self.inventory["server"]["private_ip"] if client.get("colocated") else self.inventory["server"]["public_ip"]
+        server = self._server_key(route)
+        return server["private_ip"] if client.get("colocated") else server["public_ip"]
 
     def _env_prefix(self, env: dict) -> str:
         return " ".join(f"{k}={v}" for k, v in env.items())
@@ -362,13 +417,16 @@ class SSHExecutor:
             "REMOTE_GATEWAY_HOST": server_gw_ip,
         }
 
-    def _gateway_logs(self, since_iso, until_iso):
+    def _gateway_logs(self, since_iso, until_iso, route=None):
         """`docker logs -t --since ... --until ...` no CONTAINER DO
         GATEWAY -- mesma chamada que `stop_block_proxies`/
         `run_one_execution` da v8 real fazem (so troca o nome fixo do
         container, `self.of.GATEWAY_CONTAINER`/
-        `insurance-server-lambdas-mtls-1`, pelo equivalente da v9)."""
-        proc = cli.run_ssh(self._server_ip(),
+        `insurance-server-lambdas-mtls-1`, pelo equivalente da v9).
+        `route=None` continua resolvendo o servidor UNICO do piloto
+        (`_server_ip`/`_server_key`); a campanha oficial precisa de
+        `route` pra saber de qual dos N servidores ler o log."""
+        proc = cli.run_ssh(self._server_ip(route),
                             f"docker logs -t --since {since_iso} --until {until_iso} {self.gateway_container}",
                             key_path=self.key_path)
         return (proc.stdout or "") + (proc.stderr or "")
@@ -444,7 +502,7 @@ class SSHExecutor:
                 f"_verify_gateway_binary {profile}/{route}: {local_bin_path} nao encontrado -- rode "
                 f"deliver_images.py primeiro"
             )
-        server_ip = self._server_ip()
+        server_ip = self._server_ip(route)
         remote_dir = "~/pki/gateway_verify"
         remote_bin = f"{remote_dir}/gateway"
         remote_sha = f"{remote_dir}/gateway.sha256"
@@ -484,7 +542,7 @@ class SSHExecutor:
         `_verify_gateway_binary`) -- chamada DEPOIS que
         `_launch_gateway` sobe o container, ainda antes de qualquer
         execucao cronometrada."""
-        server_ip = self._server_ip()
+        server_ip = self._server_ip(verification.get("route"))
         proc = cli.run_ssh(server_ip, f"docker exec {self.gateway_container} sha256sum /gateway", key_path=self.key_path)
         output = (proc.stdout + proc.stderr).strip()
         running_sha = output.split()[0] if output.split() else ""
@@ -602,7 +660,7 @@ class SSHExecutor:
                 f"config_ok={config_ok}, binary_ok={binary_ok}) -- abortando ANTES de qualquer execucao"
             )
 
-    def _deliver_backend_images(self):
+    def _deliver_backend_images(self, route=None):
         """Decisao 83/87 (pedido do Luciano, apos a Decisao 82): entrega
         as 3 imagens CUSTOM do backend de negocio da v8 (auth/mongo_
         seed/mockapi) ao SERVIDOR, UMA vez por fleet -- mesmo mecanismo
@@ -619,11 +677,12 @@ class SSHExecutor:
         proxy/pqc-signer trocam de verdade por bloco, o backend custom
         nunca muda de binario, so de conteudo seedado pelo proprio
         compose)."""
-        if self._backend_delivered:
+        server_ip = self._server_ip(route)
+        if server_ip in self._backend_delivered:
             return
         for key in deliver_images.BACKEND_IMAGE_KEYS:
-            self._deliver_image(key, self._server_ip())
-        self._backend_delivered = True
+            self._deliver_image(key, server_ip)
+        self._backend_delivered.add(server_ip)
 
     def _sample_cpu_mem(self, host) -> dict:
         """Decisao 83 (pedido do Luciano, item 1: comparar CPU/memoria
@@ -643,7 +702,55 @@ class SSHExecutor:
         sample["proc_meminfo_raw"] = mem_part.strip()
         return sample
 
-    def _launch_gateway(self, profile, keylog=False):
+    # Achado 10 (lacuna conhecida desde a Decisao 58, NUNCA implementada
+    # pro piloto por desenho explicito -- "precisa ser resolvida ANTES
+    # de uma campanha oficial real, nao antes do piloto"): implementado
+    # agora, pedido do Luciano, generalizacao N-servidores. Porta FIEL o
+    # mecanismo REAL da v8 (`campaign_run.py` -- `_cpu_mem_sampler_
+    # start_cmd`/`_cpu_mem_sampler_stop_cmd`/`_steal_pct_from_cpu_jsonl`,
+    # nunca reinventado): sampler PERIODICO em background (1 amostra/s,
+    # `/proc/stat`+`/proc/meminfo`, nunca `docker stats` -- `steal` so
+    # existe no nivel do host) durante a janela INTEIRA do bloco
+    # cronometrado, nao so 2 instantaneos antes/depois do backend subir
+    # (o que `_sample_cpu_mem` acima ja fazia, mantido intocado). steal%
+    # e DELTA entre a primeira e a ultima amostra do arquivo JSONL
+    # (cumulativo desde o boot, nunca uma razao desde sempre) -- mesma
+    # formula exata de `_steal_pct_from_cpu_jsonl` da v8 real.
+    #
+    # Gate explicito: SO roda em modo campanha (`self.route_server is
+    # not None`) -- nunca no piloto, por desenho (compatibilidade, item
+    # 1 do pedido: o piloto nunca ganha chamadas SSH novas que ele nao
+    # tinha antes). `start_block`/`stop_block` chamam isso condicionado
+    # ao MESMO `if self.route_server is not None`.
+    def _cpu_steal_sampler_start(self, host, label):
+        home = "/home/ec2-user"
+        out_path = f"{home}/{label}.cpu_mem.jsonl"
+        pid_path = f"{home}/{label}.cpu_mem.pid"
+        sampler_script = (
+            "import time, json\n"
+            "while True:\n"
+            "    with open('/proc/stat') as f:\n"
+            "        stat_line = f.readline().strip()\n"
+            "    with open('/proc/meminfo') as f:\n"
+            "        meminfo_raw = f.read()\n"
+            "    print(json.dumps({'sampled_at_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),"
+            " 'proc_stat_line': stat_line, 'proc_meminfo_raw': meminfo_raw}), flush=True)\n"
+            "    time.sleep(1)\n"
+        )
+        inner = f"nohup python3 -c {json.dumps(sampler_script)} > {out_path} 2>&1 & echo $! > {pid_path}"
+        cli.run_ssh(host, f"setsid sh -c {json.dumps(inner)}", key_path=self.key_path)
+        return out_path, pid_path
+
+    def _cpu_steal_sampler_stop_and_collect(self, host, out_path, pid_path, local_dir: Path) -> dict | None:
+        cli.run_ssh(host, f"kill $(cat {pid_path}) 2>/dev/null; sleep 1; true", key_path=self.key_path)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_path = local_dir / Path(out_path).name
+        scp_proc = cli.run_scp(f"ec2-user@{host}:{out_path}", str(local_path), key_path=self.key_path)
+        if scp_proc.returncode != 0:
+            return None
+        return _steal_pct_from_cpu_jsonl(local_path)
+
+    def _launch_gateway(self, profile, keylog=False, route=None):
         """Decisao 52 (Emenda 14): fatorado de `start_block` pra ser
         reusado por `dedicated_capture` tambem -- o UNICO lugar que
         decide se o gateway sobe com `KEYLOG_PATH` ou nao.
@@ -704,8 +811,8 @@ class SSHExecutor:
         )
         if not self.local_shim_bridge_join:
             network_flags += "-p 443:443 "
-        cli.run_ssh(self._server_ip(), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
-        run_proc = cli.run_ssh(self._server_ip(),
+        cli.run_ssh(self._server_ip(route), f"docker rm -f {self.gateway_container} 2>/dev/null; true", key_path=self.key_path)
+        run_proc = cli.run_ssh(self._server_ip(route),
                     f"docker run -d --name {self.gateway_container} "
                     f"{network_flags}"
                     f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
@@ -722,13 +829,13 @@ class SSHExecutor:
         # vivo (Decisao 49): sem isso, a primeira chamada do proxy
         # pode cair numa janela em que o container ja existe mas ainda
         # nao esta aceitando conexao, devolvendo 502 rio abaixo.
-        wait_proc = cli.run_ssh(self._server_ip(),
+        wait_proc = cli.run_ssh(self._server_ip(route),
                     f"for i in $(seq 1 30); do "
                     f"docker logs {self.gateway_container} 2>&1 | grep -q 'listening on' && echo FOUND && break; "
                     f"sleep 1; done",
                     key_path=self.key_path)
         if "FOUND" not in (wait_proc.stdout or ""):
-            status_proc = cli.run_ssh(self._server_ip(), f"docker ps -a --filter name={self.gateway_container} --format '{{{{.Status}}}}'", key_path=self.key_path)
+            status_proc = cli.run_ssh(self._server_ip(route), f"docker ps -a --filter name={self.gateway_container} --format '{{{{.Status}}}}'", key_path=self.key_path)
             raise RuntimeError(
                 f"_launch_gateway {profile}: container {self.gateway_container} nunca logou 'listening on' em "
                 f"30s -- abortando ANTES de qualquer verificacao/execucao (status: "
@@ -813,20 +920,27 @@ class SSHExecutor:
         por `deliver_source.py`, Decisao 83) e o caminho real remoto."""
         self._tcp_preflight(route)
         self._block_start_utc[(profile, route)] = datetime.now(timezone.utc)
+        # Achado 10 (implementado, modo campanha so -- ver docstring de
+        # `_cpu_steal_sampler_start`): comeca a amostrar ANTES de
+        # qualquer coisa do bloco, pra cobrir a janela INTEIRA.
+        if self.route_server is not None:
+            label = f"{profile}_{route}".replace("/", "_")
+            out_path, pid_path = self._cpu_steal_sampler_start(self._server_ip(route), label)
+            self._cpu_steal_sampler_paths[(profile, route)] = (out_path, pid_path)
         if not self.local_shim_bridge_join:
             # Decisao 83/87: as 3 imagens CUSTOM do backend (Decisao
             # 68, mesmo mecanismo de sempre) -- uma vez por fleet,
             # nunca por bloco (nunca trocam de CRYPTO_PROFILE em si).
-            self._deliver_backend_images()
+            self._deliver_backend_images(route)
             self.cpu_mem_samples.append(
                 {"label": "antes_do_backend", "profile": profile, "route": route,
-                 **self._sample_cpu_mem(self._server_ip())})
+                 **self._sample_cpu_mem(self._server_ip(route))})
         compose_dir = (
             '"$(pwd)/../../insurance-server-lambdas"' if self.local_shim_bridge_join
             else "~/insurance-server-lambdas"
         )
         backend_profile = BACKEND_CRYPTO_PROFILE_ENV[profile]
-        backend_proc = cli.run_ssh(self._server_ip(),
+        backend_proc = cli.run_ssh(self._server_ip(route),
                     f'cd {compose_dir} && '
                     f"CRYPTO_PROFILE={backend_profile} docker compose --profile main "
                     f"up -d --force-recreate auth mongo_seed mockapi && "
@@ -860,25 +974,30 @@ class SSHExecutor:
         if not self.local_shim_bridge_join:
             self.cpu_mem_samples.append(
                 {"label": "depois_do_backend", "profile": profile, "route": route,
-                 **self._sample_cpu_mem(self._server_ip())})
+                 **self._sample_cpu_mem(self._server_ip(route))})
         # Decisao 55, item 2: entrega por save/load, NUNCA build na
         # instancia -- ANTES de qualquer verificacao/execucao.
-        self._deliver_image("gateway", self._server_ip())
+        self._deliver_image("gateway", self._server_ip(route))
         verification = self._verify_gateway_binary(profile, route)
-        self._launch_gateway(profile)
+        self._launch_gateway(profile, route=route)
         self._verify_running_gateway_binary(verification)
         if self.local_shim_bridge_join:
-            cli.run_ssh(self._server_ip(), f"docker network connect bridge {self.gateway_container}", key_path=self.key_path)
+            cli.run_ssh(self._server_ip(route), f"docker network connect bridge {self.gateway_container}", key_path=self.key_path)
             ip_proc = cli.run_ssh(
-                self._server_ip(),
+                self._server_ip(route),
                 f"docker inspect {self.gateway_container} --format '{{{{.NetworkSettings.Networks.bridge.IPAddress}}}}'",
                 key_path=self.key_path,
             )
             bridge_ip = ip_proc.stdout.strip()
             if not bridge_ip:
                 raise RuntimeError(f"start_block {profile}/{route}: nao consegui descobrir o IP de {self.gateway_container} na rede bridge")
-            self.inventory["server"]["private_ip"] = bridge_ip
-            self.inventory["server"]["public_ip"] = bridge_ip
+            # Decisao 107 (generalizacao N-servidores): muta a entrada
+            # CERTA do inventario (piloto: "server" unico, igual
+            # sempre; campanha oficial: so o servidor desta `route`,
+            # nunca os outros 2) -- nunca mais hardcoded "server".
+            server_key = self._server_key(route)
+            server_key["private_ip"] = bridge_ip
+            server_key["public_ip"] = bridge_ip
         # Decisao 55, item 2: o proxy roda no CLIENTE, via save/load
         # tambem -- nunca `docker build` la (opin_flow.start_tls_kem_
         # proxy so faz `docker run`, presume a imagem ja presente).
@@ -924,10 +1043,22 @@ class SSHExecutor:
             '"$(pwd)/../../insurance-server-lambdas"' if self.local_shim_bridge_join
             else "~/insurance-server-lambdas"
         )
-        cli.run_ssh(self._server_ip(),
+        cli.run_ssh(self._server_ip(route),
                     f"cd {compose_dir} && docker compose --profile main stop auth mongo_seed mockapi "
                     f"2>/dev/null; true",
                     key_path=self.key_path)
+        # Achado 10 (implementado, modo campanha so): para o sampler
+        # iniciado em `start_block`, traz o JSONL, calcula o steal%
+        # real (delta 1a->ultima amostra, cobre a janela INTEIRA do
+        # bloco) -- nunca so um instantaneo antes/depois.
+        if self.route_server is not None and (profile, route) in self._cpu_steal_sampler_paths:
+            out_path, pid_path = self._cpu_steal_sampler_paths.pop((profile, route))
+            local_dir = self.images_staging_dir.parent / "cpu_steal_samples"
+            steal_pct = self._cpu_steal_sampler_stop_and_collect(self._server_ip(route), out_path, pid_path, local_dir)
+            self.cpu_steal_samples.append({
+                "profile": profile, "route": route, "server": self._server_ip(route),
+                "steal_pct": steal_pct, "sampled_at_utc": datetime.now(timezone.utc).isoformat(),
+            })
         self._block_start_utc.pop((profile, route), None)
 
     def readiness_probe(self, profile, route):
@@ -948,7 +1079,7 @@ class SSHExecutor:
         if proc.returncode != 0:
             raise RuntimeError(f"readiness_probe {profile}/{route}: execucao de settling falhou: {proc.stderr}")
         t1 = datetime.now(timezone.utc)
-        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat())
+        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat(), route)
         raw_lines, parsed = self._connection_ok_lines(log_text)
         client_facing = [ln for ln, p in zip(raw_lines, parsed) if p["sni"] != _INTERNAL_CALLER_SNI]
         if not client_facing:
@@ -982,7 +1113,7 @@ class SSHExecutor:
             raise RuntimeError(f"execucao {label}: saida remota nao-JSON: {e}\nstdout={proc.stdout!r}") from None
         t1 = datetime.now(timezone.utc)
 
-        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat())
+        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat(), route)
         raw_lines, parsed = self._connection_ok_lines(log_text)
         client_facing = [p for p in parsed if p["sni"] != _INTERNAL_CALLER_SNI]
         curve_id = client_facing[0]["curve"] if client_facing and client_facing[0]["curve"] else ec.EXPECTED_CURVE.get(profile)
@@ -1007,11 +1138,29 @@ class SSHExecutor:
             raise RuntimeError(f"_primary_iface({host}): nao consegui descobrir a interface primaria (saida vazia, stderr={proc.stderr!r})")
         return iface
 
+    def _all_server_ips(self) -> list[str]:
+        """Piloto (`route_server is None`): `[self._server_ip()]`,
+        exatamente como sempre -- 1 elemento, caminho intocado.
+        Campanha oficial: um IP por servidor distinto (ordem estavel,
+        nunca duplicado, mesmo que varias rotas apontem pro mesmo
+        servidor)."""
+        if self.route_server is None:
+            return [self._server_ip()]
+        seen = []
+        for server_id in dict.fromkeys(self.route_server.values()):  # ordem estavel, sem duplicata
+            ip = self.inventory["servers"][server_id]["public_ip"]
+            if ip not in seen:
+                seen.append(ip)
+        return seen
+
     def capture_ready_check(self):
         """Decisao 53, item 4c: fail-closed, chamado pelo smoke gate
-        ANTES de qualquer execucao -- hoje, so o servidor roda tcpdump/
-        docker exec/tshark de verdade (ver `dedicated_capture`), entao
-        a lista de hosts e so `[self._server_ip()]`.
+        ANTES de qualquer execucao -- hoje, so o(s) servidor(es) rodam
+        tcpdump/docker exec/tshark de verdade (ver `dedicated_capture`).
+        Piloto: 1 servidor so, `_all_server_ips()` devolve exatamente
+        `[self._server_ip()]` como sempre. Campanha oficial (pedido do
+        Luciano, generalizacao pra N servidores): um host por servidor
+        distinto -- os N precisam estar prontos, nunca so o primeiro.
 
         Decisao 81 (achado real, ao vivo, numa fleet nova): o probe
         (`preflight.run_capture_preflight`) so LE se `mockopin-v9-
@@ -1023,9 +1172,11 @@ class SSHExecutor:
         tenta entregar. Corrigido: entrega aqui primeiro (mesmo
         `_deliver_image` idempotente que `dedicated_capture` ja usa --
         sha256 conferido nos dois saltos, nunca um `docker build`),
-        so entao roda o probe."""
-        self._deliver_image("measure", self._server_ip())
-        return preflight.run_capture_preflight([self._server_ip()], key_path=self.key_path)
+        so entao roda o probe -- agora pra CADA servidor."""
+        hosts = self._all_server_ips()
+        for host in hosts:
+            self._deliver_image("measure", host)
+        return preflight.run_capture_preflight(hosts, key_path=self.key_path)
 
     def _preserve_capture_attempt(self, server_ip, remote_pcap_path, remote_keylog_path, profile, route, attempt, capturas_dir: Path):
         """Pedido do Luciano (item 0, regra fail-closed nova + item 3,
@@ -1100,7 +1251,7 @@ class SSHExecutor:
         cronometrada e outra -- nenhum dado das 60 execucoes (ja
         gravado antes deste laco comecar) e alterado por elas."""
         self.start_block(profile, route)
-        self._launch_gateway(profile, keylog=True)
+        self._launch_gateway(profile, keylog=True, route=route)
         # `start_block` ja verificou o transporte e o container
         # anterior -- esta e so a MESMA imagem reiniciada (keylog=True
         # nunca muda o binario), mas confere de novo porque e um
@@ -1108,7 +1259,7 @@ class SSHExecutor:
         # reconfere o transporte -- o binario local nao mudou).
         self._verify_running_gateway_binary(self.gateway_binary_verifications[-1])
 
-        server_ip = self._server_ip()
+        server_ip = self._server_ip(route)
         # Decisao 55, item 2: mockopin-v9-measure (tshark) tambem por
         # save/load -- nunca `docker build` na instancia.
         self._deliver_image("measure", server_ip)
@@ -1276,7 +1427,7 @@ class SSHExecutor:
         # independente capaz de confirmar que a soma bruta de bytes por
         # direcao (acima) fechou de verdade, nunca so reconferida contra
         # ela mesma.
-        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat())
+        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat(), route)
         gw_pairs = _handshake_bytes_all(log_text, profile)
         gw_lines = ["handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)"]
         gw_lines.extend(f"{hs_in}\t{hs_out}" for hs_in, hs_out in gw_pairs)

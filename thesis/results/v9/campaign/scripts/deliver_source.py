@@ -239,16 +239,30 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
     instala `requirements.txt` (Decisao 69 -- o servidor nunca executa
     nenhum codigo Python que precise dessas dependencias). Devolve um
     relatorio por destino (nunca conteudo de arquivo, so contagem/
-    lista de caminhos relativos entregues)."""
+    lista de caminhos relativos entregues).
+
+    Generalizacao N-servidores (Decisao 107): o piloto expoe `inventory
+    ["server"]` (UM so, singular); a campanha oficial expoe `inventory
+    ["servers"]` (dict, uma entrada por regiao-servidor, achado real
+    desta rodada -- `deliver_source` so entregava pro primeiro/unico
+    servidor, igual ao achado ja documentado no proprio `outputs.tf`
+    da campanha). `servers = {"server": inventory["server"]}` reproduz
+    o piloto byte a byte (mesma chave "server", mesmo nome de tarball
+    staged, "server.tar.gz", mesmo `target` no relatorio) quando so
+    `inventory["server"]` existe; iterar sobre `inventory["servers"]`
+    quando presente entrega pra CADA servidor da campanha, sem mudar
+    nada do caminho do piloto."""
     report = []
     with tempfile.TemporaryDirectory(prefix="v9_deliver_source_") as tmp:
         server_tarball = build_tarball(COMMON_FILES + SERVER_ONLY_FILES, Path(tmp) / "server.tar.gz", repo_root=repo_root)
         client_tarball = build_tarball(COMMON_FILES + CLIENT_ONLY_FILES, Path(tmp) / "client.tar.gz", repo_root=repo_root)
 
-        server_ip = inventory["server"]["public_ip"]
-        staged = stage_on_control(control_ip, operator_key_path, server_tarball, "server.tar.gz")
-        relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, server_ip, staged)
-        report.append({"target": "server", "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES)})
+        servers = inventory["servers"] if "servers" in inventory else {"server": inventory["server"]}
+        for server_id, server in servers.items():
+            server_ip = server["public_ip"]
+            staged = stage_on_control(control_ip, operator_key_path, server_tarball, f"{server_id}.tar.gz")
+            relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, server_ip, staged)
+            report.append({"target": server_id, "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES)})
 
         for route, client in inventory["clients"].items():
             client_ip = client["public_ip"]

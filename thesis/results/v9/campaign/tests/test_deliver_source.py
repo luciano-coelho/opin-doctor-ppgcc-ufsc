@@ -155,6 +155,69 @@ def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch
     assert "insurance-server-lambdas/docker-compose.yml" not in l0_report["files"]
 
 
+# --- Generalizacao N-servidores (Decisao 107): inventory["servers"]
+# (plural, dict por regiao-servidor) -- mesmo caminho de codigo que
+# inventory["server"] (singular) ja testado acima, mas entregando
+# SERVER_ONLY_FILES pra CADA servidor, um tarball staged por id.
+
+def test_deliver_source_modo_campanha_entrega_para_cada_servidor(monkeypatch, fake_repo):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.10"},
+            "us-east-1": {"public_ip": "203.0.113.20"},
+            "ap-northeast-1": {"public_ip": "203.0.113.30"},
+        },
+        "clients": {
+            "sa-east-1/L0": {"public_ip": "203.0.113.60"},
+        },
+    }
+    report = ds.deliver_source(
+        control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+        campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+        inventory=inventory, repo_root=fake_repo,
+    )
+    assert {r["target"] for r in report} == {"sa-east-1", "us-east-1", "ap-northeast-1", "sa-east-1/L0"}
+
+    relay_cmds = [c[-1] for c in calls if c and c[0] == "ssh" and "tar -xzf" in c[-1]]
+    assert len(relay_cmds) == 4, "um rele por servidor (3) + um por cliente (1)"
+    for ip in ("203.0.113.10", "203.0.113.20", "203.0.113.30"):
+        assert any(f"@{ip}:" in c for c in relay_cmds), f"servidor {ip} nunca recebeu o rele"
+
+    server_report = next(r for r in report if r["target"] == "sa-east-1")
+    assert "insurance-server-lambdas/docker-compose.yml" in server_report["files"]
+
+
+def test_mutante_deliver_source_campanha_so_1_servidor_perderia_entrega(monkeypatch, fake_repo):
+    """Mutante: ignorar inventory['servers'] e so entregar pro primeiro
+    servidor (comportamento ANTES da generalizacao) deixaria 2 dos 3
+    servidores da campanha sem SERVER_ONLY_FILES nenhum -- prova que a
+    iteracao sobre todos os servidores e necessaria, nao cosmetica."""
+    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: FakeProc(returncode=0))
+    inventory = {
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.10"},
+            "us-east-1": {"public_ip": "203.0.113.20"},
+        },
+        "clients": {},
+    }
+    report = ds.deliver_source(
+        control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+        campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+        inventory=inventory, repo_root=fake_repo,
+    )
+    mutant_report = report[:1]  # simula so entregar pro primeiro servidor
+    assert {r["target"] for r in mutant_report} != {"sa-east-1", "us-east-1"}, (
+        "o mutante (so 1 servidor) tem que divergir do relatorio real (2 servidores)"
+    )
+
+
 def test_build_tarball_do_servidor_inclui_server_only_files(fake_repo, tmp_path):
     out = ds.build_tarball(ds.COMMON_FILES + ds.SERVER_ONLY_FILES, tmp_path / "out.tar.gz", repo_root=fake_repo)
     with tarfile.open(out, "r:gz") as tar:
