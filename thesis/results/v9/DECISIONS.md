@@ -1855,6 +1855,18 @@ fecha cada uma:**
 | 4 | Contador de handshake contaminado pela primeira requisicao HTTP (e, na v8, por tickets -- Decisao 78/79 do `v8/DECISIONS.md`) | Contagem na fronteira exata do `Handshake()`, tickets desligados por padrao (Decisao 13/14) | Validacao cruzada tripla (contador de processo = tshark decifrado = soma bruta do pcap), nos 4 perfis (Decisao 14); overhead de registro consistente (77B/121B) nos 4 perfis (Decisao 15) | **FECHADO** |
 | 5 | Tamanho por mensagem e residuo de tempo nunca medidos/isolados | Tabela por mensagem (Decisao 15) + microbenchmarks de CPU + custo de ticket quantificado (Decisao 14) | Tabela por mensagem cruzada com o total medido, 4 perfis (Decisao 15); custo de ticket e de CPU agora sao numeros, nao incognitas | **PARCIAL -- as pecas existem, a conta do residuo historico da v8 nao foi refeita com elas** (Decisao 15, ultimo paragrafo) |
 
+**NOTA DATADA (2026-11-09, apos a Fase B real completa, decisao
+explicita do Luciano -- texto original da tabela acima mantido
+intacto, nunca reescrito): as lacunas #2 e #3 (status "PARCIAL -- falta
+teste negativo") ficam FECHADAS por decisao explicita.** A correcao
+(ja presente desde esta Decisao 18) foi aplicada e exercitada no
+caminho feliz nos 4 perfis -- confirmado com dados 100% reais da Fase
+B (Decisao 101, 60/60 execucoes, 0 erros, certificado correto do
+gateway em todas). **A rejeicao (teste negativo) fica declarada FORA
+DO ESCOPO** -- nunca mais uma lacuna remanescente, por decisao
+explicita, nao por omissao. Ver Decisao 103 (b) e Decisao 104 pra
+evidencia consolidada.
+
 **(c) CurveID e DualAuthenticated conferidos em toda conexao medida.**
 Criterio: toda execucao da campanha real le `ConnectionState.CurveID`
 e falha explicitamente se nao bater o grupo esperado do perfil; toda
@@ -11082,8 +11094,8 @@ real:**
 | # | Lacuna | Status FINAL | Evidencia numerica |
 |---|---|---|---|
 | 1 | RSA-4096 (atipico) | **FECHADO, reconfirmado** | checagem estatica (a) acima, codigo atual -- 9/9 `rsa.GenerateKey` com 2048, 0 com 4096 |
-| 2 | Cliente nunca verificava o servidor (`InsecureSkipVerify`) | **Fix aplicado e exercitado no caminho feliz, nos 4 perfis -- caminho de rejeicao (teste negativo) permanece fora do escopo.** As 60 execucoes reais da Fase B (Decisao 101) confirmam 0 erros com o certificado CORRETO do gateway, nos 4 perfis -- nunca testamos um certificado ERRADO sendo corretamente rejeitado. | 60/60 execucoes reais, 0 erros (Decisao 101); `negtest/main.go` existe no repositorio mas nunca foi exercitado contra o piloto real |
-| 3 | Servidor com certificado de cliente OPCIONAL (`VerifyClientCertIfGiven`) | **Fix aplicado e exercitado no caminho feliz, nos 4 perfis -- caminho de rejeicao (teste negativo) permanece fora do escopo**, MESMA ressalva do item 2. | mesma evidencia do item 2 -- `RequireAndVerifyClientCert` confirmado em uso (checagem (a)), nunca testado que REJEITA um cliente sem certificado nos 4 perfis fora do Hibrido-AND (que ja tem isso coberto por `dual_test.go`, T3) |
+| 2 | Cliente nunca verificava o servidor (`InsecureSkipVerify`) | **FECHADO (decisao explicita do Luciano, 2026-11-09): correcao aplicada e exercitada no caminho feliz nos 4 perfis; rejeicao fora do escopo.** As 60 execucoes reais da Fase B (Decisao 101) confirmam 0 erros com o certificado CORRETO do gateway, nos 4 perfis. | 60/60 execucoes reais, 0 erros (Decisao 101); `negtest/main.go` existe no repositorio, nunca exercitado contra o piloto real -- rejeicao fora do escopo, por decisao explicita, nunca uma lacuna remanescente |
+| 3 | Servidor com certificado de cliente OPCIONAL (`VerifyClientCertIfGiven`) | **FECHADO (decisao explicita do Luciano, 2026-11-09): correcao aplicada e exercitada no caminho feliz nos 4 perfis; rejeicao fora do escopo.** | mesma evidencia do item 2 -- `RequireAndVerifyClientCert` confirmado em uso (checagem (a)); Hibrido-AND ja tem o caminho de rejeicao coberto pelos 18 cenarios da T3/`dual_test.go`, os outros 3 perfis nao -- rejeicao fora do escopo, por decisao explicita |
 | 4 | Contador de handshake contaminado | **FECHADO** (ja estava, reconfirmado pela Fase B: consistencia `raw_in==gateway_in`/`raw_out==gateway_out` EXATA nas 12 capturas oficiais, Decisao 101/criterio 1) | 12/12 capturas, 100% consistencia byte a byte |
 | 5 | Tamanho por mensagem e residuo de tempo nunca medidos/isolados | **PARCIAL, avancado mas nao fechado** -- tamanho por mensagem: **FECHADO** (12/12 capturas reais, Decisao 101, criterio 1 PASS); residuo de TEMPO: ver item (c) abaixo -- a hipotese de RTT-extra-por-initcwnd agora esta DESCARTADA com dados reais confirmados (nao so assumida), mas o residuo de ~14% do T_fluxo da v8 (fase "HTTP calls", Fato F) continua SEM causa isolada, MESMA conclusao do relatorio final da v8 | ver (c) |
 
@@ -11161,6 +11173,52 @@ secao de metodologia da tese (cross-referenciada, nenhum escondido):**
 | 98 | MSS efetivo do criterio 2 vem da concordancia `ss -ti`/maior payload real do pcap (nunca do MSS anunciado no SYN-ACK) | SYN-ACK anuncia capacidade LOCAL da NIC (jumbo), nunca o MSS que de fato e usado no caminho real (PMTU discovery) | **Sim, desvio formal do pre-registro (Decisao 34), declarado explicitamente** |
 | 99 | Criterio 1 reretenta a captura (ate 3x) quando a decifragem sai incompleta | achado real em L0 (Decisao 95) -- keylog podia nao estar totalmente sincronizado em disco | Sim -- nunca retenta por divergencia de TAMANHO, so por decifragem incompleta |
 | 102 | `bytes_sent_within_first_rtt_window` conta por timestamp de envio dentro de 1 RTT (nunca por numero de pacote de ACK) | metodo antigo (Decisao 94) ainda discordava sob RTT real com ACKs em cluster -- confirmado por conteudo do pcap, nunca pacing como a Decisao 101 relatou por engano | Sim -- Emenda de METODO, validada com verdade conhecida antes de aplicar ao dado real |
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 104. EMENDA FORMAL ao pre-registro `v9-prereg` -- lista oficial e completa de todo desvio/ajuste de metodo feito durante o piloto inteiro (Decisoes 61/75/91/93/97/98/99/102), com o que mudou, o motivo, e se e desvio formal do pre-registro ou so correcao de mecanismo; tag `v9-ferramentas-congeladas` criada no commit atual -- a campanha oficial roda com as ferramentas EXATAMENTE como congeladas nesta tag
+
+**Pedido explicito do Luciano.** Esta e a EMENDA FORMAL, oficial,
+que fecha o registro de desvios desta rodada completa do piloto --
+nunca uma lista informal. Nenhum item abaixo reescreve o texto
+original das Decisoes 1-100 (todas permanecem intactas, visiveis,
+nunca sobrescritas) -- esta Emenda so CONSOLIDA, numa unica tabela
+oficial, o que ja estava disperso Decisao por Decisao, declarando
+explicitamente qual item e desvio FORMAL do pre-registro (precisa
+estar na secao de metodologia da tese) e qual e so correcao de
+MECANISMO de medicao (nunca muda o que e medido, nem precisa entrar
+na secao de limitacoes/metodologia como desvio, so como nota de
+implementacao).
+
+**Tabela oficial e completa, Decisoes 61 a 102 (toda a Fase B desta
+rodada):**
+
+| Decisao | O que mudou | Motivo | Desvio FORMAL do pre-registro? |
+|---|---|---|---|
+| 61 | Image ID do `gateway` em `PINS.json` re-pinado (imagem original nao existe mais localmente) | binario/certificados/camada base confirmados identicos por CONTEUDO (nunca reconstruidos) -- so o Image ID (ja sabido nao-reproduzivel entre versoes de Docker, Decisao 68) mudou | **NAO** -- so metadado de verificacao de imagem, nunca o que e medido |
+| 75 | SAN com IP real (`SERVER_IPS`) descartada, nunca aplicada ao piloto | certificados entregues confirmados identicos aos ja embutidos nas imagens pinadas | **NAO** -- decisao de design revertida ANTES de qualquer medicao real usa-la |
+| 91 | Metodo de classificacao de mensagens do criterio 1 (por direcao/stream, nunca por coocorrencia na mesma linha) | rede real fragmenta o flight do servidor em mais de uma linha do tshark -- loopback nunca mostrou isso | **NAO** -- correcao de MECANISMO (bug de parsing), nunca do criterio/limiares/baselines |
+| 93 | `CERTIFICATE_BASELINE` recalibrado por DERIVACAO (formula RFC 8446 a partir do DER real) em vez do valor antigo (913/5632/6255/6582, antes 899/5618/6241/6554) | Decisao 75 (mesma sessao) revertera a premissa que motivou o valor antigo, sem reconferir o baseline | **SIM -- desvio formal, declarado explicitamente** (o pre-registro original tinha um numero errado, nunca o metodo de calculo em si) |
+| 97 | Canal pcap do criterio 7 mede SYN-ACK saindo -> ACK voltando (nunca SYN chegando -> SYN-ACK saindo) | metodo antigo (Decisao 35) media so tempo de processamento local do servidor, nunca RTT de rede real | **NAO** -- correcao de MECANISMO, o limiar (±10%, piso de L0, Decisao 32) e os DOIS canais (probe+pcap) do pre-registro (Decisao 35) continuam exatamente os mesmos |
+| 98 | MSS efetivo do criterio 2 vem da concordancia `ss -ti`/maior payload real do pcap (nunca do MSS anunciado no SYN-ACK) | SYN-ACK anuncia capacidade LOCAL da NIC (jumbo), nunca o MSS que de fato e usado no caminho real (PMTU discovery) | **SIM -- desvio formal, declarado explicitamente** (Decisao 34 dizia "MSS lido das opcoes do SYN", sem distinguir anunciado-vs-efetivo -- a leitura literal usava o SYN-ACK) |
+| 99 | Criterio 1 reretenta a captura (ate 3x) quando a decifragem sai incompleta, preservando pcap/keylog de toda tentativa | achado real em L0 (Decisao 95) -- keylog podia nao estar totalmente sincronizado em disco | **NAO** -- nunca retenta por divergencia de TAMANHO (so por decifragem incompleta), nunca muda o criterio nem os baselines |
+| 102 | `bytes_sent_within_first_rtt_window` conta por timestamp de envio dentro de 1 RTT (nunca por numero de pacote de ACK) | metodo antigo (Decisao 94) ainda discordava sob RTT real com ACKs em cluster | **NAO** -- correcao de MECANISMO (bug de contagem), o limiar (>=10 segmentos, Decisao 14/24) e o metodo pre-registrado (teste dedicado >=64KB, dois canais, Decisao 34) continuam os mesmos |
+
+**Resumo: 2 desvios FORMAIS do pre-registro em toda a rodada**
+(Decisoes 93 e 98 -- os dois ja declarados individualmente nas
+proprias Decisoes, agora consolidados aqui pra secao de metodologia
+da tese) -- **6 correcoes de MECANISMO** (61, 75, 91, 97, 99, 102),
+nenhuma delas mudando o que e medido, os limiares, ou os baselines
+do pre-registro.
+
+**Tag de congelamento das ferramentas: `v9-ferramentas-congeladas`**,
+criada no commit atual desta branch (`v9/fase1-local`) -- **a
+campanha oficial (960 execucoes, 8 rotas) roda com o codigo de
+medicao EXATAMENTE como esta congelado nesta tag, nenhuma mudanca de
+metodo a mais sem uma nova Emenda numerada.** Nenhuma acao em
+`main`/`v9-prereg` -- os dois permanecem intocados, exatamente como
+a autorizacao original exige.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
