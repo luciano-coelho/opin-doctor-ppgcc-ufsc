@@ -1,5 +1,5 @@
 {
-  "fase_atual": "FASE_A_COMPLETA -- FASE_B_BACKEND_PROVADO -- MECANISMO DE MEDICAO DO CRITERIO 1 CORRIGIDO (DECISAO 91) -- PRONTA NOVA TENTATIVA REAL",
+  "fase_atual": "FASE_A_COMPLETA -- FASE_B_BACKEND_PROVADO -- MECANISMO DO CRITERIO 1 CORRIGIDO E PROVADO CONTRA REDE REAL NOS 4 PERFIS (DECISAO 91/92) -- PARADA NA CALIBRACAO DE CERTIFICATE_BASELINE",
   "fase_a": {
     "status": "completa, verde, 15/15 passos (0-14) numa fleet real",
     "tentativas": 2,
@@ -8,7 +8,7 @@
     "tentativa_2b_retomada": "COMPLETA -- Passos 0-14 todos verdes -- ver ensaio_infra_retomada/, Decisoes 68-74"
   },
   "fase_b": {
-    "status": "backend de negocio PROVADO (12/12, 0 falhas); mecanismo de medicao do criterio 1 (Decisao 90) CORRIGIDO (Decisao 91) -- classificacao por direcao (srcport), consciente de stream, consistencia obrigatoria contra handshakeBytesIn/Out real, carve-out interno excluido por SNI (achado novo, validacao local). 4/4 perfis confirmados localmente (1 por fluxo de negocio real completo, 3 por captura de referencia de 1 conexao). 218 testes verdes. Pronta pra nova tentativa real.",
+    "status": "backend de negocio PROVADO (12/12, 0 falhas); mecanismo de medicao do criterio 1 (Decisao 90) CORRIGIDO (Decisao 91) e PROVADO contra rede real nos 4 perfis (Decisao 92, 3a tentativa) -- 6/6 conexoes mTLS identicas, consistencia fechando exatamente, todas as mensagens nao-Certificate batendo o baseline. PARADA DE NOVO (Decisao 92) em certificate_bytes -- +14B/+28B consistente sobre CERTIFICATE_BASELINE nos 4 perfis, certificado confirmado (sha256) ser o mesmo embutido nas imagens pinadas (Decisao 75) -- descompasso de calibracao pre-existente, nunca exposto antes.",
     "resposta_do_luciano_as_3_lacunas_anteriores_rodada1": "aplicada integralmente (Decisoes 75-80): SAN real descartada, smoke gate corrigido, operator-IP pre-check, collect_artifacts.py reescrito, consolidate_v9_pilot.py criado, PILOT_RUNBOOK.md escrito. 175 testes verdes antes de tocar a AWS.",
     "tentativa_1_passo10_rodada1": "capture_ready_check() reprovava sempre numa fleet nova (Decisao 81, corrigido ao vivo)",
     "tentativa_2_passo10_rodada1": "PAROU (Decisao 82) -- backend de negocio (auth/mockapi/mongo_seed) nunca portado pra nenhuma instancia EC2 real.",
@@ -16,9 +16,14 @@
     "tentativa_3_passo10_rodada2": "4 achados reais em sequencia, todos corrigidos ao vivo: Decisao 87 (psql/localstack/mongodb sao imagens so-por-digest, nunca preservam nome atraves de save/load -- removidas do mecanismo de 2 saltos, compose as pula direto); Decisao 88 (Env de mongo_seed/mockapi truncado em PINS.json, erro de transcricao desta sessao, nunca um bug de sistema); Decisao 89 (setup_ssm.sh perdia o bit executavel no Windows, localstack o executa direto via subprocess.call). Backend sobe de ponta a ponta, 12/12 execucoes smoke, 0 falhas -- PRIMEIRA VEZ na historia deste pacote.",
     "parada_final_rodada2": "Decisao 90 -- a prova de mecanismo de captura (4 perfis, nunca o criterio oficial em si) reprova: _message_sizes_for_profile (a MESMA funcao que decide o criterio 1 oficial) classifica mal quando tshark reporta CertificateVerify+Finished do servidor numa linha SEPARADA do resto do flight do servidor -- padrao de fragmentacao TCP NUNCA visto antes (toda validacao anterior foi local/loopback). Toca o criterio 1 oficial -- parada pela regra 7(e), decisao do Luciano pendente antes de qualquer correcao.",
     "resposta_do_luciano_as_3_decisoes_pendentes_da_decisao_90": "Decisao 91: (1) causa da fragmentacao e hipotese das 6 conexoes CONFIRMADAS por dados -- N_mTLS=6 e invariante documentado em opin_flow.py desde 2026-09-14 (v7, 2026-09-12), fragmentacao e reordenamento real de TCP/TLS sob rede, nunca visto em loopback; (2) _message_sizes_for_profile corrigida com as restricoes (a)-(f) -- classificacao por srcport/stream, nunca por coocorrencia de tipos na linha; nenhum limiar/baseline tocado; regressao + mutantes verdes (test_evaluate_criteria.py); (3) Emenda registrada (bug de parsing, nunca mudanca de criterio). Achado adicional ao validar localmente (item 4): carve-out interno de auth (sni=matls-api.local) atravessa a mesma porta/interface capturada -- excluido por SNI real do ClientHello.",
-    "decisoes_pendentes_do_luciano": []
+    "tentativa_3_passo10_rodada3": "Decisao 92: fleet real aplicada; achado real corrigido ao vivo (PILOT_RUNBOOK.md nunca tinha um passo entregando auth/mongo_seed/mockapi via deliver_images.py --images -- Passo 8b acrescentado); smoke gate 12/12 execucoes OK; prova de captura (Decisao 91) funcionou PERFEITAMENTE nos 4 perfis contra rede real (6/6 conexoes mTLS identicas, zero divergencia, consistencia fechando exatamente, todas as mensagens nao-Certificate no baseline). Parou de novo em certificate_bytes (+14B/+28B sobre CERTIFICATE_BASELINE nos 4 perfis) -- certificado confirmado por sha256 ser exatamente o mesmo ja embutido nas imagens pinadas (Decisao 75), nunca um bug novo -- descompasso de calibracao do baseline pre-registrado, so agora exposto.",
+    "decisoes_pendentes_do_luciano": [
+      "CERTIFICATE_BASELINE/CERTIFICATE_TOLERANCE_B (e os 3 equivalentes) precisam ser recalibrados pro certificado REALMENTE embutido nas imagens pinadas (899->913, 5618->5632, 6241->6255, 6554->6582), com Emenda formal registrando antes/depois e causa (SAN de 2 enderecos IP no certificado do servidor)?",
+      "Ou os baselines ja deveriam ser estes valores (913/5632/6255/6582) e foi o numero original que nunca foi atualizado apos alguma mudanca historica na geracao do certificado -- precisa investigar quando/como 899 (e equivalentes) foram medidos originalmente?",
+      "Ou outra abordagem -- por exemplo remover as 2 entradas de IP do SAN do certificado do servidor (Decisao 75, item c, ja mostrou que nenhuma verificacao real depende delas), com uma Emenda formal de re-pin da imagem (Decisao 61)?"
+    ]
   },
-  "custo_acumulado_usd_estimado": 2.45,
+  "custo_acumulado_usd_estimado": 2.95,
   "teto_usd": 5.0,
   "recursos_vivos": false,
   "conta_limpa_confirmada": true

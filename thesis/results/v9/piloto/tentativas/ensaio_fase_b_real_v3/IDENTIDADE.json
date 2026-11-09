@@ -1,0 +1,16 @@
+{
+  "subpasta": "ensaio_fase_b_real_v3",
+  "descricao": "Terceira tentativa real da Fase B, apos o Luciano aprovar a Decisao 91 (correcao do mecanismo de medicao do criterio 1, achado da Decisao 90). Fleet real aplicada (31 recursos), chave/codigo/certs/imagens entregues (incluindo um gap real achado e corrigido ao vivo: deliver_images.py --images default nunca incluia as 3 imagens do backend de negocio, auth/mongo_seed/mockapi -- PILOT_RUNBOOK.md corrigido com um novo Passo 8b). Smoke gate (Passo 10) completou as 12 execucoes com ZERO falhas e a prova de captura rodou nos 4 perfis -- a Decisao 91 funcionou PERFEITAMENTE contra rede real nos 4 (6/6 conexoes mTLS identicas, consistencia fechando exatamente, todas as mensagens nao-Certificate batendo o baseline). Parou de novo (Decisao 92) -- desta vez em certificate_bytes, consistentemente +14B/+28B sobre CERTIFICATE_BASELINE nos 4 perfis, rastreado ao SAN de 2 IPs (127.0.0.1+::1) que a Decisao 75 ja confirmou estar embutido nas imagens pinadas e mantido de proposito (nenhum rebuild). Acao incorreta cometida e revertida ao vivo nesta mesma tentativa: regenerar certs/generated com os IPs REAIS da frota (Decisao 75 ja tinha descartado essa ideia explicitamente) -- revertido pra make certs default ANTES de qualquer execucao usar os certs errados, confirmado por sha256 identico ao baked-in do zero.",
+  "data_utc": "2026-11-09",
+  "resultado": "Smoke gate 12/12 execucoes OK; prova de captura (Decisao 91) funcionando perfeitamente nos 4 perfis -- PAROU em certificate_bytes (Decisao 92), achado que toca CERTIFICATE_BASELINE (pre-registrado), decisao do Luciano pendente.",
+  "decisoes_relacionadas": [91, 92],
+  "fleet": "fleet real desta tentativa (terraform apply, self_terminate_hours=4, 31 recursos), derrubada apos a parada -- aproximadamente 1h de vida (apply ~03:06 UTC, teardown ~04:03 UTC)",
+  "conta_confirmada_limpa": true,
+  "conta_como_dado": false,
+  "nota_conta_como_dado": "Evidencia de uma tentativa PARADA (Decisao 92), nunca um dos 7 criterios oficiais do piloto.",
+  "limitacao_honesta_desta_evidencia": "ERRO DE SEQUENCIAMENTO desta sessao: os 4 arquivos .log brutos de smoke_capture_proof (texto ja derivado do tshark, nunca o .pcap) so foram lembrados DEPOIS que `cleanup.py` ja tinha terminado as instancias -- com elas terminadas (nunca so paradas), os arquivos ficaram irrecuperaveis. `resultados_porta_de_fumaca.json` registra os valores EXATOS que foram lidos e computados ao vivo, direto do controle, enquanto a frota ainda estava de pe (visveis na transcricao desta sessao) -- nunca reconstruidos de memoria depois do fato. Fix de processo pra proxima tentativa: arquivar TODA evidencia (incluindo os .log de smoke_capture_proof) ANTES de qualquer chamada de teardown, nunca depois.",
+  "arquivos": [
+    "resultados_porta_de_fumaca.json"
+  ],
+  "ver_tambem": "thesis/results/v9/DECISIONS.md, Decisao 92 (narrativa completa); Decisao 91 (a correcao que esta tentativa validou contra rede real); Decisao 75 (por que o SAN do certificado do servidor fica como esta, nenhum rebuild de imagem)"
+}

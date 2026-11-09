@@ -9964,3 +9964,135 @@ orchestrator.py`, `thesis/results/v9/integration/measure/measure.sh`,
 `thesis/results/v9/piloto/README.md`, `thesis/results/v9/piloto/
 tentativas/` (reorganizacao), `thesis/results/v9/piloto/dados_oficiais/
 validacao-local-decisao-91/` (evidencia nova), esta Decisao.
+
+## 92. PARADA real na Fase B, Passo 10 (3a tentativa) -- a Decisao 91 funciona PERFEITAMENTE contra rede real nos 4 perfis; parada nova em `certificate_bytes`, achado que toca `CERTIFICATE_BASELINE` pre-registrado
+
+**Fleet real aplicada** (31 recursos, `terraform apply -var="self_terminate_hours=4"`), Passos 0-9 verdes. **Achado real, ao vivo, antes do Passo 10 (roteiro corrigido):** `deliver_images.py` sem `--images` explicito usa `ALL_IMAGE_KEYS` (gateway/proxy/pqc-signer/measure -- nome enganoso, nunca inclui o backend) -- `PILOT_RUNBOOK.md` nunca tinha um passo chamando `--images auth mongo_seed mockapi` (`BACKEND_IMAGE_KEYS`, Decisao 83), lacuna que existe desde aquela Decisao e nunca foi notada porque nenhuma tentativa chegou tão longe sem parar antes. `start_block` (chamado dentro do Passo 10) quebrou com `RuntimeError: auth.tar nao encontrado`. Corrigido: `deliver_images.py --images auth mongo_seed mockapi` rodado (3/3 `sha256_ok: true`), **`PILOT_RUNBOOK.md` ganha o Passo 8b** documentando isto permanentemente.
+
+**Passo 10, 1a parte: sucesso completo.** `smoke_ok` exigiu as 12 execucoes sem falha (`smoke_failures: []`, confirmado) -- a conexao SSH nunca fechou do lado local depois do comando terminar (MESMO sintoma "heredoc vazio" ja registrado nesta sessao e em sessoes anteriores, nunca um problema do piloto em si) -- confirmado lendo `manifest.json` direto do controle via uma nova conexao, nao suposto.
+
+**Passo 10, 2a parte: a Decisao 91 provada, pela primeira vez, contra rede real, nos 4 perfis.** Lendo os 4 logs de `smoke_capture_proof/` (texto ja no formato novo de 7 colunas, com `sni`) direto do controle e rodando `ec._message_sizes_for_profile` de verdade contra eles:
+
+| Perfil | n_streams | divergencia entre as 6 | consistencia (6/6) | outras mensagens (0B tolerancia) | certificate_bytes vs baseline |
+|---|---|---|---|---|---|
+| classico | 6 | nenhuma | fecha | todas OK | 913 vs 899 (+14B) |
+| pqc | 6 | nenhuma | fecha | todas OK | 5632 vs 5618 (+14B) |
+| hibrido-v8 | 6 | nenhuma | fecha | todas OK | 6255 vs 6241 (+14B) |
+| hibrido-and | 6 | nenhuma | fecha | todas OK | 6582 vs 6554 (+28B) |
+
+Em TODOS os 4 perfis: exatamente 6 conexoes mTLS client-facing reais
+(`sni="mtls"`), ZERO erro de stream, ZERO divergencia entre elas
+(confirma o item (c) da Decisao 91 contra rede real pela primeira
+vez), consistencia (d) fechando EXATAMENTE (bytes brutos TCP ==
+handshakeBytesIn/Out do gateway real, nas 6 conexoes, nos 4 perfis) e
+TODAS as mensagens que NAO sao a Certificate do servidor batendo
+EXATAMENTE o baseline oficial (0B de tolerancia) -- incluindo
+`CertificateVerify_servidor`/`Finished_servidor`, exatamente os 2
+campos que a Decisao 90 nunca conseguia preencher sob fragmentacao
+real. **A correcao do mecanismo de medicao funcionou perfeitamente.**
+
+**A unica causa de `capture_proof_ok: false`:** `certificate_bytes`
+consistentemente **+14B** acima do baseline (classico/pqc/hibrido-v8,
+1 folha de servidor cada) ou **+28B** (hibrido-and, 2 folhas de
+servidor -- a folga dobra, exatamente como a Decisao 29 ja previa
+pra esse perfil). **Investigado por conteudo, nao suposto:** a
+Decisao 75 (mais cedo nesta mesma sessao estendida) ja tinha
+investigado esta EXATA questao e decidido explicitamente que o
+piloto usa os certificados tal como ja estao, embutidos nas imagens
+pinadas (`mockopin-v9-gateway:pinned`/`:proxy`), SEM nenhum rebuild
+de imagem -- confirmado de novo agora: `sha256sum` do
+`classico_server.crt` recem-gerado por `make certs` (default,
+`SERVER_IPS=127.0.0.1,::1`) bate byte a byte com o mesmo arquivo
+extraido de dentro de `mockopin-v9-gateway:pinned`
+(`29c720c0...` == `29c720c0...`). O DER deste certificado mede 900
+bytes; a formula do framing TLS 1.3 (`1(contexto)+3(certificate_
+list)+3(cert)+DER+2(extensoes)`) preve exatamente 909B de conteudo
+(+4B de cabecalho = 913B de mensagem) -- bate EXATAMENTE com o valor
+medido, nos 4 perfis. **`CERTIFICATE_BASELINE` (899 pro classico, e
+os equivalentes pros outros 3) nao bate com o certificado que
+REALMENTE esta embutido nas imagens pinadas e que a Decisao 75 ja
+confirmou ser o correto pro piloto -- um descompasso de calibracao
+pre-existente, nunca um bug desta sessao, so NUNCA antes exposto
+porque esta e a primeira vez que a prova de captura chega inteira a
+este ponto.**
+
+**Achado colateral, corrigido ao vivo ANTES de qualquer execucao real
+usar o resultado errado (nunca chegou a contaminar nenhuma medicao):**
+ao investigar a causa acima, este operador tentou, por engano,
+regenerar `certs/generated` com `SERVER_IPS` REAIS da frota (os
+mesmos IPs usados na validacao local da Decisao 91) -- exatamente a
+tecnica que a Decisao 75 ja tinha explicitamente descartado pro
+piloto. Revertido imediatamente (`make certs` default, sem
+`SERVER_IPS`) e reconfirmado por sha256 contra a imagem pinada ANTES
+de entregar de novo aos 5 hosts -- a porta de fumaca que produziu os
+numeros desta Decisao ja tinha terminado com os certificados CORRETOS
+a essa altura (a tentativa errada so aconteceu DEPOIS, investigando o
+resultado), entao nenhuma medicao real foi afetada.
+
+**Por que isto e uma PARADA, nunca uma correcao-e-repete:**
+`CERTIFICATE_BASELINE`/`CERTIFICATE_TOLERANCE_B` sao os limiares
+OFICIAIS, PRE-REGISTRADOS do criterio 1 (Decisao 20/28/29/30/31) --
+mudar qualquer um deles e mudar o criterio em si, exatamente o que a
+regra 7(e) desta autorizacao proibe fazer sem decisao do Luciano. O
+codigo (medicao, classificacao, consistencia) esta verificado correto
+-- todo OUTRO campo bate exatamente, nos 4 perfis, incluindo contra
+handshakeBytesIn/Out REAL do gateway. A falha e inteiramente do
+NUMERO 899/5618/6241/6554 nao corresponder ao certificado que a
+Decisao 75 ja decidiu ser o CORRETO pro piloto -- regra 7(a) desta
+autorizacao ("falha de um criterio pre-registrado com o codigo ja
+verificado correto") aplica-se diretamente.
+
+**Acao tomada, seguindo a regra 6 (fleet nunca ociosa):**
+`emergency_stop.py` modo dry confirmou os 5 instances/5 EIPs/3 SGs/4
+key pairs esperados (sem drift); `cleanup.py --tf-dir ../../terraform
+--profile mockopin-pqc --release-eips --force` reportou
+`"all_clean": true`; verificacao final independente (12 chamadas
+`describe-*`, 3 regioes) confirmada vazia (instancias aparecem
+`terminated`, nunca `running`).
+
+**Limitacao honesta desta evidencia (erro de sequenciamento):** os 4
+arquivos `.log` brutos de `smoke_capture_proof/` so foram lembrados
+DEPOIS que `cleanup.py` ja tinha terminado as instancias -- com elas
+terminadas (nunca so paradas), os arquivos ficaram irrecuperaveis.
+Os valores exatos (lidos e computados ao vivo, direto do controle,
+enquanto a frota ainda estava de pe) ficam registrados em
+`thesis/results/v9/piloto/tentativas/ensaio_fase_b_real_v3/
+resultados_porta_de_fumaca.json` -- nunca reconstruidos de memoria
+depois do fato. Fix de processo pra proxima tentativa: arquivar TODA
+evidencia antes de qualquer chamada de teardown, nunca depois.
+
+**Decisoes pendentes do Luciano:**
+1. `CERTIFICATE_BASELINE`/`CERTIFICATE_TOLERANCE_B` (e os 3 valores
+   analogos pros outros perfis) precisam ser recalibrados pro
+   certificado REALMENTE embutido nas imagens pinadas (899→913,
+   5618→5632, 6241→6255, 6554→6582 -- todos +14B, exceto hibrido-and
+   +28B), com uma Emenda formal que registre o antes/depois e a causa
+   (SAN de 2 enderecos IP, `127.0.0.1,::1`, no certificado do
+   servidor -- nunca o valor do IP em si, Decisao 75, item c)? Ou
+2. os baselines ja eram pra ser estes (913/5632/6255/6582) e foi o
+   NUMERO ORIGINAL (899/5618/6241/6554) que nunca foi atualizado
+   depois de alguma mudanca historica na geracao do certificado
+   (precisa investigar QUANDO/COMO 899 foi medido originalmente,
+   contra qual certificado)? Ou
+3. outra abordagem -- por exemplo, se a presenca do SAN de IP no
+   certificado do servidor e ela mesma dispensavel (Decisao 75, item c,
+   ja mostrou que NENHUMA verificacao real depende dela -- nem
+   hostname, nem handshake), seria mais simples remover essas 2
+   entradas do certificado (regenerando a imagem pinada, com uma
+   Emenda formal de re-pin, Decisao 61) do que mudar os baselines?
+
+**Custo desta tentativa:** fleet viva por aproximadamente 1h (apply
+~03:06 UTC, teardown ~04:03 UTC) -- bem dentro do teto de US$5
+(estimativa ~US$0,50 so desta tentativa, ~US$2,95 acumulado com a
+Fase A e as 2 tentativas anteriores da Fase B).
+
+**Testes:** nenhum novo (achado de calibracao de baseline contra
+certificado real, nunca testavel localmente da mesma forma -- a
+Decisao 91 ja tem 13 testes cobrindo o MECANISMO, que esta Decisao
+confirma funcionar; o numero do baseline em si nao e testavel sem a
+decisao do Luciano sobre qual valor usar).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+PILOT_RUNBOOK.md` (Passo 8b), `thesis/results/v9/piloto/tentativas/
+ensaio_fase_b_real_v3/` (evidencia nova), `thesis/results/v9/piloto/
+README.md`/`estado.json`, esta Decisao.

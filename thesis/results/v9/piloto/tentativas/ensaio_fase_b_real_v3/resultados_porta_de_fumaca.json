@@ -1,0 +1,38 @@
+{
+  "nota": "Resultados computados AO VIVO (`ec._message_sizes_for_profile` real contra os 4 logs reais de smoke_capture_proof, lidos diretamente do controle, ANTES do teardown) -- registrados aqui por valor, nunca os arquivos .log brutos: por um erro de sequenciamento desta sessao (destruida a frota -- `cleanup.py` -- ANTES de arquivar os .log originais, so depois dessa chamada notou-se que eles ainda nao tinham sido copiados pro operador), os 4 arquivos .log reais ficaram irrecuperaveis (instancias TERMINADAS, nunca so paradas). Os numeros abaixo sao exatamente os que a transcricao desta sessao mostra terem sido lidos e computados enquanto a frota ainda estava viva -- nunca reconstruidos de memoria depois do fato.",
+  "manifest_smoke": {
+    "smoke_ok": false,
+    "total_execucoes": 12,
+    "smoke_failures": [],
+    "capture_preflight_go": true,
+    "capture_proof_ok": false,
+    "bytes_diagnostic_needs_decision": false
+  },
+  "capture_proof_por_perfil": {
+    "classico": {
+      "n_streams": 6, "stream_errors": [], "ignored_streams": [], "stream_divergences": [],
+      "consistency_all_ok": true, "other_messages_all_ok": true,
+      "certificate_bytes": 913, "certificate_baseline": 899, "certificate_ok": false,
+      "overall_ok": false
+    },
+    "pqc": {
+      "n_streams": 6, "stream_errors": [], "ignored_streams": [], "stream_divergences": [],
+      "consistency_all_ok": true, "other_messages_all_ok": true,
+      "certificate_bytes": 5632, "certificate_baseline": 5618, "certificate_ok": false,
+      "overall_ok": false
+    },
+    "hibrido-v8": {
+      "n_streams": 6, "stream_errors": [], "ignored_streams": [], "stream_divergences": [],
+      "consistency_all_ok": true, "other_messages_all_ok": true,
+      "certificate_bytes": 6255, "certificate_baseline": 6241, "certificate_ok": false,
+      "overall_ok": false
+    },
+    "hibrido-and": {
+      "n_streams": 6, "stream_errors": [], "ignored_streams": [], "stream_divergences": [],
+      "consistency_all_ok": true, "other_messages_all_ok": true,
+      "certificate_bytes": 6582, "certificate_baseline": 6554, "certificate_ok": false,
+      "overall_ok": false
+    }
+  },
+  "resumo": "Decisao 91 (classificacao por direcao/stream, consistencia obrigatoria) funcionou PERFEITAMENTE nos 4 perfis, contra rede real, pela primeira vez: 6/6 conexoes mTLS reais por perfil, ZERO divergencia entre elas, consistencia (raw bytes TCP vs handshakeBytesIn/Out do gateway) fechando exatamente nas 6 conexoes dos 4 perfis, e TODAS as mensagens nao-Certificate batendo exatamente no baseline oficial (0B de tolerancia) nos 4 perfis. A UNICA causa de capture_proof_ok=false e certificate_bytes -- consistentemente +14B sobre o baseline (classico/pqc/hibrido-v8, 1 folha) ou +28B (hibrido-and, 2 folhas) -- a MESMA assinatura, em TODOS os 4 perfis, do SAN de 2 enderecos IP (127.0.0.1 + ::1) que Decisao 75 ja confirmou estar embutido nas imagens pinadas e que o piloto usa DE PROPOSITO (nenhum rebuild de imagem). Ver DECISIONS.md, Decisao 92."
+}

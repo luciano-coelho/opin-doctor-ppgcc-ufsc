@@ -11,27 +11,25 @@ coisa está.
   E VERDE.** Passos 0–14 todos passaram numa execução real na AWS
   (segunda tentativa desta retomada).
 - **Fase B (piloto real de 60 execuções): backend de negócio PROVADO
-  funcionando de ponta a ponta (12/12, 0 falhas); mecanismo de
-  medição do critério 1 CORRIGIDO (Decisão 91); pronta pra nova
-  tentativa real.** Luciano respondeu as 3 lacunas da 1ª rodada
-  (Decisões 75–80) e, depois da parada da Decisão 82, respondeu o
-  pedido de portar o backend de verdade (Decisões 83–85). 2ª
-  tentativa real: 4 achados reais corrigidos ao vivo em sequência
-  (Decisões 81/87/88/89) até o backend subir de ponta a ponta — 12/12
-  execuções da porta de fumaça, ZERO falhas, primeira vez na história
-  deste pacote. Parou (Decisão 90) na prova de mecanismo da captura
-  (4/4 perfis reprovados) — achado de classificação de mensagens sob
-  rede real, tocando o critério 1 oficial. Luciano respondeu com 3
-  instruções: (1) confirmar por dados a causa da fragmentação e a
-  hipótese dos "6 grupos" — CONFIRMADO (ver Decisão 91: N_mTLS=6 é um
-  invariante já documentado em `opin_flow.py` desde 2026-09-14,
-  nunca uma suposição nova; a fragmentação é reordenamento real de
-  TCP/TLS sob rede, nunca visto em loopback puro); (2) corrigir
-  `_message_sizes_for_profile` com as 6 restrições (a–f) — feito,
-  Decisão 91, Emenda de PARSING, nenhum limiar/baseline do critério 1
-  tocado; (3) registrar a Emenda com antes/depois — Decisão 91. Os
-  dois ensaios reais anteriores (evidência, nunca critério oficial)
-  foram para `tentativas/`, marcados `conta_como_dado: false`.
+  (12/12, 0 falhas); mecanismo de medição do critério 1 CORRIGIDO
+  (Decisão 91) e PROVADO contra rede real nos 4 perfis (Decisão 92);
+  PARADA na calibração de `CERTIFICATE_BASELINE`.** Decisão 90 parou
+  na prova de captura (classificação de mensagens sob rede real,
+  tocando o critério 1). Decisão 91 corrigiu o mecanismo (classificação
+  por direção/stream, consistência obrigatória contra `handshakeBytesIn/
+  Out` real) com 13 testes + mutantes, validado localmente (4/4
+  perfis). 3ª tentativa real (Decisão 92): a correção funcionou
+  PERFEITAMENTE contra rede real nos 4 perfis (6/6 conexões mTLS
+  idênticas, consistência fechando exatamente, todas as mensagens
+  não-Certificate batendo o baseline oficial) — mas parou de novo em
+  `certificate_bytes`, consistentemente +14B/+28B sobre `CERTIFICATE_
+  BASELINE` nos 4 perfis: o certificado REALMENTE embutido nas imagens
+  pinadas (confirmado por sha256, Decisão 75) nunca bateu com o número
+  pré-registrado — um descompasso de calibração pré-existente, só
+  agora exposto porque esta é a primeira vez que a prova de captura
+  chega inteira a este ponto. 3 decisões pendentes do Luciano (Decisão
+  92). Os três ensaios reais (evidência, nunca critério oficial) ficam
+  em `tentativas/`, marcados `conta_como_dado: false`.
 - **Fase C (consolidação):** não aplicável ainda (depende da Fase B).
 
 ## Arquivos neste diretório
@@ -47,6 +45,8 @@ coisa está.
 | `dados_oficiais/validacao-local-fase-b/` | Caminho de dados completo (run_pilot→coleta→avaliação→consolidação) provado localmente antes da Fase B real (Decisão 79) — critérios 1/4/5/6 PASS reais, 2/3/7 sem evidência (gap conhecido). |
 | `tentativas/ensaio_fase_b_real/` | Logs da primeira tentativa real da Fase B (parou no Passo 10, Decisões 81–82) — `conta_como_dado: false`. Ver `tentativas/ensaio_fase_b_real/IDENTIDADE.json`. |
 | `tentativas/ensaio_fase_b_real_v2/` | Logs da segunda tentativa real da Fase B — backend provado (12/12, 0 falhas), parou na prova de captura (Decisões 81/87/88/89/90) — `conta_como_dado: false`, nunca um dos 7 critérios oficiais. Ver `tentativas/ensaio_fase_b_real_v2/IDENTIDADE.json`. |
+| `dados_oficiais/validacao-local-decisao-91/` | Validação local REAL (6 conexões mTLS reais, fluxo de negócio completo) do mecanismo corrigido pela Decisão 91, antes de qualquer tentativa real na AWS. Ver `dados_oficiais/validacao-local-decisao-91/IDENTIDADE.json`. |
+| `tentativas/ensaio_fase_b_real_v3/` | Logs da terceira tentativa real da Fase B — mecanismo da Decisão 91 provado perfeito contra rede real nos 4 perfis, parou em `certificate_bytes`/`CERTIFICATE_BASELINE` (Decisão 92) — `conta_como_dado: false`. Ver `tentativas/ensaio_fase_b_real_v3/IDENTIDADE.json`. |
 
 ## Convenção
 

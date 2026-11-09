@@ -156,7 +156,7 @@ python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-ope
 
 ---
 
-## Passo 8 — `deliver_images.py`: as 4 imagens pinadas **[OPERADOR → CONTROLE]**
+## Passo 8 — `deliver_images.py`: as 4 imagens pinadas (gateway/proxy/pqc-signer/measure) **[OPERADOR → CONTROLE]**
 
 ```
 python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador>
@@ -165,6 +165,24 @@ python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-ope
 **Critério de abortar:** qualquer `RuntimeError`.
 
 **Não entregue aqui, de propósito (Decisão 57):** `mockopin-v9-negtest` — não é usada pelo piloto real (só pelo ensaio `rehearsal_handshake.sh`), nunca necessária neste roteiro.
+
+## Passo 8b — `deliver_images.py --images`: as 3 imagens do backend de negócio (Decisão 83) **[OPERADOR → CONTROLE]**
+
+**Achado real (Decisão 91, ao executar este roteiro de novo):** o default
+de `--images` em `deliver_images.py` é `ALL_IMAGE_KEYS` (gateway/proxy/
+pqc-signer/measure — nome enganoso, nunca incluiu o backend), nunca
+`BACKEND_IMAGE_KEYS` (auth/mongo_seed/mockapi, Decisão 83/87) — o Passo
+8 sozinho NUNCA entrega o backend. Sem este passo, `start_block`
+(chamado já no Passo 10) quebra com `RuntimeError: _deliver_image(auth,
+...): .../auth.tar nao encontrado no controle`.
+
+```
+python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
+  --images auth mongo_seed mockapi
+```
+**Saída esperada:** JSON com `disk_check`, `images` (3 entradas — auth/
+mongo_seed/mockapi, `sha256_ok: true`).
+**Critério de abortar:** qualquer `RuntimeError`.
 
 ---
 
