@@ -31,6 +31,65 @@ def test_cardinality_is_exactly_60_and_12(tmp_path):
     assert len(capturas) == 12
 
 
+def test_run_pilot_default_nunca_gera_arquivo_de_aquecimento(tmp_path):
+    """n_warmup_per_profile=0 (default) tem que ser byte a byte igual
+    a antes do protocolo de aquecimento -- nenhum arquivo novo, nenhum
+    campo None inventado."""
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["n_warmup_per_profile"] == 0
+    assert manifest["total_aquecimentos"] == 0
+    assert manifest["aquecimento_log"] is None
+    assert manifest["aquecimento_calls_json"] is None
+    assert not (tmp_path / "piloto_aquecimento.log").exists()
+    assert not (tmp_path / "aquecimento_execucoes.json").exists()
+
+
+def test_run_pilot_aquecimento_roda_antes_das_execucoes_contadas_e_nunca_e_contado(tmp_path):
+    """Protocolo de 5 aquecimentos full-flow (decisao do Luciano, apos
+    a revisao final item A): roda de verdade (mesmo run_execution),
+    marcador PROPRIO, nunca soma a total_execucoes/expected_total."""
+    manifest = orch.run_pilot(
+        orch.LocalExecutor(), seed=1, out_dir=tmp_path,
+        routes=["L219"], profiles=["classico"], n_per_profile=2,
+        skip_dedicated_captures=True, n_warmup_per_profile=5,
+    )
+    # nunca conta pro total oficial.
+    assert manifest["total_execucoes"] == 2
+    assert manifest["expected_total"] == 2
+    assert manifest["n_warmup_per_profile"] == 5
+    assert manifest["total_aquecimentos"] == 5
+
+    aquecimentos = json.loads(Path(manifest["aquecimento_calls_json"]).read_text(encoding="utf-8"))
+    assert len(aquecimentos) == 5
+    assert [a["warmup"] for a in aquecimentos] == [1, 2, 3, 4, 5]
+    execucoes = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    assert len(execucoes) == 2  # nunca misturado com os aquecimentos
+
+    aquecimento_log = Path(manifest["aquecimento_log"]).read_text(encoding="utf-8")
+    assert "AQUECIMENTO INICIO" in aquecimento_log and "AQUECIMENTO FIM" in aquecimento_log
+    combined_log = Path(manifest["combined_log"]).read_text(encoding="utf-8")
+    assert "AQUECIMENTO" not in combined_log, "aquecimento nunca pode aparecer no log OFICIAL"
+
+    # o parser real do avaliador (_execucao_window) nunca pode
+    # reconhecer um marcador de aquecimento como se fosse uma execucao.
+    janela = ec._execucao_window(aquecimento_log, "classico", "L219", "aquecimento1")
+    assert janela is None, "o avaliador real nunca pode achar uma janela pra um marcador de aquecimento"
+
+
+def test_mutante_aquecimento_contado_no_total_e_pego(tmp_path):
+    """Mutante: soma os aquecimentos a execucoes_calls (comportamento
+    ERRADO) -- confirma que o total real (sem a soma) e o que o
+    codigo de verdade produz."""
+    manifest = orch.run_pilot(
+        orch.LocalExecutor(), seed=1, out_dir=tmp_path,
+        routes=["L219"], profiles=["classico"], n_per_profile=2,
+        skip_dedicated_captures=True, n_warmup_per_profile=5,
+    )
+    mutant_total = manifest["total_execucoes"] + manifest["total_aquecimentos"]
+    assert mutant_total == 7
+    assert mutant_total != manifest["total_execucoes"], "o mutante (soma) tem que divergir do real (nunca soma)"
+
+
 def test_run_pilot_grade_customizada_com_capturas_cobre_so_a_grade_pedida(tmp_path):
     """Achado real (encontrado e corrigido nesta rodada): o laco de
     capturas dedicadas usava PROFILES/ROUTES (globais do piloto,

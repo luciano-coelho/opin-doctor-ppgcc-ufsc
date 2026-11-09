@@ -116,6 +116,20 @@ def execucao_marker_fim(profile, route, run):
     return f"== EXECUCAO FIM perfil={profile} rota={route} run={run} =="
 
 
+# Protocolo de 5 aquecimentos full-flow por celula por janela (Decisao
+# do Luciano apos a revisao final, item A): marcador PROPRIO, nunca
+# "EXECUCAO INICIO/FIM" -- o parser de evaluate_criteria.py (`_execucao_
+# window`, regex sobre esses marcadores) so reconhece o segundo, entao
+# um aquecimento nunca e contado como execucao oficial so por existir
+# no mesmo combined log.
+def aquecimento_marker_inicio(profile, route, warmup):
+    return f"== AQUECIMENTO INICIO perfil={profile} rota={route} warmup={warmup} =="
+
+
+def aquecimento_marker_fim(profile, route, warmup):
+    return f"== AQUECIMENTO FIM perfil={profile} rota={route} warmup={warmup} =="
+
+
 def _connection_ok_line(sni="mtls", remote="10.0.0.1:443"):
     return f'gateway: PERFIL connection OK remoteAddr={remote} sni="{sni}"'
 
@@ -1465,7 +1479,7 @@ class SSHExecutor:
 
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
               routes: list[str] | None = None, profiles: list[str] | None = None,
-              skip_dedicated_captures: bool = False) -> dict:
+              skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0) -> dict:
     """Roda `n_per_profile` execucoes por bloco (perfis x rotas,
     default os 4x3 reais) + as 12 capturas dedicadas, escreve todos
     os artefatos no formato que `evaluate_criteria.py --aws-dir`
@@ -1492,7 +1506,24 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     a porta de fumaca (Decisao 48) e a validacao manual de bloco
     (Decisao 49) pulam essa parte de proposito, pra nao confundir
     "12 execucoes de fumaca" com "12 capturas do criterio 1", dois
-    "12" sem nenhuma relacao entre si."""
+    "12" sem nenhuma relacao entre si.
+
+    `n_warmup_per_profile` (Decisao do Luciano, protocolo de
+    aquecimento full-flow, apos a revisao final item A): K execucoes
+    REAIS e COMPLETAS (mesmo `run_execution`, nunca um handshake so --
+    isso ja e o `readiness_probe` acima) por bloco, ANTES do laco
+    contado, com marcador PROPRIO (`aquecimento_marker_inicio/fim`,
+    NUNCA `execucao_marker_inicio/fim`) -- `evaluate_criteria.py` so
+    reconhece o segundo marcador (`_execucao_window`), entao um
+    aquecimento nunca e contado como execucao oficial so por existir
+    no log. Gravado em arquivos SEPARADOS (`piloto_aquecimento.log`/
+    `aquecimento_execucoes.json`, nunca misturado com `piloto_combined.
+    log`/`piloto_calls.json`/`criterio6_execucoes.json`) -- preservado
+    dentro do MESMO `out_dir` que `collect_artifacts.py` ja hasheia por
+    completo (evidencia intacta, sha256 coberto por construcao, nunca
+    um segundo sistema de verificacao paralelo). Default 0 -- piloto
+    e qualquer chamador que nunca passe isto continuam byte a byte
+    identicos a antes (nenhum arquivo novo escrito, loop nunca entra)."""
     routes = routes if routes is not None else ROUTES
     profiles = profiles if profiles is not None else PROFILES
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1504,6 +1535,8 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     execucoes_calls = []
     criterio6_rows = []
     route_orders = {}
+    aquecimento_log_lines = []
+    aquecimento_calls = []
 
     for route in routes:
         order = profile_block_order(route, rng, profiles=profiles)
@@ -1512,6 +1545,15 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
             combined_log_lines.append(f"== Perfil: {profile} ==")
             executor.start_block(profile, route)
             combined_log_lines.append(executor.readiness_probe(profile, route))
+            for warmup in range(1, n_warmup_per_profile + 1):
+                aquecimento_log_lines.append(aquecimento_marker_inicio(profile, route, warmup))
+                warmup_result = executor.run_execution(profile, route, run=f"aquecimento{warmup}")
+                aquecimento_log_lines.extend(warmup_result["gateway_log_lines"])
+                aquecimento_log_lines.append(aquecimento_marker_fim(profile, route, warmup))
+                aquecimento_calls.append({
+                    "profile": profile, "route": route, "warmup": warmup,
+                    "insurance": warmup_result["insurance"], "person": warmup_result["person"],
+                })
             for run in range(1, n_per_profile + 1):
                 combined_log_lines.append(execucao_marker_inicio(profile, route, run))
                 result = executor.run_execution(profile, route, run)
@@ -1554,6 +1596,16 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     criterio6_path = out_dir / "criterio6_execucoes.json"
     criterio6_path.write_text(json.dumps(criterio6_rows, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    # Protocolo de aquecimento (ver docstring acima): arquivos SEMPRE
+    # criados quando n_warmup_per_profile>0, nunca quando e 0 (sem
+    # arquivo novo no caso default -- out_dir fica identico a antes).
+    aquecimento_log_path = aquecimento_calls_path = None
+    if n_warmup_per_profile > 0:
+        aquecimento_log_path = out_dir / "piloto_aquecimento.log"
+        aquecimento_log_path.write_text("\n".join(aquecimento_log_lines) + "\n", encoding="utf-8")
+        aquecimento_calls_path = out_dir / "aquecimento_execucoes.json"
+        aquecimento_calls_path.write_text(json.dumps(aquecimento_calls, indent=2, ensure_ascii=False), encoding="utf-8")
+
     expected_total = len(profiles) * len(routes) * n_per_profile
     manifest = {
         "seed": seed, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1563,6 +1615,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         "total_capturas": len(profiles) * len(routes),
         "combined_log": str(combined_log_path), "calls_json": str(calls_path),
         "criterio6_json": str(criterio6_path), "capturas_dir": str(capturas_dir),
+        # Informativo SO -- nunca somado a total_execucoes/expected_total
+        # acima (Decisao do Luciano: aquecimento nunca conta pro total
+        # oficial, so preservado como evidencia).
+        "n_warmup_per_profile": n_warmup_per_profile,
+        "total_aquecimentos": len(aquecimento_calls),
+        "aquecimento_log": str(aquecimento_log_path) if aquecimento_log_path else None,
+        "aquecimento_calls_json": str(aquecimento_calls_path) if aquecimento_calls_path else None,
         # Decisao 54, item 1: verificacao scp+sha256sum -c do binario
         # do gateway, uma entrada por bloco (start_block) -- lista
         # vazia pro LocalExecutor (nunca tem binario real pra
