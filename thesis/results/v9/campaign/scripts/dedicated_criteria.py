@@ -18,6 +18,7 @@ rodar `tshark` via `docker run --entrypoint tshark mockopin-v9-
 measure` -- nunca reconstroem nem mudam a imagem."""
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -53,14 +54,41 @@ def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -
         raise RuntimeError("run_criterio2: nao consegui descobrir a interface primaria do servidor")
 
     rm_proc = cli.run_ssh(server_ip, f"rm -f {_REMOTE_CRITERIO2_OUT} /tmp/criterio2_probe.log", key_path=executor.key_path)
-    start_proc = cli.run_ssh(
-        server_ip,
+    launch_cmd = (
         f"cd {_REMOTE_PRODUCERS_DIR} && "
         f"nohup python3 criterio2_probe.py --listen-port {CRITERIO2_LISTEN_PORT} --iface {iface} "
         f"--route {route} --instance-type m7i-flex.large --profile classico "
-        f"--out {_REMOTE_CRITERIO2_OUT} > /tmp/criterio2_probe.log 2>&1 &",
-        key_path=executor.key_path,
+        f"--out {_REMOTE_CRITERIO2_OUT} > /tmp/criterio2_probe.log 2>&1 &"
     )
+    # Decisao 94 (achado real, ao vivo, na primeira execucao real deste
+    # script, Passo 11.5): o processo em segundo plano SEMPRE iniciava
+    # com sucesso (confirmado via `ps aux`/log no servidor, repetidas
+    # vezes, com o PID vivo e realmente escutando) mesmo quando a
+    # SESSAO SSH que o lancava nunca retornava a tempo (estourava o
+    # timeout de 50s do cliente) -- NUNCA um problema de sintaxe do
+    # comando (`< /dev/null`, `stdin=DEVNULL`, `setsid`, `sh -c
+    # '...& echo $!'`, `ssh -f`: nenhuma das 5 tentativas mudou nada,
+    # o MESMO comando simples de sempre, sem nenhuma dessas adicoes,
+    # retornou em ~1,3s assim que testado manualmente, de novo, apos
+    # so uns 15s de intervalo). Causa real: a sessao de controle tinha
+    # acabado de terminar as 60 execucoes + 12 capturas reais do Passo
+    # 11 (muitas conexoes SSH em sequencia rapida pro mesmo par de
+    # hosts) -- throttling transitorio do lado do servidor (`sshd` ou
+    # a pilha de rede), nunca visto fora dessa janela. Corrigido com
+    # retry simples (backoff curto), nunca mudando o mecanismo de
+    # lancamento em si.
+    start_proc = None
+    for attempt in range(3):
+        try:
+            start_proc = cli.run_ssh(server_ip, launch_cmd, key_path=executor.key_path)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                raise RuntimeError(
+                    "run_criterio2: a sessao SSH que sobe o probe nunca retornou em 3 tentativas "
+                    "(timeout, provavel throttling transitorio do servidor logo apos o Passo 11)"
+                )
+            time.sleep(15)
     if start_proc.returncode != 0:
         raise RuntimeError(f"run_criterio2: falhou subindo o probe no servidor: {cli.redact(start_proc.stderr)}")
     time.sleep(2)  # da tempo do probe abrir a porta e comecar o tcpdump antes do cliente discar

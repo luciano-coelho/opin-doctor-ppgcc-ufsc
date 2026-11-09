@@ -2,6 +2,7 @@
 liga os produtores dos criterios 2/3/7 ao pipeline real. SSH/SCP
 stubados via cli._run, nenhuma chamada real."""
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -122,6 +123,80 @@ def test_run_criterio2_sobe_probe_dispara_cliente_e_traz_resultado(tmp_path, mon
     # a conexao de teste tem que vir do CLIENTE da rota, nunca do servidor.
     client_calls = [c for c in flat if "203.0.113.70" in c and "/dev/tcp/" in c]
     assert client_calls, flat
+
+
+# --- Decisao 94 (achado real, ao vivo, Passo 11.5): a sessao SSH que
+# sobe o probe pode nao retornar a tempo (throttling transitorio do
+# servidor logo apos as 60 execucoes do Passo 11, nunca um problema
+# de sintaxe de comando -- confirmado manualmente, o MESMO comando
+# simples de sempre funcionou em <2s depois de so uns 15s de espera).
+# `run_criterio2` tenta de novo (3x, 15s de intervalo) em vez de
+# propagar o `TimeoutExpired` cru.
+
+def _fake_run_criterio2_timeout_then_ok(calls, n_timeouts, server_ready_after=1):
+    state = {"checks": 0, "launch_attempts": 0}
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "ip -o -4 route" in remote_cmd:
+            return FakeProc(stdout="eth0\n")
+        if "criterio2_probe.py --listen-port" in remote_cmd:
+            state["launch_attempts"] += 1
+            if state["launch_attempts"] <= n_timeouts:
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+            return FakeProc()
+        if "test -f /tmp/criterio2_initcwnd.json" in remote_cmd:
+            state["checks"] += 1
+            if state["checks"] >= server_ready_after:
+                return FakeProc(stdout="FOUND\n")
+            return FakeProc(stdout="")
+        return FakeProc()
+
+    return fake_run
+
+
+def test_run_criterio2_tenta_de_novo_se_a_sessao_de_lancamento_nao_retorna(tmp_path, monkeypatch):
+    monkeypatch.setattr(dc.time, "sleep", lambda s: None)
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_criterio2_timeout_then_ok(calls, n_timeouts=2))
+    monkeypatch.setattr(cli, "run_scp", lambda src, dst, **k: (
+        Path(dst).write_text(json.dumps({"bytes_sent_total": 71680, "mss_bytes": 1448}), encoding="utf-8"),
+        FakeProc(),
+    )[1])
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    result = dc.run_criterio2(executor, tmp_path / "out", route="L219")
+    assert result["bytes_sent_total"] == 71680
+
+
+def test_run_criterio2_falha_alto_se_a_sessao_de_lancamento_nunca_retorna(tmp_path, monkeypatch):
+    monkeypatch.setattr(dc.time, "sleep", lambda s: None)
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_criterio2_timeout_then_ok(calls, n_timeouts=99))
+    with pytest.raises(RuntimeError, match="nunca retornou"):
+        dc.run_criterio2(executor=orch.SSHExecutor(_inventory(), key_path="/fake/key"),
+                          out_dir=tmp_path / "out", route="L219")
+
+
+def test_mutante_run_criterio2_sem_retry_propaga_o_timeout_cru(tmp_path, monkeypatch):
+    """Mutacao = o comportamento ANTES desta Decisao: sem o laco de
+    retry, a mesma situacao (1 timeout, depois sucesso) faz o script
+    inteiro quebrar com `TimeoutExpired` cru -- prova que o teste
+    'tenta de novo' acima de fato depende do retry, nunca passa por
+    acidente."""
+    calls = []
+    fake_run = _fake_run_criterio2_timeout_then_ok(calls, n_timeouts=1)
+
+    def mutant_run_criterio2_sem_retry(executor, out_dir, route="L219"):
+        server_ip = executor._server_ip()
+        cli.run_ssh(server_ip, "ip -o -4 route show to default | awk '{print $5}' | head -1", key_path=executor.key_path)
+        return cli.run_ssh(server_ip, "cd producers && nohup python3 criterio2_probe.py --listen-port 9876 &",
+                            key_path=executor.key_path)  # mutante: nunca tenta de novo
+
+    import unittest.mock as mock
+    with mock.patch.object(cli, "_run", fake_run):
+        with pytest.raises(subprocess.TimeoutExpired):
+            mutant_run_criterio2_sem_retry(orch.SSHExecutor(_inventory(), key_path="/fake/key"), tmp_path / "out")
 
 
 def test_run_criterio2_falha_alto_se_arquivo_nunca_aparece(tmp_path, monkeypatch):

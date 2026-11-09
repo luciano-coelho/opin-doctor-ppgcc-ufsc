@@ -37,6 +37,14 @@ verdade -- este script PODE ser testado localmente (mecanica
 correta, JSON valido), mas o NUMERO de segmentos resultante so e
 significativo contra uma rota real do piloto, com RTT > 0.
 """
+# Decisao 94 (achado real, ao vivo, na primeira execucao real deste
+# script, Passo 11.5): o SERVIDOR roda Python 3.9 (mesma razao da
+# Decisao 65 em orchestrator.py) -- `int | None` (PEP 604) so existe
+# em runtime a partir do 3.10 sem isto. Adia a avaliacao de anotacao
+# pra string, zero mudanca de comportamento (nada aqui inspeciona
+# anotacao em runtime).
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -53,8 +61,18 @@ def run(cmd, **kw):
 
 
 def start_tcpdump(iface, pcap_path, port):
+    # Decisao 94 (achado real, ao vivo, Passo 11.5): sem `sudo`,
+    # `tcpdump` falha com "You don't have permission to perform this
+    # capture on that device (CAP_NET_RAW may be required)" -- SILENCIOSO
+    # (Popen nunca verifica o retorno), nunca escreve pcap nenhum, e
+    # TODO o resto do script segue adiante com dados ausentes (mss_
+    # bytes/bytes_before_ack = None) em vez de falhar alto. Mesma
+    # correcao que `dedicated_capture`/`_launch_gateway`
+    # (orchestrator.py) ja usam pro tcpdump real do criterio 1 --
+    # nunca um privilegio novo, so o mesmo `sudo` sem senha que o
+    # `ec2-user` real ja tem nesta AMI.
     proc = subprocess.Popen(
-        ["tcpdump", "-i", iface, "-s", "0", "-w", pcap_path, f"tcp port {port}"],
+        ["sudo", "tcpdump", "-i", iface, "-s", "0", "-w", pcap_path, f"tcp port {port}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(1)  # da tempo do tcpdump abrir a interface antes do accept
@@ -79,7 +97,18 @@ def ss_ti_snapshot(port) -> dict:
 
 
 def ethtool_offloads(iface) -> dict:
-    out = run(["ethtool", "-k", iface]).stdout
+    """Decisao 37: registrado SEMPRE, mas nunca decide o resultado do
+    criterio 2 (so diagnostico de TSO/GSO/GRO). Decisao 94 (achado
+    real, ao vivo, Passo 11.5): a AMI real (Amazon Linux 2023) nao tem
+    `ethtool` instalado -- um `FileNotFoundError` aqui derrubava o
+    script INTEIRO antes de sequer escrever o resultado do criterio 2,
+    exatamente a classe de erro que a Decisao 37 ja disse que este
+    campo nunca deveria causar. Fail-closed-pro-diagnostico-em-si
+    (nunca None silencioso): "indisponivel" explicito, nunca inventado."""
+    try:
+        out = run(["ethtool", "-k", iface]).stdout
+    except FileNotFoundError:
+        return {"tso": "indisponivel", "gso": "indisponivel", "gro": "indisponivel"}
     offloads = {}
     for key in ("tcp-segmentation-offload", "generic-segmentation-offload", "generic-receive-offload"):
         m = re.search(rf"^{re.escape(key)}:\s*(on|off)", out, re.M)
@@ -128,13 +157,34 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
 
     # Primeiro ACK do CLIENTE (porta de destino = porta do servidor,
     # flag ACK, sem SYN) e o numero de ACK que ele carrega.
+    #
+    # Decisao 94 (achado real, ao vivo, Passo 11.5, confirmado por
+    # conteudo contra o pcap real): o PRIMEIRO ACK do cliente apos o
+    # handshake e o que FECHA o 3-way handshake (ack_num == first_seq,
+    # reconhece so o SYN, nunca nenhum byte de dado -- o servidor
+    # normalmente nem comecou a mandar nada ainda) -- usar ESSE
+    # (`ack_out[0]`, o bug original) faz `sent_before_ack` ser SEMPRE
+    # 0 por construcao, nunca refletindo quantos bytes o servidor
+    # realmente mandou antes do primeiro ACK relevante. A docstring
+    # desta funcao ja dizia o certo ("ack_num > seq inicial dos dados
+    # do servidor") -- o codigo nunca implementava essa condicao.
+    # Corrigido: pula qualquer ACK que reconheca <= first_seq (so o
+    # handshake), usa o primeiro que de fato reconhece algum byte de
+    # dado real.
     ack_out = run(
         _tshark_argv(pcap_path) + ["-Y", f"tcp.dstport=={port} && tcp.flags.ack==1 && tcp.flags.syn==0",
                                     "-T", "fields", "-e", "tcp.ack"],
     ).stdout.strip().splitlines()
-    if not ack_out:
+    first_client_ack = None
+    for line in ack_out:
+        if not line:
+            continue
+        candidate = int(line)
+        if candidate > first_seq:
+            first_client_ack = candidate
+            break
+    if first_client_ack is None:
         return mss, None
-    first_client_ack = int(ack_out[0])
 
     # Bytes do servidor cujo seq_end <= o que esse primeiro ACK ja
     # reconhece foram mandados ANTES desse ACK chegar -- soma deles,

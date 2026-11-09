@@ -26,8 +26,16 @@ __all__ = ["redact", "run_aws", "run_aws_json", "run_ssh", "run_scp", "run_terra
 def _run(argv, timeout=None):
     """Unico lugar que de fato chama subprocess.run -- os testes
     monkeypatcham ISTO (cli._run), nunca o subprocess do Python em
-    si, pra isolar completamente qualquer chamada real a aws/ssh/scp."""
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    si, pra isolar completamente qualquer chamada real a aws/ssh/scp.
+
+    `stdin=DEVNULL` explicito -- higiene defensiva (nenhum chamador
+    deste modulo jamais precisa de stdin herdado; `pki_relay.py`
+    entrega a chave via arquivo temporario + `scp`, nunca via stdin
+    de `cli.run_ssh`), nao a causa nem a correcao de nenhum achado
+    especifico (ver Decisao 94, `dedicated_criteria.run_criterio2`,
+    pra um hang real de SSH cuja causa era outra -- throttling
+    transitorio do servidor, nunca sintaxe de comando)."""
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
 
 
 def run_aws(args, profile=None, region=None, timeout=30):
