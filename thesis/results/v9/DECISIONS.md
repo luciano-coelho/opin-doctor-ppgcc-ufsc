@@ -9789,3 +9789,178 @@ Fase A e a tentativa anterior da Fase B).
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/DECISIONS.md`
 (esta Decisao), evidencia em `thesis/results/v9/piloto/
 ensaio_fase_b_real_v2/`.
+
+## 91. Emenda -- bug de PARSING do mecanismo de medicao do criterio 1 (NUNCA mudanca do criterio, dos limiares ou dos baselines), resposta as 3 decisoes pendentes da Decisao 90
+
+**Item 1 do pedido do Luciano -- confirmado por dados, sem AWS, antes de qualquer correcao:**
+
+1. **Causa da fragmentacao:** `_message_sizes_for_profile` classificava
+   cada mensagem pela COOCORRENCIA de tipos na mesma linha do tshark
+   ("servidor" = linha com ServerHello(2) E Certificate(11) juntos),
+   nunca por QUEM REALMENTE MANDOU a mensagem. Sob rede real, o
+   flight do servidor as vezes chega em DUAS escritas de socket
+   separadas (CertificateVerify+Finished numa linha sem 2/11) -- o
+   mesmo mecanismo TLS de sempre, so com um agrupamento de pacotes
+   diferente do loopback (RTT/janela de congestionamento reais
+   nunca presentes em loopback). A heuristica antiga simplesmente
+   nunca testou essa possibilidade.
+2. **Hipotese dos "6 grupos repetidos" por captura:** CONFIRMADA, e
+   nao e uma suposicao nova -- e um invariante DESTE PROJETO,
+   documentado em `thesis/scripts/opin_flow.py`
+   (`get_local_leg_cert_paths`, Decisao do v7 de 2026-09-14): a
+   execucao completa do fluxo de negocio (`opin_flow.py`) abre
+   exatamente 6 conexoes mTLS client-facing reais por execucao
+   ("restores exactly 6 'upstream handshake complete' lines per
+   full flow", confirmado contra dados da v7 de 2026-09-12). Os 6
+   grupos repetidos, byte a byte identicos, nos logs reais da
+   Decisao 90 (`smoke_capture_proof_*.log`, 1 `dedicated_capture` =
+   1 execucao completa de `campaign_client_runner.py`) SAO essas 6
+   conexoes -- nunca o mesmo handshake relatado em janelas
+   diferentes pelo tshark.
+   - **Limitacao honesta:** o .pcap BRUTO desta tentativa nunca foi
+     puxado do host efemero pro operador antes do teardown da
+     Decisao 90 -- so a secao "tamanho POR MENSAGEM" (texto JA
+     derivado pelo proprio `dedicated_capture`) sobreviveu, arquivada
+     agora em `piloto/tentativas/ensaio_fase_b_real_v2/` (`conta_como_
+     dado: false`, pedido do Luciano). Nao foi possivel contar `tcp.
+     stream` no pcap bruto desta tentativa especifica porque ele nunca
+     existiu localmente -- a confirmacao do item 2 acima vem do CODIGO
+     do projeto (fonte primaria, nunca uma suposicao) e, abaixo, de
+     uma captura NOVA, local, com pcap bruto real. Corrigido daqui pra
+     frente: a proxima tentativa real arquiva o pcap bruto tambem (ver
+     item 4).
+
+**Item 2 do pedido do Luciano -- correcao de `_message_sizes_for_profile`, restricoes (a)-(f):**
+
+- **(a) Limiares/baselines intocados:** `CERTIFICATE_BASELINE`,
+  `CLIENTHELLO_BASELINE`, `HANDSHAKE_MESSAGE_BASELINE` e as
+  tolerancias (0B/±4B/0B) -- nenhuma linha alterada.
+- **(b) Mensagens TLS remontadas por conexao:** nova funcao
+  `_message_sizes_stream_aware` (evaluate_criteria.py) classifica
+  cada mensagem pelo `tcp.srcport` de quem mandou (o srcport do
+  ClientHello = cliente; qualquer outro = servidor), agrupando por
+  `tcp.stream` -- mensagens do MESMO lado em linhas/frames diferentes
+  do MESMO stream sao mescladas antes de montar o dict por tipo, a
+  fragmentacao deixa de importar. `dedicated_capture` (orchestrator.py)
+  agora liga desegmentacao de TCP/TLS EXPLICITAMENTE (`-o tcp.desegment_
+  tcp_streams/tls.desegment_ssl_records/tls.desegment_ssl_application_
+  data: TRUE`) e extrai `tcp.stream`/`tcp.srcport`/`tcp.len` alem de
+  `tls.handshake.type/length` (formato novo: 7 colunas, `frame, stream,
+  srcport, tcp.len, tipos, tamanhos, sni` -- o 7o campo, SNI do
+  ClientHello, e um achado ADICIONAL, ver abaixo). O caminho LEGADO (3
+  colunas, measure.sh local/fixture sintetico, nunca fragmentado em
+  loopback) fica intocado, byte a byte, pra regressao (item e).
+- **(c) 6 conexoes, divergencia relatada:** cada captura agrupa os
+  streams validos (ClientHello encontrado) em ordem cronologica; o
+  primeiro e o valor medido oficial, os outros tem que ser IDENTICOS
+  -- qualquer divergencia entra em `stream_divergences` (nunca
+  ignorada) e reprova `ok`.
+- **(d) Consistencia obrigatoria:** bytes brutos TCP por direcao (soma
+  de `tcp.len` do inicio do stream ate o ULTIMO frame com mensagem de
+  handshake) tem que fechar EXATAMENTE com `handshakeBytesIn`/
+  `handshakeBytesOut` que o GATEWAY REAL logou pra essa conexao
+  (`countingConn`, `business_server.go`) -- extraido agora por
+  `_handshake_bytes_all` (orchestrator.py, janela de tempo do
+  `_gateway_logs` em volta do disparo da captura) e comparado por
+  `_parse_gateway_handshake_bytes` (evaluate_criteria.py). Sem fechar
+  -- ou sem a secao (fail-closed) -- o stream e REPROVADO, nunca passa.
+  **Confirmado empiricamente, nao so por formula:** contra as 4
+  capturas reais de referencia (pqc/hibrido-v8/hibrido-and/classico,
+  `local_validation_criterio1_v2/`, Decisao 84) e contra uma captura
+  NOVA, local, de 6 conexoes reais (abaixo), os bytes brutos TCP
+  fecham byte a byte com o log do gateway nos 4+6 casos.
+- **(e) Regressao:** `test_evaluate_criteria.py` (NOVO, 13 testes)
+  confirma que o caminho legado e o novo produzem resultado IDENTICO
+  na captura de referencia do classico (unica das 4 cuja captura de
+  referencia nunca fragmenta); documenta, honestamente, que pqc/
+  hibrido-v8/hibrido-and JA fragmentavam nessas mesmas capturas de
+  referencia LOCAIS (nunca precisou de AWS pra acontecer) e que o
+  caminho legado JA errava pra elas (certificate_bytes/ServerHello/
+  CertificateVerify_servidor/Finished_servidor = None) -- o caminho
+  novo acerta as 3. Fixtures sinteticos cobrem: flight fragmentado em
+  2 linhas: mutante do formato legado contra a MESMA fragmentacao
+  (cego, confirma o bug real); 6 streams identicos vs. mutante com a
+  6a conexao divergente; consistencia fechando vs. mutante com
+  handshakeBytesIn/Out adulterado; secao de consistencia ausente
+  (fail-closed); stream sem ClientHello (fail-closed).
+- **(f) Nunca ajustar pra passar:** teste dedicado
+  (`test_item_f_totais_fecham_mas_mensagem_individual_diverge_
+  continua_fail`) confirma que, mesmo com (c)/(d) OK, uma mensagem
+  individual fora do baseline continua FAIL -- a correcao NUNCA
+  afrouxa o criterio 1 oficial.
+
+**Achado ADICIONAL, ao validar localmente (item 4 do pedido, "rode
+localmente... pra confirmar 4/4 perfis" ANTES de subir a frota):**
+subindo o stack real localmente (backend via `docker compose`, gateway
+`mockopin-v9-gateway`, proxy+pqc-signer via `opin_flow.start_tls_kem_
+proxy`/`start_pqc_signer_service`) e rodando UMA execucao real e
+completa do fluxo de negocio (`campaign_client_runner.py`, perfil
+classico, `call_count: 44`) com tcpdump+tshark capturando a interface
+primaria do gateway (mesmo padrao de `capture_one_profile.sh`, Decisao
+84, mas com o fluxo de negocio real no lugar do `negtest` de 1
+conexao): a captura real mostrou **exatamente 6 conexoes `sni="mtls"`
+(client-facing, confirma o item 2 acima com dado real) MAIS 7 conexoes
+do carve-out interno de auth (`sni="matls-api.local"`, Decisao
+17/18/36, ja excluido da contagem do criterio 4) -- as duas atravessam
+a MESMA porta 443/interface capturada.** Sem um filtro, essas 7
+conexoes contaminariam `n_streams`/`stream_divergences` com uma
+negociacao TLS completamente diferente (CurveP256, outro certificado).
+Corrigido ANTES de qualquer tentativa real: `dedicated_capture` agora
+extrai tambem `tls.handshake.extensions_server_name` (SNI do
+ClientHello, 7a coluna); `_message_sizes_stream_aware` exclui qualquer
+stream cujo SNI do ClientHello seja diferente de `"mtls"`, reportado em
+`ignored_streams` (nunca um erro, nunca uma divergencia -- so um
+carve-out conhecido, fora do escopo dos "6"). As 6 conexoes `mtls`
+reais desta captura foram byte a byte identicas entre si
+(`stream_divergences: []`) e fecharam exatamente contra
+`handshakeBytesIn=1513`/`handshakeBytesOut=1640` do gateway real nas 6
+(`consistency`, 6/6 `ok: true`) -- `certificate_ok: false` so pelo
+mesmo motivo JA documentado (Decisao 28/29, SAN com 2 IPs nesta
+implantacao local, +14B sobre o baseline, em TODOS os 4 perfis,
+inclusive esta captura). Evidencia (texto derivado, nunca o .pcap/
+keylog brutos) em `thesis/results/v9/piloto/dados_oficiais/
+validacao-local-decisao-91/`.
+
+**Limitacao honesta desta validacao local:** so o classico rodou o
+fluxo de negocio REAL completo -- pqc/hibrido-v8/hibrido-and falharam
+no proprio Python LOCAL deste operador com `ValueError: Unknown key
+type: 2.16.840.1.101.3.4.3.18` (assinatura JWT com certificado PQC/
+ML-DSA via `pyjwt`/`cryptography` de prateleira), a MESMA classe de
+limitacao que o projeto JA documenta (`opin_flow.get_local_leg_cert_
+paths`) e a razao pela qual a Decisao 84 usa `negtest -scenario
+matrix` (1 conexao so) em vez do fluxo de negocio real pra validar
+esses 3 perfis localmente -- nunca um bug desta Emenda, nunca
+corrigido aqui (fora de escopo: e sobre assinatura de JWT, nao sobre
+tamanho de mensagem TLS). A logica de classificacao/consistencia em si
+nao tem NENHUM ramo especifico de perfil -- e identica pra qualquer
+perfil -- e ja foi confirmada byte a byte contra capturas reais de
+pqc/hibrido-v8/hibrido-and (1 conexao cada, Decisao 84) nos testes
+automatizados.
+
+**Testes:** `test_evaluate_criteria.py` (NOVO, 13 testes, regressao +
+mutantes) + 2 testes/fixtures de `test_orchestrator.py` atualizados
+pro formato novo (`_TSHARK_FAKE_OUTPUT`, `test_dedicated_capture_
+extrai_tamanhos_que_o_avaliador_aceita`) -- 218 testes no total, todos
+verdes.
+
+**Organizacao pedida (item 1):** `piloto/ensaio_fase_b_real/` e
+`piloto/ensaio_fase_b_real_v2/` movidos pra `piloto/tentativas/`
+(`git mv`, historia preservada), cada `IDENTIDADE.json` com
+`conta_como_dado: false` explicito -- evidencia de tentativas PARADAS,
+nunca um dos 7 criterios oficiais.
+
+**Decisao:** com a causa confirmada por dados, a correcao restrita a
+parsing (nunca ao criterio), a regressao e os mutantes verdes, e a
+confirmacao local (4/4 perfis -- 1 por fluxo de negocio real + 3 por
+captura de referencia de 1 conexao, Decisao 84), a suite roda verde e a
+Fase B pode ser executada de novo (item 4 do pedido), seguindo as
+paradas do item 7 do prompt original.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/integration/
+evaluate_criteria.py`, `thesis/results/v9/campaign/scripts/
+orchestrator.py`, `thesis/results/v9/integration/measure/measure.sh`,
+`thesis/results/v9/campaign/tests/test_evaluate_criteria.py` (novo),
+`thesis/results/v9/campaign/tests/test_orchestrator.py`,
+`thesis/results/v9/piloto/README.md`, `thesis/results/v9/piloto/
+tentativas/` (reorganizacao), `thesis/results/v9/piloto/dados_oficiais/
+validacao-local-decisao-91/` (evidencia nova), esta Decisao.

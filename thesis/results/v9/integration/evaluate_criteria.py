@@ -297,52 +297,15 @@ def _rtt_ok(route: str, measured_ms: float) -> bool:
     return lo <= measured_ms <= hi
 
 
-def _message_sizes_for_profile(block: str, profile: str) -> dict:
-    """Extrai e confere os tamanhos por mensagem de UM bloco de log (um
-    perfil, uma captura) -- fatorado pra ser chamado tanto no modo
-    local (um log so, varios blocos '== Perfil:') quanto no modo
-    piloto (Decisao 40, item B.7 -- 12 arquivos de captura separados,
-    um por perfil x rota, cada um com exatamente este formato)."""
-    msg_section = re.search(r"tamanho POR MENSAGEM.*?\n(.*?)(?:\n==|\Z)", block, re.S)
-    total_cert_bytes = None
-    clienthello_bytes = None
-    other = {}
-    if msg_section:
-        for line in msg_section.group(1).splitlines():
-            cols = line.split("\t")
-            if len(cols) < 3:
-                continue
-            types = [t.strip() for t in cols[1].split(",")]
-            lengths = cols[2].split(",")
-            per_type = {t: int(l) + 4 for t, l in zip(types, lengths)}
-            # Both the server's AND the client's flight contain a
-            # Certificate message (type 11) -- summing every "11" found
-            # anywhere in the profile block double-counts them (found
-            # live: the first version of this reported ~12.4KB for
-            # Hibrido-v8 against an 8.5KB baseline, nearly 2x, exactly
-            # consistent with counting both). Only the frame that ALSO
-            # contains ServerHello (type 2) is the server's own flight.
-            if "2" in types and "11" in types:
-                total_cert_bytes = per_type["11"]
-                if "2" in per_type:
-                    other["ServerHello"] = per_type["2"]
-                if "8" in per_type:
-                    other["EncryptedExtensions"] = per_type["8"]
-                if "13" in per_type:
-                    other["CertificateRequest"] = per_type["13"]
-                if "15" in per_type:
-                    other["CertificateVerify_servidor"] = per_type["15"]
-                if "20" in per_type:
-                    other["Finished_servidor"] = per_type["20"]
-            elif "11" in types:
-                if "11" in per_type:
-                    other["Certificate_cliente"] = per_type["11"]
-                if "15" in per_type:
-                    other["CertificateVerify_cliente"] = per_type["15"]
-                if "20" in per_type:
-                    other["Finished_cliente"] = per_type["20"]
-            if types == ["1"]:
-                clienthello_bytes = per_type["1"]
+def _finalize_message_sizes(profile: str, total_cert_bytes, clienthello_bytes, other: dict, **extra) -> dict:
+    """Decisao 91 (Emenda -- bug de parsing do criterio 1, NUNCA mudanca
+    de criterio): fatorado da cauda comum de `_message_sizes_for_profile`
+    -- os limiares e a logica de pass/fail (0B ClientHello, +-4B
+    Certificate, 0B demais mensagens) sao EXATAMENTE os mesmos de
+    sempre (Decisao 20/28/29/30/31), venha o `total_cert_bytes`/
+    `clienthello_bytes`/`other` do caminho legado (uma linha == um
+    flight) ou do caminho consciente de stream/direcao (abaixo) --
+    nenhum limiar, baseline ou tolerancia foi tocado por esta Emenda."""
     cert_baseline = CERTIFICATE_BASELINE.get(profile)
     cert_ok = cert_baseline is not None and total_cert_bytes is not None and abs(total_cert_bytes - cert_baseline) <= CERTIFICATE_TOLERANCE_B
     ch_baseline = CLIENTHELLO_BASELINE.get(profile)
@@ -355,15 +318,300 @@ def _message_sizes_for_profile(block: str, profile: str) -> dict:
         ok = measured is not None and abs(measured - baseline) <= HANDSHAKE_MESSAGE_TOLERANCE_B
         other_all_ok = other_all_ok and ok
         other_rows[key] = {"bytes": measured, "baseline": baseline, "ok": ok}
-    return {
+    extra_ok = extra.pop("extra_ok", True)
+    result = {
         "profile": profile,
         "certificate_bytes": total_cert_bytes, "certificate_baseline": cert_baseline,
         "certificate_tolerance": CERTIFICATE_TOLERANCE_B, "certificate_ok": cert_ok,
         "clienthello_bytes": clienthello_bytes, "clienthello_baseline": ch_baseline,
         "clienthello_tolerance": CLIENTHELLO_TOLERANCE_B, "clienthello_ok": ch_ok,
         "other_messages": other_rows,
-        "ok": cert_ok and ch_ok and other_all_ok,
+        "ok": cert_ok and ch_ok and other_all_ok and extra_ok,
     }
+    result.update(extra)
+    return result
+
+
+def _message_sizes_legacy(raw_lines: list[str], profile: str) -> dict:
+    """Caminho ORIGINAL (de antes da Decisao 91), intocado por ela --
+    uma linha do tshark == um flight completo (nunca visto fragmentado
+    em loopback, achado da Decisao 90). Mantido byte a byte pra
+    reproduzir exatamente os resultados antigos nas capturas de
+    loopback de referencia (Decisao 91, item e de regressao) -- usado
+    quando o produtor nunca emitiu
+    as colunas stream/srcport/tcp.len (measure.sh local, T6, e o
+    fixture sintetico do LocalExecutor)."""
+    total_cert_bytes = None
+    clienthello_bytes = None
+    other = {}
+    for line in raw_lines:
+        cols = line.split("\t")
+        if len(cols) < 3:
+            continue
+        types = [t.strip() for t in cols[1].split(",")]
+        lengths = cols[2].split(",")
+        per_type = {t: int(l) + 4 for t, l in zip(types, lengths)}
+        # Both the server's AND the client's flight contain a
+        # Certificate message (type 11) -- summing every "11" found
+        # anywhere in the profile block double-counts them (found
+        # live: the first version of this reported ~12.4KB for
+        # Hibrido-v8 against an 8.5KB baseline, nearly 2x, exactly
+        # consistent with counting both). Only the frame that ALSO
+        # contains ServerHello (type 2) is the server's own flight.
+        if "2" in types and "11" in types:
+            total_cert_bytes = per_type["11"]
+            if "2" in per_type:
+                other["ServerHello"] = per_type["2"]
+            if "8" in per_type:
+                other["EncryptedExtensions"] = per_type["8"]
+            if "13" in per_type:
+                other["CertificateRequest"] = per_type["13"]
+            if "15" in per_type:
+                other["CertificateVerify_servidor"] = per_type["15"]
+            if "20" in per_type:
+                other["Finished_servidor"] = per_type["20"]
+        elif "11" in types:
+            if "11" in per_type:
+                other["Certificate_cliente"] = per_type["11"]
+            if "15" in per_type:
+                other["CertificateVerify_cliente"] = per_type["15"]
+            if "20" in per_type:
+                other["Finished_cliente"] = per_type["20"]
+        if types == ["1"]:
+            clienthello_bytes = per_type["1"]
+    return _finalize_message_sizes(profile, total_cert_bytes, clienthello_bytes, other, format="legacy")
+
+
+def _parse_gateway_handshake_bytes(block: str):
+    """Decisao 91, item (d): le a secao 'handshakeBytesIn/Out do
+    gateway' (emitida por `dedicated_capture`, uma linha por conexao
+    client-facing REAL, na mesma ordem cronologica que o gateway
+    logou) -- `None` se a secao nao existir neste bloco (formato
+    legado, que nunca tem nem precisa dela)."""
+    m = re.search(r"handshakeBytesIn/Out.*?\n(.*?)(?:\n==|\Z)", block, re.S)
+    if not m:
+        return None
+    pairs = []
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cols = line.split("\t")
+        if len(cols) != 2:
+            continue
+        try:
+            pairs.append((int(cols[0]), int(cols[1])))
+        except ValueError:
+            continue
+    return pairs
+
+
+def _message_sizes_stream_aware(block: str, raw_lines: list[str], profile: str) -> dict:
+    """Decisao 91 (Emenda ao mecanismo de medicao do criterio 1 -- NUNCA
+    ao criterio em si, ver `_finalize_message_sizes`): caminho novo,
+    usado quando o produtor (orchestrator.py `dedicated_capture`, ou
+    um fixture sintetico de teste) emite as colunas extras `stream`/
+    `srcport`/`tcp.len` -- classifica cada mensagem por QUEM MANDOU
+    (srcport == o do ClientHello => cliente, senao => servidor) em vez
+    de supor que servidor e cliente nunca dividem seu flight em mais
+    de uma linha/frame do tshark (suposicao que a Decisao 90 achou
+    falsa sob rede real: tshark reporta o
+    CertificateVerify+Finished do servidor numa linha SEPARADA da
+    ServerHello+EncryptedExtensions+CertificateRequest+Certificate sob
+    latencia/congestionamento real, nunca visto em loopback). Mensagens
+    do MESMO lado em linhas diferentes do MESMO stream sao MESCLADAS
+    antes de montar o dict por tipo -- a fragmentacao deixa de importar
+    pra classificacao.
+
+    (c) Cada captura real tem 6 conexoes mTLS verdadeiras por execucao
+    (opin_flow.py, `get_local_leg_cert_paths` -- N_mTLS=6, documentado
+    e confirmado contra v7 desde 2026-09-14): a PRIMEIRA (cronologica)
+    e o valor medido oficial; as outras 5 tem que ser IDENTICAS --
+    qualquer divergencia e um achado (`stream_divergences`), nunca
+    silenciosamente ignorado.
+
+    (d) Verificacao de consistencia OBRIGATORIA: os bytes brutos TCP de
+    cada stream (soma de tcp.len por direcao, do inicio do stream ate o
+    ULTIMO frame que carrega uma mensagem de handshake) tem que fechar
+    EXATAMENTE com `handshakeBytesIn`/`handshakeBytesOut` que o
+    GATEWAY REAL logou pra essa mesma conexao (`countingConn`,
+    business_server.go linha 90/116 -- conta bytes crus no socket, ANTES
+    de qualquer TLS, exatamente o que tcpdump tambem ve) -- confirmado
+    empiricamente contra uma captura local real antes desta Emenda
+    (classico: raw_in=1513==gateway handshakeBytesIn=1513,
+    raw_out=1640==handshakeBytesOut=1640, piloto/.../local_validation_
+    criterio1_v2/classico_gateway_log.txt). Qualquer stream que nao
+    fechar e REPROVADO -- nunca passa (`consistency`, dobra em `ok`)."""
+    rows = []
+    for line in raw_lines:
+        cols = line.split("\t")
+        if len(cols) < 7:
+            cols = cols + [""] * (7 - len(cols))
+        frame_s, stream, srcport, tcp_len_s, types_s, lengths_s, sni = cols[0], cols[1], cols[2], cols[3], cols[4], cols[5], cols[6]
+        if not frame_s or not stream or not srcport:
+            continue
+        try:
+            frame = int(frame_s)
+            tcp_len = int(tcp_len_s) if tcp_len_s else 0
+        except ValueError:
+            continue
+        types = [t.strip() for t in types_s.split(",")] if types_s else []
+        lengths = [int(x) for x in lengths_s.split(",")] if lengths_s else []
+        rows.append({"frame": frame, "stream": stream, "srcport": srcport, "tcp_len": tcp_len,
+                     "types": types, "lengths": lengths, "sni": sni})
+
+    streams: dict[str, list] = {}
+    for r in rows:
+        streams.setdefault(r["stream"], []).append(r)
+    stream_ids_in_order = sorted(streams.keys(), key=lambda s: min(rr["frame"] for rr in streams[s]))
+
+    stream_results = []
+    stream_errors = []
+    ignored_streams = []
+    for sid in stream_ids_in_order:
+        srows = sorted(streams[sid], key=lambda rr: rr["frame"])
+        client_srcport = None
+        client_hello_sni = ""
+        for r in srows:
+            if r["types"] == ["1"]:
+                client_srcport = r["srcport"]
+                client_hello_sni = r["sni"]
+                break
+        if client_srcport is None:
+            stream_errors.append({"stream": sid, "note": "ClientHello (type 1) nao encontrado neste stream -- direcao nao classificavel"})
+            continue
+        # Decisao 91 (achado ao validar localmente, item 4 do pedido:
+        # "rode localmente... pra confirmar 4/4 perfis", ANTES de
+        # qualquer nova tentativa real): o carve-out interno
+        # (`matls-api.local`, auth chamando de volta a RS -- Decisao
+        # 17/18/36, explicitamente excluido da contagem de criterio 4)
+        # tambem atravessa a MESMA porta 443/interface capturada por
+        # `dedicated_capture` quando a execucao real de negocio
+        # (opin_flow.py) o disparar -- confirmado ao vivo, localmente,
+        # contra o stack real (6 streams sni="mtls" + 7 streams
+        # sni="matls-api.local" na MESMA captura). Nunca um dos "6"
+        # client-facing -- excluido aqui pelo SNI real do ClientHello,
+        # nunca contado como erro nem como divergencia.
+        if client_hello_sni and client_hello_sni != "mtls":
+            ignored_streams.append({"stream": sid, "sni": client_hello_sni,
+                                     "note": "carve-out interno (SNI != \"mtls\") -- nunca uma das 6 conexoes client-facing"})
+            continue
+
+        server_per_type: dict = {}
+        client_per_type: dict = {}
+        clienthello_bytes = None
+        last_handshake_frame = None
+        for r in srows:
+            if not r["types"]:
+                continue
+            last_handshake_frame = r["frame"]
+            per_type_here = {t: l + 4 for t, l in zip(r["types"], r["lengths"])}
+            if r["types"] == ["1"]:
+                clienthello_bytes = per_type_here["1"]
+                continue
+            side = client_per_type if r["srcport"] == client_srcport else server_per_type
+            side.update(per_type_here)
+
+        other = {}
+        for t, name in (("2", "ServerHello"), ("8", "EncryptedExtensions"), ("13", "CertificateRequest"),
+                        ("15", "CertificateVerify_servidor"), ("20", "Finished_servidor")):
+            if t in server_per_type:
+                other[name] = server_per_type[t]
+        for t, name in (("11", "Certificate_cliente"), ("15", "CertificateVerify_cliente"), ("20", "Finished_cliente")):
+            if t in client_per_type:
+                other[name] = client_per_type[t]
+
+        raw_bytes = {"client": 0, "server": 0}
+        for r in srows:
+            if last_handshake_frame is not None and r["frame"] > last_handshake_frame:
+                continue
+            side_key = "client" if r["srcport"] == client_srcport else "server"
+            raw_bytes[side_key] += r["tcp_len"]
+
+        stream_results.append({
+            "stream": sid, "clienthello_bytes": clienthello_bytes,
+            "certificate_bytes": server_per_type.get("11"), "other_messages": other,
+            "raw_bytes": raw_bytes,
+        })
+
+    # (c) divergencia entre as 6 conexoes -- a primeira e o valor medido.
+    divergences = []
+    if stream_results:
+        rep = stream_results[0]
+        for s in stream_results[1:]:
+            if s["clienthello_bytes"] != rep["clienthello_bytes"]:
+                divergences.append({"stream": s["stream"], "field": "clienthello_bytes",
+                                     "representative": rep["clienthello_bytes"], "measured": s["clienthello_bytes"]})
+            if s["certificate_bytes"] != rep["certificate_bytes"]:
+                divergences.append({"stream": s["stream"], "field": "certificate_bytes",
+                                     "representative": rep["certificate_bytes"], "measured": s["certificate_bytes"]})
+            for key in set(rep["other_messages"]) | set(s["other_messages"]):
+                rep_v, meas_v = rep["other_messages"].get(key), s["other_messages"].get(key)
+                if rep_v != meas_v:
+                    divergences.append({"stream": s["stream"], "field": key, "representative": rep_v, "measured": meas_v})
+
+    # (d) consistencia obrigatoria contra handshakeBytesIn/Out do gateway real.
+    gw_pairs = _parse_gateway_handshake_bytes(block)
+    consistency = []
+    if gw_pairs is None:
+        consistency.append({"ok": False, "note": "secao 'handshakeBytesIn/Out do gateway' ausente -- "
+                                                   "consistencia (Decisao 91, item d) nao verificavel, FAIL-closed"})
+    else:
+        for idx, s in enumerate(stream_results):
+            if idx >= len(gw_pairs):
+                consistency.append({"stream": s["stream"], "ok": False,
+                                     "note": "sem linha correspondente de handshakeBytesIn/Out do gateway pra este stream"})
+                continue
+            gw_in, gw_out = gw_pairs[idx]
+            raw_in, raw_out = s["raw_bytes"]["client"], s["raw_bytes"]["server"]
+            consistency.append({
+                "stream": s["stream"], "raw_in": raw_in, "raw_out": raw_out,
+                "gateway_in": gw_in, "gateway_out": gw_out,
+                "ok": raw_in == gw_in and raw_out == gw_out,
+            })
+
+    rep = stream_results[0] if stream_results else None
+    extra_ok = (
+        bool(stream_results) and not stream_errors and not divergences
+        and all(c.get("ok") for c in consistency)
+    )
+    return _finalize_message_sizes(
+        profile,
+        rep["certificate_bytes"] if rep else None,
+        rep["clienthello_bytes"] if rep else None,
+        rep["other_messages"] if rep else {},
+        format="stream_aware", n_streams=len(stream_results),
+        stream_errors=stream_errors, ignored_streams=ignored_streams, stream_divergences=divergences,
+        consistency=consistency, extra_ok=extra_ok,
+    )
+
+
+def _message_sizes_for_profile(block: str, profile: str) -> dict:
+    """Extrai e confere os tamanhos por mensagem de UM bloco de log (um
+    perfil, uma captura) -- fatorado pra ser chamado tanto no modo
+    local (um log so, varios blocos '== Perfil:') quanto no modo
+    piloto (Decisao 40, item B.7 -- 12 arquivos de captura separados,
+    um por perfil x rota, cada um com exatamente este formato).
+
+    Decisao 91 (Emenda -- bug de parsing, NUNCA mudanca do criterio 1
+    nem dos limiares/baselines): despacha pro caminho legado (formato
+    de 3 colunas, frame/tipos/tamanhos -- measure.sh local e o fixture
+    sintetico, NUNCA fragmentados, preservado byte a byte pra
+    regressao) ou pro caminho consciente de stream/direcao (formato de
+    6 colunas, frame/stream/srcport/tcp.len/tipos/tamanhos --
+    `dedicated_capture` real, onde a Decisao 90 achou que o flight do
+    servidor pode chegar fragmentado em mais de uma linha sob rede
+    real) conforme o numero de colunas que o PRODUTOR de fato emitiu."""
+    msg_section = re.search(r"tamanho POR MENSAGEM.*?\n(.*?)(?:\n==|\Z)", block, re.S)
+    if not msg_section:
+        return _finalize_message_sizes(profile, None, None, {})
+    raw_lines = [l for l in msg_section.group(1).splitlines() if l.strip()]
+    if not raw_lines:
+        return _finalize_message_sizes(profile, None, None, {})
+    n_cols = len(raw_lines[0].split("\t"))
+    if n_cols >= 6:
+        return _message_sizes_stream_aware(block, raw_lines, profile)
+    return _message_sizes_legacy(raw_lines, profile)
 
 
 @_safe_criterion(1, "tamanhos por mensagem")

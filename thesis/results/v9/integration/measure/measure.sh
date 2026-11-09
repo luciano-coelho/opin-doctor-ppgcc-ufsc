@@ -49,8 +49,17 @@ tshark -r "$PCAP" -o "tls.keylog_file: $KEYLOG" -Y tls \
   -T fields -e frame.number -e ip.src -e tcp.len -e tls.record.content_type -e tls.handshake.type \
   2>/dev/null || echo "(tshark nao produziu linhas decifradas)"
 
+# Decisao 91 (Emenda, item b): desegmentacao de TCP/TLS ligada
+# EXPLICITAMENTE (ja e o default do tshark -- nunca mudou o
+# comportamento aqui, T6 roda em loopback dentro do MESMO container e
+# nunca fragmentou o flight em mais de uma linha, Decisao 90). Formato
+# de 3 colunas preservado de proposito (measure.sh fica no caminho
+# LEGADO de `_message_sizes_for_profile`, nunca o consciente de
+# stream/direcao que `dedicated_capture` usa pra rede real).
 echo "== tshark: tamanho POR MENSAGEM de handshake (tipo + comprimento declarado, 4B de header por mensagem) =="
-tshark -r "$PCAP" -o "tls.keylog_file: $KEYLOG" -Y tls.handshake \
+tshark -r "$PCAP" -o "tls.keylog_file: $KEYLOG" \
+  -o "tcp.desegment_tcp_streams: TRUE" -o "tls.desegment_ssl_records: TRUE" \
+  -o "tls.desegment_ssl_application_data: TRUE" -Y tls.handshake \
   -T fields -e frame.number -e tls.handshake.type -e tls.handshake.length \
   2>/dev/null || echo "(tshark nao produziu linhas de handshake)"
 

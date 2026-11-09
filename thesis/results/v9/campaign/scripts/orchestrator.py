@@ -1106,6 +1106,7 @@ class SSHExecutor:
                 f"(stdout={start_proc.stdout!r} stderr={start_proc.stderr!r})"
             )
 
+        t0 = datetime.now(timezone.utc)
         try:
             gw_ip = self._server_gateway_ip(route)
             env = self._client_env(profile, gw_ip)
@@ -1118,30 +1119,99 @@ class SSHExecutor:
             # sleep antes do kill: da tempo da conexao de disparo
             # terminar de verdade antes de cortar a captura no meio.
             cli.run_ssh(server_ip, f"sleep 1; sudo kill {tcpdump_pid} 2>/dev/null; sleep 1; true", key_path=self.key_path)
+        t1 = datetime.now(timezone.utc)
 
         cli.run_ssh(server_ip, f"docker exec {self.gateway_container} cat /tmp/v9_keylog.txt > {keylog_path}", key_path=self.key_path)
 
+        # Decisao 91 (Emenda -- bug de parsing do criterio 1, item b):
+        # tres colunas extras (tcp.stream, tcp.srcport, tcp.len) em
+        # relacao ao que esta funcao emitia antes -- `_message_sizes_
+        # for_profile` (evaluate_criteria.py) agora classifica cada
+        # mensagem por QUEM MANDOU (srcport), nunca mais por "esta na
+        # mesma linha que ServerHello" (suposicao que a rede real
+        # quebrou: o flight do servidor pode chegar fragmentado em mais
+        # de uma linha/frame sob latencia real, nunca visto em
+        # loopback). Desegmentacao de TCP/TLS ligada EXPLICITAMENTE
+        # (ja e o default do tshark, mas o item b do Luciano pede
+        # explicito) -- reagrupa fragmentos de UM registro TLS antes de
+        # reportar o tipo/tamanho da mensagem, pra qualquer fragmentacao
+        # no NIVEL DE REGISTRO (nao so a de reordenar linhas) tambem
+        # ficar coberta. Filtro `tcp.len>0` (nao so `tls.handshake`):
+        # precisa de TODO segmento TCP real, nao so os que carregam uma
+        # mensagem de handshake completa, pra fechar a soma bruta de
+        # bytes por direcao (item d) -- linhas sem tipo/tamanho de
+        # handshake saem com essas duas colunas vazias, nunca omitidas.
         tshark_proc = cli.run_ssh(
             server_ip,
             f"docker run --rm -v {pcap_path}:{pcap_path}:ro -v {keylog_path}:{keylog_path}:ro "
             f"--entrypoint tshark mockopin-v9-measure "
-            f'-r {pcap_path} -o "tls.keylog_file: {keylog_path}" -Y tls.handshake '
-            f"-T fields -e frame.number -e tls.handshake.type -e tls.handshake.length -E aggregator=,",
+            f'-r {pcap_path} -o "tls.keylog_file: {keylog_path}" '
+            f'-o "tcp.desegment_tcp_streams: TRUE" -o "tls.desegment_ssl_records: TRUE" '
+            f'-o "tls.desegment_ssl_application_data: TRUE" -Y "tcp.len>0" '
+            f"-T fields -e frame.number -e tcp.stream -e tcp.srcport -e tcp.len "
+            f"-e tls.handshake.type -e tls.handshake.length "
+            f"-e tls.handshake.extensions_server_name -E aggregator=,",
             key_path=self.key_path,
         )
-        lines = ["tamanho POR MENSAGEM (frame, tipos, tamanhos)"]
+        # Decisao 91 (achado ao validar localmente contra o stack real,
+        # item 4 do pedido do Luciano -- confirmar 4/4 perfis ANTES de
+        # qualquer nova tentativa real): o carve-out interno de auth
+        # (SNI "matls-api.local", Decisao 17/18/36 -- ja excluido da
+        # contagem do criterio 4) atravessa a MESMA porta 443/interface
+        # capturada aqui quando a execucao real de negocio o dispara --
+        # confirmado ao vivo, localmente, contra o stack real (6 streams
+        # sni="mtls" + 7 streams sni="matls-api.local" na MESMA
+        # captura). SNI do ClientHello extraido pra `_message_sizes_
+        # for_profile` poder excluir esses streams da analise das 6
+        # conexoes client-facing, nunca conta-los como erro nem como
+        # divergencia.
+        lines = ["tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos, sni)"]
+        n_handshake_rows = 0
         for raw_line in tshark_proc.stdout.strip().splitlines():
+            # tshark `-T fields` omite os TABS finais quando os ultimos
+            # campos estao vazios -- um pacote sem mensagem de
+            # handshake (ACK puro ja excluido por `tcp.len>0`, mas
+            # tambem um fragmento PARCIAL de um registro TLS reagrupado
+            # num frame POSTERIOR, parte do mesmo achado da Decisao 90,
+            # corrigido aqui pela Decisao 91) chega aqui com menos de 7
+            # colunas -- preenche ate 7 em vez de descartar (descartar
+            # subcontaria os bytes brutos do item d pra QUALQUER
+            # captura real que fragmente no nivel de registro,
+            # exatamente o cenario que esta Emenda existe pra cobrir).
             cols = raw_line.split("\t")
-            if len(cols) < 3 or not cols[1] or not cols[2]:
+            if len(cols) < 7:
+                cols = cols + [""] * (7 - len(cols))
+            if not cols[0] or not cols[1] or not cols[2] or not cols[3]:
                 continue
-            lines.append(f"{cols[0]}\t{cols[1]}\t{cols[2]}")
-        if len(lines) == 1:
+            lines.append("\t".join(cols[:7]))
+            if cols[4] and cols[5]:
+                n_handshake_rows += 1
+        if n_handshake_rows == 0:
             raise RuntimeError(
                 f"dedicated_capture {profile}/{route}: tshark nao extraiu nenhuma mensagem de handshake "
                 f"(pcap vazio ou keylog nao decifrou) -- stdout={tshark_proc.stdout!r} stderr={tshark_proc.stderr!r}"
             )
+
+        # Decisao 91, item (d): handshakeBytesIn/Out REAIS (log do
+        # gateway, `countingConn`) pras 6 conexoes client-facing desta
+        # execucao, na mesma ordem cronologica que o pcap -- unica fonte
+        # independente capaz de confirmar que a soma bruta de bytes por
+        # direcao (acima) fechou de verdade, nunca so reconferida contra
+        # ela mesma.
+        log_text = self._gateway_logs(t0.isoformat(), t1.isoformat())
+        gw_pairs = _handshake_bytes_all(log_text, profile)
+        gw_lines = ["handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)"]
+        gw_lines.extend(f"{hs_in}\t{hs_out}" for hs_in, hs_out in gw_pairs)
+
         self.stop_block(profile, route)
-        return f"== Perfil: {profile} ==\n" + "\n".join(lines) + "\n== fim =="
+        # Decisao 91: divisor "==..." explicito entre as duas secoes --
+        # `_message_sizes_for_profile`/`_parse_gateway_handshake_bytes`
+        # (evaluate_criteria.py) delimitam cada secao achando a PROXIMA
+        # linha que comeca com "==" (ou o fim do texto); sem esse
+        # divisor, a secao "tamanho POR MENSAGEM" engoliria as linhas
+        # de handshakeBytesIn/Out tambem.
+        return (f"== Perfil: {profile} ==\n" + "\n".join(lines) + "\n== secao seguinte ==\n"
+                + "\n".join(gw_lines) + "\n== fim ==")
 
 
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
@@ -1253,6 +1323,22 @@ _BYTES_DIAGNOSTIC_LOG_RE_TEMPLATE = (
     r'gateway: {profile} connection OK remoteAddr=\S+ sni="mtls"[^\n]*?'
     r'handshakeBytesIn=(\d+) handshakeBytesOut=(\d+)'
 )
+
+
+def _handshake_bytes_all(log_text: str, profile: str) -> list[tuple[int, int]]:
+    """Decisao 91, item (d): TODAS as linhas 'connection OK' CLIENT-
+    FACING (sni="mtls", mesmo filtro que `_bytes_diagnostic_for_profile`
+    ja usa pra excluir o carve-out interno matls-api.local/Decisao 18/
+    19) deste perfil, na ordem cronologica em que o gateway logou --
+    `dedicated_capture` usa a MESMA ordem em que o pcap viu as conexoes
+    (ambos crescem no tempo), entao o N-esimo par aqui corresponde ao
+    N-esimo tcp.stream do pcap. Reusa o padrao de `_bytes_diagnostic_
+    for_profile` (nunca reinventado), so com `finditer` em vez de
+    `search` -- aquela funcao so pegava a PRIMEIRA conexao (suficiente
+    pro diagnostico da Decisao 55); esta precisa de todas (6, pelo
+    N_mTLS documentado em opin_flow.py)."""
+    pattern = _BYTES_DIAGNOSTIC_LOG_RE_TEMPLATE.format(profile=_re.escape(profile))
+    return [(int(m.group(1)), int(m.group(2))) for m in _re.finditer(pattern, log_text)]
 
 
 def _bytes_diagnostic_for_profile(log_text: str, profile: str, certs_dir) -> dict:

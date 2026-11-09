@@ -1769,14 +1769,22 @@ def test_capturas_dedicadas_tem_nome_e_hash_esperados_e_o_avaliador_le(tmp_path)
 # stdout diferente por etapa -- o fake generico de calls/call_count
 # das outras suites nao serve aqui).
 
+# Decisao 91 (Emenda -- bug de parsing do criterio 1, item b): formato
+# novo de 6 colunas (frame, stream, srcport, tcp.len, tipos, tamanhos)
+# -- stream "0", srcport "50000" (cliente) / "443" (servidor), tcp.len
+# fabricado (nenhum teste estrutural abaixo confere consistencia
+# bytes-brutos-vs-gateway, so `test_dedicated_capture_extrai_tamanhos_
+# que_o_avaliador_aceita`, que fabrica os DOIS lados coerentes entre
+# si explicitamente).
 _TSHARK_FAKE_OUTPUT = (
-    "1\t1\t332\n"
-    "2\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
-    "3\t11,15,20\t6352,3571,32\n"
+    "1\t0\t50000\t100\t1\t332\n"
+    "2\t0\t443\t200\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
+    "3\t0\t50000\t150\t11,15,20\t6352,3571,32\n"
 )
 
 
-def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark_output=_TSHARK_FAKE_OUTPUT):
+def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark_output=_TSHARK_FAKE_OUTPUT,
+                                 gateway_log_output=""):
     def fake_run(argv, timeout=None):
         calls.append(argv)
         local_docker = _fake_local_docker_gateway_binary_call(argv)
@@ -1796,6 +1804,12 @@ def _fake_run_dedicated_capture(calls, iface="eth0", tcpdump_pid="12345", tshark
             proc.stdout = f"{tcpdump_pid}\n"
         elif "campaign_client_runner.py" in remote_cmd:
             proc.stdout = '{"calls": [], "call_count": 0, "retries": []}'
+        elif "docker logs -t --since" in remote_cmd:
+            # Decisao 91, item (d): janela de log do gateway (handshake
+            # BytesIn/Out REAIS) -- buscada em volta do disparo da
+            # execucao de captura, nunca confundida com a checagem de
+            # "listening on" (string distinta, ver abaixo).
+            proc.stdout = gateway_log_output
         elif "tls.handshake.type" in remote_cmd:
             proc.stdout = tshark_output
         elif "sha256sum -c" in remote_cmd:
@@ -1880,19 +1894,30 @@ def test_dedicated_capture_extrai_tamanhos_que_o_avaliador_aceita(monkeypatch):
     hibrido-v8 (ec.CERTIFICATE_BASELINE/CLIENTHELLO_BASELINE) quando o
     tshark fake devolve exatamente os tamanhos esperados desse
     perfil -- confirma que o parsing de `-E aggregator=,` e o "+4B de
-    cabecalho" do avaliador se encaixam sem ajuste nenhum aqui."""
+    cabecalho" do avaliador se encaixam sem ajuste nenhum aqui.
+
+    Decisao 91 (item d): o fake tambem fornece tcp.len/handshakeBytesIn/
+    Out COERENTES entre si (100+150=250 bytes do cliente, 200 bytes do
+    servidor) -- sem isso a verificacao de consistencia obrigatoria
+    reprovaria por FALTA de evidencia, nunca por escolha."""
     hb = ec.HANDSHAKE_MESSAGE_BASELINE["hibrido-v8"]
     ch = ec.CLIENTHELLO_BASELINE["hibrido-v8"] - 4
     cert = ec.CERTIFICATE_BASELINE["hibrido-v8"] - 4
     tshark_output = (
-        f"1\t1\t{ch}\n"
-        f"2\t2,8,13,11,15,20\t"
+        f"1\t0\t50000\t100\t1\t{ch}\n"
+        f"2\t0\t443\t200\t2,8,13,11,15,20\t"
         f"{hb['ServerHello']-4},{hb['EncryptedExtensions']-4},{hb['CertificateRequest']-4},"
         f"{cert},{hb['CertificateVerify_servidor']-4},{hb['Finished_servidor']-4}\n"
-        f"3\t11,15,20\t{hb['Certificate_cliente']-4},{hb['CertificateVerify_cliente']-4},{hb['Finished_cliente']-4}\n"
+        f"3\t0\t50000\t150\t11,15,20\t{hb['Certificate_cliente']-4},{hb['CertificateVerify_cliente']-4},{hb['Finished_cliente']-4}\n"
+    )
+    gateway_log_output = (
+        'gateway: hibrido-v8 connection OK remoteAddr=10.0.0.9:50000 sni="mtls" '
+        'curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
+        "handshakeBytesIn=250 handshakeBytesOut=200\n"
     )
     calls = []
-    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(calls, tshark_output=tshark_output))
+    monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(
+        calls, tshark_output=tshark_output, gateway_log_output=gateway_log_output))
     executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
     block = executor.dedicated_capture("hibrido-v8", "L0")
     row = ec._message_sizes_for_profile(block, "hibrido-v8")
