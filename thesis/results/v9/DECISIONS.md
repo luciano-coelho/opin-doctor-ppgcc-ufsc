@@ -10731,3 +10731,170 @@ completo) em thesis/results/v9/campaign/tc_netem_ground_truth/.
 
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
+
+## 101. Quinta tentativa real da Fase B -- primeira com as Emendas 96-99 exercitadas de verdade na AWS: 6/7 PASS (criterios 1 e 7, alvos diretos das Emendas, agora PASSAM pela primeira vez), so o criterio 2 continua FAIL, pelo motivo JA conhecido (pacing, nunca mais o bug de MSS). Teardown pela PRIMEIRA VEZ usando o gate fail-closed de verdade (--pull-verified-marker, nunca --force)
+
+**Contexto:** apos as Emendas 96-100 (Decisoes anteriores), o Luciano
+autorizou executar a Fase B inteira de novo, sem pedir confirmacao,
+pra exercitar as correcoes dos criterios 1/2/7 contra a AWS real pela
+primeira vez. Autonomia total mantida durante toda a execucao
+(guardrails padrao desta rodada: regioes sa-east-1/eu-north-1/
+ap-southeast-1, tag `mockopin-pqc-v9-piloto`, custo e tempo
+monitorados em tempo real).
+
+**Achados reais de infraestrutura, corrigidos ao vivo (nenhum toca o
+que e medido):**
+
+1. **Imagem `mockopin-v9-measure` destruida por engano nesta mesma
+   sessao** (removida durante a limpeza da validacao local tc netem
+   da Decisao 100, sem notar que era a MESMA imagem usada pelo
+   piloto real) -- `deliver_images.py` abortou corretamente (sha256
+   do `.tar` nao batia com `PINS.json`, fail-closed funcionando como
+   desenhado). Corrigido reconstruindo a imagem do MESMO Dockerfile
+   (`docker build -f measure/Dockerfile .`) e **repinando em
+   `PINS.json` SO a entrada `measure`** (`tar_sha256`, a camada
+   `rootfs_layers[3]` que mudou -- so metadado de timestamp da copia
+   do `measure.sh`, nunca conteudo --, e `image_id` informativo) --
+   `config_subset` e as outras 5 camadas saem IDENTICAS, confirmando
+   que nada funcional mudou. Gateway/proxy/pqc-signer NUNCA tocados.
+   Esta imagem e so tooling de captura (tcpdump+tshark), nunca o
+   sistema sob teste -- repinar o tar nunca afeta nenhum criterio
+   pre-registrado.
+2. **Passo 10 (porta de fumaca): conexao SSH caiu** ("Connection
+   reset by peer") no meio da execucao -- o processo remoto (sem
+   `nohup`) morreu junto com a sessao. Investigado ao vivo (incluindo
+   uma investigacao independente, evidencia preservada em
+   `piloto/tentativas/investigacao_passo10_2026-11-09/`, `conta_como_
+   dado: false`, confirmando por `docker ps` com timestamps reais no
+   servidor que o processo estava genuinamente progredindo, nunca
+   travado, antes da queda da conexao). Corrigido relancando com
+   `nohup ... & disown`, imune a quedas de SSH subsequentes -- usado
+   a partir daqui pra TODOS os passos longos (Passo 11, 11.5).
+   **Achado adicional, nao corrigido no codigo (documentado pra
+   decisao futura):** nenhuma chamada SSH deste pipeline usa
+   `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax`, e
+   nenhum passo do roteiro tem orcamento de tempo -- uma pendencia
+   real (nao travamento) e indistinguivel de um travamento genuino
+   sem investigacao manual como esta. Fica registrado como melhoria
+   futura, nunca aplicado nesta rodada (nenhuma mudanca no meio de
+   uma execucao real em andamento).
+3. **Janela de autodesligamento de seguranca (4h, Decisao 23) ficou
+   curta demais pro escopo real desta tentativa** -- a porta de
+   fumaca sozinha (12 execucoes) levou ~45 min, deixando so ~1h13 pra
+   as 60 execucoes + 12 capturas (com retry) + coleta + consolidacao +
+   teardown. Corrigido ao vivo, deliberadamente, ENQUANTO ativamente
+   atendido (nunca uma extensao "silenciosa" -- Luciano presente e
+   confirmando cada passo): `/etc/mockopin-campaign/deadline`
+   reescrito em todas as 5 instancias, duas vezes, terminando em
+   servidor+3 clientes = `2026-11-09T18:30:00Z`, controle =
+   `2026-11-09T19:30:00Z` (>=60min depois dos hosts, pedido explicito
+   do Luciano -- a coleta final passa pelo controle, que precisa
+   sobreviver mais tempo que os hosts que ele ainca coleta). O
+   mecanismo real (`systemd` timer, `shutdown -h now`, nunca libera o
+   EIP por si so) foi lido direto do template Terraform
+   (`safety_timer.sh.tftpl`) antes de agir -- nunca seria "renovado
+   pelo orquestrador" como um comentario antigo em `variables.tf`
+   sugeria (`orchestrator.py` nunca implementou isso -- achado real,
+   gap preexistente, nunca corrigido nesta rodada por estar fora do
+   escopo das Emendas 96-100).
+4. **`collect_artifacts.py --remote-dir ~/campaign-data/v9/piloto`
+   falhou duas vezes** com `cd: ... No such file or directory`,
+   mostrando um caminho LOCAL do operador (`/c/Users/.../campaign-
+   data/...`) -- o `~` foi expandido pelo PROPRIO git-bash do
+   operador antes de alcancar o script, nunca passado literal pro
+   controle expandir no lado dele (pitfall ja documentado neste
+   projeto). `MSYS_NO_PATHCONV=1` NAO resolve isso (so afeta conversao
+   de padrao de caminho absoluto, nunca expansao de `~` do bash, que
+   e um mecanismo diferente). Corrigido colocando `--remote-dir` entre
+   aspas simples. Nunca um bug em `collect_artifacts.py` -- erro de
+   invocacao do operador, corrigido na hora, sem mudar o script.
+
+**Custo/tempo monitorados em tempo real durante toda a execucao**
+(Luciano presente, checagens diretas e repetidas por `describe-
+instances`/estado do processo/contagem de arquivos reais -- nunca
+estimativas paradas): projecoes recalculadas a cada marco real (1o
+bloco L0, 1o bloco L219, 1o bloco L325) -- todas ficaram dentro dos
+novos limiares (US$8 = alerta, US$10 = pausa-e-pergunta, nunca mais
+destroy automatico por custo/lentidao, regra atualizada pelo Luciano
+nesta rodada, substituindo a regra antiga de 80%-nunca-dispara-no-
+meio-do-piloto). Nenhum dos limiares foi atingido -- custo final
+~US$6,13 (US$4,20 de tentativas anteriores + ~US$1,93 desta), teto
+US$10 nunca ameacado.
+
+**Passo 11 completo, dados reais confirmados em `piloto_calls.json`
+(10,9MB, as 60 execucoes completas):** `total_execucoes: 60`,
+`expected_total: 60`, **0 chamadas HTTP com falha nas 60 execucoes**
+(L0=20, L219=20, L325=20, confirmado por contagem direta). Latencia
+mediana por chamada, por rota: L0=10,3ms, L219=235,6ms,
+L325=341,9ms -- fisicamente consistente com a RTT nominal de cada
+rota (0/219/325ms) + overhead de processamento, nenhuma rota
+anomala.
+
+**Os 7 criterios, valores reais desta tentativa (consolidado em
+`thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09-
+v2/`):**
+
+| # | Criterio | Resultado | Nota |
+|---|---|---|---|
+| 1 | Tamanhos por mensagem | **PASS** | as 12 capturas, incluindo TODAS as de L0 (o gap persistente da Decisao 95) -- `n_streams=6`, 0 erros de stream, 0 divergencias, consistencia `ok:true` nas 6 conexoes de cada captura, Certificate batendo exato os baselines derivados da Decisao 93 (913/5632/6255/6582) |
+| 2 | initcwnd real | FAIL | `mss_channels_agree: true` (Emenda 98 confirmada correta -- os dois canais do MSS efetivo concordam de verdade) -- mas `segments_computed=2,0` vs limiar 10, por causa do MESMO pacing ja relatado na Decisao 95 (decisao pendente #2, ainda do Luciano) -- NUNCA mais o bug de MSS anunciado no SYN-ACK |
+| 3 | Zero erros na rota mais distante | **PASS** | 20/20 em L325, 0 erros |
+| 4 | Contagens do fluxo | **PASS** | |
+| 5 | Zero erros | **PASS** | 0/60 |
+| 6 | Instrumentacao completa + asserções | **PASS** | |
+| 7 | Sanidade de latencia por rota | **PASS** | Emenda 97 confirmada correta -- L0 probe=0,148ms/pcap=0,098ms; L219 probe=219,889ms/pcap=220,048ms (Δ0,159ms); L325 probe=330,196ms/pcap=330,859ms (Δ0,663ms) -- os dois canais concordam de verdade, nunca so cada um passando sozinho |
+
+**Resultado: 6/7 PASS** (subiu de 4/7 na Decisao 95) -- os DOIS
+criterios que eram o alvo direto das Emendas 97 (criterio 7) e 99
+(criterio 1) agora PASSAM pela primeira vez. O unico FAIL (criterio
+2) e o MESMO achado ja relatado e pendente de decisao do Luciano --
+nao e um achado novo, e a Emenda 98 esta CONFIRMADA correta (o MSS
+efetivo agora mede certo; o pacing e um problema de METODO separado,
+ainda sem decisao).
+
+**Passo 12 (coleta): 92 arquivos verificados por sha256** (vs. 19 na
+Decisao 95) -- inclui, pela primeira vez, os pcaps/keylogs BRUTOS de
+toda tentativa de captura (`capturas_brutas/`, confirmando o retry da
+Emenda 99 funcionou de verdade: `classico/L0` precisou de 3
+tentativas antes de decifrar completo e ser aceito; `classico/L219`
+decifrou completo na 1a tentativa), `criterio2_probe.pcap`, e
+`full_container_logs/` com os 4 containers do servidor (gateway/
+auth/mongo_seed/mockapi) + diagnostico leve por instancia -- tudo
+que a Decisao 96 (regra fail-closed nova) pediu.
+
+**Passo 14 (teardown): PRIMEIRA VEZ usando o gate fail-closed de
+verdade.** `cleanup.py --pull-verified-marker /tmp/v9_piloto_
+coletado/.pull-verified` (nunca `--force`) -- `"forced": false,
+"reason": null`, `"all_clean": true` nas 3 regioes. Nas tentativas
+anteriores (Decisoes 90-95), o roteiro sempre usava `--force`,
+nunca exercitando o gate que ja existia em codigo desde a Decisao 96
+-- esta e a PRIMEIRA vez que o teardown passou pelo caminho real,
+sem bypass.
+
+**Passo 15 (verificacao independente): confirmado limpo.** As 5
+instancias aparecem em `describe-instances` com `State.Name=
+terminated` (retencao normal de metadado da AWS, nunca recurso
+cobrando) -- `describe-addresses`/`describe-security-groups`/
+`describe-key-pairs` vazios nas 3 regioes, confirmando `cleanup.py`.
+
+**Custo final desta tentativa:** ~US$1,93 (4,64h de fleet, 5
+instancias + 5 EIPs) -- total acumulado ~US$6,13, dentro do novo
+teto de alerta (US$8) e bem abaixo do teto de pausa (US$10).
+
+**Evidencia:** `thesis/results/v9/piloto/dados_oficiais/piloto-real-
+aws-2026-11-09-v2/` (RELATORIO_PILOTO.md + criteria_evaluation.json +
+raw/, 92 arquivos verificados por sha256, incluindo as 60 execucoes
+reais e as capturas brutas de toda tentativa de retry);
+`thesis/results/v9/piloto/tentativas/investigacao_passo10_2026-11-
+09/` (investigacao do achado 2 acima, `conta_como_dado: false`). O
+resultado anterior (`piloto-real-aws-2026-11-09/`, Decisao 95, 4/7
+PASS) permanece intacto como historico -- nunca sobrescrito.
+
+**Decisao pendente do Luciano, unica remanescente:** criterio 2 --
+`segments_computed` deveria usar outra janela/metrica que nao sofra
+do throttling de pacing, ou o metodo precisa ser revisto? (mesma
+pergunta da Decisao 95, agora reconfirmada com o MSS corrigido --
+nunca mais uma questao de MSS incorreto).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

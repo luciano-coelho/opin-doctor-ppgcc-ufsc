@@ -1,5 +1,5 @@
 {
-  "fase_atual": "FASE_A_COMPLETA -- FASE_B_COMPLETA DE PONTA A PONTA (60/60 EXECUCOES, 12/12 CAPTURAS, 7 CRITERIOS AVALIADOS COM DADOS REAIS) -- 4/7 PASS, 3/7 FAIL (ACHADOS NOVOS DE METODO, DECISAO 95, PENDENTES DO LUCIANO)",
+  "fase_atual": "FASE_A_COMPLETA -- FASE_B_COMPLETA DE PONTA A PONTA, 5a TENTATIVA (DECISAO 101) -- 6/7 PASS, 1/7 FAIL (CRITERIO 2, PACING, PENDENTE DO LUCIANO)",
   "fase_a": {
     "status": "completa, verde, 15/15 passos (0-14) numa fleet real",
     "tentativas": 2,
@@ -8,20 +8,28 @@
     "tentativa_2b_retomada": "COMPLETA -- Passos 0-14 todos verdes -- ver ensaio_infra_retomada/, Decisoes 68-74"
   },
   "fase_b": {
-    "status": "COMPLETA DE PONTA A PONTA (Decisao 95, 4a tentativa real) -- 60/60 execucoes, 12/12 capturas, criterios 2/3/7 com dados 100% reais pela primeira vez. Resultado: 4/7 PASS (criterios 3/4/5/6), 3/7 FAIL (criterios 1/2/7) -- os 3 FAILs sao achados NOVOS de METODO de medicao (nunca de infraestrutura), nunca vistos antes porque nenhuma tentativa anterior chegou tao longe.",
-    "narrativa_resumida": "Decisao 90: parada na prova de captura (classificacao de mensagens sob rede real). Decisao 91: mecanismo corrigido (classificacao por direcao/stream, consistencia obrigatoria). Decisao 92 (3a tentativa): mecanismo provado perfeito nos 4 perfis, mas certificate_bytes sempre +14B/+28B sobre CERTIFICATE_BASELINE -- descompasso de calibracao pre-existente (Decisao 75 ja tinha revertido a premissa da Decisao 28/29 sem reconferir o baseline). Decisao 93: CERTIFICATE_BASELINE recalibrado por DERIVACAO (formula RFC 8446 a partir do DER real), opcao 2 do Luciano, confirmada nos 5 pontos pedidos. Decisao 94 (4a tentativa): 4 achados reais de infraestrutura/logica no Passo 11.5 (produtores dos criterios 2/3/7, nunca exercitados contra o piloto real antes) -- todos corrigidos ao vivo (retry de SSH, ethtool ausente, tcpdump sem sudo, bug de selecao de ACK) -- mais um achado no PILOT_RUNBOOK.md (Passo 8b, imagens do backend). Decisao 95: Fase B completa -- 7 criterios com dados reais, 3 achados NOVOS de metodo (nunca de infraestrutura) nos criterios 1/2/7.",
-    "criterio_1_fail": "classico/pqc/hibrido-v8/hibrido-and: L219 e L325 PASSAM nos 4 (confirma a Decisao 91/93 nas 12 capturas OFICIAIS). L0 falha nos 4 -- so ClientHello/ServerHello decifram, nada depois, nas 6 conexoes, nos 4 perfis -- pacotes brutos existem no pcap, so o dissector TLS nunca decifra. Hipotese nao confirmada: L0 (RTT quase zero) pode nao dar tempo do keylog sincronizar em disco antes do docker exec cat.",
-    "criterio_2_fail": "segments_computed=0,32 (2896B/8961B MSS do SYN-ACK) vs ss_ti_cwnd=10 -- discordam muito. mss_bytes vem do SYN-ACK (capacidade LOCAL de jumbo frame, pmtu:9001), nunca do MSS EFETIVO (ss -ti mostra mss:1448, reduzido por PMTU discovery entre regioes). Mesmo com 1448, ainda diverge -- TCP pacing (ss -ti mostra pacing_rate 1.05Mbps) limita a taxa de envio independente do cwnd -- os 2 canais podem estar medindo grandezas diferentes numa conexao real com pacing.",
-    "criterio_7_fail": "L219/L325 falham (L0 passa). O canal pcap mede SYN->SYN-ACK na MESMA interface do SERVIDOR -- isso e tempo de PROCESSAMENTO do servidor, nunca RTT de rede real (precisaria dos 2 trechos de propagacao, invisiveis numa captura so no servidor). L0 'passou' por coincidencia (RTT real e tempo de processamento sao os dois minusculos).",
+    "status": "COMPLETA DE PONTA A PONTA pela SEGUNDA vez (Decisao 101, 5a tentativa real) -- 60/60 execucoes, 12/12 capturas. Resultado: 6/7 PASS (criterios 1/3/4/5/6/7), 1/7 FAIL (criterio 2) -- os criterios 1 e 7 (alvo direto das Emendas 99 e 97) PASSAM pela primeira vez.",
+    "narrativa_resumida": "Decisao 90: parada na prova de captura. Decisao 91: mecanismo corrigido. Decisao 92 (3a tentativa): parou em certificate_bytes. Decisao 93: CERTIFICATE_BASELINE recalibrado por derivacao. Decisao 94 (4a tentativa): 4 achados reais de infraestrutura/logica no Passo 11.5, corrigidos ao vivo. Decisao 95 (4a tentativa, COMPLETA): 4/7 PASS, 3 FAILs (criterios 1/2/7) -- achados NOVOS de METODO. Decisoes 96-100: Emenda fail-closed de teardown (96, --pull-verified-marker em vez de --force, preservacao de pcap/keylog brutos de toda tentativa de captura, collect_full_logs), Emenda RTT-pcap ao criterio 7 (97, SYN-ACK saindo -> ACK voltando em vez de SYN chegando -> SYN-ACK saindo), Emenda MSS-efetivo ao criterio 2 (98, concordancia ss-ti vs maior payload real do pcap, nunca o MSS anunciado no SYN-ACK), Emenda robustez-de-captura ao criterio 1 (99, retry de ate 3x so quando a decifragem sai incompleta), validacao local com tc netem e verdade conhecida (100, RTT 5/50/200ms e MTU 1500/9001 confirmados contra os producers reais). Decisao 101 (5a tentativa, COMPLETA): as duas Emendas-alvo (97 e 99) confirmadas corretas contra a AWS real -- criterios 1 e 7 PASSAM; criterio 2 continua FAIL, mas agora confirmado ser SO o pacing (mss_channels_agree=true, a Emenda 98 tambem esta correta). Teardown pela PRIMEIRA vez usando o gate fail-closed de verdade (forced=false).",
+    "criterio_1_pass": "as 12 capturas, incluindo TODAS as 4 de L0 (o gap persistente da Decisao 95, resolvido pela Emenda 99/retry) -- n_streams=6, 0 erros, 0 divergencias, consistencia ok em todas as 6 conexoes de cada captura, Certificate batendo exato os baselines derivados da Decisao 93.",
+    "criterio_2_fail": "mss_channels_agree=true (Emenda 98 confirmada correta -- os dois canais do MSS efetivo concordam) mas segments_computed=2,0 vs limiar 10, por causa de TCP pacing (mesmo achado da Decisao 95, decisao pendente #2) -- NUNCA mais o bug de MSS anunciado no SYN-ACK.",
+    "criterio_7_pass": "Emenda 97 confirmada correta -- L0 probe=0,148ms/pcap=0,098ms; L219 probe=219,889ms/pcap=220,048ms (consistentes entre si); L325 probe=330,196ms/pcap=330,859ms (consistentes entre si).",
     "decisoes_pendentes_do_luciano": [
-      "Criterio 1: investigar a causa do gap de decifragem em L0 (precisa de pcap/keylog brutos -- descartados com o teardown desta tentativa, proxima deveria arquiva-los antes) -- aumentar a janela antes do docker exec cat keylog, ou outra abordagem?",
-      "Criterio 2: mss_bytes deveria vir do MSS EFETIVO (ss -ti) em vez do SYN-ACK? O pacing precisa entrar na formula/tolerancia de concordancia entre os 2 canais, ou o metodo precisa ser revisto?",
-      "Criterio 7: o canal pcap precisa de captura nos DOIS lados (cliente E servidor) pra medir RTT de verdade, ou precisa ser redesenhado/descartado como canal independente?"
+      "Criterio 2 (unica remanescente): segments_computed deveria usar outra janela/metrica que nao sofra do throttling de pacing, ou o metodo precisa ser revisto? (mesma pergunta da Decisao 95, agora reconfirmada com o MSS corrigido -- nunca mais uma questao de MSS incorreto)."
+    ],
+    "achados_de_infraestrutura_da_5a_tentativa": [
+      "Imagem mockopin-v9-measure removida por engano durante a limpeza da validacao local da Decisao 100 (mesma sessao) -- corrigida reconstruindo do mesmo Dockerfile e repinando SO a entrada measure em PINS.json (tar_sha256 + 1 camada de rootfs_layers, metadado de timestamp, nunca conteudo) -- gateway/proxy/pqc-signer intocados.",
+      "Passo 10: conexao SSH caiu (Connection reset by peer) com o processo remoto genuinamente progredindo (confirmado por investigacao independente, piloto/tentativas/investigacao_passo10_2026-11-09/) -- corrigido relancando com nohup+disown, usado em todos os passos longos daqui em diante.",
+      "Janela de autodesligamento (4h) curta demais pro escopo real -- estendida ao vivo, enquanto ativamente atendido, pra servidor+3 clientes=18:30Z e controle=19:30Z (>=60min depois dos hosts).",
+      "collect_artifacts.py --remote-dir ~/campaign-data/... expandido localmente pelo git-bash do operador (pitfall de tilde, nao de MSYS_NO_PATHCONV) -- corrigido com aspas simples, nunca um bug do script."
     ]
   },
-  "evidencia_fase_b_completa": "thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09/ (RELATORIO_PILOTO.md, criteria_evaluation.json, raw/ com os 19 arquivos coletados incluindo as 12 capturas oficiais e as 60 execucoes reais)",
-  "custo_acumulado_usd_estimado": 4.2,
-  "teto_usd": 8.0,
+  "evidencia_fase_b_mais_recente": "thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09-v2/ (RELATORIO_PILOTO.md, criteria_evaluation.json, raw/ com 92 arquivos coletados incluindo as 60 execucoes reais e os pcaps/keylogs brutos de toda tentativa de captura)",
+  "evidencia_fase_b_anterior_historico": "thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09/ (Decisao 95, 4/7 PASS, nunca sobrescrito)",
+  "custo_acumulado_usd_estimado": 6.13,
+  "teto_usd_alerta": 8.0,
+  "teto_usd_pausa": 10.0,
+  "nota_tetos": "Decisao do Luciano durante a 5a tentativa: US$8 agora e so alerta (nunca destroy automatico), US$10 e pausa-e-pergunta (nunca teardown unilateral por custo/lentidao) -- substitui a regra antiga de 80%-nunca-dispara-no-meio-do-piloto.",
   "recursos_vivos": false,
-  "conta_limpa_confirmada": true
+  "conta_limpa_confirmada": true,
+  "teardown_usou_gate_fail_closed_de_verdade": true
 }

@@ -1,0 +1,14 @@
+{
+  "o_que_e": "Investigacao pontual (pedido do Luciano, addendum via coordenador) de uma possivel paralisacao do Passo 10 (porta de fumaca) na 5a tentativa real da Fase B -- NUNCA um dos 7 criterios oficiais, NUNCA dado do piloto.",
+  "conta_como_dado": false,
+  "quando": "2026-11-09, aproximadamente 13:12-13:25 UTC",
+  "pergunta": "O processo orchestrator.py --smoke (PID 18315 no controle, vivo desde 13:12 UTC) estava realmente travado, ou so demorado?",
+  "evidencia_coletada": [
+    "control_ps_fd_log.txt -- ps/fd/status do processo (estado S, bloqueado em do_poll -- espera de I/O normal, nunca um deadlock/crash), conexoes SSH abertas no momento",
+    "check_operator_ip.json -- saida real de check_operator_ip.py contra o terraform state: IP do operador NAO mudou (161.22.59.250/32, bate exatamente com a regra do security group) -- hipotese de drift de IP do operador DESCARTADA por dados, nao suposta",
+    "server_docker_ps_e_logs.txt -- docker ps -a + logs do servidor: gateway/auth/mongo_seed/mockapi foram CRIADOS/RECRIADOS 30-60 SEGUNDOS antes da checagem, perfil=pqc -- prova DIRETA de progresso real (start_block do 2o perfil da grade rodando ativamente no exato instante da investigacao)"
+  ],
+  "conclusao": "NAO e um hang confirmado. O processo estava genuinamente em progresso (perfil 'pqc', o 2o dos 4, subindo os containers no momento exato da checagem) -- 11 minutos de vida total e consistente com ter completado o 1o perfil (classico, com probes de prontidao + 1 execucao real cruzando 3 regioes) e comecado o 2o. O log vazio (/tmp/smoke_run.log) NAO e evidencia de hang -- orchestrator.py so imprime o JSON final, nunca progresso incremental. A conectividade controle->cliente L219 (testada direto, fora do processo) respondeu rapido e normal.",
+  "decisao_tomada": "NAO derrubei a frota. Destruir uma execucao com progresso real confirmado, so por precaucao temporal sem evidencia de hang de fato, seria destrutivo e sem justificativa -- contraria ao proprio pedido do Luciano de nunca adivinhar/supor sem conferir primeiro. Reportado ao coordenador pra decisao/acompanhamento continuado.",
+  "achado_para_relatar_como_melhoria_futura": "Confirmado: nenhuma chamada SSH deste orquestrador tem ConnectTimeout/ServerAliveInterval/ServerAliveCountMax configurados, e nenhum passo do roteiro tem orcamento maximo de tempo -- um hang real (diferente deste caso) ficaria indistinguivel de progresso lento ate alguem investigar manualmente como aqui. Caminho recomendado pra um Decisao futura: adicionar essas opcoes de SSH e um timeout por passo (ex. 15min pra porta de fumaca) que falha limpo e aciona as regras de retry/teardown existentes, nunca fica so esperando."
+}

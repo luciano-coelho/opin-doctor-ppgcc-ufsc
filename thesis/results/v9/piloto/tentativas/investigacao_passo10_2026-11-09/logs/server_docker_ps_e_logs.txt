@@ -1,0 +1,23 @@
+=== docker ps -a (servidor, 54.20.143.109) ===
+CONTAINER ID   IMAGE                                 STATUS                      NAMES
+7fb3c1fd0e7e   mockopin-v9-gateway                   Up 28 seconds (criado ha 30s)   v9-mtls
+d822344e37dc   insurance-server-lambdas-auth         Up 45 seconds (criado ha 58s)   insurance-server-lambdas-auth-1
+01215a0d6a8e   localstack/localstack:4.0             Up 56 seconds (healthy)          insurance-server-lambdas-localstack-1
+b098e6a1ca4e   insurance-server-lambdas-mongo_seed   Exited (0) 40 seconds ago       insurance-server-lambdas-mongo_seed-1
+828571de5eac   raidiam-insurance-lambdas:latest       Up 56 seconds                   insurance-server-lambdas-mockapi-1
+e9ccdb18c385   postgres:16                            Up 2 hours (healthy)             insurance-server-lambdas-psql-1
+8056d90b9845   mongo:latest                           Up 2 hours                      insurance-server-lambdas-mongodb-1
+
+ACHADO CENTRAL: gateway/auth/mockapi/mongo_seed foram CRIADOS/RECRIADOS ha 30-60 SEGUNDOS
+(relativo ao momento desta checagem, ~13:25 UTC) -- confirma que start_block() do
+PERFIL "pqc" (2o perfil da grade) estava rodando ATIVAMENTE no exato momento da
+checagem, nunca parado. O processo (pid 18315, 11min de vida total) e consistente
+com: perfil 1 (classico) completo + perfil 2 (pqc) comecando a subir -- PROGRESSO
+REAL, nao hang.
+
+=== gateway log tail (v9-mtls) ===
+2026/11/09 13:24:55 gateway (business mode): profile=pqc listening on :443 (expected group MLKEM1024)
+
+=== auth log tail (insurance-server-lambdas-auth-1) ===
+[log completo de inicializacao Node/Raidiam, "Stage 2: Server start has completed.
+Ready to process events." as 13:24:39Z -- container saudavel, sem erro]

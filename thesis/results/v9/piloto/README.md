@@ -11,9 +11,9 @@ coisa está.
   E VERDE.** Passos 0–14 todos passaram numa execução real na AWS
   (segunda tentativa desta retomada).
 - **Fase B (piloto real de 60 execuções): COMPLETA DE PONTA A PONTA
-  pela primeira vez (Decisão 95, 4ª tentativa real) — 60/60 execuções,
+  pela SEGUNDA vez (Decisão 101, 5ª tentativa real) — 60/60 execuções,
   12/12 capturas, os 7 critérios avaliados com dados 100% reais.
-  Resultado: 4/7 PASS (critérios 3/4/5/6), 3/7 FAIL (critérios 1/2/7).**
+  Resultado: 6/7 PASS (critérios 1/3/4/5/6/7), 1/7 FAIL (critério 2).**
   Resumo da sequência: Decisão 90 parou na prova de captura (classificação
   de mensagens sob rede real). Decisão 91 corrigiu o mecanismo
   (classificação por direção/stream, consistência obrigatória). Decisão
@@ -25,15 +25,25 @@ coisa está.
   Luciano, confirmada nos 5 pontos pedidos. Decisão 94 (4ª tentativa): 4
   achados reais de infraestrutura/lógica nos produtores dos critérios
   2/3/7 (nunca exercitados contra o piloto real antes), todos corrigidos
-  ao vivo. Decisão 95: Fase B completa — os 3 FAILs (critérios 1/2/7) são
-  achados NOVOS de MÉTODO de medição (nunca de infraestrutura), nunca
-  vistos antes porque nenhuma tentativa anterior chegou tão longe — 3
-  decisões pendentes do Luciano. Os quatro ensaios reais (evidência,
-  nunca critério oficial) ficam em `tentativas/`, marcados `conta_como_
-  dado: false`; o resultado OFICIAL completo fica em `dados_oficiais/
-  piloto-real-aws-2026-11-09/`.
-- **Fase C (consolidação):** feita (Decisão 95) — ver `dados_oficiais/
-  piloto-real-aws-2026-11-09/RELATORIO_PILOTO.md`.
+  ao vivo. Decisão 95 (4ª tentativa, COMPLETA): 4/7 PASS, 3 FAILs
+  (critérios 1/2/7) — achados NOVOS de MÉTODO de medição (nunca de
+  infraestrutura). Decisões 96-100: Emenda fail-closed de teardown (96),
+  Emenda RTT-pcap ao critério 7 (97), Emenda MSS-efetivo ao critério 2
+  (98), Emenda robustez-de-captura ao critério 1 com retry (99),
+  validação local com tc netem e verdade conhecida (100). **Decisão 101
+  (5ª tentativa, COMPLETA): os critérios 1 e 7 — alvo direto das
+  Emendas 99 e 97 — PASSAM pela primeira vez; só o critério 2 continua
+  FAIL, pelo motivo JÁ conhecido (pacing, nunca mais o bug de MSS,
+  confirmado corrigido por `mss_channels_agree: true`); teardown pela
+  PRIMEIRA vez usando o gate fail-closed de verdade
+  (`--pull-verified-marker`, nunca `--force`).** Os cinco ensaios reais
+  (evidência, nunca critério oficial além do resultado final) ficam em
+  `tentativas/`, marcados `conta_como_dado: false`; o resultado OFICIAL
+  mais recente fica em `dados_oficiais/piloto-real-aws-2026-11-09-v2/`
+  (o resultado anterior, Decisão 95, permanece em `piloto-real-
+  aws-2026-11-09/` como histórico, nunca sobrescrito).
+- **Fase C (consolidação):** feita (Decisão 101) — ver `dados_oficiais/
+  piloto-real-aws-2026-11-09-v2/RELATORIO_PILOTO.md`.
 
 ## Arquivos neste diretório
 
@@ -50,7 +60,9 @@ coisa está.
 | `tentativas/ensaio_fase_b_real_v2/` | Logs da segunda tentativa real da Fase B — backend provado (12/12, 0 falhas), parou na prova de captura (Decisões 81/87/88/89/90) — `conta_como_dado: false`, nunca um dos 7 critérios oficiais. Ver `tentativas/ensaio_fase_b_real_v2/IDENTIDADE.json`. |
 | `dados_oficiais/validacao-local-decisao-91/` | Validação local REAL (6 conexões mTLS reais, fluxo de negócio completo) do mecanismo corrigido pela Decisão 91, antes de qualquer tentativa real na AWS. Ver `dados_oficiais/validacao-local-decisao-91/IDENTIDADE.json`. |
 | `tentativas/ensaio_fase_b_real_v3/` | Logs da terceira tentativa real da Fase B — mecanismo da Decisão 91 provado perfeito contra rede real nos 4 perfis, parou em `certificate_bytes`/`CERTIFICATE_BASELINE` (Decisão 92) — `conta_como_dado: false`. Ver `tentativas/ensaio_fase_b_real_v3/IDENTIDADE.json`. |
-| `dados_oficiais/piloto-real-aws-2026-11-09/` | **Resultado OFICIAL completo da Fase B** (Decisão 95, 4ª tentativa) — 60/60 execuções, 12/12 capturas, os 7 critérios reais (4 PASS, 3 FAIL — achados novos de método, nunca de infraestrutura). `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (19 arquivos coletados). |
+| `dados_oficiais/piloto-real-aws-2026-11-09/` | Resultado da 4ª tentativa (Decisão 95) — 60/60 execuções, 12/12 capturas, 4/7 PASS, 3/7 FAIL (achados novos de método, nunca de infraestrutura) — **histórico, superado pela 5ª tentativa**, nunca sobrescrito. `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (19 arquivos coletados). |
+| `tentativas/investigacao_passo10_2026-11-09/` | Investigação ao vivo (Decisão 101, achado 2) confirmando que o Passo 10 da 5ª tentativa estava genuinamente progredindo (nunca travado) antes de uma queda de conexão SSH — `conta_como_dado: false`. |
+| `dados_oficiais/piloto-real-aws-2026-11-09-v2/` | **Resultado OFICIAL mais recente da Fase B** (Decisão 101, 5ª tentativa) — 60/60 execuções, 12/12 capturas, os 7 critérios reais (6 PASS, 1 FAIL — critérios 1 e 7 agora passam, só o critério 2 continua FAIL por pacing, já conhecido). `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (92 arquivos coletados, incluindo pcaps/keylogs brutos de toda tentativa de captura). |
 
 ## Convenção
 

@@ -1,0 +1,26 @@
+=== ps -eo pid,etime,stat,wchan:32,cmd (orchestrator.py --smoke) ===
+  18315       11:18 S    do_poll.constprop.0              python3 orchestrator.py --mode ssh --inventory-json inventory.json --ssh-key /home/ec2-user/.ssh/campaign_key --images-staging-dir /home/ec2-user/images --smoke --out /home/ec2-user/campaign-data/v9/smoke
+
+=== fd de 18315 ===
+lr-x------. 1 ec2-user ec2-user 64 Nov  9 13:23 0 -> /dev/null
+l-wx------. 1 ec2-user ec2-user 64 Nov  9 13:23 1 -> /tmp/smoke_run.log
+l-wx------. 1 ec2-user ec2-user 64 Nov  9 13:23 2 -> /tmp/smoke_run.log
+lr-x------. 1 ec2-user ec2-user 64 Nov  9 13:23 4 -> pipe:[57144]
+lr-x------. 1 ec2-user ec2-user 64 Nov  9 13:23 6 -> pipe:[57145]
+
+=== /proc/18315/status ===
+Name: python3
+State: S (sleeping)
+
+=== ss -tnp (ESTAB) no momento ===
+ESTAB 0 60 172.31.30.177:22 161.22.59.250:49554
+ESTAB 0 0 172.31.30.177:42842 16.192.231.138:22 users:(("ssh",pid=19449,fd=3))
+
+=== /tmp/smoke_run.log (stdout/stderr do processo) ===
+Size: 0 bytes (vazio -- orchestrator.py so imprime o JSON final, nunca progresso incremental; vazio NAO e evidencia de hang por si so)
+Modify: 2026-11-09 13:12:19 UTC (criado no inicio do processo, nunca mais escrito)
+
+=== teste direto, do CONTROLE, da conexao pro cliente L219 (16.192.231.138), logo depois do pid=19449 ja ter saido ===
+OK_L219
+13:24:12 up 2:13, 0 users, load average: 0.03 0.03 0.00
+rc=0 -- conectividade controle->cliente L219 confirmada RAPIDA e FUNCIONAL no momento da checagem.
