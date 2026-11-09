@@ -31,6 +31,43 @@ def test_cardinality_is_exactly_60_and_12(tmp_path):
     assert len(capturas) == 12
 
 
+def test_run_pilot_grade_customizada_com_capturas_cobre_so_a_grade_pedida(tmp_path):
+    """Achado real (encontrado e corrigido nesta rodada): o laco de
+    capturas dedicadas usava PROFILES/ROUTES (globais do piloto,
+    4x3=12) hardcoded, nunca os parametros `profiles`/`routes` da
+    propria funcao -- uma grade customizada (ex.: a do ensaio
+    multi-regiao/campanha oficial) com `skip_dedicated_captures=False`
+    teria SEMPRE as 12 capturas do piloto, nunca a grade real pedida.
+    Prova com uma grade de 2 perfis x 2 rotas (nunca igual a 4x3)."""
+    manifest = orch.run_pilot(
+        orch.LocalExecutor(), seed=1, out_dir=tmp_path,
+        n_per_profile=1, routes=["L123", "L14"], profiles=["classico", "pqc"],
+    )
+    assert manifest["total_capturas"] == 4, "2 perfis x 2 rotas = 4, nunca os 12 do piloto"
+    capturas = list(Path(manifest["capturas_dir"]).glob("*.log"))
+    assert len(capturas) == 4
+    capture_names = {p.stem for p in capturas}
+    assert capture_names == {"classico_L123", "classico_L14", "pqc_L123", "pqc_L14"}
+    # nenhuma rota/perfil do piloto (L0/L219/L325, hibrido-v8/hibrido-and) deveria aparecer.
+    assert not any("L0" in n or "L219" in n or "L325" in n or "hibrido" in n for n in capture_names), capture_names
+
+
+def test_mutante_run_pilot_capturas_fixas_no_piloto_e_pego(tmp_path):
+    """Mutante: reproduz o comportamento ANTIGO (capturas sempre sobre
+    PROFILES/ROUTES do piloto) -- confirma que o teste real acima
+    reprovaria essa regressao."""
+    capturas_dir = tmp_path / "mutante_capturas"
+    capturas_dir.mkdir()
+    executor = orch.LocalExecutor()
+    for profile in orch.PROFILES:  # mutante: ignora os parametros da chamada, usa sempre os globais
+        for route in orch.ROUTES:
+            block = executor.dedicated_capture(profile, route, capturas_dir=capturas_dir)
+            (capturas_dir / f"{profile}_{route}.log").write_text(block, encoding="utf-8")
+    mutant_capturas = list(capturas_dir.glob("*.log"))
+    assert len(mutant_capturas) == 12, "mutante reproduz os 12 do piloto, nunca os 4 da grade customizada"
+    assert len(mutant_capturas) != 4
+
+
 def test_cada_rota_tem_os_4_perfis_sem_repeticao(tmp_path):
     manifest = orch.run_pilot(orch.LocalExecutor(), seed=7, out_dir=tmp_path)
     for route in orch.ROUTES:
@@ -1272,6 +1309,62 @@ def test_mutante_capture_ready_check_nunca_entrega_measure_e_pego(monkeypatch):
     assert calls == [], "mutante nunca deveria ter entregado measure -- confirma que o teste real dependia disso"
 
 
+def test_capture_ready_check_cobre_os_3_servidores_em_modo_campanha(monkeypatch):
+    """Lacuna encontrada e fechada agora (pedido do Luciano, confirmacao
+    da generalizacao achado 10/condicao 4): o teste acima so cobria o
+    piloto (1 servidor). Em modo campanha com os 3 servidores REAIS da
+    campanha oficial (sa-east-1/us-east-1/ap-northeast-1),
+    `capture_ready_check()` tem que entregar 'measure' e rodar o probe
+    nos 3, nunca so no primeiro/unico."""
+    order = []
+    inventory = {
+        "control": {"public_ip": "203.0.113.10"},
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.50"},
+            "us-east-1": {"public_ip": "203.0.113.51"},
+            "ap-northeast-1": {"public_ip": "203.0.113.52"},
+        },
+        "clients": {"L219": {"public_ip": "203.0.113.70"}},
+    }
+    executor = orch.SSHExecutor(
+        inventory, key_path="/fake/key",
+        route_server={"L0-sa-east-1": "sa-east-1", "L219": "sa-east-1",
+                      "L0-us-east-1": "us-east-1", "L0-ap-northeast-1": "ap-northeast-1"},
+    )
+
+    def fake_deliver_image(self, image_key, host):
+        order.append(("deliver", image_key, host))
+
+    def fake_run_capture_preflight(hosts, key_path=None):
+        order.append(("probe", tuple(hosts)))
+        return {"go": True, "checks": []}
+
+    monkeypatch.setattr(orch.SSHExecutor, "_deliver_image", fake_deliver_image)
+    monkeypatch.setattr(orch.preflight, "run_capture_preflight", fake_run_capture_preflight)
+
+    result = executor.capture_ready_check()
+    assert result == {"go": True, "checks": []}
+    delivered_hosts = {c[2] for c in order if c[0] == "deliver"}
+    assert delivered_hosts == {"203.0.113.50", "203.0.113.51", "203.0.113.52"}, order
+    probe_call = next(c for c in order if c[0] == "probe")
+    assert set(probe_call[1]) == {"203.0.113.50", "203.0.113.51", "203.0.113.52"}, order
+
+
+def test_mutante_capture_ready_check_campanha_so_1_servidor_e_pego(monkeypatch):
+    """Mutante: usa `[self._server_ip()]` (jeito antigo, 1 servidor) em
+    vez de `_all_server_ips()` -- confirma que, em modo campanha, isso
+    levanta (route=None e invalido) em vez de silenciosamente cobrir
+    so 1 dos 3 servidores."""
+    inventory = {
+        "control": {"public_ip": "203.0.113.10"},
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50"}, "us-east-1": {"public_ip": "203.0.113.51"}},
+        "clients": {"L219": {"public_ip": "203.0.113.70"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
+    with pytest.raises(KeyError):
+        executor._server_ip()  # mutante: route=None por default, nao existe em modo campanha
+
+
 # --- Decisao 58, achado 18: sondagem TCP pura (preflight_tcp.py real
 # da v8), restaurada -- uma vez por rota, DE DENTRO do cliente, ANTES
 # de qualquer entrega/execucao cara.
@@ -2304,3 +2397,80 @@ def test_sampler_de_steal_roda_em_modo_campanha(monkeypatch):
     assert sample["profile"] == "classico" and sample["route"] == "L219"
     assert sample["server"] == "203.0.113.50"
     assert sample["steal_pct"] == pytest.approx(100 * 50 / 390)
+
+
+def test_sampler_de_steal_cobre_servidores_distintos_em_rotas_diferentes(monkeypatch):
+    """Lacuna encontrada e fechada agora (pedido do Luciano, confirmacao
+    da generalizacao achado 10/condicao 4): o teste acima so exercitava
+    1 servidor (sa-east-1). Com 2 rotas mapeadas pra 2 servidores REAIS
+    distintos da campanha oficial (sa-east-1/us-east-1) no MESMO
+    executor, o sampler tem que amostrar o HOST CERTO de cada bloco,
+    nunca sempre o mesmo servidor por acidente de closure/estado
+    compartilhado."""
+    hosts_sampled = []
+
+    def fake_run(argv, timeout=None):
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if argv and argv[0] == "ssh" and ("cpu_mem.jsonl" in remote_cmd or "cpu_mem.pid" in remote_cmd):
+            hosts_sampled.append(argv[-2] if len(argv) >= 2 else None)
+        tcp_pre = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_pre is not None:
+            return tcp_pre
+        if "jwks" in remote_cmd or "Startup completed" in remote_cmd:
+            return _SimpleProc(stdout="")
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout="gateway: OK\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
+        return _SimpleProc()
+
+    def fake_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        if "cpu_mem.jsonl" in src:
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+            Path(dst).write_text(
+                json.dumps({"proc_stat_line": "cpu 100 0 50 1000 0 0 0 10"}) + "\n" +
+                json.dumps({"proc_stat_line": "cpu 200 0 90 1200 0 0 0 60"}) + "\n",
+                encoding="utf-8",
+            )
+        return _SimpleProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "run_scp", fake_scp)
+    inventory = {
+        "control": {"public_ip": "203.0.113.10", "private_ip": "10.0.0.10"},
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.50", "private_ip": "10.0.0.50"},
+            "us-east-1": {"public_ip": "203.0.113.51", "private_ip": "10.0.0.51"},
+        },
+        "clients": {
+            "L219": {"public_ip": "203.0.113.70", "private_ip": "10.0.2.70", "colocated": False},
+            "L14": {"public_ip": "203.0.113.71", "private_ip": "10.0.2.71", "colocated": False},
+        },
+    }
+    executor = orch.SSHExecutor(
+        inventory, key_path="/fake/key",
+        route_server={"L219": "sa-east-1", "L14": "us-east-1"},
+    )
+    executor.start_block("classico", "L219")
+    executor.stop_block("classico", "L219")
+    executor.start_block("classico", "L14")
+    executor.stop_block("classico", "L14")
+
+    assert len(executor.cpu_steal_samples) == 2
+    by_route = {s["route"]: s for s in executor.cpu_steal_samples}
+    assert by_route["L219"]["server"] == "203.0.113.50"
+    assert by_route["L14"]["server"] == "203.0.113.51"
+    # a amostragem SSH real tem que ter alcancado os 2 HOSTS distintos, nunca so 1.
+    assert any("203.0.113.50" in (h or "") for h in hosts_sampled), hosts_sampled
+    assert any("203.0.113.51" in (h or "") for h in hosts_sampled), hosts_sampled

@@ -273,6 +273,110 @@ def test_mutante_run_criterio2_nunca_espera_o_arquivo_e_pego(monkeypatch, tmp_pa
     assert scp_called, "mutante chamou scp sem esperar -- prova que o teste real dependia da espera"
 
 
+# --- Generalizacao N-servidores (Decisao 107, achado de confirmacao
+# desta rodada): `direction="client-to-server"` e `run_criterio2_
+# campaign()` estavam implementados mas SEM nenhum teste dedicado --
+# lacuna real, fechada agora. `_fake_run_criterio2_labeled` e generico
+# o bastante pra casar com QUALQUER rotulo (`criterio2_initcwnd*.json`,
+# nunca so o caminho fixo do piloto).
+
+def _fake_run_criterio2_labeled(calls):
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "ip -o -4 route" in remote_cmd:
+            return FakeProc(stdout="eth0\n")
+        if remote_cmd.startswith("test -f") and "criterio2_initcwnd" in remote_cmd:
+            return FakeProc(stdout="FOUND\n")
+        return FakeProc()
+    return fake_run
+
+
+def test_run_criterio2_direcao_cliente_para_servidor_inverte_papeis(tmp_path, monkeypatch):
+    """Gap fechado (pedido do Luciano): `direction='client-to-server'`
+    tem que INVERTER os papeis -- quem ESCUTA (e quem o scp final le)
+    passa a ser o CLIENTE, quem DISPARA a conexao de teste passa a ser
+    o SERVIDOR (o oposto exato do default/piloto, testado acima)."""
+    monkeypatch.setattr(dc.time, "sleep", lambda s: None)
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_criterio2_labeled(calls))
+
+    def fake_run_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        if str(dst).endswith(".json"):
+            Path(dst).write_text(json.dumps({"bytes_sent_total": 1234}), encoding="utf-8")
+        else:
+            Path(dst).write_bytes(b"pcap falso")
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "run_scp", fake_run_scp)
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    out_dir = tmp_path / "out"
+    result = dc.run_criterio2(executor, out_dir, route="L219", direction="client-to-server", label="L219_c2s")
+
+    assert result["bytes_sent_total"] == 1234
+    flat = [" ".join(c) for c in calls]
+    # quem sobe o probe/escuta tem que ser o CLIENTE (203.0.113.70), nunca o servidor.
+    assert any("203.0.113.70" in c and "criterio2_probe.py" in c for c in flat), flat
+    # quem dispara a conexao de teste tem que ser o SERVIDOR (203.0.113.50), nunca o cliente.
+    connect_calls = [c for c in flat if "/dev/tcp/" in c]
+    assert connect_calls and all("203.0.113.50" in c for c in connect_calls), connect_calls
+    # caminhos rotulados, nunca os fixos do piloto (que ficariam sem sufixo).
+    assert (out_dir / "criterio2_initcwnd_L219_c2s.json").is_file()
+    assert (out_dir / "criterio2_probe_L219_c2s.pcap").is_file()
+    assert not (out_dir / "criterio2_initcwnd.json").exists()
+
+
+def test_run_criterio2_direcao_invalida_falha_alto():
+    with pytest.raises(ValueError, match="direction invalida"):
+        dc.run_criterio2(orch.SSHExecutor(_inventory(), key_path="/fake/key"), Path("/tmp/x"), route="L219",
+                          direction="lado-nenhum")
+
+
+def test_run_criterio2_campaign_cobre_l325_e_as_2_direcoes(monkeypatch, tmp_path):
+    """Gap fechado (pedido do Luciano, os 2 itens declarados fora de
+    escopo ate aqui): `run_criterio2_campaign()` tem que rodar L325
+    explicitamente (nunca so L219/L123/L14/L30) E as duas direcoes
+    (server-to-client E client-to-server) -- nunca so a default do
+    piloto."""
+    calls = []
+
+    def fake_run_criterio2(executor, out_dir, route=None, direction="server-to-client", label=None):
+        calls.append((route, direction, label))
+        return {"ok": True}
+
+    monkeypatch.setattr(dc, "run_criterio2", fake_run_criterio2)
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    results = dc.run_criterio2_campaign(executor, tmp_path / "out")
+
+    routes_covered = {r for (r, _, _) in calls}
+    directions_covered = {d for (_, d, _) in calls}
+    assert "L325" in routes_covered, f"L325 tem que ser coberto -- gap declarado como fora de escopo antes: {routes_covered}"
+    assert directions_covered == {"server-to-client", "client-to-server"}, directions_covered
+    # as 3 rotas L0-* (RTT nominal 0, co-localizadas) ficam fora -- criterio 2 nao se aplica a elas.
+    assert not any(r.startswith("L0-") for r in routes_covered), routes_covered
+    assert results[f"L325_server-to-client"] == {"ok": True, "data": {"ok": True}}
+    assert results[f"L325_client-to-server"] == {"ok": True, "data": {"ok": True}}
+
+
+def test_run_criterio2_campaign_isola_falha_individual_nunca_aborta_as_outras(monkeypatch, tmp_path):
+    """Qualquer falha numa combinacao rota+direcao tem que ficar
+    registrada como `{"ok": False, ...}`, nunca abortar as demais --
+    confirma a regra de isolamento ja documentada na docstring."""
+    def fake_run_criterio2(executor, out_dir, route=None, direction="server-to-client", label=None):
+        if route == "L325":
+            raise RuntimeError("falha simulada so em L325")
+        return {"ok": True}
+
+    monkeypatch.setattr(dc, "run_criterio2", fake_run_criterio2)
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    results = dc.run_criterio2_campaign(executor, tmp_path / "out", routes=["L123", "L325"])
+
+    assert results["L123_server-to-client"]["ok"] is True
+    assert results["L325_server-to-client"] == {"ok": False, "error": "falha simulada so em L325"}
+    assert results["L123_client-to-server"]["ok"] is True, "falha em L325 nunca pode abortar as outras combinacoes"
+
+
 # --- criterio 7: probe (cliente) + pcap (servidor, via mockopin-v9-measure) + combine.
 
 def test_run_criterio7_roda_probe_no_cliente_e_pcap_no_servidor(tmp_path, monkeypatch):

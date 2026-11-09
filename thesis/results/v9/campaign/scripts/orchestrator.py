@@ -1459,10 +1459,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     NUNCA conta pro total oficial do piloto, mesmo que gere artefatos
     no MESMO formato (pra poder ser avaliada pelos mesmos criterios).
 
-    `routes`/`profiles` (Decisao 49): reduzem a grade pra validacao
-    manual de UM bloco especifico (ex.: 1 perfil x 1 rota x N
-    execucoes) -- nunca usado pelas 60/12 oficiais, que sempre passam
-    o default (todas as rotas/perfis).
+    `routes`/`profiles` (Decisao 49): reduzem/expandem a grade --
+    usado historicamente so pra REDUZIR (validacao manual de UM
+    bloco especifico, sempre com `skip_dedicated_captures=True`); o
+    ensaio multi-regiao/campanha oficial (Decisao 107) e o primeiro
+    caso que EXPANDE (8 rotas da campanha) com capturas dedicadas
+    ligadas -- o laco de capturas abaixo honra `profiles`/`routes`
+    de verdade, nunca os globais PROFILES/ROUTES do piloto.
 
     `skip_dedicated_captures`: as 12 capturas do criterio 1 sao uma
     responsabilidade SEPARADA (Decisao 41, produtores dedicados) --
@@ -1505,9 +1508,20 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 })
             executor.stop_block(profile, route)
 
+    # Achado real (encontrado agora, pedido do Luciano: desenho do
+    # ensaio multi-regiao reduzido): este laco usava PROFILES/ROUTES
+    # (os globais do piloto, 4x3) HARDCODED, nunca `profiles`/`routes`
+    # (os parametros da propria funcao, 1 linha acima) -- inofensivo
+    # ate agora porque `routes`/`profiles` so eram usados (Decisao 49)
+    # pra REDUZIR a grade de validacao manual, sempre JUNTO com
+    # `skip_dedicated_captures=True` (nunca exercitava este laco). A
+    # campanha/ensaio oficial e o PRIMEIRO caso que passa uma grade
+    # customizada (8 rotas) E quer capturas dedicadas ao mesmo tempo
+    # -- sem este fix, as capturas do criterio 1 ficariam presas as 3
+    # rotas do piloto, nunca cobrindo as 5 rotas novas da campanha.
     if not skip_dedicated_captures:
-        for profile in PROFILES:
-            for route in ROUTES:
+        for profile in profiles:
+            for route in routes:
                 block = executor.dedicated_capture(profile, route, capturas_dir=capturas_dir)
                 (capturas_dir / f"{profile}_{route}.log").write_text(block, encoding="utf-8")
 
@@ -1526,7 +1540,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         "smoke": smoke, "n_per_profile": n_per_profile,
         "route_orders": route_orders,
         "total_execucoes": len(execucoes_calls), "expected_total": expected_total,
-        "total_capturas": EXPECTED_CAPTURES,
+        "total_capturas": len(profiles) * len(routes),
         "combined_log": str(combined_log_path), "calls_json": str(calls_path),
         "criterio6_json": str(criterio6_path), "capturas_dir": str(capturas_dir),
         # Decisao 54, item 1: verificacao scp+sha256sum -c do binario
