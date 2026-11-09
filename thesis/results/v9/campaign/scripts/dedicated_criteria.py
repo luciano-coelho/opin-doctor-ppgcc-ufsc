@@ -205,7 +205,14 @@ def run_criterio7(executor, out_dir: Path, routes=("L0", "L219", "L325")) -> dic
     result = {}
     for route in routes:
         client_ip = executor._client_ip(route)
-        server_ip = executor._server_ip()
+        # Achado real (pedido do Luciano, revisao de codigo com grep
+        # literal): esta chamada ficou sem `route` desde a Decisao 107
+        # -- `run_criterio7` nunca foi tocada na generalizacao
+        # N-servidores. Em modo campanha (`route_server` setado),
+        # `_server_ip()` sem `route` levanta KeyError de proposito
+        # (fail-closed, ver `_server_key`) -- a funcao quebraria na
+        # PRIMEIRA rota, sempre. Corrigido antes de qualquer uso real.
+        server_ip = executor._server_ip(route)
         gw_ip = executor._server_gateway_ip(route)
 
         probe_proc = cli.run_ssh(

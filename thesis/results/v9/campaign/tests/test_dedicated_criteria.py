@@ -408,6 +408,61 @@ def test_run_criterio7_roda_probe_no_cliente_e_pcap_no_servidor(tmp_path, monkey
     assert all("203.0.113.50" in c for c in pcap_calls), "pcap tem que rodar do SERVIDOR -- " + str(pcap_calls)
 
 
+def test_run_criterio7_funciona_em_modo_campanha_sem_quebrar(tmp_path, monkeypatch):
+    """Achado real encontrado nesta rodada (grep literal pedido pelo
+    Luciano): `run_criterio7` chamava `executor._server_ip()` SEM
+    `route` -- em modo campanha isso levanta KeyError (fail-closed de
+    `_server_key`) na PRIMEIRA rota, sempre. Corrigido; este teste
+    prova que a funcao agora roda de ponta a ponta em modo campanha,
+    resolvendo o SERVIDOR CERTO (us-east-1, nao sa-east-1) pra rota
+    L14."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "criterio7_rtt.py probe" in remote_cmd:
+            return FakeProc(stdout=json.dumps({"rtt_ms_probe": 14.1, "n_samples_probe": 20}))
+        if "test -f /tmp/criterio1_classico_" in remote_cmd:
+            return FakeProc(stdout="FOUND\n")
+        if "criterio7_rtt.py pcap" in remote_cmd:
+            return FakeProc(stdout=json.dumps({"rtt_ms_pcap": 13.8, "n_samples_pcap": 1}))
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {
+        "control": {"public_ip": "203.0.113.10"},
+        "servers": {
+            "sa-east-1": {"public_ip": "203.0.113.50"},
+            "us-east-1": {"public_ip": "203.0.113.51"},
+        },
+        "clients": {"L14": {"public_ip": "203.0.113.71", "colocated": False}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L14": "us-east-1"})
+    out_dir = tmp_path / "out"
+    result = dc.run_criterio7(executor, out_dir, routes=("L14",))
+
+    assert result["L14"] == {"rtt_ms_probe": 14.1, "n_samples_probe": 20, "rtt_ms_pcap": 13.8}
+    flat = [" ".join(c) for c in calls]
+    pcap_calls = [c for c in flat if "criterio7_rtt.py pcap" in c or "test -f" in c]
+    # o servidor certo (us-east-1, 203.0.113.51) tem que ser usado, nunca sa-east-1.
+    assert any("203.0.113.51" in c for c in pcap_calls), pcap_calls
+    assert not any("203.0.113.50" in c for c in pcap_calls), pcap_calls
+
+
+def test_mutante_run_criterio7_sem_route_quebra_em_modo_campanha(tmp_path):
+    """Mutante: reproduz o bug ANTIGO (`_server_ip()` sem route) --
+    confirma que ele realmente quebraria em modo campanha, provando
+    que o fix acima era necessario, nao cosmetico."""
+    inventory = {
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50"}, "us-east-1": {"public_ip": "203.0.113.51"}},
+        "clients": {"L14": {"public_ip": "203.0.113.71"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L14": "us-east-1"})
+    with pytest.raises(KeyError):
+        executor._server_ip()  # mutante: o jeito antigo, sem route, quebra em modo campanha
+
+
 def test_run_criterio7_falha_alto_se_nenhum_pcap_dedicado_existe(tmp_path, monkeypatch):
     def fake_run(argv, timeout=None):
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
