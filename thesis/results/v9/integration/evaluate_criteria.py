@@ -455,42 +455,17 @@ def _parse_gateway_handshake_bytes(block: str):
     return pairs
 
 
-def _message_sizes_stream_aware(block: str, raw_lines: list[str], profile: str) -> dict:
-    """Decisao 91 (Emenda ao mecanismo de medicao do criterio 1 -- NUNCA
-    ao criterio em si, ver `_finalize_message_sizes`): caminho novo,
-    usado quando o produtor (orchestrator.py `dedicated_capture`, ou
-    um fixture sintetico de teste) emite as colunas extras `stream`/
-    `srcport`/`tcp.len` -- classifica cada mensagem por QUEM MANDOU
-    (srcport == o do ClientHello => cliente, senao => servidor) em vez
-    de supor que servidor e cliente nunca dividem seu flight em mais
-    de uma linha/frame do tshark (suposicao que a Decisao 90 achou
-    falsa sob rede real: tshark reporta o
-    CertificateVerify+Finished do servidor numa linha SEPARADA da
-    ServerHello+EncryptedExtensions+CertificateRequest+Certificate sob
-    latencia/congestionamento real, nunca visto em loopback). Mensagens
-    do MESMO lado em linhas diferentes do MESMO stream sao MESCLADAS
-    antes de montar o dict por tipo -- a fragmentacao deixa de importar
-    pra classificacao.
-
-    (c) Cada captura real tem 6 conexoes mTLS verdadeiras por execucao
-    (opin_flow.py, `get_local_leg_cert_paths` -- N_mTLS=6, documentado
-    e confirmado contra v7 desde 2026-09-14): a PRIMEIRA (cronologica)
-    e o valor medido oficial; as outras 5 tem que ser IDENTICAS --
-    qualquer divergencia e um achado (`stream_divergences`), nunca
-    silenciosamente ignorado.
-
-    (d) Verificacao de consistencia OBRIGATORIA: os bytes brutos TCP de
-    cada stream (soma de tcp.len por direcao, do inicio do stream ate o
-    ULTIMO frame que carrega uma mensagem de handshake) tem que fechar
-    EXATAMENTE com `handshakeBytesIn`/`handshakeBytesOut` que o
-    GATEWAY REAL logou pra essa mesma conexao (`countingConn`,
-    business_server.go linha 90/116 -- conta bytes crus no socket, ANTES
-    de qualquer TLS, exatamente o que tcpdump tambem ve) -- confirmado
-    empiricamente contra uma captura local real antes desta Emenda
-    (classico: raw_in=1513==gateway handshakeBytesIn=1513,
-    raw_out=1640==handshakeBytesOut=1640, piloto/.../local_validation_
-    criterio1_v2/classico_gateway_log.txt). Qualquer stream que nao
-    fechar e REPROVADO -- nunca passa (`consistency`, dobra em `ok`)."""
+def _classify_streams(raw_lines: list[str]) -> tuple[list, list, list]:
+    """Fatorado de `_message_sizes_stream_aware` (Decisao 91) pra ser
+    reusado tambem por `capture_decryption_complete` (pedido do
+    Luciano, item 3 da rodada de correcao dos criterios 2/7 -- robustez
+    de captura em L0): classifica cada mensagem por QUEM MANDOU
+    (srcport == o do ClientHello => cliente, senao => servidor),
+    agrupa por `tcp.stream`, mescla fragmentos do MESMO lado em linhas
+    diferentes do MESMO stream, e exclui o carve-out interno (SNI !=
+    "mtls", Decisao 91/36). Devolve `(stream_results, stream_errors,
+    ignored_streams)` -- MESMA classificacao, nunca duplicada entre os
+    dois chamadores."""
     rows = []
     for line in raw_lines:
         cols = line.split("\t")
@@ -583,6 +558,38 @@ def _message_sizes_stream_aware(block: str, raw_lines: list[str], profile: str) 
             "raw_bytes": raw_bytes,
         })
 
+    return stream_results, stream_errors, ignored_streams
+
+
+def _message_sizes_stream_aware(block: str, raw_lines: list[str], profile: str) -> dict:
+    """Decisao 91 (Emenda ao mecanismo de medicao do criterio 1 -- NUNCA
+    ao criterio em si, ver `_finalize_message_sizes`): caminho novo,
+    usado quando o produtor (orchestrator.py `dedicated_capture`, ou
+    um fixture sintetico de teste) emite as colunas extras `stream`/
+    `srcport`/`tcp.len`. Classificacao por stream/direcao/SNI fatorada
+    em `_classify_streams`.
+
+    (c) Cada captura real tem 6 conexoes mTLS verdadeiras por execucao
+    (opin_flow.py, `get_local_leg_cert_paths` -- N_mTLS=6, documentado
+    e confirmado contra v7 desde 2026-09-14): a PRIMEIRA (cronologica)
+    e o valor medido oficial; as outras 5 tem que ser IDENTICAS --
+    qualquer divergencia e um achado (`stream_divergences`), nunca
+    silenciosamente ignorado.
+
+    (d) Verificacao de consistencia OBRIGATORIA: os bytes brutos TCP de
+    cada stream (soma de tcp.len por direcao, do inicio do stream ate o
+    ULTIMO frame que carrega uma mensagem de handshake) tem que fechar
+    EXATAMENTE com `handshakeBytesIn`/`handshakeBytesOut` que o
+    GATEWAY REAL logou pra essa mesma conexao (`countingConn`,
+    business_server.go linha 90/116 -- conta bytes crus no socket, ANTES
+    de qualquer TLS, exatamente o que tcpdump tambem ve) -- confirmado
+    empiricamente contra uma captura local real antes desta Emenda
+    (classico: raw_in=1513==gateway handshakeBytesIn=1513,
+    raw_out=1640==handshakeBytesOut=1640, piloto/.../local_validation_
+    criterio1_v2/classico_gateway_log.txt). Qualquer stream que nao
+    fechar e REPROVADO -- nunca passa (`consistency`, dobra em `ok`)."""
+    stream_results, stream_errors, ignored_streams = _classify_streams(raw_lines)
+
     # (c) divergencia entre as 6 conexoes -- a primeira e o valor medido.
     divergences = []
     if stream_results:
@@ -633,6 +640,42 @@ def _message_sizes_stream_aware(block: str, raw_lines: list[str], profile: str) 
         stream_errors=stream_errors, ignored_streams=ignored_streams, stream_divergences=divergences,
         consistency=consistency, extra_ok=extra_ok,
     )
+
+
+EXPECTED_MTLS_STREAMS_PER_CAPTURE = 6
+
+
+def capture_decryption_complete(raw_lines: list[str], expected_streams: int = EXPECTED_MTLS_STREAMS_PER_CAPTURE) -> dict:
+    """Pedido do Luciano (item 3, rodada de correcao dos criterios
+    2/7): antes de aceitar uma captura dedicada do criterio 1 como
+    final, confere decifragem IMEDIATA e COMPLETA -- cada uma das
+    `expected_streams` conexoes mTLS client-facing reais (carve-out
+    interno ja excluido por SNI, `_classify_streams`/Decisao 91)
+    precisa ter o Certificate do SERVIDOR decifrado
+    (`tls.handshake.type==11` legivel -- o sintoma real observado na
+    Decisao 95 foi so ClientHello/ServerHello decifrarem em L0, nada
+    depois, hipotese de keylog ainda nao totalmente flushado em disco
+    quando `docker exec cat` roda, RTT quase zero nao da tempo de
+    sobra). NUNCA decide tamanho nem divergencia -- so SE a captura
+    decifrou o suficiente pra ser avaliada; `_message_sizes_stream_
+    aware` continua sendo quem decide pass/fail de tamanho. Chamado
+    por `orchestrator.py dedicated_capture` ANTES de aceitar uma
+    tentativa como final -- decifragem incompleta aciona um RETRY
+    (ate 3x), nunca mascara nem adivinha a causa; divergencia de
+    TAMANHO (mesmo com decifragem completa) nunca aciona retry, e
+    reportada como esta."""
+    stream_results, stream_errors, ignored_streams = _classify_streams(raw_lines)
+    missing_certificate = [s["stream"] for s in stream_results if s["certificate_bytes"] is None]
+    complete = (
+        len(stream_results) == expected_streams
+        and not stream_errors
+        and not missing_certificate
+    )
+    return {
+        "complete": complete, "n_streams_classified": len(stream_results),
+        "expected_streams": expected_streams, "streams_missing_certificate": missing_certificate,
+        "stream_errors": stream_errors, "ignored_streams": ignored_streams,
+    }
 
 
 def _message_sizes_for_profile(block: str, profile: str) -> dict:
@@ -934,12 +977,29 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     estatisticas (mesma logica de separar captura de medicao
     cronometrada, Decisao 24): numa conexao NOVA, o servidor manda
     >=64KB (bem mais que qualquer cwnd inicial razoavel cobriria) --
-    `bytes_sent_before_first_client_ack / mss_bytes` (MSS lido das
-    OPCOES do SYN dessa mesma conexao, nao suposto) da o numero de
+    `bytes_sent_before_first_client_ack / mss_bytes` da o numero de
     segmentos que o cwnd inicial permitiu enviar sem esperar ACK.
     Confirmado por DOIS canais independentes: (1) `bytes_antes_do_
     ACK / MSS`, calculado aqui; (2) `ss -ti` logo depois da conexao,
     campo `cwnd` reportado pelo proprio kernel.
+
+    Emenda MSS-efetivo (pedido do Luciano, apos a Decisao 95 achar que
+    `mss_bytes` vinha do MSS ANUNCIADO no SYN-ACK do servidor --
+    capacidade LOCAL da NIC/jumbo frame, nunca o MSS que de fato e
+    usado no caminho real entre regioes, reduzido por PMTU discovery
+    -- a AWS real mediu 8961B anunciado vs 1448B efetivo): desvio
+    formal do pre-registro (Decisao 34 dizia "MSS lido das opcoes do
+    SYN da mesma conexao" -- o codigo lia literalmente a opcao do
+    SYN-ACK, que e exatamente a capacidade local, nunca o efetivo).
+    `mss_bytes` agora so existe quando DOIS canais do MSS EFETIVO
+    concordam (`criterio2_probe.py effective_mss`): (1) `ss -ti`,
+    campo `mss` do proprio kernel; (2) o MAIOR payload real (`tcp.
+    len`) que o servidor de fato colocou no fio. Se os dois
+    discordarem, `mss_bytes` vem `None` no JSON e o criterio FALHA por
+    essa razao especificamente (`mss_channels_agree=False`), nunca
+    tenta adivinhar qual canal "esta certo". O MSS anunciado no
+    SYN-ACK continua registrado (`mss_synack_announced_bytes`), so
+    como diagnostico -- nunca entra no calculo de `segments_computed`.
 
     Decisao 37 (Emenda 9, corrige a Decisao 34): **reprovar so porque
     TSO/GSO estao ligados tornaria o criterio praticamente
@@ -960,10 +1020,12 @@ def criterion_2_initcwnd(aws_dir) -> dict:
 
     Formato esperado em `<aws_dir>/criterio2_initcwnd.json`:
     `{"bytes_sent_total": int, "bytes_sent_before_first_client_ack": int,
-    "mss_bytes": int, "ss_ti_cwnd": int, "offloads": {"tso": "on"|"off",
-    "gso": "on"|"off", "gro": "on"|"off"}}` -- `offloads` e sempre
-    exigido no arquivo (pra garantir que foi de fato registrado), mas
-    seu CONTEUDO nunca decide pass/fail.
+    "mss_bytes": int|None, "mss_channels_agree": bool, "ss_ti_cwnd": int,
+    "offloads": {"tso": "on"|"off", "gso": "on"|"off", "gro": "on"|"off"}}`
+    -- `offloads` e sempre exigido no arquivo (pra garantir que foi de
+    fato registrado), mas seu CONTEUDO nunca decide pass/fail.
+    `mss_channels_agree` e exigido explicitamente -- ausente ou False
+    reprova por si so (Emenda MSS-efetivo).
     """
     if not aws_dir:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
@@ -977,6 +1039,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
         total = data["bytes_sent_total"]
         before_ack = data["bytes_sent_before_first_client_ack"]
         mss = data["mss_bytes"]
+        mss_channels_agree = data["mss_channels_agree"]
         ss_cwnd = data["ss_ti_cwnd"]
         offloads = data["offloads"]
         # Decisao 40 (revisao independente, item B.8): o JSON precisa
@@ -1002,6 +1065,17 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     if not isinstance(offloads, dict) or "tso" not in offloads or "gso" not in offloads or "gro" not in offloads:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": "campo 'offloads' ausente ou incompleto -- precisa ser registrado (tso/gso/gro), mesmo que nao decida o resultado"}
+    # Emenda MSS-efetivo: `mss_channels_agree` precisa ser o booleano
+    # True estritamente -- ausente, None ou False reprova por si so,
+    # ANTES de qualquer calculo de segmentos (um `mss_bytes` vindo de
+    # canais discordantes nunca pode ser usado, mesmo que por acidente
+    # o resultado parecesse bater).
+    if mss_channels_agree is not True:
+        return {"criterion": 2, "name": "initcwnd real",
+                "route": route, "instance_type": instance_type, "profile": profile,
+                "mss_channels_agree": mss_channels_agree, "pass": False,
+                "note": "os dois canais do MSS efetivo (ss -ti e maior payload real do pcap) discordam "
+                        "(ou 'mss_channels_agree' ausente) -- Emenda MSS-efetivo, nunca usa um canal por default"}
     test_valid = isinstance(total, (int, float)) and total >= INITCWND_MIN_BYTES_SENT
     segments_computed = (before_ack / mss) if (isinstance(before_ack, (int, float)) and isinstance(mss, (int, float)) and mss > 0) else None
     segments_ok = segments_computed is not None and segments_computed >= INITCWND_MIN_SEGMENTS
@@ -1011,6 +1085,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     ok = test_valid and segments_ok and ss_ok and agree
     return {"criterion": 2, "name": "initcwnd real",
             "route": route, "instance_type": instance_type, "profile": profile,
+            "mss_channels_agree": mss_channels_agree,
             "bytes_sent_total": total, "min_bytes_required": INITCWND_MIN_BYTES_SENT, "test_valid": test_valid,
             "segments_computed": segments_computed, "ss_ti_cwnd": ss_cwnd, "threshold": INITCWND_MIN_SEGMENTS,
             "max_diff_segments": INITCWND_MAX_DIFF_SEGMENTS, "agree": agree,
@@ -1116,9 +1191,17 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
     1. `rtt_ms_probe`: probe de CONEXAO TCP na porta 443 (mesmo
        metodo da v8 real, "Pre-flight TCP/443") -- N amostras,
        mediana.
-    2. `rtt_ms_pcap`: SYN->SYN-ACK extraido direto da captura
-       dedicada (criterio 1/2) das conexoes TLS reais -- zero custo
-       extra, os dados ja existem.
+    2. `rtt_ms_pcap`: Emenda RTT-pcap (pedido do Luciano, apos a
+       Decisao 95 achar que o metodo original -- SYN do cliente
+       CHEGANDO -> SYN-ACK do servidor SAINDO, os DOIS eventos na
+       MESMA interface do servidor -- media so tempo de PROCESSAMENTO
+       local, zero propagacao de rede, nunca RTT real): agora mede a
+       SEGUNDA metade do 3-way handshake, SYN-ACK do servidor SAINDO
+       -> ACK do cliente fechando o handshake CHEGANDO de volta (ida+
+       volta completas, servidor->cliente->servidor), direto da MESMA
+       captura dedicada (criterio 1/2) das conexoes TLS reais, pareado
+       por `tcp.stream` -- zero custo extra, zero ponto de captura
+       novo, zero regra de SG nova.
     Os dois precisam (a) passar `_rtt_ok` individualmente e (b)
     CONCORDAR entre si (`_rtt_consistent`) -- se um canal disser
     "dentro da faixa" e o outro disser algo muito diferente, isso e

@@ -1,0 +1,3 @@
+FROM alpine:3.20
+RUN apk add --no-cache python3 tcpdump iproute2 docker-cli bash
+RUN printf '#!/bin/sh\nexec "$@"\n' > /usr/bin/sudo && chmod +x /usr/bin/sudo

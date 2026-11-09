@@ -107,7 +107,10 @@ def test_run_criterio2_sobe_probe_dispara_cliente_e_traz_resultado(tmp_path, mon
     calls = []
     monkeypatch.setattr(cli, "_run", _fake_run_criterio2(calls))
 
+    scp_calls = []
+
     def fake_run_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        scp_calls.append((src, dst))
         Path(dst).write_text(json.dumps({"bytes_sent_total": 71680, "mss_bytes": 1448}), encoding="utf-8")
         return FakeProc()
 
@@ -123,6 +126,47 @@ def test_run_criterio2_sobe_probe_dispara_cliente_e_traz_resultado(tmp_path, mon
     # a conexao de teste tem que vir do CLIENTE da rota, nunca do servidor.
     client_calls = [c for c in flat if "203.0.113.70" in c and "/dev/tcp/" in c]
     assert client_calls, flat
+
+    # Pedido do Luciano (item 0, regra fail-closed nova): o pcap bruto
+    # deste teste dedicado tem que ser trazido pro MESMO out_dir que o
+    # manifesto global ja cobre -- nunca so o JSON.
+    assert (out_dir / "criterio2_probe.pcap").is_file()
+    pcap_scp_calls = [c for c in scp_calls if "criterio2.pcap" in c[0]]
+    assert pcap_scp_calls, scp_calls
+
+
+def test_mutante_run_criterio2_sem_pull_do_pcap_perde_evidencia_bruta(tmp_path, monkeypatch):
+    """Mutante = o comportamento ANTIGO: so traz o JSON, nunca o pcap
+    bruto -- o teste real acima depende de fato do scp extra, provado
+    aqui reproduzindo o mutante (sem a chamada extra) e confirmando
+    que o pcap NUNCA aparece no out_dir."""
+    monkeypatch.setattr(dc.time, "sleep", lambda s: None)
+    calls = []
+    monkeypatch.setattr(cli, "_run", _fake_run_criterio2(calls))
+
+    def fake_run_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        Path(dst).write_text(json.dumps({"bytes_sent_total": 71680, "mss_bytes": 1448}), encoding="utf-8")
+        return FakeProc()
+
+    def mutant_run_criterio2(executor, out_dir, route="L219"):
+        server_ip = executor._server_ip()
+        cli.run_ssh(server_ip, "ip -o -4 route show to default | awk '{print $5}' | head -1", key_path=executor.key_path)
+        cli.run_ssh(server_ip, "nohup python3 criterio2_probe.py ... &", key_path=executor.key_path)
+        for _ in range(5):
+            check = cli.run_ssh(server_ip, "test -f /tmp/criterio2_initcwnd.json && echo FOUND", key_path=executor.key_path)
+            if "FOUND" in (check.stdout or ""):
+                break
+        cli.run_ssh(executor._client_ip(route), "cat < /dev/tcp/x/9876", key_path=executor.key_path)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        local_path = out_dir / "criterio2_initcwnd.json"
+        cli.run_scp(f"ec2-user@{server_ip}:/tmp/criterio2_initcwnd.json", str(local_path), key_path=executor.key_path)
+        return json.loads(local_path.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(cli, "run_scp", fake_run_scp)
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    out_dir = tmp_path / "out_mutante"
+    mutant_run_criterio2(executor, out_dir, route="L219")
+    assert not (out_dir / "criterio2_probe.pcap").exists(), "mutante nunca traz o pcap bruto -- exatamente a lacuna da regra fail-closed nova"
 
 
 # --- Decisao 94 (achado real, ao vivo, Passo 11.5): a sessao SSH que
@@ -273,3 +317,64 @@ def test_run_criterio7_falha_alto_se_nenhum_pcap_dedicado_existe(tmp_path, monke
     executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
     with pytest.raises(RuntimeError, match="nenhum pcap dedicado"):
         dc.run_criterio7(executor, tmp_path / "out", routes=("L219",))
+
+
+# --- collect_full_logs (pedido do Luciano, item 0, regra fail-closed
+# nova): logs CHEIOS de TODOS os containers do servidor -- antes
+# desta Emenda, auth/mongo_seed/mockapi nunca tinham log nenhum
+# guardado, e o gateway so tinha uma JANELA de tempo.
+
+def test_collect_full_logs_traz_log_cheio_dos_4_containers(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "docker logs -t v9-mtls" in remote_cmd:
+            return FakeProc(stdout="log do gateway completo\n")
+        if "docker logs -t insurance-server-lambdas-auth-1" in remote_cmd:
+            return FakeProc(stdout="log do auth completo\n")
+        if "docker logs -t insurance-server-lambdas-mongo_seed-1" in remote_cmd:
+            return FakeProc(stdout="log do mongo_seed completo\n")
+        if "docker logs -t insurance-server-lambdas-mockapi-1" in remote_cmd:
+            return FakeProc(stdout="log do mockapi completo\n")
+        if "dmesg" in remote_cmd:
+            return FakeProc(stdout="dmesg fake\n")
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    out_dir = tmp_path / "out"
+    result = dc.collect_full_logs(executor, out_dir)
+
+    logs_dir = out_dir / "full_container_logs"
+    assert (logs_dir / "v9-mtls.log").read_text(encoding="utf-8") == "log do gateway completo\n"
+    assert (logs_dir / "insurance-server-lambdas-auth-1.log").read_text(encoding="utf-8") == "log do auth completo\n"
+    assert (logs_dir / "insurance-server-lambdas-mongo_seed-1.log").read_text(encoding="utf-8") == "log do mongo_seed completo\n"
+    assert (logs_dir / "insurance-server-lambdas-mockapi-1.log").read_text(encoding="utf-8") == "log do mockapi completo\n"
+    assert set(result["containers"]) == {"v9-mtls", "insurance-server-lambdas-auth-1",
+                                          "insurance-server-lambdas-mongo_seed-1", "insurance-server-lambdas-mockapi-1"}
+    # sem janela de tempo (--since/--until) -- log CHEIO, nunca so um trecho.
+    full_log_calls = [" ".join(c) for c in calls if "docker logs -t v9-mtls" in " ".join(c)]
+    assert full_log_calls and all("--since" not in c for c in full_log_calls), full_log_calls
+
+
+def test_mutante_collect_full_logs_so_gateway_perde_auth_mongo_mockapi(tmp_path, monkeypatch):
+    """Mutante = o comportamento ANTIGO: so o gateway (via `_gateway_
+    logs`, com JANELA de tempo) era preservado -- auth/mongo_seed/
+    mockapi nunca apareciam em disco. Reproduz o mutante e confirma
+    que a lacuna real existia."""
+    def mutant_collect(executor, out_dir):
+        out_dir = Path(out_dir)
+        logs_dir = out_dir / "full_container_logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_text = executor._gateway_logs("2026-01-01T00:00:00", "2026-01-01T00:01:00")
+        (logs_dir / "v9-mtls.log").write_text(log_text, encoding="utf-8")
+        return {"containers": {"v9-mtls": {}}}
+
+    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: FakeProc(stdout=""))
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    out_dir = tmp_path / "out_mutante"
+    result = mutant_collect(executor, out_dir)
+    assert set(result["containers"]) == {"v9-mtls"}  # nunca os outros 3 -- exatamente a lacuna da regra nova
+    assert not (out_dir / "full_container_logs" / "insurance-server-lambdas-auth-1.log").exists()

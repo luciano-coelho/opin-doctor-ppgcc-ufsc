@@ -203,7 +203,7 @@ class LocalExecutor:
             "curveID": ec.EXPECTED_CURVE[profile], "dualAuthenticated": dual,
         }
 
-    def dedicated_capture(self, profile, route):
+    def dedicated_capture(self, profile, route, capturas_dir=None):
         return _dedicated_capture_block(profile)
 
     def capture_ready_check(self):
@@ -1027,7 +1027,32 @@ class SSHExecutor:
         self._deliver_image("measure", self._server_ip())
         return preflight.run_capture_preflight([self._server_ip()], key_path=self.key_path)
 
-    def dedicated_capture(self, profile, route):
+    def _preserve_capture_attempt(self, server_ip, remote_pcap_path, remote_keylog_path, profile, route, attempt, capturas_dir: Path):
+        """Pedido do Luciano (item 0, regra fail-closed nova + item 3,
+        robustez de captura): traz o pcap+keylog BRUTOS desta
+        tentativa (sucesso OU falha -- nunca so a que deu certo) pro
+        `capturas_dir` LOCAL (no CONTROLE) -- sem isso, os dois ficam
+        SO em `/tmp` no servidor, destruidos pelo teardown, nunca
+        fazendo parte do que `collect_artifacts.py` verifica por
+        sha256. A tentativa VENCEDORA (que `dedicated_capture` aceita
+        como final) ganha o nome SEM sufixo de tentativa
+        (`{profile}_{route}.pcap`/`.keylog`) alem da copia numerada --
+        mesma convencao que `{profile}_{route}.log` (o bloco de texto
+        extraido) ja usa."""
+        retries_dir = capturas_dir / "capturas_brutas"
+        retries_dir.mkdir(parents=True, exist_ok=True)
+        local_pcap = retries_dir / f"{profile}_{route}_tentativa{attempt}.pcap"
+        local_keylog = retries_dir / f"{profile}_{route}_tentativa{attempt}.keylog"
+        pcap_proc = cli.run_scp(f"ec2-user@{server_ip}:{remote_pcap_path}", str(local_pcap), key_path=self.key_path)
+        if pcap_proc.returncode != 0:
+            raise RuntimeError(f"_preserve_capture_attempt {profile}/{route} tentativa {attempt}: scp do pcap falhou: {cli.redact(pcap_proc.stderr)}")
+        keylog_proc = cli.run_scp(f"ec2-user@{server_ip}:{remote_keylog_path}", str(local_keylog), key_path=self.key_path)
+        if keylog_proc.returncode != 0:
+            raise RuntimeError(f"_preserve_capture_attempt {profile}/{route} tentativa {attempt}: scp do keylog falhou: {cli.redact(keylog_proc.stderr)}")
+
+    MAX_CAPTURE_ATTEMPTS = 3
+
+    def dedicated_capture(self, profile, route, capturas_dir=None):
         """Decisao 52 (pedido independente, item 4) -- substitui o
         placeholder da Decisao 49 (que so lia um arquivo que nunca era
         escrito).
@@ -1087,109 +1112,162 @@ class SSHExecutor:
         # Decisao 55, item 2: mockopin-v9-measure (tshark) tambem por
         # save/load -- nunca `docker build` na instancia.
         self._deliver_image("measure", server_ip)
-        pcap_path = f"/tmp/criterio1_{profile}_{route}.pcap"
-        keylog_path = f"/tmp/criterio1_keylog_{profile}_{route}.txt"
-        tcpdump_log = f"/tmp/criterio1_tcpdump_{profile}_{route}.log"
-
         iface = self._primary_iface(server_ip)
 
-        start_proc = cli.run_ssh(
-            server_ip,
-            f"sudo sh -c 'nohup tcpdump -i {iface} -s 0 -w {pcap_path} \"tcp port 443\" "
-            f"> {tcpdump_log} 2>&1 & echo $!'",
-            key_path=self.key_path,
-        )
-        tcpdump_pid = start_proc.stdout.strip().splitlines()[-1] if start_proc.stdout.strip() else ""
-        if not tcpdump_pid.isdigit():
-            raise RuntimeError(
-                f"dedicated_capture {profile}/{route}: tcpdump nao iniciou "
-                f"(stdout={start_proc.stdout!r} stderr={start_proc.stderr!r})"
+        # Emenda robustez-de-captura (pedido do Luciano, item 3 da
+        # rodada de correcao dos criterios 1/2/7, apos a Decisao 95
+        # achar que L0 so decifra ClientHello/ServerHello nos 4
+        # perfis, hipotese de timing nunca confirmada): nunca adivinha
+        # a causa -- em vez disso, torna a captura ROBUSTA. Cada
+        # tentativa usa pcap/keylog/log PROPRIOS (numerados), confere
+        # decifragem IMEDIATA e COMPLETA (`ec.capture_decryption_
+        # complete`, as 6 conexoes mTLS precisam ter o Certificate do
+        # servidor decifrado) antes de aceitar -- SO retenta quando o
+        # MODO DE FALHA e decifragem incompleta (nunca por divergencia
+        # de tamanho, que e reportada como esta, nunca mascarada por
+        # retry), ate `MAX_CAPTURE_ATTEMPTS` vezes. TODA tentativa
+        # (sucesso ou falha) tem seu pcap/keylog preservados -- pedido
+        # explicito do Luciano, nunca descartados silenciosamente.
+        attempts_log = []
+        lines = None
+        t0 = t1 = None
+        for attempt in range(1, self.MAX_CAPTURE_ATTEMPTS + 1):
+            pcap_path = f"/tmp/criterio1_{profile}_{route}_tentativa{attempt}.pcap"
+            keylog_path = f"/tmp/criterio1_keylog_{profile}_{route}_tentativa{attempt}.txt"
+            tcpdump_log = f"/tmp/criterio1_tcpdump_{profile}_{route}_tentativa{attempt}.log"
+
+            start_proc = cli.run_ssh(
+                server_ip,
+                f"sudo sh -c 'nohup tcpdump -i {iface} -s 0 -w {pcap_path} \"tcp port 443\" "
+                f"> {tcpdump_log} 2>&1 & echo $!'",
+                key_path=self.key_path,
             )
+            tcpdump_pid = start_proc.stdout.strip().splitlines()[-1] if start_proc.stdout.strip() else ""
+            if not tcpdump_pid.isdigit():
+                raise RuntimeError(
+                    f"dedicated_capture {profile}/{route} tentativa {attempt}: tcpdump nao iniciou "
+                    f"(stdout={start_proc.stdout!r} stderr={start_proc.stderr!r})"
+                )
 
-        t0 = datetime.now(timezone.utc)
-        try:
-            gw_ip = self._server_gateway_ip(route)
-            env = self._client_env(profile, gw_ip)
-            remote_argv = f"campaign_client_runner.py --label criterio1_capture_{profile}_{route}"
-            remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(env)} python3 {remote_argv}"
-            trigger = cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
-            if trigger.returncode != 0:
-                raise RuntimeError(f"dedicated_capture {profile}/{route}: conexao de disparo falhou: {trigger.stderr}")
-        finally:
-            # sleep antes do kill: da tempo da conexao de disparo
-            # terminar de verdade antes de cortar a captura no meio.
-            cli.run_ssh(server_ip, f"sleep 1; sudo kill {tcpdump_pid} 2>/dev/null; sleep 1; true", key_path=self.key_path)
-        t1 = datetime.now(timezone.utc)
+            attempt_t0 = datetime.now(timezone.utc)
+            try:
+                gw_ip = self._server_gateway_ip(route)
+                env = self._client_env(profile, gw_ip)
+                remote_argv = f"campaign_client_runner.py --label criterio1_capture_{profile}_{route}_t{attempt}"
+                remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(env)} python3 {remote_argv}"
+                trigger = cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
+                if trigger.returncode != 0:
+                    raise RuntimeError(f"dedicated_capture {profile}/{route} tentativa {attempt}: conexao de disparo falhou: {trigger.stderr}")
+            finally:
+                # sleep 1 antes do kill: da tempo da conexao de disparo
+                # terminar de verdade antes de cortar a captura no
+                # meio. sleep 2 (em vez de 1) DEPOIS do kill: tempo
+                # extra pro keylog ser flushado em disco pelo processo
+                # do gateway antes do `docker exec cat` seguinte --
+                # hipotese registrada na Decisao 95 (L0, RTT quase
+                # zero, pode nao dar tempo de sobra) -- nunca confirmada
+                # sozinha, por isso tambem o RETRY (acima) se mesmo
+                # assim a decifragem sair incompleta.
+                cli.run_ssh(server_ip, f"sleep 1; sudo kill {tcpdump_pid} 2>/dev/null; sleep 2; true", key_path=self.key_path)
+            attempt_t1 = datetime.now(timezone.utc)
 
-        cli.run_ssh(server_ip, f"docker exec {self.gateway_container} cat /tmp/v9_keylog.txt > {keylog_path}", key_path=self.key_path)
+            cli.run_ssh(server_ip, f"docker exec {self.gateway_container} cat /tmp/v9_keylog.txt > {keylog_path}", key_path=self.key_path)
 
-        # Decisao 91 (Emenda -- bug de parsing do criterio 1, item b):
-        # tres colunas extras (tcp.stream, tcp.srcport, tcp.len) em
-        # relacao ao que esta funcao emitia antes -- `_message_sizes_
-        # for_profile` (evaluate_criteria.py) agora classifica cada
-        # mensagem por QUEM MANDOU (srcport), nunca mais por "esta na
-        # mesma linha que ServerHello" (suposicao que a rede real
-        # quebrou: o flight do servidor pode chegar fragmentado em mais
-        # de uma linha/frame sob latencia real, nunca visto em
-        # loopback). Desegmentacao de TCP/TLS ligada EXPLICITAMENTE
-        # (ja e o default do tshark, mas o item b do Luciano pede
-        # explicito) -- reagrupa fragmentos de UM registro TLS antes de
-        # reportar o tipo/tamanho da mensagem, pra qualquer fragmentacao
-        # no NIVEL DE REGISTRO (nao so a de reordenar linhas) tambem
-        # ficar coberta. Filtro `tcp.len>0` (nao so `tls.handshake`):
-        # precisa de TODO segmento TCP real, nao so os que carregam uma
-        # mensagem de handshake completa, pra fechar a soma bruta de
-        # bytes por direcao (item d) -- linhas sem tipo/tamanho de
-        # handshake saem com essas duas colunas vazias, nunca omitidas.
-        tshark_proc = cli.run_ssh(
-            server_ip,
-            f"docker run --rm -v {pcap_path}:{pcap_path}:ro -v {keylog_path}:{keylog_path}:ro "
-            f"--entrypoint tshark mockopin-v9-measure "
-            f'-r {pcap_path} -o "tls.keylog_file: {keylog_path}" '
-            f'-o "tcp.desegment_tcp_streams: TRUE" -o "tls.desegment_ssl_records: TRUE" '
-            f'-o "tls.desegment_ssl_application_data: TRUE" -Y "tcp.len>0" '
-            f"-T fields -e frame.number -e tcp.stream -e tcp.srcport -e tcp.len "
-            f"-e tls.handshake.type -e tls.handshake.length "
-            f"-e tls.handshake.extensions_server_name -E aggregator=,",
-            key_path=self.key_path,
-        )
-        # Decisao 91 (achado ao validar localmente contra o stack real,
-        # item 4 do pedido do Luciano -- confirmar 4/4 perfis ANTES de
-        # qualquer nova tentativa real): o carve-out interno de auth
-        # (SNI "matls-api.local", Decisao 17/18/36 -- ja excluido da
-        # contagem do criterio 4) atravessa a MESMA porta 443/interface
-        # capturada aqui quando a execucao real de negocio o dispara --
-        # confirmado ao vivo, localmente, contra o stack real (6 streams
-        # sni="mtls" + 7 streams sni="matls-api.local" na MESMA
-        # captura). SNI do ClientHello extraido pra `_message_sizes_
-        # for_profile` poder excluir esses streams da analise das 6
-        # conexoes client-facing, nunca conta-los como erro nem como
-        # divergencia.
-        lines = ["tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos, sni)"]
-        n_handshake_rows = 0
-        for raw_line in tshark_proc.stdout.strip().splitlines():
-            # tshark `-T fields` omite os TABS finais quando os ultimos
-            # campos estao vazios -- um pacote sem mensagem de
-            # handshake (ACK puro ja excluido por `tcp.len>0`, mas
-            # tambem um fragmento PARCIAL de um registro TLS reagrupado
-            # num frame POSTERIOR, parte do mesmo achado da Decisao 90,
-            # corrigido aqui pela Decisao 91) chega aqui com menos de 7
-            # colunas -- preenche ate 7 em vez de descartar (descartar
-            # subcontaria os bytes brutos do item d pra QUALQUER
-            # captura real que fragmente no nivel de registro,
-            # exatamente o cenario que esta Emenda existe pra cobrir).
-            cols = raw_line.split("\t")
-            if len(cols) < 7:
-                cols = cols + [""] * (7 - len(cols))
-            if not cols[0] or not cols[1] or not cols[2] or not cols[3]:
-                continue
-            lines.append("\t".join(cols[:7]))
-            if cols[4] and cols[5]:
-                n_handshake_rows += 1
-        if n_handshake_rows == 0:
+            # Decisao 91 (Emenda -- bug de parsing do criterio 1, item b):
+            # tres colunas extras (tcp.stream, tcp.srcport, tcp.len) em
+            # relacao ao que esta funcao emitia antes -- `_message_sizes_
+            # for_profile` (evaluate_criteria.py) agora classifica cada
+            # mensagem por QUEM MANDOU (srcport), nunca mais por "esta na
+            # mesma linha que ServerHello" (suposicao que a rede real
+            # quebrou: o flight do servidor pode chegar fragmentado em mais
+            # de uma linha/frame sob latencia real, nunca visto em
+            # loopback). Desegmentacao de TCP/TLS ligada EXPLICITAMENTE
+            # (ja e o default do tshark, mas o item b do Luciano pede
+            # explicito) -- reagrupa fragmentos de UM registro TLS antes de
+            # reportar o tipo/tamanho da mensagem, pra qualquer fragmentacao
+            # no NIVEL DE REGISTRO (nao so a de reordenar linhas) tambem
+            # ficar coberta. Filtro `tcp.len>0` (nao so `tls.handshake`):
+            # precisa de TODO segmento TCP real, nao so os que carregam uma
+            # mensagem de handshake completa, pra fechar a soma bruta de
+            # bytes por direcao (item d) -- linhas sem tipo/tamanho de
+            # handshake saem com essas duas colunas vazias, nunca omitidas.
+            tshark_proc = cli.run_ssh(
+                server_ip,
+                f"docker run --rm -v {pcap_path}:{pcap_path}:ro -v {keylog_path}:{keylog_path}:ro "
+                f"--entrypoint tshark mockopin-v9-measure "
+                f'-r {pcap_path} -o "tls.keylog_file: {keylog_path}" '
+                f'-o "tcp.desegment_tcp_streams: TRUE" -o "tls.desegment_ssl_records: TRUE" '
+                f'-o "tls.desegment_ssl_application_data: TRUE" -Y "tcp.len>0" '
+                f"-T fields -e frame.number -e tcp.stream -e tcp.srcport -e tcp.len "
+                f"-e tls.handshake.type -e tls.handshake.length "
+                f"-e tls.handshake.extensions_server_name -E aggregator=,",
+                key_path=self.key_path,
+            )
+            # Decisao 91 (achado ao validar localmente contra o stack real,
+            # item 4 do pedido do Luciano -- confirmar 4/4 perfis ANTES de
+            # qualquer nova tentativa real): o carve-out interno de auth
+            # (SNI "matls-api.local", Decisao 17/18/36 -- ja excluido da
+            # contagem do criterio 4) atravessa a MESMA porta 443/interface
+            # capturada aqui quando a execucao real de negocio o dispara --
+            # confirmado ao vivo, localmente, contra o stack real (6 streams
+            # sni="mtls" + 7 streams sni="matls-api.local" na MESMA
+            # captura). SNI do ClientHello extraido pra `_message_sizes_
+            # for_profile` poder excluir esses streams da analise das 6
+            # conexoes client-facing, nunca conta-los como erro nem como
+            # divergencia.
+            attempt_lines = ["tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos, sni)"]
+            n_handshake_rows = 0
+            for raw_line in tshark_proc.stdout.strip().splitlines():
+                # tshark `-T fields` omite os TABS finais quando os ultimos
+                # campos estao vazios -- um pacote sem mensagem de
+                # handshake (ACK puro ja excluido por `tcp.len>0`, mas
+                # tambem um fragmento PARCIAL de um registro TLS reagrupado
+                # num frame POSTERIOR, parte do mesmo achado da Decisao 90,
+                # corrigido aqui pela Decisao 91) chega aqui com menos de 7
+                # colunas -- preenche ate 7 em vez de descartar (descartar
+                # subcontaria os bytes brutos do item d pra QUALQUER
+                # captura real que fragmente no nivel de registro,
+                # exatamente o cenario que esta Emenda existe pra cobrir).
+                cols = raw_line.split("\t")
+                if len(cols) < 7:
+                    cols = cols + [""] * (7 - len(cols))
+                if not cols[0] or not cols[1] or not cols[2] or not cols[3]:
+                    continue
+                attempt_lines.append("\t".join(cols[:7]))
+                if cols[4] and cols[5]:
+                    n_handshake_rows += 1
+
+            # Pedido do Luciano (item 0, regra fail-closed nova):
+            # preserva pcap+keylog DESTA tentativa, sucesso ou falha,
+            # pro `capturas_dir` (local, no CONTROLE) -- nunca so no
+            # servidor, onde seriam destruidos pelo teardown.
+            if capturas_dir is not None:
+                self._preserve_capture_attempt(server_ip, pcap_path, keylog_path, profile, route, attempt, Path(capturas_dir))
+
+            decryption = {"complete": False, "note": "nenhuma linha de handshake extraida (pcap vazio ou keylog nao decifrou nada)"}
+            if n_handshake_rows > 0:
+                decryption = ec.capture_decryption_complete(attempt_lines)
+            attempts_log.append({"attempt": attempt, "n_handshake_rows": n_handshake_rows, "decryption": decryption})
+
+            if n_handshake_rows > 0 and decryption["complete"]:
+                lines, t0, t1 = attempt_lines, attempt_t0, attempt_t1
+                # `run_criterio7` (dedicated_criteria.py) procura o
+                # pcap dedicado pelo nome SEM sufixo de tentativa
+                # (`/tmp/criterio1_{profile}_{route}.pcap`) -- copia a
+                # tentativa VENCEDORA pra esse nome no SERVIDOR, nunca
+                # muda a busca do lado de quem consome.
+                winner_pcap = f"/tmp/criterio1_{profile}_{route}.pcap"
+                winner_keylog = f"/tmp/criterio1_keylog_{profile}_{route}.txt"
+                cli.run_ssh(server_ip, f"cp {pcap_path} {winner_pcap} && cp {keylog_path} {winner_keylog}", key_path=self.key_path)
+                if capturas_dir is not None:
+                    cli.run_scp(f"ec2-user@{server_ip}:{winner_pcap}", str(Path(capturas_dir) / f"{profile}_{route}.pcap"), key_path=self.key_path)
+                    cli.run_scp(f"ec2-user@{server_ip}:{winner_keylog}", str(Path(capturas_dir) / f"{profile}_{route}.keylog"), key_path=self.key_path)
+                break
+        else:
             raise RuntimeError(
-                f"dedicated_capture {profile}/{route}: tshark nao extraiu nenhuma mensagem de handshake "
-                f"(pcap vazio ou keylog nao decifrou) -- stdout={tshark_proc.stdout!r} stderr={tshark_proc.stderr!r}"
+                f"dedicated_capture {profile}/{route}: decifragem incompleta em "
+                f"{self.MAX_CAPTURE_ATTEMPTS} tentativas (nunca uma divergencia de tamanho -- "
+                f"essa e reportada, nunca re-tentada) -- {attempts_log}"
             )
 
         # Decisao 91, item (d): handshakeBytesIn/Out REAIS (log do
@@ -1279,7 +1357,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     if not skip_dedicated_captures:
         for profile in PROFILES:
             for route in ROUTES:
-                block = executor.dedicated_capture(profile, route)
+                block = executor.dedicated_capture(profile, route, capturas_dir=capturas_dir)
                 (capturas_dir / f"{profile}_{route}.log").write_text(block, encoding="utf-8")
 
     combined_log_path = out_dir / "piloto_combined.log"

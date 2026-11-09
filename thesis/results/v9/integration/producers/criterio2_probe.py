@@ -18,13 +18,27 @@ deixaria de refletir o initcwnd puro.
 3. Tira o snapshot de `ss -ti` IMEDIATAMENTE -- antes do primeiro
    `send()`.
 4. Manda >=64KB.
-5. Para o tcpdump, extrai via `tshark`: o MSS das opcoes do SYN e os
-   bytes que o SERVIDOR mandou antes do primeiro ACK do cliente que
-   reconhece esses bytes.
+5. Para o tcpdump, extrai via `tshark`: o MSS ANUNCIADO no SYN-ACK
+   (so diagnostico -- ver Emenda abaixo) e os bytes que o SERVIDOR
+   mandou antes do primeiro ACK do cliente que reconhece esses bytes.
 6. Registra `ethtool -k <iface>` (tso/gso/gro) -- sempre, mesmo que
    nao decida o resultado (Decisao 37).
 7. Escreve o JSON no formato que `evaluate_criteria.py`'s
    `criterion_2_initcwnd` espera.
+
+Emenda MSS-efetivo (pedido do Luciano, apos a Decisao 95 achar que
+`mss_bytes` vinha do MSS ANUNCIADO no SYN-ACK do servidor -- a
+capacidade LOCAL da NIC/jumbo frame, ex. 8961B, nunca o MSS que de
+fato acaba sendo usado no caminho real entre regioes, reduzido por
+PMTU discovery): `mss_bytes` agora vem da CONCORDANCIA entre dois
+canais independentes do MSS EFETIVO -- (1) `ss -ti`, campo `mss`
+reportado pelo proprio kernel; (2) o MAIOR payload real (`tcp.len`)
+que o servidor de fato colocou no fio nesta conexao, direto do pcap.
+Se os dois discordarem, `mss_bytes` sai `None` e o criterio FALHA por
+essa razao especificamente (nunca usa um dos dois canais "por
+default"). O MSS anunciado no SYN-ACK continua registrado
+(`mss_synack_announced_bytes`), so como diagnostico/evidencia do
+porque o metodo anterior estava errado -- nunca entra no calculo.
 
 Uso:
   python criterio2_probe.py --listen-port 9999 --iface eth0 \
@@ -88,12 +102,23 @@ def stop_tcpdump(proc):
 
 
 def ss_ti_snapshot(port) -> dict:
-    """Le `ss -ti` AGORA (sem esperar nada) e extrai o campo `cwnd`
-    da conexao estabelecida na porta dada -- chamado imediatamente
-    apos accept(), antes de qualquer send()."""
+    """Le `ss -ti` AGORA (sem esperar nada) e extrai os campos `cwnd`
+    e `mss` da conexao estabelecida na porta dada -- chamado
+    imediatamente apos accept(), antes de qualquer send().
+
+    Emenda MSS-efetivo (pedido do Luciano, apos a Decisao 95 achar que
+    `mss_bytes` vinha do SYN-ACK -- capacidade LOCAL de jumbo frame da
+    NIC, nunca o MSS EFETIVO do caminho real): o campo `mss` que o
+    PROPRIO KERNEL reporta aqui e o MSS que ele de fato vai usar pra
+    mandar dado por essa conexao (ja reduzido por PMTU/rota conhecida,
+    quando aplicavel) -- vira um dos dois canais do MSS efetivo (ver
+    `extract_mss_and_bytes_before_ack`, canal 2 = maior payload real
+    observado no pcap)."""
     out = run(["ss", "-ti", f"dport = :{port}", "or", f"sport = :{port}"]).stdout
-    m = re.search(r"cwnd:(\d+)", out)
-    return {"raw": out.strip(), "cwnd": int(m.group(1)) if m else None}
+    cwnd_m = re.search(r"cwnd:(\d+)", out)
+    mss_m = re.search(r"mss:(\d+)", out)
+    return {"raw": out.strip(), "cwnd": int(cwnd_m.group(1)) if cwnd_m else None,
+            "mss": int(mss_m.group(1)) if mss_m else None}
 
 
 def ethtool_offloads(iface) -> dict:
@@ -130,19 +155,24 @@ def _tshark_argv(pcap_path):
             "mockopin-v9-measure", "-r", pcap_path]
 
 
-def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int | None]:
-    """tshark: MSS das opcoes do SYN do SERVIDOR (quem aceita a
-    conexao, nao quem conecta); bytes que o SERVIDOR mandou (seq
+def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int | None, int | None]:
+    """tshark: (1) MSS ANUNCIADO pelo SERVIDOR no seu SYN-ACK --
+    diagnostico, NUNCA usado no calculo (Emenda MSS-efetivo, ver
+    docstring do modulo: e so a capacidade LOCAL da NIC, nunca o MSS
+    que de fato vai ser usado no caminho real); (2) o MAIOR payload
+    real (`tcp.len`) entre os segmentos de dados que o SERVIDOR
+    mandou -- canal 2 do MSS EFETIVO (cross-check obrigatorio contra
+    `ss -ti`, feito no chamador); (3) bytes que o SERVIDOR mandou (seq
     final - seq inicial do primeiro segmento de dados) ANTES do
     primeiro segmento vindo do CLIENTE com flag ACK que reconhece
     esses bytes (ack_num > seq inicial dos dados do servidor)."""
     # MSS anunciado pelo SERVIDOR no seu SYN-ACK (tcp.flags.syn==1 &&
-    # tcp.flags.ack==1, origem = porta do servidor).
+    # tcp.flags.ack==1, origem = porta do servidor) -- SO diagnostico.
     mss_out = run(
         _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
                                     "-T", "fields", "-e", "tcp.options.mss_val"],
     ).stdout.strip().splitlines()
-    mss = int(mss_out[0]) if mss_out and mss_out[0] else None
+    mss_announced = int(mss_out[0]) if mss_out and mss_out[0] else None
 
     # Todos os segmentos de DADOS que o servidor mandou (porta de
     # origem = porta do servidor, len>0), em ordem.
@@ -151,9 +181,15 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
                                     "-T", "fields", "-e", "tcp.seq", "-e", "tcp.len"],
     ).stdout.strip().splitlines()
     if not data_out:
-        return mss, None
+        return mss_announced, None, None
     first_seq = int(data_out[0].split("\t")[0])
     server_bytes_by_seq_end = [int(line.split("\t")[0]) + int(line.split("\t")[1]) for line in data_out if line]
+    # Canal 2 do MSS EFETIVO: o MAIOR payload real que o servidor de
+    # fato colocou no fio nesta conexao -- se TSO/GSO estiver ligado
+    # isso pode inflar pra um "superpacote" (registrado em `offloads`,
+    # Decisao 37), o que faz esse canal DISCORDAR de `ss -ti` de
+    # proposito (nunca concordar por acidente com um numero inflado).
+    mss_pcap_max_payload = max(int(line.split("\t")[1]) for line in data_out if line)
 
     # Primeiro ACK do CLIENTE (porta de destino = porta do servidor,
     # flag ACK, sem SYN) e o numero de ACK que ele carrega.
@@ -184,7 +220,7 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
             first_client_ack = candidate
             break
     if first_client_ack is None:
-        return mss, None
+        return mss_announced, mss_pcap_max_payload, None
 
     # Bytes do servidor cujo seq_end <= o que esse primeiro ACK ja
     # reconhece foram mandados ANTES desse ACK chegar -- soma deles,
@@ -193,7 +229,26 @@ def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int |
     bytes_before_ack = None
     if sent_before_ack > 0:
         bytes_before_ack = server_bytes_by_seq_end[sent_before_ack - 1] - first_seq
-    return mss, bytes_before_ack
+    return mss_announced, mss_pcap_max_payload, bytes_before_ack
+
+
+# Emenda MSS-efetivo: diferenca maxima aceitavel (bytes) entre os dois
+# canais independentes do MSS efetivo (`ss -ti` e maior payload real
+# do pcap) pra considera-los "concordando" -- 0B por padrao (os dois
+# medem a MESMA grandeza do MESMO jeito, sem motivo pra divergir nem
+# um byte, salvo TSO/GSO inflando o pcap -- ver comentario acima).
+MSS_CHANNELS_MAX_DIFF_BYTES = 0
+
+
+def effective_mss(ss_ti_mss, mss_pcap_max_payload) -> tuple[int | None, bool]:
+    """Emenda MSS-efetivo (pedido do Luciano): os DOIS canais
+    (`ss -ti` e maior payload real do pcap) tem que CONCORDAR -- senao
+    FALHA, nunca usa um dos dois sozinho "por default". Devolve
+    `(mss_bytes_efetivo_ou_None, concordam_bool)`."""
+    if not isinstance(ss_ti_mss, int) or not isinstance(mss_pcap_max_payload, int):
+        return None, False
+    agree = abs(ss_ti_mss - mss_pcap_max_payload) <= MSS_CHANNELS_MAX_DIFF_BYTES
+    return (ss_ti_mss if agree else None), agree
 
 
 def main():
@@ -227,7 +282,8 @@ def main():
     stop_tcpdump(tcpdump_proc)
 
     offloads = ethtool_offloads(args.iface)
-    mss, bytes_before_ack = extract_mss_and_bytes_before_ack(args.pcap, args.listen_port)
+    mss_announced, mss_pcap_max_payload, bytes_before_ack = extract_mss_and_bytes_before_ack(args.pcap, args.listen_port)
+    mss_bytes, mss_channels_agree = effective_mss(snapshot["mss"], mss_pcap_max_payload)
 
     out = {
         "route": args.route,
@@ -235,7 +291,11 @@ def main():
         "profile": args.profile,
         "bytes_sent_total": PAYLOAD_BYTES,
         "bytes_sent_before_first_client_ack": bytes_before_ack,
-        "mss_bytes": mss,
+        "mss_synack_announced_bytes": mss_announced,  # diagnostico, nunca usado no calculo (ver docstring do modulo)
+        "mss_pcap_max_payload_bytes": mss_pcap_max_payload,
+        "ss_ti_mss": snapshot["mss"],
+        "mss_channels_agree": mss_channels_agree,
+        "mss_bytes": mss_bytes,  # MSS EFETIVO -- None se os dois canais discordarem
         "ss_ti_cwnd": snapshot["cwnd"],
         "ss_ti_raw_snapshot": snapshot["raw"],
         "offloads": offloads,

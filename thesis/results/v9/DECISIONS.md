@@ -10424,3 +10424,310 @@ ficam arquivados como evidencia desta Decisao, nunca reconstruidos).
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/piloto/
 dados_oficiais/piloto-real-aws-2026-11-09/` (resultado completo),
 `thesis/results/v9/piloto/README.md`/`estado.json`, esta Decisao.
+
+## 96. Regra fail-closed NOVA pro teardown -- destroy so depois dos brutos coletados e VERIFICADOS por sha256 (12 pcaps, 12 keylogs, flights, logs de todas as instancias e conteineres, artefatos das 60 execucoes); achado real: PILOT_RUNBOOK.md mandava --force como comando PRINCIPAL, nunca exercitando o gate que ja existia em codigo
+
+**Pedido do Luciano**, respondendo ao Relatorio da Fase B (Decisao 95):
+regra nova, fail-closed, pro teardown -- so pode rodar depois que os
+brutos estejam coletados e verificados por sha256; se a coleta
+falhar, a frota NAO e derrubada (exceto por limite de custo/
+seguranca, regra 7, e entao o relatorio tem que dizer exatamente o
+que se perdeu); testar o bloqueio com mutante.
+
+**Achado real, auditando o proprio PILOT_RUNBOOK.md:** o gate
+(`cleanup.py full_cleanup`, `pull_verified_marker`) ja existia em
+codigo desde cedo nesta rodada -- mas o roteiro real (Passo 14)
+SEMPRE mandava `--force` como o comando PRINCIPAL de teardown, NUNCA
+`--pull-verified-marker`. O gate nunca foi de fato exercitado em
+NENHUMA tentativa real desta sessao (Decisoes 90-95 todas usaram
+`--force`). Corrigido:
+
+1. **cleanup.py full_cleanup:** `force=True` agora EXIGE `reason`
+   (string nao-vazia) -- reservado EXPLICITAMENTE pra excecao de
+   custo/seguranca (regra 7), nunca um bypass por conveniencia/
+   costume. `reason`/`forced` entram no resultado (auditavel, nunca
+   um bypass silencioso). CLI ganha `--reason`.
+2. **PILOT_RUNBOOK.md, Passo 14:** comando principal agora usa
+   `--pull-verified-marker /tmp/v9_piloto_coletado/.pull-verified`
+   (o MESMO marcador que o Passo 12/collect_artifacts.py ja escreve
+   DEPOIS de hashear por completo o diretorio) -- `--force --reason`
+   fica documentado SO como fallback da regra 7.
+3. **Evidencia bruta que faltava no que o manifesto ja hasheia** (a
+   causa real do gate nunca ter dado diferenca, mesmo se exercitado:
+   os brutos criticos nunca estavam no diretorio que ele verifica):
+   - orchestrator.py dedicated_capture: alem do bloco de texto
+     extraido (ja existia), agora traz o PCAP e o KEYLOG BRUTOS de
+     TODA tentativa (sucesso ou falha, ver Decisao 99) pro
+     capturas_dir LOCAL (controle) -- antes ficavam SO em /tmp no
+     SERVIDOR, destruidos pelo teardown, nunca parte do que
+     collect_artifacts.py verifica.
+   - dedicated_criteria.py run_criterio2: traz tambem o pcap bruto
+     do teste dedicado de initcwnd (criterio2_probe.pcap), antes so
+     o JSON.
+   - dedicated_criteria.py collect_full_logs (NOVA): log CHEIO (sem
+     janela de tempo) dos 4 containers do servidor
+     (gateway/auth/mongo_seed/mockapi) -- antes, SO uma JANELA do
+     gateway (_gateway_logs, usada dentro de uma execucao
+     especifica) era preservada; os outros 3 NUNCA tinham log nenhum
+     guardado. Mais diagnostico leve (dmesg, best-effort, nunca
+     fail-closed) de cada instancia da fleet.
+   Todos escrevem DENTRO do MESMO out_dir/--dir que
+   collect_artifacts.py ja hasheia por completo (find . -type f)
+   -- vira evidencia coberta pelo manifesto sha256 EXISTENTE, por
+   construcao, nunca um segundo sistema de verificacao paralelo.
+
+**Testes (mutante pedido explicitamente):** test_cleanup.py ganha 5
+testes (force sem reason falha alto, reason vazia falha alto, reason
+explicita prossegue e e reportada, sem force nunca reporta `forced`,
+MUTANTE reproduzindo o comportamento ANTIGO -- --force sozinho
+bastava, exatamente como o PILOT_RUNBOOK.md usava -- confirmando a
+lacuna real que esta Emenda fecha). test_dedicated_criteria.py
+ganha 4 (pull do pcap do criterio2 + mutante sem o pull,
+collect_full_logs traz os 4 containers + mutante que so trazia o
+gateway). test_orchestrator.py ganha 1 (preserva pcap/keylog de
+TODA tentativa, incluindo falhas, no capturas_dir).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 97. Emenda RTT-pcap ao criterio 7 -- o canal pcap medida tempo de PROCESSAMENTO LOCAL do servidor (SYN chegando -> SYN-ACK saindo, os dois na MESMA interface), nunca RTT de rede real; corrigido pra SYN-ACK saindo -> ACK fechando o handshake voltando (mesma captura, zero ponto novo, zero regra de SG nova); validado com verdade conhecida (Decisao 100)
+
+**Rotulo formal de emenda:**
+- **O que mudou:** o METODO do canal `rtt_ms_pcap` do criterio 7 --
+  de "SYN do cliente chegando -> SYN-ACK do servidor saindo" pra
+  "SYN-ACK do servidor saindo -> primeiro ACK do cliente (que fecha o
+  3-way handshake, Decisao 94 ja confirmou que ele nunca reconhece
+  dado) chegando de volta". A faixa de aceitacao (nominal +-10%, piso
+  de L0 da Emenda 5) e o segundo canal (rtt_ms_probe, TCP/443) nao
+  mudam.
+- **Motivo:** achado real da Decisao 95 -- o metodo antigo mede dois
+  eventos na MESMA interface do servidor, SEM NENHUMA propagacao de
+  rede entre eles -- e tempo de processamento local (confirmado por
+  teoria E por verdade conhecida, Decisao 100: 0,024ms medido num
+  teste com RTT REAL de 50ms configurado). O metodo novo cobre ida
+  (servidor->cliente) E volta (cliente->servidor) completas na MESMA
+  captura so-do-servidor -- RTT real de verdade, sem precisar de
+  captura no cliente.
+- **Data:** 2026-11-09.
+- **Pareamento por tcp.stream** (nunca por ordem/indice de lista --
+  streams podem intercalar sob rede real, Decisao 91).
+- **Tolerancia do criterio (+-10%, piso de L0) lida e CONFIRMADA
+  adequada** -- o piso absoluto de 1ms pra L0 (Decisao 32, Emenda 5)
+  ja trata corretamente o caso sub-milissegundo mencionado pelo
+  Luciano; nenhuma mudanca necessaria ali, nenhum STOP.
+
+criterio7_rtt.py: pcap_syn_synack_rtt/rtt_from_syn_synack_times
+substituidas por pcap_synack_ack_rtt/rtt_from_synack_ack_times/
+pair_synack_ack_by_stream (pareamento explicito por stream).
+evaluate_criteria.py: docstring do criterio 7 atualizada, nenhuma
+mudanca de limiar/formato de dado.
+
+**Validado com verdade conhecida (Decisao 100):** RTT configurado
+5/50/200ms via tc netem (topologia correta -- delay so no cliente,
+egress+ingress via ifb, nunca no servidor) -- os dois canais (probe
+real + pcap novo) bateram a configuracao dentro de +-2% nos 3
+valores; o metodo ANTIGO, medido contra os MESMOS pacotes reais,
+mostrou exatamente o sintoma teorizado (0,024ms a 50ms configurados).
+
+**Testes:** test_producers.py ganha 3 (pareamento por stream,
+mutante "metodo antigo mede so processamento local", mediana robusta
+a outlier com a nova assinatura). test_dedicated_criteria.py
+inalterado (interface JSON -- rtt_ms_pcap/n_samples_pcap --
+preservada, so a implementacao interna mudou).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 98. Emenda MSS-efetivo ao criterio 2 -- mss_bytes vinha do MSS ANUNCIADO no SYN-ACK (capacidade LOCAL da NIC/jumbo, Decisao 34), nunca o MSS EFETIVO do caminho real; corrigido pra CONCORDANCIA obrigatoria entre ss -ti e o maior payload real do pcap, senao FALHA; desvio formal do pre-registro (Decisao 34), declarado pra tese; validado com verdade conhecida (Decisao 100)
+
+**Rotulo formal de emenda, desvio DECLARADO do pre-registro:**
+- **O que mudou:** o METODO de obter `mss_bytes` no criterio 2 -- de
+  "MSS das opcoes do SYN-ACK do servidor" (Decisao 34 dizia "lido das
+  OPCOES do SYN da mesma conexao, nunca suposto" -- o codigo
+  implementava isso lendo literalmente a opcao do SYN-ACK, que e
+  exatamente a capacidade LOCAL da NIC, nunca o efetivo real) pra
+  CONCORDANCIA obrigatoria entre DOIS canais do MSS EFETIVO: (1)
+  ss -ti, campo mss do proprio kernel; (2) o MAIOR payload real
+  (tcp.len) que o servidor de fato colocou no fio, direto do pcap.
+  O limiar (INITCWND_MIN_SEGMENTS=10) nao muda.
+- **Motivo:** a AWS real (Decisao 95) mediu mss_bytes=8961
+  (anunciado no SYN-ACK, capacidade LOCAL de jumbo frame da instancia)
+  mas o MSS EFETIVO real (ss -ti) era 1448 -- reduzido por PMTU
+  discovery no caminho real entre regioes. Usar o anunciado inflava o
+  denominador de segments_computed em ~6x, fazendo o criterio
+  reprovar por um motivo de MEDICAO, nunca pela realidade do
+  initcwnd.
+- **Data:** 2026-11-09.
+- **Declarado explicitamente como desvio do pre-registro** (Decisao
+  34 definia o MSS pelas "opcoes do SYN" sem especificar qual lado da
+  conexao nem distinguir anunciado-vs-efetivo -- a implementacao
+  literal seguia o SYN-ACK) -- a reportar na metodologia da tese.
+
+**Metodo adotado:** criterio2_probe.py ganha ss_ti_snapshot com o
+campo mss (alem de cwnd, ja existente); extract_mss_and_bytes_
+before_ack devolve tambem mss_pcap_max_payload (maior tcp.len
+entre os segmentos de dados do servidor), nova funcao auxiliar
+effective_mss(ss_ti_mss, mss_pcap_max_payload) -- concordam (diff
+0B) => usa o valor, mss_channels_agree=True; discordam =>
+mss_bytes=None, mss_channels_agree=False. O MSS anunciado no
+SYN-ACK continua registrado (mss_synack_announced_bytes), SO como
+diagnostico -- nunca entra no calculo. evaluate_criteria.py
+criterion_2_initcwnd exige mss_channels_agree is True ANTES de
+qualquer calculo de segmentos -- ausente/False reprova por essa razao
+especificamente.
+
+**Validado com verdade conhecida (Decisao 100):** MTU 1500 (ethtool
+TSO/GSO/GRO off) -- ss_ti_mss=1448, mss_pcap_max_payload=1448,
+concordam; MTU 9001 (jumbo) -- ss_ti_mss=8949,
+mss_pcap_max_payload=8949, concordam -- em AMBOS os casos o
+anunciado no SYN-ACK (1460/8961) e LIGEIRAMENTE diferente do
+efetivo (overhead de opcoes TCP como timestamp), reforcando por que
+nunca deveria ser usado direto. GSO ligado (achado incidental, antes
+de desligar os offloads pro teste principal) inflou
+mss_pcap_max_payload pra um "superpacote" (21720B) -- concordancia
+corretamente FALHOU, confirmando que a Emenda nunca aceita por
+acidente um canal inflado por offload.
+
+**Achado adicional, nao pedido mas relevante (ver Decisao 100):** em
+AMBOS os testes de MTU (RTT=40ms configurado), segments_computed
+saiu bem abaixo do ss_ti_cwnd=10 -- TCP pacing (pacing_rate
+observado, 5,75-35,4Mbps) throttla o envio independente do cwnd,
+reproduzindo de forma controlada e repetivel o MESMO fenomeno que a
+Decisao 95 ja tinha achado contra a AWS real (decisao pendente #2) --
+fortalece essa analise: nao e um acaso da rede real, e um efeito
+generico de pacing em qualquer conexao nova (slow-start).
+
+**Testes:** test_producers.py ganha 6 (mss junto com cwnd no
+snapshot, effective_mss concorda/discorda, mutante "usaria o
+anunciado por default"). test_evaluate_criteria.py ganha 4
+(criterion_2_initcwnd passa quando concordam, reprova quando
+mss_channels_agree=False/ausente, mutante replicando a logica
+ANTIGA que aceitaria incorretamente uma concordancia ACIDENTAL entre
+segments_computed com MSS errado e ss_ti_cwnd).
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 99. Emenda robustez-de-captura ao criterio 1 -- dedicated_capture confere decifragem IMEDIATA e COMPLETA (6 streams mTLS, Certificate do servidor decifrado) antes de aceitar uma captura, RETENTA (ate 3x) SO quando o modo de falha e decifragem incompleta, NUNCA por divergencia de tamanho; preserva pcap+keylog de TODA tentativa (sucesso ou falha)
+
+**Pedido do Luciano (item 3):** nao adivinhar a causa do gap de
+decifragem em L0 (Decisao 95) -- tornar a captura ROBUSTA: antes de
+encerrar, confere decifragem imediata e completa; se faltar, refaz (so
+quando o modo de falha e decifragem incompleta, nunca divergencia de
+tamanho), ate 3x, registrando cada tentativa; preserva pcap e keylog
+de todas, inclusive as que falharam.
+
+**Mecanismo:** evaluate_criteria.py ganha capture_decryption_
+complete(raw_lines, expected_streams=6) -- fatora a classificacao
+por stream (_classify_streams, extraido de _message_sizes_stream_
+aware sem mudar seu comportamento, confirmado byte a byte pela
+suite inteira passando) e confere que as expected_streams (6,
+N_mTLS, Decisao 91) conexoes client-facing reais tem o Certificate do
+SERVIDOR decifrado (tls.handshake.type==11 legivel) -- NUNCA decide
+tamanho/divergencia, so SE a captura decifrou o suficiente pra ser
+avaliada.
+
+orchestrator.py dedicated_capture reescrita com um laco de ATE
+MAX_CAPTURE_ATTEMPTS=3 tentativas: cada uma usa pcap/keylog/log
+PROPRIOS (numerados _tentativaN), dispara uma NOVA conexao de
+disparo, extrai via tshark, confere capture_decryption_complete --
+so aceita e sai do laco quando n_handshake_rows > 0 and complete;
+senao, tenta de novo (sleep extra de 2s, em vez de 1s, antes do
+docker exec cat do keylog -- da mais tempo pro flush em disco,
+hipotese da Decisao 95, mas NUNCA a unica correcao -- o retry cobre
+o caso de ainda nao ser suficiente). Se as 3 tentativas falharem,
+levanta com o log completo de cada uma (attempts_log) -- NUNCA
+mascara, NUNCA relata uma captura incompleta como se fosse completa.
+A tentativa VENCEDORA e copiada no servidor pro nome SEM sufixo
+(criterio1_<perfil>_<rota>.pcap/.txt) -- run_criterio7
+(dedicated_criteria.py) continua achando o pcap pelo mesmo nome, sem
+mudanca.
+
+**Preservacao (item 0, Decisao 96):** _preserve_capture_attempt
+traz pcap+keylog de TODA tentativa (sucesso ou falha) pro
+capturas_dir local (capturas_brutas/), MAIS a vencedora com o nome
+limpo -- nenhuma tentativa e descartada silenciosamente.
+
+**Divergencia de tamanho nunca aciona retry** (requisito explicito do
+Luciano): o retry so e acionado por capture_decryption_complete() ==
+False -- uma captura que decifrou tudo mas diverge do baseline
+(_message_sizes_stream_aware) e aceita e reportada como esta, nunca
+re-tentada.
+
+**Testes:** test_evaluate_criteria.py ganha 4 (capture_decryption_
+complete com 6 streams completos, com L0-parcial reproduzindo o
+sintoma real da Decisao 95, com menos de 6 streams, mutante que
+ignora Certificate ausente). test_orchestrator.py ganha 4 (retenta
+quando a 1a tentativa e incompleta e a 2a completa, falha apos as 3
+tentativas com decifragem sempre incompleta, preserva pcap/keylog de
+TODA tentativa incluindo falhas, mutante "aceitaria captura parcial
+sem checar decifragem"), mais o fixture compartilhado _TSHARK_FAKE_
+OUTPUT atualizado pra 6 streams (N_mTLS real) em vez de 1.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 100. Validacao LOCAL (sem AWS) das Emendas 97/98 com VERDADE CONHECIDA -- tc netem em containers Docker reais (RTT 5/50/200ms, MTU 1500/9001), contra os producers REAIS (criterio2_probe.py/criterio7_rtt.py), sem nenhuma modificacao nem monkeypatch
+
+**Pedido do Luciano (item 4):** validar os fixes localmente com
+verdade conhecida -- tc netem em containers (--cap-add NET_ADMIN),
+RTT configurado (5/50/200ms) e MTU/MSS (1500/9001), provando que RTT e
+initcwnd medidos pelos DOIS canais batem com os valores configurados
+dentro da tolerancia; mutantes (canal errado, MSS do SYN-ACK).
+
+**Topologia (achado real, corrigido ao vivo, documentado em
+campaign/tc_netem_ground_truth/IDENTIDADE.json):** a primeira
+tentativa (delay simetrico 25/25ms no EGRESS de ambos os lados)
+media corretamente a RTT total via ping, mas o canal pcap SYN->SYN-
+ACK mostrava 25ms (nao ~0) -- investigado: tcpdump captura pacotes
+de EGRESS DEPOIS do delay do netem ser aplicado, entao delay no
+EGRESS do SERVIDOR contamina o proprio evento "SYN-ACK saindo" com um
+atraso LOCAL artificial, que a rede real nunca tem (propagacao
+acontece so NO FIO, nunca como fila local observavel pelo proprio
+remetente). Corrigido: delay SO no lado do CLIENTE -- egress (saida)
++ ingress via ifb (tc filter ... action mirred egress redirect dev
+ifb0) -- reproduzindo corretamente "zero overhead local, propagacao
+so no fio", a MESMA premissa que o metodo novo do criterio 7
+pressupoe.
+
+**Resultados reais (criterio 7, RTT):** RTT configurado 5ms -> canal
+probe 5,233ms / canal pcap NOVO 5,186ms. RTT configurado 50ms ->
+canal probe 50,353ms / canal pcap NOVO 50,564ms / canal pcap ANTIGO
+(mesmo pcap) 0,024ms. RTT configurado 200ms -> canal probe 200,408ms
+/ canal pcap NOVO 200,218ms.
+
+Os dois canais reais bateram a configuracao dentro de +-2% nos 3
+valores (bem dentro do +-10% do criterio); o metodo ANTIGO, medido
+contra os MESMOS pacotes reais capturados a 50ms, confirma o sintoma
+teorizado (tempo de processamento local, nao RTT).
+
+**Resultados reais (criterio 2, MSS efetivo):** MTU 1500 -> ss -ti
+mss=1448, maior payload real (pcap)=1448, SYN-ACK anunciado=1460,
+concordam=sim. MTU 9001 -> ss -ti mss=8949, maior payload real
+(pcap)=8949, SYN-ACK anunciado=8961, concordam=sim.
+
+Os dois canais do MSS efetivo concordam EXATAMENTE nos dois MTUs
+testados; o anunciado no SYN-ACK difere sempre um pouco (overhead de
+opcoes TCP como timestamp) -- nunca deveria ser usado direto,
+confirmando a Emenda 98. GSO ligado (achado incidental antes de
+desligar os offloads) inflou o canal pcap pra um "superpacote"
+(21720B) -- a concordancia obrigatoria corretamente REPROVOU esse
+caso, nunca aceitou por acidente.
+
+**Achado adicional (nao pedido, relatado por relevancia):** em ambos
+os testes de MTU (RTT=40ms), segments_computed saiu bem abaixo do
+ss_ti_cwnd=10 por causa de TCP pacing -- reproduz de forma
+controlada e repetivel o MESMO fenomeno que a Decisao 95 relatou como
+decisao pendente #2 contra a AWS real (fortalece aquela analise, nao
+a resolve -- decisao pendente permanece com o Luciano).
+
+**Nenhum producer foi alterado pra este teste** -- roda o MESMO
+criterio2_probe.py/criterio7_rtt.py que vai pra AWS, sem
+monkeypatch de rede nenhum (so containers/tc reais). Containers,
+redes e imagens Docker usados foram todos REMOVIDOS apos a coleta
+(nenhum recurso persistente, nenhum IP real, nenhuma credencial).
+Evidencia (JSON real de cada execucao + IDENTIDADE.json com o metodo
+completo) em thesis/results/v9/campaign/tc_netem_ground_truth/.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.

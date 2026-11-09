@@ -1691,9 +1691,9 @@ def test_capturas_dedicadas_rodam_fora_de_qualquer_janela_cronometrada(tmp_path)
     calls_to_dedicated_capture = []
     real_dedicated_capture = orch.LocalExecutor.dedicated_capture
 
-    def spying_dedicated_capture(self, profile, route):
+    def spying_dedicated_capture(self, profile, route, capturas_dir=None):
         calls_to_dedicated_capture.append((profile, route))
-        return real_dedicated_capture(self, profile, route)
+        return real_dedicated_capture(self, profile, route, capturas_dir=capturas_dir)
 
     executor = orch.LocalExecutor()
     import unittest.mock as mock
@@ -1776,10 +1776,16 @@ def test_capturas_dedicadas_tem_nome_e_hash_esperados_e_o_avaliador_le(tmp_path)
 # bytes-brutos-vs-gateway, so `test_dedicated_capture_extrai_tamanhos_
 # que_o_avaliador_aceita`, que fabrica os DOIS lados coerentes entre
 # si explicitamente).
-_TSHARK_FAKE_OUTPUT = (
-    "1\t0\t50000\t100\t1\t332\n"
-    "2\t0\t443\t200\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
-    "3\t0\t50000\t150\t11,15,20\t6352,3571,32\n"
+# Emenda robustez-de-captura (pedido do Luciano, item 3): `dedicated_
+# capture` agora exige decifragem completa das 6 conexoes mTLS reais
+# (`ec.capture_decryption_complete`, N_mTLS=6, Decisao 91) antes de
+# aceitar uma tentativa -- o fixture simula as 6, identicas, nunca so
+# 1 (que bastava antes desta Emenda, mas reprovaria agora).
+_TSHARK_FAKE_OUTPUT = "".join(
+    f"{3 * s + 1}\t{s}\t50000\t100\t1\t332\n"
+    f"{3 * s + 2}\t{s}\t443\t200\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
+    f"{3 * s + 3}\t{s}\t50000\t150\t11,15,20\t6352,3571,32\n"
+    for s in range(6)
 )
 
 
@@ -1903,17 +1909,23 @@ def test_dedicated_capture_extrai_tamanhos_que_o_avaliador_aceita(monkeypatch):
     hb = ec.HANDSHAKE_MESSAGE_BASELINE["hibrido-v8"]
     ch = ec.CLIENTHELLO_BASELINE["hibrido-v8"] - 4
     cert = ec.CERTIFICATE_BASELINE["hibrido-v8"] - 4
-    tshark_output = (
-        f"1\t0\t50000\t100\t1\t{ch}\n"
-        f"2\t0\t443\t200\t2,8,13,11,15,20\t"
+    # Emenda robustez-de-captura (pedido do Luciano, item 3): 6 streams
+    # IDENTICOS (N_mTLS=6, Decisao 91) -- `ec.capture_decryption_
+    # complete` agora exige as 6, nunca so 1, antes de aceitar a
+    # tentativa como final.
+    tshark_output = "".join(
+        f"{3*s+1}\t{s}\t50000\t100\t1\t{ch}\n"
+        f"{3*s+2}\t{s}\t443\t200\t2,8,13,11,15,20\t"
         f"{hb['ServerHello']-4},{hb['EncryptedExtensions']-4},{hb['CertificateRequest']-4},"
         f"{cert},{hb['CertificateVerify_servidor']-4},{hb['Finished_servidor']-4}\n"
-        f"3\t0\t50000\t150\t11,15,20\t{hb['Certificate_cliente']-4},{hb['CertificateVerify_cliente']-4},{hb['Finished_cliente']-4}\n"
+        f"{3*s+3}\t{s}\t50000\t150\t11,15,20\t{hb['Certificate_cliente']-4},{hb['CertificateVerify_cliente']-4},{hb['Finished_cliente']-4}\n"
+        for s in range(6)
     )
-    gateway_log_output = (
+    gateway_log_output = "".join(
         'gateway: hibrido-v8 connection OK remoteAddr=10.0.0.9:50000 sni="mtls" '
         'curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
         "handshakeBytesIn=250 handshakeBytesOut=200\n"
+        for _ in range(6)
     )
     calls = []
     monkeypatch.setattr(cli, "_run", _fake_run_dedicated_capture(
@@ -2028,3 +2040,137 @@ def test_mutante_keylog_sempre_ligado_e_pego(monkeypatch):
     assert mutant_has_keylog_in_start_block is True  # mutante liga indevidamente
     with pytest.raises(AssertionError):
         assert mutant_has_keylog_in_start_block is False
+
+
+# --- Emenda robustez-de-captura (pedido do Luciano, item 3, apos a
+# Decisao 95 achar que L0 so decifra ClientHello/ServerHello nos 4
+# perfis): `dedicated_capture` reteNta (ate MAX_CAPTURE_ATTEMPTS) so
+# quando o MODO DE FALHA for decifragem incompleta -- nunca por
+# divergencia de tamanho.
+
+def _tshark_output_n_streams(n):
+    return "".join(
+        f"{3*s+1}\t{s}\t50000\t100\t1\t332\n"
+        f"{3*s+2}\t{s}\t443\t200\t2,8,13,11,15,20\t183,6,105,6350,3571,32\n"
+        f"{3*s+3}\t{s}\t50000\t150\t11,15,20\t6352,3571,32\n"
+        for s in range(n)
+    )
+
+
+def _fake_run_dedicated_capture_variavel(calls, tshark_outputs):
+    """Como `_fake_run_dedicated_capture`, mas a saida do tshark varia
+    por CHAMADA (uma por tentativa) -- `tshark_outputs[i]` pra a
+    (i+1)-esima chamada; a ultima entrada se repete se faltar."""
+    state = {"tshark_calls": 0}
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+
+        proc = _SimpleProc()
+        if "/dev/tcp/" in remote_cmd:
+            proc.stdout = "OK\n"
+        elif "ip -o -4 route show to default" in remote_cmd:
+            proc.stdout = "eth0\n"
+        elif "nohup tcpdump" in remote_cmd:
+            proc.stdout = "12345\n"
+        elif "campaign_client_runner.py" in remote_cmd:
+            proc.stdout = '{"calls": [], "call_count": 0, "retries": []}'
+        elif "docker logs -t --since" in remote_cmd:
+            proc.stdout = ""
+        elif "tls.handshake.type" in remote_cmd:
+            idx = min(state["tshark_calls"], len(tshark_outputs) - 1)
+            proc.stdout = tshark_outputs[idx]
+            state["tshark_calls"] += 1
+        elif "sha256sum -c" in remote_cmd:
+            proc.stdout = "gateway: OK\n"
+        elif "listening on" in remote_cmd:
+            proc.stdout = "FOUND\n"
+        elif "sha256sum /gateway" in remote_cmd:
+            proc.stdout = f"{_FAKE_GATEWAY_SHA256}  /gateway\n"
+        else:
+            image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+            if image_id_stdout is not None:
+                proc.stdout = image_id_stdout
+        return proc
+    return fake_run, state
+
+
+def test_dedicated_capture_retenta_quando_decifragem_incompleta_na_1a_tentativa(monkeypatch):
+    """1a tentativa: so 1 dos 6 streams decifrou (sintoma real da
+    Decisao 95 em L0) -- tem que retentar, nunca aceitar como final.
+    2a tentativa: as 6 decifram -- aceita, para de retentar."""
+    calls = []
+    fake_run, state = _fake_run_dedicated_capture_variavel(
+        calls, [_tshark_output_n_streams(1), _tshark_output_n_streams(6)])
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "run_scp", lambda *a, **k: _SimpleProc())
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    block = executor.dedicated_capture("classico", "L0")
+    assert state["tshark_calls"] == 2, "tinha que ter tentado de novo exatamente 1 vez (2 tentativas no total)"
+    row = ec._message_sizes_for_profile(block, "classico")
+    assert row["n_streams"] == 6
+
+
+def test_dedicated_capture_falha_apos_max_tentativas_com_decifragem_sempre_incompleta(monkeypatch):
+    calls = []
+    fake_run, state = _fake_run_dedicated_capture_variavel(calls, [_tshark_output_n_streams(1)])
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(cli, "run_scp", lambda *a, **k: _SimpleProc())
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="decifragem incompleta"):
+        executor.dedicated_capture("classico", "L0")
+    assert state["tshark_calls"] == executor.MAX_CAPTURE_ATTEMPTS
+
+
+def test_dedicated_capture_preserva_pcap_keylog_de_toda_tentativa_incluindo_falhas(monkeypatch, tmp_path):
+    """Pedido do Luciano (item 0+3): TODA tentativa (sucesso ou falha)
+    tem pcap+keylog preservados no `capturas_dir` local -- nunca so a
+    vencedora, nunca descartados silenciosamente."""
+    calls = []
+    fake_run, state = _fake_run_dedicated_capture_variavel(
+        calls, [_tshark_output_n_streams(1), _tshark_output_n_streams(1), _tshark_output_n_streams(6)])
+    monkeypatch.setattr(cli, "_run", fake_run)
+
+    scp_pairs = []
+
+    def fake_run_scp(src, dst, key_path=None, port=22, connect_timeout=20, recursive=False):
+        scp_pairs.append((src, dst))
+        if "@" not in dst:  # so escreve quando dst e um caminho LOCAL (pull remoto->local)
+            Path(dst).write_text("conteudo-fake", encoding="utf-8")
+        return _SimpleProc()
+
+    monkeypatch.setattr(cli, "run_scp", fake_run_scp)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    capturas_dir = tmp_path / "criterio1_capturas"
+    capturas_dir.mkdir()
+    executor.dedicated_capture("classico", "L0", capturas_dir=capturas_dir)
+
+    retries_dir = capturas_dir / "capturas_brutas"
+    for attempt in (1, 2, 3):
+        assert (retries_dir / f"classico_L0_tentativa{attempt}.pcap").is_file(), list(retries_dir.iterdir())
+        assert (retries_dir / f"classico_L0_tentativa{attempt}.keylog").is_file()
+    # a vencedora (tentativa 3) tambem ganha o nome SEM sufixo.
+    assert (capturas_dir / "classico_L0.pcap").is_file()
+    assert (capturas_dir / "classico_L0.keylog").is_file()
+
+
+def test_mutante_dedicated_capture_sem_checar_decifragem_aceitaria_captura_parcial():
+    """Mutante = o comportamento ANTIGO (antes desta Emenda): aceita a
+    1a tentativa so porque `n_handshake_rows > 0`, sem nunca checar
+    `ec.capture_decryption_complete` -- com 1 de 6 streams decifrados
+    (sintoma real da Decisao 95), o mutante aceitaria incorretamente
+    onde o codigo real exige retry."""
+    lines_1_de_6 = [l for l in _tshark_output_n_streams(1).splitlines() if l]
+    n_handshake_rows_mutante = sum(1 for l in lines_1_de_6 if len(l.split("\t")) >= 6 and l.split("\t")[4] and l.split("\t")[5])
+    mutant_aceita = n_handshake_rows_mutante > 0  # mutante: nunca confere completude
+    assert mutant_aceita is True  # aceitaria errado
+
+    real = ec.capture_decryption_complete(lines_1_de_6)
+    assert real["complete"] is False  # o codigo real rejeita a MESMA captura

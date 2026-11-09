@@ -245,8 +245,8 @@ python3 orchestrator.py --mode ssh --inventory-json inventory.json --ssh-key ~/.
   --images-staging-dir ~/images --out ~/campaign-data/v9/piloto
 REMOTE
 ```
-**Saída esperada:** JSON com `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 arquivos) escritos em `~/campaign-data/v9/piloto/` (saída FLAT, Decisão 75/78 — nunca dividida por perfil).
-**Critério de abortar:** qualquer exceção/`RuntimeError` (start_block, run_execution, dedicated_capture) — nenhuma correção de código no meio desta janela sem registrar Decisão numerada; se a correção alterar o que é medido, regra 7(e), STOP.
+**Saída esperada:** JSON com `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 arquivos) escritos em `~/campaign-data/v9/piloto/` (saída FLAT, Decisão 75/78 — nunca dividida por perfil). **Emenda robustez-de-captura (item 0+3, pedido do Luciano):** `criterio1_capturas/capturas_brutas/` ganha o pcap+keylog BRUTOS de TODA tentativa de cada uma das 12 capturas dedicadas (sucesso ou falha, até 3 tentativas cada — retry só quando o modo de falha é decifragem incompleta, nunca divergência de tamanho); a tentativa vencedora de cada captura também fica em `criterio1_capturas/{perfil}_{rota}.pcap`/`.keylog` (sem sufixo de tentativa).
+**Critério de abortar:** qualquer exceção/`RuntimeError` (start_block, run_execution, dedicated_capture) — inclusive "decifragem incompleta em 3 tentativas" (as 3 tentativas ficam preservadas em `capturas_brutas/` mesmo assim, nunca perdidas) — nenhuma correção de código no meio desta janela sem registrar Decisão numerada; se a correção alterar o que é medido, regra 7(e), STOP.
 
 ---
 
@@ -262,14 +262,22 @@ REMOTE
 **O que roda, na ordem:** critério 3 (local, reusa `evaluate_criteria.
 criterion_4_counts` já escrito pelo Passo 11, filtra L325) → critério
 2 (sobe `criterio2_probe.py` no servidor, dispara 1 conexão de teste
-do cliente L219 via `/dev/tcp`, porta 9876) → critério 7 (por rota:
-`probe` do cliente contra 443, `pcap` no servidor reaproveitando os
-pcaps dedicados que o Passo 11 já escreveu em `/tmp`). Escreve
-`criterio2_initcwnd.json`/`criterio3_l325_execucoes.json`/
-`criterio7_rtt_por_rota.json` no MESMO diretório `~/campaign-data/v9/
+do cliente L219 via `/dev/tcp`, porta 9876 — Emenda MSS-efetivo, item
+2: `mss_bytes` só existe quando `ss -ti` e o maior payload real do
+pcap concordam, nunca o MSS anunciado no SYN-ACK) → critério 7 (por
+rota: `probe` do cliente contra 443, `pcap` no servidor reaproveitando
+os pcaps dedicados que o Passo 11 já escreveu em `/tmp` — Emenda
+RTT-pcap, item 1: mede SYN-ACK saindo → ACK fechando o handshake
+voltando, nunca SYN chegando → SYN-ACK saindo) → `collect_full_logs`
+(item 0, regra fail-closed nova: log CHEIO, sem janela de tempo, dos
+4 containers do servidor — gateway/auth/mongo_seed/mockapi — +
+diagnóstico leve de cada instância). Escreve
+`criterio2_initcwnd.json`/`criterio2_probe.pcap`/
+`criterio3_l325_execucoes.json`/`criterio7_rtt_por_rota.json`/
+`full_container_logs/` no MESMO diretório `~/campaign-data/v9/
 piloto/` — um único pull no Passo 12 traz tudo junto.
-**Saída esperada:** JSON com as 3 chaves (`criterio2`/`criterio3`/
-`criterio7`), nenhuma vazia.
+**Saída esperada:** JSON com as 4 chaves (`criterio2`/`criterio3`/
+`criterio7`/`full_logs`), nenhuma vazia.
 **Critério de abortar:** qualquer `RuntimeError` — nunca prossiga pro
 Passo 12 com um dos 3 arquivos ausente (a consolidação reportaria
 "sem evidência" silenciosamente, sem dizer que a causa foi este
@@ -283,7 +291,7 @@ passo falhando).
 python collect_artifacts.py --control-ip "$CONTROL_IP" --key <chave-do-operador> \
   --remote-dir ~/campaign-data/v9/piloto --local-dir /tmp/v9_piloto_coletado
 ```
-**Saída esperada:** JSON com `"files_verified": N` (N = todos os arquivos do diretório: `manifest.json` + `piloto_combined.log` + `piloto_calls.json` + `criterio6_execucoes.json` + 12 de `criterio1_capturas/` + `criterio2_initcwnd.json` + `criterio3_l325_execucoes.json` + `criterio7_rtt_por_rota.json` + `manifest.sha256`), `.pull-verified` escrito em `/tmp/v9_piloto_coletado/`.
+**Saída esperada:** JSON com `"files_verified": N` (N = todos os arquivos do diretório — agora inclui, além do que já existia, os pcaps/keylogs BRUTOS de toda tentativa de captura em `criterio1_capturas/capturas_brutas/` + os vencedores em `criterio1_capturas/*.pcap`/`*.keylog`, `criterio2_probe.pcap`, e `full_container_logs/*.log` — item 0, regra fail-closed nova), `.pull-verified` escrito em `/tmp/v9_piloto_coletado/`. **Este `.pull-verified` é o marcador que o Passo 14 agora EXIGE** (`--pull-verified-marker`) antes de qualquer teardown — nunca mais `--force` como caminho principal.
 **Critério de abortar:** qualquer `RuntimeError` ("nao bate"/"ausente") — nunca confiar numa cópia parcial/corrompida.
 
 ---
@@ -303,7 +311,9 @@ python consolidate_v9_pilot.py \
 
 ## Passo 14 — teardown **[OPERADOR]**
 
-Mesma sequência dos Passos 11-13 de `INFRA_REHEARSAL.md`: `emergency_stop.py` modo dry (diagnóstico) → `cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force` (principal, `all_clean: true` esperado) → `emergency_stop.py --execute` (fallback, só se `all_clean: false`).
+**Emenda fail-closed (item 0, pedido do Luciano):** até esta rodada, o comando principal usava `--force`, que NUNCA de fato exercitava o gate que já existia em código (`.pull-verified`) — achado real, corrigido aqui. Sequência: `emergency_stop.py` modo dry (diagnóstico) → `cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --pull-verified-marker /tmp/v9_piloto_coletado/.pull-verified` (principal — bloqueia com `RuntimeError` se o Passo 12 não tiver rodado/verificado os brutos, `all_clean: true` esperado) → `emergency_stop.py --execute` (fallback, só se `all_clean: false`).
+
+**`--force --reason "<motivo>"` só é aceitável nas exceções da regra 7** (limite de custo ou de segurança atingido no meio do piloto, com evidência ainda não coletada) — `--force` sem `--reason` agora falha alto (`cleanup.py` exige a razão, nunca um bypass silencioso). Usado assim, o relatório final tem que dizer explicitamente o que foi perdido (quais brutos nunca foram verificados).
 
 ---
 

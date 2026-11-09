@@ -1,0 +1,23 @@
+{
+  "o_que_e": "Validacao local, com verdade conhecida, das 3 Emendas da rodada de correcao dos criterios 1/2/7 (pedido do Luciano apos o Relatorio da Fase B/Decisao 95): Emenda RTT-pcap (criterio 7), Emenda MSS-efetivo (criterio 2), Emenda robustez-de-captura (criterio 1). Nunca a AWS real -- containers Docker locais com tc netem (--cap-add NET_ADMIN), contra os PRODUTORES REAIS (criterio2_probe.py/criterio7_rtt.py), sem nenhum monkeypatch/mock de rede.",
+  "quando": "2026-11-09",
+  "metodo": {
+    "topologia_rtt": "2 containers (servidor+cliente) na MESMA rede docker custom. Delay aplicado SO no lado do CLIENTE -- egress (tc qdisc netem) + ingress (via dispositivo ifb, redirecionado com tc filter mirred) -- NUNCA no servidor. Isso reproduz corretamente a semantica real (propagacao de rede, zero overhead local) -- confirmado empiricamente: o metodo ANTIGO (SYN chegando->SYN-ACK saindo, ambos no servidor) mediu 0,024ms (quase zero, 'tempo de processamento local', exatamente o sintoma real da Decisao 95); o metodo NOVO (SYN-ACK saindo->ACK fechando o handshake voltando, mesma captura no servidor) mediu a RTT CONFIGURADA dentro de tolerancia folgada nos 3 valores pedidos (5/50/200ms).",
+    "topologia_mss": "2 containers numa rede docker custom com --opt com.docker.network.driver.mtu=<1500|9001> (MTU consistente na PONTE e nas duas interfaces -- um mismatch bridge/interface causou descarte de pacotes numa tentativa, corrigido recriando a rede com a opcao de MTU certa). ethtool -K eth0 tso off gso off gro off no servidor (sem isso, GSO produz 'superpacotes' no pcap, exatamente o cenario que a Emenda MSS-efetivo trata como DESACORDO por design -- tambem observado e documentado aqui). criterio2_probe.py rodado de ponta a ponta, sem nenhuma modificacao, contra o par real de containers.",
+    "producao_real_sem_mudanca": "Nenhum destes dois producers (criterio2_probe.py, criterio7_rtt.py) foi alterado pra este teste -- roda exatamente o codigo que vai pra AWS."
+  },
+  "resultados": {
+    "criterio_7_rtt_ms": [
+      {"configurado": 5, "canal_probe": 5.233, "canal_pcap_novo": 5.186, "dentro_de_10pct": true},
+      {"configurado": 50, "canal_probe": 50.353, "canal_pcap_novo": 50.564, "canal_pcap_metodo_antigo": 0.024, "dentro_de_10pct": true, "metodo_antigo_seria_rejeitado": true},
+      {"configurado": 200, "canal_probe": 200.408, "canal_pcap_novo": 200.218, "dentro_de_10pct": true}
+    ],
+    "criterio_2_mss": [
+      {"mtu": 1500, "ss_ti_mss": 1448, "mss_pcap_max_payload": 1448, "mss_synack_announced": 1460, "mss_channels_agree": true},
+      {"mtu": 9001, "ss_ti_mss": 8949, "mss_pcap_max_payload": 8949, "mss_synack_announced": 8961, "mss_channels_agree": true}
+    ],
+    "achado_adicional_nao_pedido_mas_relevante": "Em AMBOS os testes de criterio 2 (MTU 1500 e 9001, RTT=40ms), segments_computed saiu bem abaixo do ss_ti_cwnd=10 (1 segmento, nao 10) -- TCP pacing (pacing_rate real observado: 5,75Mbps/35,4Mbps) throttla o envio independente do cwnd, reproduzindo de forma controlada e repetivel o MESMO fenomeno que a Decisao 95 relatou como achado pendente (decisao_pendente #2) contra a AWS real. Fortalece essa analise -- nao e um acaso da rede real, e um efeito generico de pacing que qualquer conexao nova (slow-start) sofre."
+  },
+  "mutantes": "O 'canal errado' (metodo antigo SYN->SYN-ACK) foi literalmente medido contra o MESMO pcap real (nao um fixture) e comparado ao canal novo -- diferenca de 3 ordens de grandeza (0,024ms vs 50,564ms), documentando o mutante com dados reais, nunca so sinteticos. O mutante do MSS (GSO ligado inflando mss_pcap_max_payload pra 'superpacotes') tambem foi observado meio-sem-querer antes de eu desligar os offloads -- ambos preservados em evidencia/.",
+  "evidencia_preservada": "evidencia/*.json -- saidas REAIS dos producers (nunca fixtures escritos a mao). Containers/redes/imagens Docker usados aqui foram todos removidos apos a coleta (nenhum recurso persistente, nenhuma credencial, nenhum IP real)."
+}

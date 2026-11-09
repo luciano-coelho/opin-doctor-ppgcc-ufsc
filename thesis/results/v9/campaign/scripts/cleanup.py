@@ -107,12 +107,38 @@ def release_orphaned_eips(region, profile, orphaned_eips, actually_release=False
     return allocation_ids
 
 
-def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None, force=False) -> dict:
-    if not force:
+def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None, force=False, reason=None) -> dict:
+    """Pedido do Luciano (item 0, regra fail-closed nova): o teardown
+    (`terraform destroy`, logo abaixo) so pode rodar depois que os
+    brutos estejam coletados e VERIFICADOS por sha256 -- 12 pcaps, 12
+    keylogs, flights extraidos, logs de todas as instancias e dos
+    conteineres, artefatos das 60 execucoes (tudo isso cabe dentro do
+    MESMO `pull_verified_marker`, que `collect_artifacts.py` so
+    escreve DEPOIS de hashear por completo o diretorio -- ver Decisao
+    [N], `orchestrator.py dedicated_capture`/`dedicated_criteria.py
+    collect_full_logs`/`run_criterio2`, que agora alimentam esse MESMO
+    diretorio).
+
+    Achado real desta rodada: o `PILOT_RUNBOOK.md` ate aqui mandava
+    `--force` como o comando PRINCIPAL de teardown (nunca `--pull-
+    verified-marker`) -- o gate acima existia em codigo mas NUNCA era
+    de fato exercitado em nenhuma tentativa real. `force=True` agora
+    exige `reason` (string nao-vazia) -- reservado EXPLICITAMENTE pra
+    excecao de custo/seguranca (regra 7 do piloto), nunca um jeito de
+    pular a verificacao por conveniencia. A `reason` entra no
+    resultado -- auditavel, nunca um bypass silencioso."""
+    if force:
+        if not reason or not str(reason).strip():
+            raise RuntimeError(
+                "force=True exige 'reason' nao-vazia -- reservado pra excecao de custo/seguranca (regra 7), "
+                "nunca um bypass sem motivo declarado."
+            )
+    else:
         if pull_verified_marker is None or not Path(pull_verified_marker).is_file():
             raise RuntimeError(
                 f"{pull_verified_marker} nao encontrado -- rode collect_artifacts.py primeiro, "
-                "ou passe force=True se tiver certeza que os dados nao sao necessarios."
+                "ou passe force=True com uma 'reason' explicita (excecao de custo/seguranca) se tiver "
+                "certeza que os dados nao sao necessarios."
             )
 
     drift = check_self_terminate_drift(profile)
@@ -132,6 +158,7 @@ def full_cleanup(tf_dir, profile, release_eips=False, pull_verified_marker=None,
     return {
         "drift": drift, "destroy_rc": destroy_rc,
         "regions": regions_report, "all_clean": all_clean,
+        "forced": bool(force), "reason": reason if force else None,
     }
 
 
@@ -142,9 +169,10 @@ def main():
     ap.add_argument("--release-eips", action="store_true")
     ap.add_argument("--pull-verified-marker")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--reason", help="obrigatorio com --force -- motivo explicito (excecao de custo/seguranca, regra 7)")
     args = ap.parse_args()
     result = full_cleanup(args.tf_dir, args.profile, release_eips=args.release_eips,
-                           pull_verified_marker=args.pull_verified_marker, force=args.force)
+                           pull_verified_marker=args.pull_verified_marker, force=args.force, reason=args.reason)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     sys.exit(0 if result["all_clean"] else 1)
 

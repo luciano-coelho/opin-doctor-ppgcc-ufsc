@@ -490,3 +490,149 @@ def test_mutante_certificate_baseline_nao_corrigido_dava_residuo_nao_constante()
         residuos_out.add(total["out"] - out_sum)
     assert residuos_out == {135, 149}, residuos_out
     assert len(residuos_out) > 1  # nao-constante -- exatamente o sintoma que motivou a correcao
+
+
+# --- Pedido do Luciano (item 3, rodada de correcao dos criterios 2/7):
+# `capture_decryption_complete` -- confere decifragem IMEDIATA e
+# COMPLETA das 6 conexoes mTLS reais ANTES de `dedicated_capture`
+# aceitar uma tentativa de captura como final. Nunca decide tamanho.
+
+def _stream_lines(n_complete=6, missing_certificate_in=(), carve_out_streams=0, frame_start=1):
+    """Monta linhas sinteticas no formato de 7 colunas (frame, stream,
+    srcport, tcp.len, tipos, tamanhos, sni) -- `n_complete` streams
+    client-facing (sni=mtls), com Certificate (tipo 11) do servidor
+    OMITIDO nos streams cujo indice esta em `missing_certificate_in`
+    (simula decifragem parcial -- so ClientHello/ServerHello, nada
+    depois, o sintoma real da Decisao 95 em L0); `carve_out_streams`
+    streams adicionais com sni != "mtls" (carve-out interno, Decisao
+    91/36), que precisam ser EXCLUIDOS, nunca contados."""
+    lines = []
+    frame = frame_start
+    for i in range(n_complete):
+        sid = str(i)
+        lines.append(f"{frame}\t{sid}\t52342\t332\t1\t332\tmtls"); frame += 1
+        if i in missing_certificate_in:
+            lines.append(f"{frame}\t{sid}\t443\t189\t2\t183\t"); frame += 1
+        else:
+            lines.append(f"{frame}\t{sid}\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\t"); frame += 1
+    for j in range(carve_out_streams):
+        sid = str(100 + j)
+        lines.append(f"{frame}\t{sid}\t52342\t332\t1\t332\tmatls-api.local"); frame += 1
+        lines.append(f"{frame}\t{sid}\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\t"); frame += 1
+    return lines
+
+
+def test_capture_decryption_complete_6_streams_decifrados_e_completa():
+    lines = _stream_lines(n_complete=6, carve_out_streams=1)
+    result = ec.capture_decryption_complete(lines)
+    assert result["complete"] is True
+    assert result["n_streams_classified"] == 6
+    assert result["streams_missing_certificate"] == []
+    assert len(result["ignored_streams"]) == 1  # carve-out excluido, nunca contado
+
+
+def test_capture_decryption_complete_l0_parcial_e_incompleta():
+    """Reproduz o sintoma real da Decisao 95 em L0: 1 das 6 conexoes
+    so decifrou ClientHello/ServerHello (Certificate do servidor
+    ausente) -- precisa ser detectado como incompleto, pra acionar o
+    retry de captura (orchestrator.py), nunca aceito como final."""
+    lines = _stream_lines(n_complete=6, missing_certificate_in=(3,))
+    result = ec.capture_decryption_complete(lines)
+    assert result["complete"] is False
+    assert result["streams_missing_certificate"] == ["3"]
+
+
+def test_capture_decryption_complete_menos_de_6_streams_e_incompleta():
+    lines = _stream_lines(n_complete=5)
+    result = ec.capture_decryption_complete(lines)
+    assert result["complete"] is False
+    assert result["n_streams_classified"] == 5
+
+
+def test_mutante_capture_decryption_complete_ignora_certificate_ausente():
+    """Mutante: aceita como completo so por contar streams, sem
+    conferir se o Certificate de cada um decifrou -- tem que divergir
+    do resultado real (que reprova por causa do stream 3)."""
+    lines = _stream_lines(n_complete=6, missing_certificate_in=(3,))
+    stream_results, stream_errors, ignored_streams = ec._classify_streams(lines)
+    mutant_complete = len(stream_results) == 6 and not stream_errors  # mutante: nunca confere certificate_bytes
+    real = ec.capture_decryption_complete(lines)
+    assert mutant_complete is True
+    assert real["complete"] is False
+    assert mutant_complete != real["complete"]
+
+
+# --- Emenda MSS-efetivo ao criterio 2 (pedido do Luciano, apos a
+# Decisao 95 achar que `mss_bytes` vinha do MSS anunciado no SYN-ACK,
+# nunca o MSS efetivo real): `criterion_2_initcwnd` agora exige
+# `mss_channels_agree` == True estritamente, antes de qualquer calculo
+# de segmentos.
+
+def _criterio2_json(tmp_path, **overrides):
+    import json as _json
+    data = {
+        "route": "L219", "instance_type": "m7i-flex.large", "profile": "classico",
+        "bytes_sent_total": 71680, "bytes_sent_before_first_client_ack": 14480,
+        "mss_bytes": 1448, "mss_channels_agree": True, "ss_ti_cwnd": 10,
+        "offloads": {"tso": "off", "gso": "off", "gro": "off"},
+    }
+    data.update(overrides)
+    (tmp_path / "criterio2_initcwnd.json").write_text(_json.dumps(data), encoding="utf-8")
+    return tmp_path
+
+
+def test_criterion_2_passa_quando_canais_de_mss_concordam(tmp_path):
+    _criterio2_json(tmp_path)
+    result = ec.criterion_2_initcwnd(str(tmp_path))
+    assert result["pass"] is True, result
+    assert result["segments_computed"] == 10.0
+
+
+def test_criterion_2_reprova_quando_mss_channels_agree_e_false(tmp_path):
+    """Reproduz o achado real da Decisao 95: canais discordando
+    (SYN-ACK anunciava 8961, efetivo real era 1448) -- tem que
+    reprovar por essa razao especificamente, mesmo que `mss_bytes`
+    estivesse preenchido com algum numero."""
+    _criterio2_json(tmp_path, mss_channels_agree=False)
+    result = ec.criterion_2_initcwnd(str(tmp_path))
+    assert result["pass"] is False
+    assert result["mss_channels_agree"] is False
+
+
+def test_criterion_2_reprova_quando_mss_channels_agree_ausente(tmp_path):
+    data_path = tmp_path / "criterio2_initcwnd.json"
+    _criterio2_json(tmp_path)
+    import json as _json
+    data = _json.loads(data_path.read_text(encoding="utf-8"))
+    del data["mss_channels_agree"]
+    data_path.write_text(_json.dumps(data), encoding="utf-8")
+    result = ec.criterion_2_initcwnd(str(tmp_path))
+    assert result["pass"] is False
+    assert "malformado ou campo ausente" in result["note"]
+
+
+def test_mutante_criterion_2_sem_exigir_mss_channels_agree_passaria_errado(tmp_path):
+    """Mutante = o comportamento ANTIGO (antes da Emenda MSS-efetivo):
+    nunca confere `mss_channels_agree`, so usa `mss_bytes` direto --
+    com o MESMO JSON que discorda de verdade (Decisao 95), o mutante
+    passaria incorretamente onde o codigo real reprova."""
+    _criterio2_json(tmp_path, mss_bytes=8961, mss_channels_agree=False,
+                     bytes_sent_before_first_client_ack=2896)
+    real = ec.criterion_2_initcwnd(str(tmp_path))
+    assert real["pass"] is False
+
+    # mutante: replica a logica ANTIGA (sem o bloqueio de mss_channels_agree)
+    segments_mutante = 2896 / 8961
+    mutant_pass = segments_mutante >= ec.INITCWND_MIN_SEGMENTS  # nunca bate (0,32 < 10) neste caso real,
+    assert mutant_pass is False  # mas o PONTO é que o mutante nem olha mss_channels_agree pra decidir --
+    # um JSON formulado pra enganar o mutante (ss_ti_cwnd baixo TAMBEM, concordando com o numero errado
+    # do SYN-ACK) mostra a lacuna real: o mutante aceitaria uma concordancia ACIDENTAL entre
+    # segments_computed (com MSS errado) e ss_ti_cwnd, enquanto o codigo real bloqueia MESMO ASSIM
+    # por causa de mss_channels_agree=False.
+    _criterio2_json(tmp_path, mss_bytes=8961, mss_channels_agree=False,
+                     bytes_sent_before_first_client_ack=89610, ss_ti_cwnd=10)
+    real2 = ec.criterion_2_initcwnd(str(tmp_path))
+    assert real2["pass"] is False  # bloqueado por mss_channels_agree, nunca chega a calcular segments
+    segments_mutante2 = 89610 / 8961  # = 10.0 -- bateria "certo" com ss_ti_cwnd=10 por ACIDENTE
+    assert segments_mutante2 == 10.0
+    assert segments_mutante2 >= ec.INITCWND_MIN_SEGMENTS  # o mutante passaria aqui -- a razao exata da Emenda

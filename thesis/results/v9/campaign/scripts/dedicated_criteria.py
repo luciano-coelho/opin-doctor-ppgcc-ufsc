@@ -120,6 +120,19 @@ def run_criterio2(executor, out_dir: Path, route: str = CRITERIO2_PROBE_ROUTE) -
     scp_proc = cli.run_scp(f"ec2-user@{server_ip}:{_REMOTE_CRITERIO2_OUT}", str(local_path), key_path=executor.key_path)
     if scp_proc.returncode != 0:
         raise RuntimeError(f"run_criterio2: scp do resultado falhou: {cli.redact(scp_proc.stderr)}")
+
+    # Pedido do Luciano (item 0, regra fail-closed nova): o pcap bruto
+    # deste teste dedicado ficava SO no servidor (/tmp/criterio2.pcap),
+    # destruido junto com a instancia no teardown -- nunca fazia parte
+    # do que `collect_artifacts.py` verifica por sha256 (so o JSON).
+    # Trazido agora pra DENTRO do MESMO `out_dir` que o manifesto
+    # global ja cobre -- vira evidencia bruta preservada por construcao,
+    # nunca um passo separado de verificacao.
+    pcap_local_path = out_dir / "criterio2_probe.pcap"
+    pcap_scp_proc = cli.run_scp(f"ec2-user@{server_ip}:/tmp/criterio2.pcap", str(pcap_local_path), key_path=executor.key_path)
+    if pcap_scp_proc.returncode != 0:
+        raise RuntimeError(f"run_criterio2: scp do pcap bruto falhou: {cli.redact(pcap_scp_proc.stderr)}")
+
     return json.loads(local_path.read_text(encoding="utf-8"))
 
 
@@ -179,6 +192,56 @@ def run_criterio7(executor, out_dir: Path, routes=("L0", "L219", "L325")) -> dic
     return result
 
 
+# Pedido do Luciano (item 0, regra fail-closed nova): nomes reais dos
+# 3 containers de negocio (docker-compose `insurance-server-lambdas`,
+# Decisao 83) -- o gateway e sempre `executor.gateway_container`
+# (configuravel), nunca hardcoded junto com estes.
+_BACKEND_CONTAINERS = ("insurance-server-lambdas-auth-1", "insurance-server-lambdas-mongo_seed-1",
+                       "insurance-server-lambdas-mockapi-1")
+
+
+def collect_full_logs(executor, out_dir: Path) -> dict:
+    """Pedido do Luciano (item 0, regra fail-closed nova: teardown so
+    depois dos brutos coletados e VERIFICADOS por sha256 -- "12 pcaps,
+    12 keylogs, flights extraidos, logs de TODAS as instancias e dos
+    conteineres"). Antes desta Emenda, SO uma JANELA de tempo do log
+    do gateway (`_gateway_logs`, usada dentro de uma execucao
+    especifica) era preservada -- `auth`/`mongo_seed`/`mockapi` NUNCA
+    tinham log nenhum guardado, e o proprio gateway so tinha trechos,
+    nunca o log CHEIO da sessao inteira. Escreve dentro do MESMO
+    `out_dir` que `collect_artifacts.py` ja hasheia por completo (`find
+    . -type f`) -- vira evidencia bruta coberta pelo manifesto sha256
+    existente, por construcao, nunca um segundo sistema de verificacao
+    paralelo."""
+    out_dir = Path(out_dir)
+    logs_dir = out_dir / "full_container_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    server_ip = executor._server_ip()
+
+    written = {}
+    for container in (executor.gateway_container,) + _BACKEND_CONTAINERS:
+        proc = cli.run_ssh(server_ip, f"docker logs -t {container} 2>&1", key_path=executor.key_path)
+        (logs_dir / f"{container}.log").write_text(proc.stdout or "", encoding="utf-8")
+        written[container] = {"bytes": len(proc.stdout or ""), "rc": proc.returncode}
+
+    # Diagnostico leve de cada instancia (servidor + os clientes da
+    # fleet) -- best-effort, NUNCA fail-closed (nenhum achado real
+    # ate agora dependeu disto; registrado so pela completude literal
+    # do pedido, "logs de todas as instancias"). `dmesg` sem
+    # permissao/ausente escreve uma nota explicita, nunca quebra a
+    # coleta dos containers (que SAO fail-closed, ver acima).
+    instance_ips = {"server": server_ip}
+    instance_ips.update({f"client_{route}": executor._client_ip(route) for route in executor.inventory.get("clients", {})})
+    for name, ip in instance_ips.items():
+        try:
+            proc = cli.run_ssh(ip, "dmesg 2>&1 | tail -n 200 || echo 'dmesg indisponivel'", key_path=executor.key_path)
+            (logs_dir / f"instancia_{name}_dmesg.log").write_text(proc.stdout or "", encoding="utf-8")
+        except Exception as e:  # nunca fail-closed -- so diagnostico
+            (logs_dir / f"instancia_{name}_dmesg.log").write_text(f"indisponivel: {e}\n", encoding="utf-8")
+
+    return {"containers": written, "instances": list(instance_ips)}
+
+
 def build_criterio3(collected_dir: Path, out_dir: Path) -> dict:
     """Adapter: reaproveita o PROPRIO avaliador (`evaluate_criteria.
     criterion_4_counts`, nunca reimplementado) pra obter o `ok` por
@@ -201,10 +264,15 @@ def build_criterio3(collected_dir: Path, out_dir: Path) -> dict:
 
 def run_all(executor, collected_dir: Path, out_dir: Path) -> dict:
     """Roda os 3, na ordem -- criterio3 nunca depende de rede (so le
-    dados ja coletados), roda primeiro; 2/7 precisam da fleet viva."""
+    dados ja coletados), roda primeiro; 2/7 precisam da fleet viva.
+    `collect_full_logs` (item 0, regra fail-closed nova) roda por
+    ULTIMO, DEPOIS de 2/7 -- precisa da fleet AINDA viva (SSH), mas so
+    faz sentido depois que os criterios dedicados ja rodaram (senao
+    perderia os proprios logs deles)."""
     report = {"criterio3": build_criterio3(collected_dir, out_dir)}
     report["criterio2"] = run_criterio2(executor, out_dir)
     report["criterio7"] = run_criterio7(executor, out_dir)
+    report["full_logs"] = collect_full_logs(executor, out_dir)
     return report
 
 
