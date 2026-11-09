@@ -405,3 +405,88 @@ def test_regressao_e_consistencia_real_para_os_3_outros_perfis():
         assert new["consistency"] == [
             {"stream": "0", "raw_in": gw_in, "raw_out": gw_out, "gateway_in": gw_in, "gateway_out": gw_out, "ok": True}
         ]
+
+        # Decisao 93: com o baseline corrigido (derivado do DER real),
+        # o Certificate do servidor TAMBEM bate -- `ok` geral fica
+        # True nos 4 perfis, nunca so as outras mensagens.
+        assert new["certificate_ok"] is True, f"{profile}: {new['certificate_bytes']} vs {new['certificate_baseline']}"
+        assert new["ok"] is True, profile
+
+
+# --- Decisao 93 (Emenda -- CERTIFICATE_BASELINE recalibrado por
+# DERIVACAO, nunca por copia de um valor medido): a Decisao 75 (mesma
+# sessao) ja tinha revertido a premissa da Decisao 28/29 (SAN com IPs
+# reais) -- o piloto usa o certificado de loopback tal como embutido
+# nas imagens pinadas, sem rebuild -- mas CERTIFICATE_BASELINE nunca
+# foi reconferido contra essa reversao. Corrigido aqui: derivado pela
+# formula do RFC 8446 a partir do DER REAL (BASELINE_CERT_DER_SIZES,
+# ja correto, nunca tocado), nunca copiado da medicao na AWS.
+
+def test_formula_tls13_reproduz_o_baseline_derivado_para_1_folha():
+    """Formula validada contra o unico caso sem nenhuma extensao de
+    certificado: message = DER + 13 (4 cabecalho + 1 contexto + 3
+    comprimento da lista + 3 comprimento do cert + 2 comprimento de
+    extensoes)."""
+    for profile in ("classico", "pqc", "hibrido-v8"):
+        der = ec.BASELINE_CERT_DER_SIZES[profile]["out"]
+        assert ec._tls13_certificate_message_size([der]) == der + 13
+        assert ec.CERTIFICATE_BASELINE[profile] == der + 13
+
+
+def test_formula_tls13_hibrido_and_duas_folhas_com_extensao_real_na_mldsa():
+    """Hibrido-AND: 2 folhas de servidor -- formula generaliza pra
+    message = 8 + soma_por_folha(DER_i + 5 + extensao_i); a folha
+    ML-DSA carrega 3B reais de extensao (confirmado via 2 capturas
+    reais independentes, Decisao 84/92), a RSA nao carrega nenhuma."""
+    assert ec._tls13_certificate_message_size([914, 5647], extra_extension_bytes=[0, 3]) == 6582
+    assert ec.CERTIFICATE_BASELINE["hibrido-and"] == 6582
+
+
+def test_mutante_formula_sem_a_extensao_da_folha_mldsa_erra_o_hibrido_and():
+    """Mutacao: omitir os 3B de extensao reais da folha ML-DSA (o
+    mesmo erro que uma formula "generica demais" cometeria) erra o
+    valor real por exatamente 3B -- prova que esse termo e necessario,
+    nunca um ajuste cosmetico pra "fazer passar"."""
+    mutant_value = ec._tls13_certificate_message_size([914, 5647])  # sem extra_extension_bytes
+    assert mutant_value == 6579
+    assert mutant_value != ec.CERTIFICATE_BASELINE["hibrido-and"]
+
+
+def test_residuo_da_soma_por_mensagem_fica_constante_nos_4_perfis():
+    """Decisao 93, item (c) do pedido do Luciano: com o Certificate
+    corrigido, a soma dos baselines por mensagem contra o baseline de
+    bytes totais do handshake (BASELINE_HANDSHAKE_BYTES) fecha com o
+    MESMO residuo constante nos 4 perfis e nas 2 direcoes (121B saida,
+    77B entrada -- framing de registro TLS/AEAD/ChangeCipherSpec, nunca
+    parte da convencao "+4B por mensagem") -- prova que NENHUMA outra
+    entrada da tabela precisa de correcao."""
+    residuos_out, residuos_in = set(), set()
+    for profile in ec.PROFILES_ALL:
+        hb = ec.HANDSHAKE_MESSAGE_BASELINE[profile]
+        total = ec.BASELINE_HANDSHAKE_BYTES[profile]
+        out_sum = (hb["ServerHello"] + hb["EncryptedExtensions"] + hb["CertificateRequest"]
+                   + ec.CERTIFICATE_BASELINE[profile] + hb["CertificateVerify_servidor"] + hb["Finished_servidor"])
+        in_sum = (ec.CLIENTHELLO_BASELINE[profile] + hb["Certificate_cliente"]
+                  + hb["CertificateVerify_cliente"] + hb["Finished_cliente"])
+        residuos_out.add(total["out"] - out_sum)
+        residuos_in.add(total["in"] - in_sum)
+    assert residuos_out == {121}, residuos_out
+    assert residuos_in == {77}, residuos_in
+
+
+def test_mutante_certificate_baseline_nao_corrigido_dava_residuo_nao_constante():
+    """Mutacao = o estado ANTES desta Emenda (899/5618/6241/6554,
+    derivados da premissa falsa da Decisao 28/29) -- o residuo da
+    soma por mensagem NUNCA era constante (variava 135/135/135/149,
+    so por causa do Certificate), provando que essa era de fato a
+    UNICA entrada inconsistente e que esta Emenda a corrigiu."""
+    old_certificate_baseline = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
+    residuos_out = set()
+    for profile in ec.PROFILES_ALL:
+        hb = ec.HANDSHAKE_MESSAGE_BASELINE[profile]
+        total = ec.BASELINE_HANDSHAKE_BYTES[profile]
+        out_sum = (hb["ServerHello"] + hb["EncryptedExtensions"] + hb["CertificateRequest"]
+                   + old_certificate_baseline[profile] + hb["CertificateVerify_servidor"] + hb["Finished_servidor"])
+        residuos_out.add(total["out"] - out_sum)
+    assert residuos_out == {135, 149}, residuos_out
+    assert len(residuos_out) > 1  # nao-constante -- exatamente o sintoma que motivou a correcao

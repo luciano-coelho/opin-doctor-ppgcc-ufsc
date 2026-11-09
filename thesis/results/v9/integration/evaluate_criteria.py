@@ -46,6 +46,42 @@ EXPECTED_CURVE = {
     "hibrido-and": "SecP384r1MLKEM1024",
 }
 
+# DER, bytes -- do certificado REALMENTE embutido nas imagens pinadas
+# (SERVER_IPS/SERVER_DNS default do certs/Makefile, Decisao 75 --
+# nenhum rebuild de imagem pro piloto). Medido direto nos arquivos
+# reais desta sessao (`ssl.PEM_cert_to_DER_cert`) -- confere exatamente
+# com a tabela da Decisao 9 (DECISIONS.md linhas 896-901: servidor RSA
+# 914, servidor ML-DSA 5.647, cliente RSA 801, cliente ML-DSA 5.534) e
+# com a conferencia por sha256 contra `mockopin-v9-gateway:pinned`
+# (Decisao 92/93). Movida pra ANTES de `CERTIFICATE_BASELINE` (Decisao
+# 93) porque este agora e DERIVADO dela, nunca o contrario.
+BASELINE_CERT_DER_SIZES = {
+    "classico": {"in": 787, "out": 900},
+    "pqc": {"in": 5506, "out": 5619},
+    "hibrido-v8": {"in": 6131, "out": 6242},
+    "hibrido-and": {"in": 801 + 5534, "out": 914 + 5647},
+}
+
+
+def _tls13_certificate_message_size(leaf_der_sizes: list, extra_extension_bytes: list = None) -> int:
+    """Decisao 93 (Emenda -- CERTIFICATE_BASELINE recalibrado):
+    deriva o tamanho da mensagem Certificate do TLS 1.3 a partir do(s)
+    tamanho(s) DER REAL(is) do(s) certificado(s)-folha -- nunca uma
+    constante copiada de uma medicao (pedido explicito do Luciano).
+    Framing do RFC 8446, secao 4.4.2, confirmado byte a byte contra 2
+    capturas reais independentes (Decisao 84, local; Decisao 92, AWS
+    real) nos 4 perfis: 4B de cabecalho de handshake + 1B de
+    `certificate_request_context` (sempre vazio aqui, so o byte de
+    comprimento 0) + 3B de comprimento da `certificate_list` + por
+    folha, 3B de comprimento do certificado + DER + 2B de comprimento
+    de extensoes (+ bytes de extensao REAIS, 0 na folha RSA de todo
+    perfil -- a UNICA excecao, Hibrido-AND, passa isso explicito)."""
+    if extra_extension_bytes is None:
+        extra_extension_bytes = [0] * len(leaf_der_sizes)
+    content = 1 + 3 + sum(3 + d + 2 + e for d, e in zip(leaf_der_sizes, extra_extension_bytes))
+    return content + 4
+
+
 # Decisao 20 (item e) -- tolerancia POR MENSAGEM, calculada, nao suposta.
 # Baseline = o tamanho da mensagem Certificate ISOLADA (Decisao 15),
 # NAO o total do flight do servidor (esse e maior, inclui ServerHello/
@@ -55,35 +91,63 @@ EXPECTED_CURVE = {
 # perfis, porque comparava a Certificate isolada contra um numero
 # maior que nunca poderia bater).
 #
-# Decisao 28 (Emenda 1 ao criterio 1) + Decisao 29 (Emenda 2): o
-# servidor do piloto precisa de DOIS IPs no SAN (IP privado, pro L0
-# co-localizado; EIP, pro L219/L325 cross-region -- confirmado na v8
-# real, Decisao 52/53 dela) em vez do par loopback (127.0.0.1,::1)
-# usado nos testes locais. A Emenda 1 estimou o delta por aritmetica
-# de DER (-12B) -- a Emenda 2 MEDIU de verdade (dois builds reais de
-# certificado, mesmo pipeline, so variando SERVER_IPS) e achou -14B
-# pros perfis de certificado unico (a aritmetica errou por ~2B, efeito
-# de fronteira na codificacao de comprimento do DER, nao decomposto
-# byte a byte) e -28B pro Hibrido-AND especificamente -- CONFIRMADO no
-# codigo (`certs/main.go`, `sameSANs(andRSAServer, andMLDSAServer)`)
-# que esse perfil tem DOIS certificados-folha de servidor, cada um
-# carregando o mesmo SAN, dobrando o efeito. Valores adotados: os
-# MEDIDOS (Decisao 29), nao os aritmeticos (Decisao 28, superados).
-# Decisao 42 (revisao independente, item D.10d): com o SAN hoje FIXO
-# (Decisao 29) e o baseline MEDIDO (nao estimado), nao ha mais
-# justificativa pra +-50B -- essa folga so fazia sentido quando o SAN
-# em si era incerto (Emenda 1, Decisao 28). A unica fonte de
-# variabilidade legitima que resta e o INTEIRO ASN.1 do numero de
-# serie do certificado (um valor por build, de tamanho em bytes
-# variavel: 1 byte extra de preenchimento sempre que o byte mais
-# significativo tem o bit alto ligado, pra nao ser lido como negativo
-# -- nunca mais que +-2B por certificado-folha). O Hibrido-AND tem
-# DOIS certificados-folha de servidor (Decisao 29), entao essa folga
-# dobra: +-4B no pior caso. +-4B flat (nao escalado por perfil) ainda
-# e MUITO mais estreito que +-50B e detecta corretamente a regressao
-# que a folga antiga escondia: faltar o EIP no SAN custa -14B
-# (Decisao 29) ou -28B no Hibrido-AND, ambos >> 4B.
-CERTIFICATE_BASELINE = {"classico": 899, "pqc": 5618, "hibrido-v8": 6241, "hibrido-and": 6554}
+# Decisao 28 (Emenda 1 ao criterio 1) + Decisao 29 (Emenda 2): a
+# Emenda 1 PARTIU do valor medido do certificado embutido (o mesmo
+# 913/5632/6255/6582 que esta Emenda 93 restaura -- ver o commit que
+# introduziu a Emenda 1, "Baseline recalculado: 913-12=901,
+# 5632-12=5620, 6255-12=6243, 6582-12=6570") e SUBTRAIU uma estimativa
+# aritmetica (-12B) assumindo que o piloto trocaria o SAN de loopback
+# (127.0.0.1,::1) por um SAN com dois IPs reais (IP privado + EIP). A
+# Emenda 2 MEDIU essa troca de verdade (dois builds reais, so variando
+# SERVER_IPS) e corrigiu o delta pra -14B (-28B no Hibrido-AND, 2
+# folhas de servidor). As DUAS Emendas, porem, ficaram assentadas sobre
+# uma premissa que a Decisao 75 (retomada desta rodada) derrubou
+# explicitamente: **o piloto NUNCA troca o SAN** -- usa o certificado
+# de loopback tal como ja esta embutido nas imagens pinadas, sem
+# nenhum rebuild. A Decisao 75 confirmou isso por sha256 mas nunca
+# reconferiu `CERTIFICATE_BASELINE` contra essa reversao -- o numero
+# ficou com o delta de uma troca de SAN que nunca aconteceu.
+#
+# Decisao 93 (Emenda -- pedido do Luciano, opcao 2: corrigir por
+# DERIVACAO, nunca por copia de um valor medido): com a premissa da
+# Emenda 1/2 falsa (Decisao 75), o baseline correto e o mesmo valor
+# MEDIDO que a propria Emenda 1 ja usava como ponto de partida --
+# agora DERIVADO pela formula de `_tls13_certificate_message_size`
+# a partir do DER REAL (`BASELINE_CERT_DER_SIZES`, acima), nunca
+# copiado da medicao na AWS (que so CONFIRMOU o valor derivado,
+# nunca foi a fonte dele). Residuo da soma por mensagem contra
+# `BASELINE_HANDSHAKE_BYTES` (framing TLS/registro/AEAD, nunca parte
+# desta convencao de "+4B por mensagem") fica CONSTANTE nos 4 perfis
+# depois desta correcao (121B, saida; 77B, entrada) -- antes, so a
+# entrada Certificate tinha residuo variavel (135/135/135/149);
+# nenhuma outra entrada da tabela precisa de correcao.
+#
+# Decisao 42 (revisao independente, item D.10d, ainda valida): com o
+# SAN FIXO (Decisao 75, nunca trocado) e o baseline agora DERIVADO (nao
+# estimado nem medido-e-copiado), a unica fonte de variabilidade
+# legitima que resta e o INTEIRO ASN.1 do numero de serie do
+# certificado (1 byte extra de preenchimento sempre que o byte mais
+# significativo tem o bit alto ligado -- nunca mais que +-2B por
+# certificado-folha; +-4B no pior caso do Hibrido-AND, 2 folhas).
+# +-4B flat continua a tolerancia certa.
+CERTIFICATE_BASELINE = {
+    "classico": _tls13_certificate_message_size([BASELINE_CERT_DER_SIZES["classico"]["out"]]),
+    "pqc": _tls13_certificate_message_size([BASELINE_CERT_DER_SIZES["pqc"]["out"]]),
+    "hibrido-v8": _tls13_certificate_message_size([BASELINE_CERT_DER_SIZES["hibrido-v8"]["out"]]),
+    # Hibrido-AND: 2 folhas de servidor (Decisao 29) -- a formula
+    # precisa dos DER INDIVIDUAIS (914 RSA + 5647 ML-DSA), nunca so a
+    # soma que BASELINE_CERT_DER_SIZES guarda (confirmado == 6561 pelo
+    # assert abaixo). A folha ML-DSA carrega 3B REAIS de extensao por
+    # `CertificateEntry` que a folha RSA nao tem -- confirmado via o
+    # campo `Certificates Length` do tshark (nunca o sub-parsing ASN.1
+    # dessa folha, que o proprio tshark erra pra ML-DSA), igual nas 2
+    # capturas reais independentes (Decisao 84 local, Decisao 92 AWS).
+    "hibrido-and": _tls13_certificate_message_size([914, 5647], extra_extension_bytes=[0, 3]),
+}
+assert 914 + 5647 == BASELINE_CERT_DER_SIZES["hibrido-and"]["out"], (
+    "DER individuais do Hibrido-AND usados em CERTIFICATE_BASELINE tem que somar "
+    "exatamente o total que BASELINE_CERT_DER_SIZES ja guarda -- nunca divergir"
+)
 CERTIFICATE_TOLERANCE_B = 4
 
 # Decisao 30 (Emenda 3 ao criterio 1): a Decisao 20/21 original supunha
@@ -180,21 +244,6 @@ CERT_FILES_BY_PROFILE = {
         "server": ("hibrido_and_rsa_server.crt", "hibrido_and_mldsa_server.crt"),
     },
 }
-
-# DER, bytes -- do MESMO build (loopback, SERVER_IPS/SERVER_DNS
-# default do certs/Makefile) que produziu BASELINE_HANDSHAKE_BYTES
-# acima. Medido direto nos arquivos reais desta sessao (cryptography,
-# x509.load_pem_x509_certificate(...).public_bytes(Encoding.DER)) --
-# confere exatamente com a tabela da Decisao 9 (DECISIONS.md linhas
-# 896-901: servidor RSA 914, servidor ML-DSA 5.647, cliente RSA 801,
-# cliente ML-DSA 5.534).
-BASELINE_CERT_DER_SIZES = {
-    "classico": {"in": 787, "out": 900},
-    "pqc": {"in": 5506, "out": 5619},
-    "hibrido-v8": {"in": 6131, "out": 6242},
-    "hibrido-and": {"in": 801 + 5534, "out": 914 + 5647},
-}
-
 
 def _cert_der_size(cert_path) -> int:
     """Decisao 75, item 2 (pedido do Luciano): usa so a stdlib

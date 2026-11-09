@@ -10096,3 +10096,136 @@ decisao do Luciano sobre qual valor usar).
 PILOT_RUNBOOK.md` (Passo 8b), `thesis/results/v9/piloto/tentativas/
 ensaio_fase_b_real_v3/` (evidencia nova), `thesis/results/v9/piloto/
 README.md`/`estado.json`, esta Decisao.
+
+## 93. Emenda -- `CERTIFICATE_BASELINE` recalibrado por DERIVACAO a partir do DER real (opcao 2 do Luciano), investigacao completa antes de qualquer correcao: a Decisao 75 ja tinha revertido a premissa da Decisao 28/29 e `CERTIFICATE_BASELINE` nunca foi reconferido contra essa reversao
+
+**Investigacao, sem AWS, item 1 do pedido (cinco partes, nenhuma suposta):**
+
+**(a) DER real de cada certificado embutido vs `BASELINE_CERT_DER_SIZES`.**
+Medido direto (`ssl.PEM_cert_to_DER_cert`) contra `certs/generated/`
+(confirmado por sha256 == o mesmo embutido em `mockopin-v9-gateway:
+pinned`, Decisao 92): classico out=900/in=787; pqc out=5619/in=5506;
+hibrido-v8 out=6242/in=6131; hibrido-and out=914+5647/in=801+5534 --
+**os quatro batem EXATAMENTE com `BASELINE_CERT_DER_SIZES`, sem
+nenhuma divergencia.** Essa tabela nunca foi o problema.
+
+**(b) Historico via `git log -S` + `DECISIONS.md`.** `BASELINE_CERT_
+DER_SIZES` foi introduzida em `8a14254b` (Decisao 55) com os MESMOS
+900/5619/6242/914+5647 de hoje -- nunca mudou desde entao.
+`CERTIFICATE_BASELINE` mudou uma unica vez, em `107f592c` (Decisoes
+28/29): o diff mostra literalmente o comentario REMOVIDO dizendo
+`"Baseline recalculado: 913-12=901, 5632-12=5620, 6255-12=6243,
+6582-12=6570"` -- ou seja, **913/5632/6255/6582 (os MESMOS valores que
+a medicao real na AWS, Decisao 92, encontrou) ja eram o ponto de
+partida da Decisao 28**, que SUBTRAIU uma estimativa aritmetica de
+-12B (depois corrigida pra -14B/-28B medido na Decisao 29) assumindo
+que o piloto trocaria o SAN de loopback por um com dois IPs reais
+(privado+EIP). A Decisao 75 (retomada desta mesma sessao estendida)
+investigou essa EXATA premissa e a derrubou explicitamente: "a tecnica
+de SAN real... fica descartada pro piloto -- nenhum rebuild de
+imagem"; confirmou por sha256 que o certificado embutido e o de
+loopback (127.0.0.1,::1); e concluiu "por que isto e uma Emenda, nunca
+um STOP: nenhum criterio pre-registrado muda" -- mas nunca reconferiu
+`CERTIFICATE_BASELINE` contra essa reversao. O numero ficou ancorado
+numa troca de SAN que a propria Decisao 75 provou nunca acontecer.
+
+**(c) Soma dos baselines por mensagem vs `BASELINE_HANDSHAKE_BYTES`,
+residuo, entrada unica inconsistente.** Pra cada perfil/sentido:
+`out_soma = ServerHello+EncryptedExtensions+CertificateRequest+
+Certificate+CertificateVerify_servidor+Finished_servidor`; `in_soma =
+ClientHello+Certificate_cliente+CertificateVerify_cliente+Finished_
+cliente`. **Antes da correcao** (899/5618/6241/6554): residuo `out` =
+135/135/135/149 (NAO constante -- hibrido-and diverge dos outros 3
+exatamente pela folha extra do Certificate) e residuo `in` =
+77/77/77/77 (ja constante, lado cliente nunca teve problema).
+**Depois da correcao** (913/5632/6255/6582): residuo `out` =
+121/121/121/121 (constante nos 4) e residuo `in` continua 77/77/77/77.
+**A UNICA entrada inconsistente, nos dois lados, era o Certificate do
+SERVIDOR -- confirmado por aritmetica exata, nenhuma outra linha da
+tabela (ServerHello/EncryptedExtensions/CertificateRequest/
+CertificateVerify/Finished, nos dois sentidos, nem Certificate_
+cliente) precisa de correcao.** (O residuo de 121B/77B que sobra e
+framing de registro TLS 1.3/tag AEAD/ChangeCipherSpec -- nunca parte
+da convencao "+4B por mensagem" que estas tabelas usam, nunca uma
+inconsistencia.)
+
+**(d) Valor da Certificate derivado pela formula, 4 perfis, 2
+sentidos (inclui a Certificate do CLIENTE no mTLS).** RFC 8446,
+secao 4.4.2: `message = 4(cabecalho handshake) + 1(certificate_
+request_context, sempre vazio) + 3(comprimento da certificate_list) +
+por folha [3(comprimento do cert) + DER + 2(comprimento de
+extensoes) + extensao real]`. Pra 1 folha: `message = DER+13` --
+testado contra os 3 perfis de folha unica, bate EXATO nos dois
+sentidos (classico: servidor 900+13=913, cliente 787+13=800 -- este
+ULTIMO ja era o valor usado em `HANDSHAKE_MESSAGE_BASELINE`, nunca
+mudou; pqc: 5619+13=5632 / 5506+13=5519 [ja correto]; hibrido-v8:
+6242+13=6255 / 6131+13=6144 [ja correto]). Hibrido-AND (2 folhas,
+servidor E cliente): a formula generaliza pra `8 + soma_por_folha(DER_i
++5+extensao_i)` -- confirmado por conteudo (campo `Certificates
+Length` do tshark, nunca o sub-parsing ASN.1 da folha ML-DSA, que o
+proprio tshark erra com "BER Error"/"Vector length... malformed") que
+a folha ML-DSA carrega 3B REAIS de extensao por `CertificateEntry` que
+a folha RSA nao tem -- confirmado em 2 capturas reais INDEPENDENTES
+(local, Decisao 84; AWS real, Decisao 92): servidor
+914+5647+21=6582 (bate com a medicao real da Decisao 92); cliente
+801+5534+21=6356 (bate com o `Certificate_cliente` que `HANDSHAKE_
+MESSAGE_BASELINE` ja usava, nunca mudou). **Os 4 perfis, os 2
+sentidos: a formula reproduz EXATAMENTE tanto os valores ja corretos
+(ClientHello, Certificate_cliente, todas as demais mensagens) quanto
+o unico valor errado (Certificate do servidor) -- nenhuma segunda
+inconsistencia encontrada.**
+
+**(e) Por que validacoes locais antigas passaram com 899.** Nunca
+passaram contra um certificado real -- a Decisao 79 ("caminho de
+dados completo provado localmente") usou `LocalExecutor`/`_dedicated_
+capture_block`, que FABRICA os tamanhos de mensagem DIRETO dos
+proprios dicionarios de baseline (`HANDSHAKE_MESSAGE_BASELINE`/
+`CERTIFICATE_BASELINE`) -- circular por construcao, nunca uma medicao
+independente contra um arquivo de certificado real. A Decisao 90 foi
+a PRIMEIRA vez que `certificate_ok` foi avaliado contra uma captura
+de rede de verdade (e parou antes de chegar a essa comparacao
+especifica, por um bug de parsing diferente); a Decisao 92 foi a
+PRIMEIRA vez que a comparacao de fato rodou -- e foi exatamente
+quando a inconsistencia apareceu.
+
+**Hipotese do Luciano: CONFIRMADA em todos os 5 pontos.** Residuo
+mostra EXATAMENTE uma entrada inconsistente (nunca mais de uma, nunca
+outra mensagem); o valor derivado pela formula a partir do DER real
+bate EXATAMENTE com o medido na AWS (Decisao 92) nos 4 perfis.
+
+**Correcao (item 2 do pedido, opcao 2 -- por DERIVACAO, nunca copia):**
+`CERTIFICATE_BASELINE` deixa de ser uma constante literal e passa a
+ser CALCULADO, em tempo de import, por `_tls13_certificate_message_
+size(leaf_der_sizes, extra_extension_bytes)` (nova, `evaluate_
+criteria.py`) a partir de `BASELINE_CERT_DER_SIZES` (que ja estava
+certo, nunca tocado) -- a formula e o `assert` de conferencia (soma
+dos DER individuais do Hibrido-AND == o total que `BASELINE_CERT_DER_
+SIZES` ja guardava) ficam GRAVADOS no codigo, nunca so no commit.
+`CERTIFICATE_TOLERANCE_B` continua ±4B (Decisao 42, ainda valida: unica
+fonte de variabilidade legitima e o padding ASN.1 do numero de serie).
+Nenhuma outra constante tocada. `BASELINE_CERT_DER_SIZES` so foi
+MOVIDA pra antes de `CERTIFICATE_BASELINE` no arquivo (precisa existir
+primeiro, e computada em tempo de import) -- conteudo idêntico.
+
+**Isto e um DESVIO FORMAL do pre-registro `v9-prereg`** (o valor
+numerico do limiar do criterio 1 muda, 899/5618/6241/6554 ->
+913/5632/6255/6582, mesmo a logica e a tolerancia de ±4B continuando
+as mesmas) -- **a ser relatado na tese como tal**, com esta Decisao e
+a evidencia das Decisoes 75/90/92 como anexo: a causa raiz nunca foi
+um erro de medicao ou de implementacao, foi a Decisao 28/29 ter sido
+construida sobre uma premissa (SAN com IPs reais) que a Decisao 75,
+mais tarde, descartou sem propagar a reversao pro numero que dependia
+dela.
+
+**Testes:** `test_evaluate_criteria.py` ganha 5 testes novos --
+formula reproduz o baseline derivado (1 e 2 folhas), mutante que omite
+a extensao real da folha ML-DSA (erra por exatamente 3B), residuo
+constante nos 4 perfis (prova que nenhuma outra entrada precisa de
+correcao), mutante com o `CERTIFICATE_BASELINE` antigo (prova que o
+residuo NAO era constante antes). As 3 capturas de referencia
+(pqc/hibrido-v8/hibrido-and, Decisao 91) ganham uma asserção nova:
+`certificate_ok`/`ok` agora `True`. 223 testes no total, todos verdes.
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/integration/
+evaluate_criteria.py`, `thesis/results/v9/campaign/tests/test_
+evaluate_criteria.py`, esta Decisao.
