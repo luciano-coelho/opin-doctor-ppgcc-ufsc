@@ -573,10 +573,17 @@ def build_flows(criteria_eval: list, criterio3: dict) -> dict:
             "l325_errors_found": l325_errors}
 
 
-def build_profile_route_table(sizes: dict, flows: dict, latency: dict) -> list:
+def build_profile_route_table(sizes: dict, flows: dict, latency: dict, profiles=None, routes=None) -> list:
+    """Pedido do Luciano (fechamento dos criterios 1/3/4/6/7 pra
+    campanha, item 3 -- estender o consolidado as 8 rotas/4 perfis):
+    `profiles`/`routes` agora parametrizados -- `None` preserva o
+    piloto byte a byte (PROFILES/ROUTES, 4x3); `main()` passa
+    `campaign_topology.CAMPAIGN_ROUTES` (8) com `--campaign`."""
+    profiles = profiles if profiles is not None else PROFILES
+    routes = routes if routes is not None else ROUTES
     rows = []
-    for p in PROFILES:
-        for r in ROUTES:
+    for p in profiles:
+        for r in routes:
             key = f"{p}/{r}"
             has_size = any(row["profile"] == p and row["route"] == r for row in sizes["message_sizes_by_profile_route"])
             has_flow = key in flows["by_profile_route"]
@@ -744,13 +751,27 @@ def render_latency_md(latency: dict, rtt_initcwnd: dict) -> str:
         lines.append(f"| {route} | {v['nominal_ms']} | {v['rtt_ms_probe']} | {v['rtt_ms_pcap']} | {v['consistent']} |")
     lines.append("")
     i = rtt_initcwnd["initcwnd"]
-    lines.append(f"initcwnd/MSS medidos REALMENTE apenas para **{i['profile']}/{i['route']}** "
-                  f"(unica combinacao que o probe dedicado do criterio 2 cobriu neste piloto -- "
-                  f"ver `REQUISITOS_CAMPANHA_OFICIAL.md` item (a) para o gap conhecido): "
-                  f"cwnd={i['ss_ti_cwnd']}, mss={i['mss_bytes']}B, "
-                  f"bytes enviados na 1a janela de RTT={i['bytes_sent_within_first_rtt_window']}B "
-                  f"(RTT usado: {i['rtt_ms_used_for_window']}ms). As demais 11 combinacoes de "
-                  f"perfil x rota: **não verificado**.")
+    if "profile" in i:
+        # Piloto -- 1 combinacao fixa, texto original intocado.
+        lines.append(f"initcwnd/MSS medidos REALMENTE apenas para **{i['profile']}/{i['route']}** "
+                      f"(unica combinacao que o probe dedicado do criterio 2 cobriu neste piloto -- "
+                      f"ver `REQUISITOS_CAMPANHA_OFICIAL.md` item (a) para o gap conhecido): "
+                      f"cwnd={i['ss_ti_cwnd']}, mss={i['mss_bytes']}B, "
+                      f"bytes enviados na 1a janela de RTT={i['bytes_sent_within_first_rtt_window']}B "
+                      f"(RTT usado: {i['rtt_ms_used_for_window']}ms). As demais 11 combinacoes de "
+                      f"perfil x rota: **não verificado**.")
+    else:
+        # Campanha -- `i` e o dict `combinations` de
+        # `criterion_2_initcwnd_campaign` (achado B.5), N combinacoes
+        # rota/direcao rotuladas -- tabela em vez de 1 frase fixa.
+        lines.append("initcwnd/MSS reais por combinacao rota/direcao (modo campanha, "
+                      "`criterion_2_initcwnd_campaign`):")
+        lines.append("")
+        lines.append("| Combinacao | cwnd (ss -ti) | MSS efetivo (B) | segmentos computados | OK? |")
+        lines.append("|---|---|---|---|---|")
+        for label, v in sorted(i.items()):
+            lines.append(f"| {label} | {v.get('ss_ti_cwnd')} | {v.get('mss_bytes') or v.get('mss_channels_agree')} | "
+                          f"{v.get('segments_computed')} | {v.get('pass')} |")
     return "\n".join(lines) + "\n"
 
 
@@ -894,6 +915,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--out-subdir", default="CONSOLIDATED_REPORT")
+    # Pedido do Luciano (fechamento dos criterios 1/3/4/6/7 pra
+    # campanha, item 3): sem a flag, comportamento do piloto
+    # INALTERADO (PROFILES/ROUTES fixos, 4x3, arquivos raw/ no nome
+    # de sempre). Com `--campaign`, ROUTES vem de
+    # `campaign_topology.CAMPAIGN_ROUTES` (8) -- PROFILES continua 4
+    # nos dois modos (nunca houve generalizacao de perfil pedida).
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa as 8 rotas de campaign_topology.CAMPAIGN_ROUTES em vez das 3 do piloto "
+                          "(ROUTES) -- le criteria_evaluation.json no formato _campaign e "
+                          "criterio3_distante_execucoes.json em vez de criterio3_l325_execucoes.json")
+    # Pedido do Luciano (item 4 -- ensaio offline completo): o ensaio
+    # roda com pcaps FALSOS (bytes literais "pcap falso", nunca um
+    # pcap real que o tshark saiba abrir) -- a extracao criptografica
+    # real (tshark + parser DER) e deliberadamente pulada so nesse
+    # cenario de teste, nunca num relatorio real. Reportado explicito
+    # no proprio `consolidated.json` (`crypto_extraction_skipped`).
+    ap.add_argument("--skip-crypto-extraction", action="store_true",
+                     help="pula a extracao real via tshark/parser DER (so para ensaios com pcaps falsos -- "
+                          "NUNCA usar num relatorio real)")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -902,59 +942,99 @@ def main():
     out_dir = run_dir / args.out_subdir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.campaign:
+        _scripts_dir = Path(__file__).resolve().parent
+        if str(_scripts_dir) not in sys.path:
+            sys.path.insert(0, str(_scripts_dir))
+        import campaign_topology as ct
+        routes = list(ct.CAMPAIGN_ROUTES)
+    else:
+        routes = ROUTES
+    profiles = PROFILES
+
     manifest = load_json(raw_dir / "manifest.json")
     criteria_eval = load_json(run_dir / "criteria_evaluation.json")
     piloto_calls = load_json(raw_dir / "piloto_calls.json")
     criterio7 = load_json(raw_dir / "criterio7_rtt_por_rota.json")
-    criterio2 = load_json(raw_dir / "criterio2_initcwnd.json")
-    criterio3 = load_json(raw_dir / "criterio3_l325_execucoes.json")
-    pins = load_json(run_dir.parents[2] / "campaign" / "PINS.json")
+    criterio3_name = "criterio3_distante_execucoes.json" if args.campaign else "criterio3_l325_execucoes.json"
+    criterio3 = load_json(raw_dir / criterio3_name)
+    pins_path = run_dir.parents[2] / "campaign" / "PINS.json"
     pki_dir = run_dir.parents[2] / "certs" / "generated"
+    if args.skip_crypto_extraction and not pins_path.is_file():
+        # So em modo de ensaio/teste (--skip-crypto-extraction): a
+        # estrutura de diretorios real do piloto (3 niveis acima de
+        # run_dir) nunca existe num diretorio temporario de ensaio --
+        # nunca tomado como ausencia real de PINS.json num relatorio
+        # de verdade (ali, sem --skip-crypto-extraction, continua
+        # estourando igual a antes).
+        pins = {}
+    else:
+        pins = load_json(pins_path)
 
-    print("Extraindo parametros criptograficos reais (tshark + parser DER proprio) para 4 perfis x 3 rotas...",
-          file=sys.stderr)
-    crypto = {}
-    for p in PROFILES:
-        per_route = {}
-        for r in ROUTES:
-            per_route[r] = {"handshake": extract_handshake(capturas_dir, p, r),
-                             "entries": extract_certs(capturas_dir, p, r)}
-        hs_all = [per_route[r]["handshake"] for r in ROUTES]
-        consistent = all(
-            h["ciphersuite_hex"] == hs_all[0]["ciphersuite_hex"] and
-            h["negotiated_group_hex"] == hs_all[0]["negotiated_group_hex"] and
-            h["certificateverify_sig_hash_alg_hex_distinct"] == hs_all[0]["certificateverify_sig_hash_alg_hex_distinct"]
-            for h in hs_all)
-        entries_all = [per_route[r]["entries"] for r in ROUTES]
-        entries_consistent = all(
-            {side: [e["sha256"] for e in d["entries"]] for side, d in ent.items()} ==
-            {side: [e["sha256"] for e in d["entries"]] for side, d in entries_all[0].items()}
-            for ent in entries_all)
-        crypto[p] = {"handshake_l0": per_route["L0"]["handshake"],
-                     "handshake_all_routes": {r: per_route[r]["handshake"] for r in ROUTES},
-                     "entries_by_side": per_route["L0"]["entries"],
-                     "entries_all_routes": {r: per_route[r]["entries"] for r in ROUTES},
-                     "cross_route_consistent": consistent and entries_consistent}
+    if args.skip_crypto_extraction:
+        print(f"PULANDO extracao criptografica real (--skip-crypto-extraction, {len(profiles)} perfis x "
+              f"{len(routes)} rotas nunca tocadas por tshark) -- SO valido pra ensaio/teste.", file=sys.stderr)
+        crypto = {}
+        check = {"pass": True, "failures": [],
+                 "note": "extracao pulada (--skip-crypto-extraction) -- nunca usar num relatorio real"}
+        pki_checks = {"pki_dir": str(pki_dir), "skipped": True}
+        log_evidence = build_log_evidence(raw_dir)
+    else:
+        print(f"Extraindo parametros criptograficos reais (tshark + parser DER proprio) para "
+              f"{len(profiles)} perfis x {len(routes)} rotas...", file=sys.stderr)
+        crypto = {}
+        for p in profiles:
+            per_route = {}
+            for r in routes:
+                per_route[r] = {"handshake": extract_handshake(capturas_dir, p, r),
+                                 "entries": extract_certs(capturas_dir, p, r)}
+            hs_all = [per_route[r]["handshake"] for r in routes]
+            consistent = all(
+                h["ciphersuite_hex"] == hs_all[0]["ciphersuite_hex"] and
+                h["negotiated_group_hex"] == hs_all[0]["negotiated_group_hex"] and
+                h["certificateverify_sig_hash_alg_hex_distinct"] == hs_all[0]["certificateverify_sig_hash_alg_hex_distinct"]
+                for h in hs_all)
+            entries_all = [per_route[r]["entries"] for r in routes]
+            entries_consistent = all(
+                {side: [e["sha256"] for e in d["entries"]] for side, d in ent.items()} ==
+                {side: [e["sha256"] for e in d["entries"]] for side, d in entries_all[0].items()}
+                for ent in entries_all)
+            first_route = routes[0]
+            crypto[p] = {"handshake_l0": per_route[first_route]["handshake"],
+                         "handshake_all_routes": {r: per_route[r]["handshake"] for r in routes},
+                         "entries_by_side": per_route[first_route]["entries"],
+                         "entries_all_routes": {r: per_route[r]["entries"] for r in routes},
+                         "cross_route_consistent": consistent and entries_consistent}
 
-    check = dual_signature_check(crypto)
-    pki_checks = verify_against_disk_pki(crypto["hibrido-and"]["entries_by_side"], pki_dir)
-    pki_checks["pki_dir"] = str(pki_dir)
-    log_evidence = build_log_evidence(raw_dir)
+        check = dual_signature_check(crypto)
+        pki_checks = verify_against_disk_pki(crypto["hibrido-and"]["entries_by_side"], pki_dir)
+        pki_checks["pki_dir"] = str(pki_dir)
+        log_evidence = build_log_evidence(raw_dir)
 
-    if not check["pass"]:
-        print("=" * 70, file=sys.stderr)
-        print("FALHA NA CHECAGEM AUTOMATIZADA DE CRIPTOGRAFIA (BLOCO B item 3):", file=sys.stderr)
-        for f in check["failures"]:
-            print(f"  - {f}", file=sys.stderr)
-        print("=" * 70, file=sys.stderr)
+        if not check["pass"]:
+            print("=" * 70, file=sys.stderr)
+            print("FALHA NA CHECAGEM AUTOMATIZADA DE CRIPTOGRAFIA (BLOCO B item 3):", file=sys.stderr)
+            for f in check["failures"]:
+                print(f"  - {f}", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
 
     sizes = build_sizes(criteria_eval)
     jwt_jwks = build_jwt_jwks(piloto_calls)
     latency = build_latency(piloto_calls)
     c7_rows = next(c for c in criteria_eval if c["criterion"] == 7)["rows"]
+    if args.campaign:
+        # Pedido do Luciano (item 3): em campanha, o criterio 2 nunca
+        # tem 1 arquivo fixo (`criterio2_initcwnd.json`) -- usa as N
+        # combinacoes rota/direcao ja resolvidas por
+        # `criterion_2_initcwnd_campaign` (achado B.5), direto de
+        # `criteria_evaluation.json`, nunca um arquivo raw extra.
+        c2_campaign = next(c for c in criteria_eval if c["criterion"] == 2)
+        criterio2 = c2_campaign.get("combinations", {})
+    else:
+        criterio2 = load_json(raw_dir / "criterio2_initcwnd.json")
     rtt_initcwnd = {"rtt_by_route": c7_rows, "initcwnd": criterio2}
     flows = build_flows(criteria_eval, criterio3)
-    profile_route_table = build_profile_route_table(sizes, flows, latency)
+    profile_route_table = build_profile_route_table(sizes, flows, latency, profiles=profiles, routes=routes)
     all_pass = all(r["pass"] for r in criteria_eval)
 
     consolidated = {
@@ -978,8 +1058,18 @@ def main():
     (out_dir / "consolidated.json").write_text(
         json.dumps(consolidated, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
 
-    (out_dir / "crypto_params.md").write_text(
-        render_crypto_md(crypto, check, pki_checks, log_evidence), encoding="utf-8")
+    if args.skip_crypto_extraction:
+        # render_crypto_md exige campos reais dentro de `crypto` (um
+        # handshake/entries por perfil, de uma extracao tshark real) --
+        # com a extracao pulada, `crypto={}` nunca teria o que
+        # renderizar; escreve uma nota explicita em vez de simular
+        # dados que nao existem.
+        crypto_md = ("# Secao (a) -- Parametros criptograficos por perfil\n\n"
+                     "PULADO (--skip-crypto-extraction) -- so para ensaio/teste com pcaps falsos, "
+                     "nunca usado num relatorio real.\n")
+    else:
+        crypto_md = render_crypto_md(crypto, check, pki_checks, log_evidence)
+    (out_dir / "crypto_params.md").write_text(crypto_md, encoding="utf-8")
     (out_dir / "sizes.md").write_text(render_sizes_md(sizes, jwt_jwks), encoding="utf-8")
     (out_dir / "latency.md").write_text(render_latency_md(latency, rtt_initcwnd), encoding="utf-8")
     (out_dir / "flows_criteria.md").write_text(

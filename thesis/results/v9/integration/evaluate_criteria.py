@@ -219,6 +219,19 @@ HANDSHAKE_MESSAGE_TOLERANCE_B = 0
 PROFILES_ALL = ("classico", "pqc", "hibrido-v8", "hibrido-and")
 PILOT_ROUTES = ("L0", "L219", "L325")
 
+
+def _ensure_campaign_topology_on_path():
+    """Fatorado (achado desta rodada -- fechamento dos criterios 1/3/4/
+    6/7 pra campanha, pedido do Luciano): mesmo path hack que
+    `criterion_2_initcwnd_campaign` ja usava sozinho (achado B.5),
+    agora reusado por TODAS as variantes de campanha abaixo, nunca
+    copiado de novo por funcao. Mesmo padrao que orchestrator.py ja usa
+    pro sentido inverso (_INTEGRATION_DIR, import evaluate_criteria) --
+    nunca depende do sys.path de quem chama ja incluir campaign/scripts."""
+    _campaign_scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "campaign", "scripts")
+    if _campaign_scripts_dir not in sys.path:
+        sys.path.insert(0, _campaign_scripts_dir)
+
 # Decisao 55 (pedido independente, item 3): handshakeBytesIn/Out
 # totais medidos no BUILD de certificado que produziu o historico
 # citado (loopback, certs/generated default -- Decisao 14/17/18,
@@ -338,12 +351,24 @@ L0_RTT_ABSOLUTE_FLOOR_MS = 1.0
 RTT_TOLERANCE_FRACTION = 0.10
 
 
-def _rtt_ok(route: str, measured_ms: float) -> bool:
-    if route == "L0":
+def _rtt_ok_for_nominal(nominal_ms: float, measured_ms: float) -> bool:
+    """Fatorado de `_rtt_ok` (achado desta rodada -- fechamento do
+    criterio 7 pra campanha): a MESMA logica, generalizada por
+    NOMINAL (co-localizado == nominal 0, nunca mais pelo NOME
+    literal "L0" -- a campanha tem 3 rotas co-localizadas com
+    rotulos distintos, "L0-sa-east-1"/"L0-us-east-1"/
+    "L0-ap-northeast-1", nenhuma chamada "L0"). Zero mudanca de
+    comportamento pro piloto: `_rtt_ok` abaixo so repassa
+    `NOMINAL_RTT_MS[route]`, que para "L0" e 0, caindo no mesmo
+    ramo de piso absoluto de antes."""
+    if nominal_ms == 0:
         return measured_ms < L0_RTT_ABSOLUTE_FLOOR_MS
-    nominal = NOMINAL_RTT_MS[route]
-    lo, hi = nominal * (1 - RTT_TOLERANCE_FRACTION), nominal * (1 + RTT_TOLERANCE_FRACTION)
+    lo, hi = nominal_ms * (1 - RTT_TOLERANCE_FRACTION), nominal_ms * (1 + RTT_TOLERANCE_FRACTION)
     return lo <= measured_ms <= hi
+
+
+def _rtt_ok(route: str, measured_ms: float) -> bool:
+    return _rtt_ok_for_nominal(NOMINAL_RTT_MS[route], measured_ms)
 
 
 def _finalize_message_sizes(profile: str, total_cert_bytes, clienthello_bytes, other: dict, **extra) -> dict:
@@ -754,6 +779,62 @@ def criterion_1_message_sizes(log_text: str, aws_dir=None) -> dict:
             "note": "avaliado so com o que o log local forneceu -- o criterio real exige as 12 capturas do piloto (4 perfis x 3 rotas)"}
 
 
+@_safe_criterion(1, "tamanhos por mensagem (campanha)")
+def criterion_1_message_sizes_campaign(aws_dir, profiles=None, routes=None) -> dict:
+    """Variante de campanha de `criterion_1_message_sizes` (pedido do
+    Luciano, fechamento dos criterios 1/3/4/6/7 pra campanha -- mesma
+    classe de gap que a `criterion_2_initcwnd_campaign` ja fechou pro
+    criterio 2, achado B.5).
+
+    Definicao das capturas dedicadas EM MODO CAMPANHA, proposta e
+    implementada aqui (impressa no relatorio desta rodada ANTES desta
+    implementacao, como pedido): produto completo perfis x rotas --
+    4 perfis x 8 rotas = 32 combinacoes, uma captura dedicada por
+    combinacao, MESMO formato/nome de arquivo que o piloto ja usa
+    (`<aws_dir>/criterio1_capturas/<perfil>_<rota>.log`), so com
+    `rota` vindo de `campaign_topology.CAMPAIGN_ROUTES` (8 rotulos) em
+    vez de `PILOT_ROUTES` (3). Justificativa: a Decisao 91 (item d)
+    exige consistencia byte a byte contra o `handshakeBytesIn/Out` do
+    GATEWAY REAL de cada conexao capturada -- isso e inerentemente por
+    conexao real, numa rota real especifica (RTT/MTU/caminho de rede
+    influenciam fragmentacao, achado da propria Decisao 90), nunca algo
+    que uma unica captura por perfil (ignorando a rota) poderia provar
+    pras 8 rotas da campanha. Produto completo porque o perfil
+    (algoritmo/certificado) e route-agnostico por desenho -- nao ha
+    combinacao perfil x rota logicamente invalida a excluir (diferente
+    do criterio 2/7 de campanha, onde so rotas com RTT>0 ou so rotas
+    nao-L0 fazem sentido testar)."""
+    criterion, name = 1, "tamanhos por mensagem (campanha)"
+    if not aws_dir:
+        return {"criterion": criterion, "name": name, "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem capturas dedicadas, nao ha evidencia"}
+    _ensure_campaign_topology_on_path()
+    import campaign_topology as ct
+    profiles = list(profiles) if profiles is not None else list(PROFILES_ALL)
+    routes = list(routes) if routes is not None else list(ct.CAMPAIGN_ROUTES)
+    capturas_dir = os.path.join(aws_dir, "criterio1_capturas")
+    results, missing = [], []
+    for profile in profiles:
+        for route in routes:
+            path = os.path.join(capturas_dir, f"{profile}_{route}.log")
+            if not os.path.isfile(path):
+                missing.append(f"{profile}_{route}")
+                continue
+            block = open(path, encoding="utf-8", errors="replace").read()
+            row = _message_sizes_for_profile(block, profile)
+            row["route"] = route
+            results.append(row)
+    expected = len(profiles) * len(routes)
+    ok = len(missing) == 0 and len(results) == expected and all(r["ok"] for r in results)
+    return {"criterion": criterion, "name": name, "rows": results,
+            "missing_captures": missing, "expected_captures": expected,
+            "profiles": profiles, "routes": routes,
+            "pass": ok,
+            "note": (None if ok else f"modo campanha -- exige {expected} capturas "
+                                      f"({len(profiles)} perfis x {len(routes)} rotas); "
+                                      f"{len(missing)} faltando ou reprovada(s)")}
+
+
 # Decisao 36 (Emenda 8 ao criterio 4, poluicao do probe): "6
 # conexoes mTLS client-facing" (Decisao 17/18, 44/6/28/4/4) nunca
 # tinha sido wireada neste avaliador -- so verificada manualmente
@@ -852,6 +933,45 @@ def criterion_4_counts(execucoes: list | None, log_text: str = "") -> dict:
             "rows": rows, "pass": count_ok and all_ok}
 
 
+@_safe_criterion(4, "contagens do fluxo (campanha)")
+def criterion_4_counts_campaign(execucoes: list | None, log_text: str = "", expected_total: int | None = None) -> dict:
+    """Variante de campanha de `criterion_4_counts` -- MESMA logica de
+    contagem HTTP/mTLS por execucao (as constantes 44/28/4/4/6 sao do
+    fluxo de negocio, route-agnosticas, nunca pilot-specific), so com
+    `expected_total` parametrizado em vez da constante
+    `EXPECTED_EXECUCOES_PILOTO=60` -- obrigatorio em modo campanha
+    (ensaio N=2 x 4 perfis x 8 rotas = 64; oficial N=30 x 4 x 8 = 960;
+    nunca assumido)."""
+    if not execucoes:
+        return {"criterion": 4, "name": "contagens do fluxo (campanha)", "pass": False,
+                "note": "nenhuma lista de execucoes fornecida"}
+    if expected_total is None:
+        return {"criterion": 4, "name": "contagens do fluxo (campanha)", "pass": False,
+                "note": "expected_total obrigatorio em modo campanha -- depende da escala real, nunca assumido"}
+    expected_http = {"http": 44, "jwts": 28, "jwks": 4, "ca": 4}
+    rows = []
+    for entry in execucoes:
+        profile, route, run = entry.get("profile"), entry.get("route"), entry.get("run")
+        http_counts = _http_counts_for_calls(entry)
+        window = _execucao_window(log_text, profile, route, run)
+        if window is None:
+            rows.append({"profile": profile, "route": route, "run": run,
+                         "actual": http_counts, "expected": expected_http,
+                         "mtls": None, "ok": False,
+                         "note": "marcador de inicio/fim nao encontrado no log para esta execucao"})
+            continue
+        mtls = sum(1 for sni in _MTLS_CONNECTION_OK_RE.findall(window) if sni != _INTERNAL_CALLER_SNI)
+        actual = {**http_counts, "mtls": mtls}
+        expected = {**expected_http, "mtls": EXPECTED_MTLS_CONNECTIONS}
+        rows.append({"profile": profile, "route": route, "run": run,
+                     "actual": actual, "expected": expected, "ok": actual == expected})
+    count_ok = len(execucoes) == expected_total
+    all_ok = all(r["ok"] for r in rows)
+    return {"criterion": 4, "name": "contagens do fluxo (campanha)",
+            "total_execucoes": len(execucoes), "expected_total": expected_total,
+            "rows": rows, "pass": count_ok and all_ok}
+
+
 @_safe_criterion(5, "zero erros")
 def criterion_5_zero_errors(log_text: str) -> dict:
     # Decisao 33 (avaliador fail-closed): "nenhum erro encontrado" so
@@ -946,6 +1066,48 @@ def criterion_6_instrumentation(log_text: str, aws_dir=None) -> dict:
             "keylog_decryption_evidence": has_keylog_evidence,
             "pass": all_ok and has_keylog_evidence and len(rows) > 0,
             "note": "modo local (sem --aws-dir) -- nao exige cardinalidade de 60, uso de desenvolvimento apenas"}
+
+
+@_safe_criterion(6, "instrumentacao completa + asserções (campanha)")
+def criterion_6_instrumentation_campaign(aws_dir, expected_total: int | None = None) -> dict:
+    """Variante de campanha de `criterion_6_instrumentation` (caminho
+    `aws_dir`) -- MESMA logica por execucao (CurveID/DualAuthenticated/
+    keylog_evidence), so com `expected_total` parametrizado em vez da
+    constante `EXPECTED_EXECUCOES_PILOTO=60`, obrigatorio em modo
+    campanha (nunca assumido)."""
+    criterion, name = 6, "instrumentacao completa + asserções (campanha)"
+    if not aws_dir:
+        return {"criterion": criterion, "name": name, "pass": False, "note": "nenhum --aws-dir fornecido"}
+    if expected_total is None:
+        return {"criterion": criterion, "name": name, "pass": False,
+                "note": "expected_total obrigatorio em modo campanha -- depende da escala real, nunca assumido"}
+    path = os.path.join(aws_dir, "criterio6_execucoes.json")
+    if not os.path.isfile(path):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo nao encontrado: {path}"}
+    try:
+        execucoes = json.load(open(path, encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo malformado ({e})"}
+    if not isinstance(execucoes, list):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"esperada uma lista, recebido {type(execucoes).__name__}"}
+    rows = []
+    for entry in execucoes:
+        profile = entry.get("profile")
+        curve, dual = entry.get("curveID"), entry.get("dualAuthenticated")
+        keylog_ok = entry.get("keylog_evidence") is True
+        want = EXPECTED_CURVE.get(profile)
+        curve_ok = curve == want
+        dual_ok = True
+        if profile == "hibrido-and":
+            dual_ok = dual is True
+        ok = curve_ok and dual_ok and keylog_ok
+        rows.append({**entry, "curve_expected": want, "curve_ok": curve_ok,
+                     "dual_ok": dual_ok, "keylog_ok": keylog_ok, "ok": ok})
+    count_ok = len(execucoes) == expected_total
+    all_ok = all(r["ok"] for r in rows)
+    return {"criterion": criterion, "name": name,
+            "total_execucoes": len(execucoes), "expected_total": expected_total,
+            "rows": rows, "pass": count_ok and all_ok}
 
 
 INITCWND_MIN_SEGMENTS = 10
@@ -1128,12 +1290,7 @@ def criterion_2_initcwnd_campaign(aws_dir, routes=None) -> dict:
     criterion, name = 2, "initcwnd real (campanha)"
     if not aws_dir:
         return {"criterion": criterion, "name": name, "pass": False, "note": "nenhum --aws-dir fornecido"}
-    # Mesmo padrao que orchestrator.py ja usa pro sentido inverso
-    # (_INTEGRATION_DIR, import evaluate_criteria) -- nunca depende do
-    # sys.path de quem chama ja incluir campaign/scripts.
-    _campaign_scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "campaign", "scripts")
-    if _campaign_scripts_dir not in sys.path:
-        sys.path.insert(0, _campaign_scripts_dir)
+    _ensure_campaign_topology_on_path()
     import campaign_topology as ct
     routes = routes if routes is not None else [r for r in ct.CAMPAIGN_ROUTES if ct.CAMPAIGN_NOMINAL_RTT_MS[r] > 0]
     combinations = {}
@@ -1191,6 +1348,53 @@ def criterion_3_distant_route(aws_dir) -> dict:
             "errors_found": len(errors), "pass": ok}
 
 
+@_safe_criterion(3, "zero erros na rota mais distante (campanha)")
+def criterion_3_distant_route_campaign(aws_dir, route=None, profiles=None, n_per_profile=None) -> dict:
+    """Variante de campanha de `criterion_3_distant_route` (mesma
+    classe de fechamento desta rodada). `route` default = a rota de
+    MAIOR RTT nominal em `campaign_topology.CAMPAIGN_NOMINAL_RTT_MS`
+    (hoje "L325", mesmo rotulo do piloto por coincidencia -- derivado,
+    nunca hardcoded de novo aqui). `n_per_profile` e OBRIGATORIO em
+    modo campanha (nunca assumido) -- a escala real varia entre o
+    ensaio (N=2) e a campanha oficial (N=30), diferente do piloto
+    (sempre N=5). Usa um arquivo PROPRIO
+    (`criterio3_distante_execucoes.json`, nunca o nome
+    `criterio3_l325_execucoes.json` do piloto) para nao confundir
+    escalas/arquivos completamente diferentes sob o mesmo nome."""
+    criterion, name = 3, "zero erros na rota mais distante (campanha)"
+    if not aws_dir:
+        return {"criterion": criterion, "name": name, "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem log de execucoes, nao ha evidencia"}
+    _ensure_campaign_topology_on_path()
+    import campaign_topology as ct
+    route = route if route is not None else max(ct.CAMPAIGN_NOMINAL_RTT_MS, key=ct.CAMPAIGN_NOMINAL_RTT_MS.get)
+    profiles = list(profiles) if profiles is not None else list(PROFILES_ALL)
+    if n_per_profile is None:
+        return {"criterion": criterion, "name": name, "pass": False,
+                "note": "n_per_profile obrigatorio em modo campanha -- depende da escala real "
+                        "(ensaio N=2 vs oficial N=30), nunca assumido"}
+    path = os.path.join(aws_dir, "criterio3_distante_execucoes.json")
+    if not os.path.isfile(path):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo nao encontrado: {path}"}
+    try:
+        execs = json.load(open(path, encoding="utf-8"))["execucoes"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo malformado ou campo ausente ({e})"}
+    if not isinstance(execs, list):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"'execucoes' nao e uma lista ({type(execs).__name__})"}
+    all_route_ok = all(e.get("route") == route for e in execs)
+    expected_total = len(profiles) * n_per_profile
+    count_ok = len(execs) == expected_total
+    per_profile = Counter(e.get("profile") for e in execs)
+    profiles_ok = all(per_profile.get(p) == n_per_profile for p in profiles)
+    errors = [e for e in execs if e.get("ok") is not True]
+    ok = all_route_ok and count_ok and profiles_ok and len(errors) == 0
+    return {"criterion": criterion, "name": name,
+            "route": route, "total_execucoes": len(execs), "expected_total": expected_total,
+            "all_route_ok": all_route_ok, "profile_distribution_ok": profiles_ok,
+            "errors_found": len(errors), "pass": ok}
+
+
 # Decisao 38 (Emenda 10 ao criterio 7): limiar de concordancia
 # EXPLICITO entre os dois canais (probe TCP/443 e pcap SYN/SYN-ACK),
 # nunca deixado implicito. L0 usa diferenca ABSOLUTA (nominal 0ms,
@@ -1213,16 +1417,27 @@ RTT_CONSISTENCY_FRACTION = 0.05
 RTT_MIN_SAMPLES = 20
 
 
+_RTT_CONSISTENCY_ABS_MS_COLOCATED = RTT_CONSISTENCY_ABS_MS["L0"]  # 0,5ms -- mesmo valor de sempre,
+# generalizado abaixo por NOMINAL==0 (nunca mais pelo nome literal "L0", mesmo motivo de _rtt_ok_for_nominal).
+
+
+def _rtt_consistent_for_nominal(nominal_ms: float, a: float, b: float) -> bool:
+    """Fatorado de `_rtt_consistent` (mesmo motivo de
+    `_rtt_ok_for_nominal`, achado desta rodada): generalizado por
+    NOMINAL, nunca mais pelo nome "L0" -- zero mudanca de
+    comportamento pro piloto."""
+    if nominal_ms == 0:
+        return abs(a - b) <= _RTT_CONSISTENCY_ABS_MS_COLOCATED
+    return abs(a - b) <= RTT_CONSISTENCY_FRACTION * nominal_ms
+
+
 def _rtt_consistent(route: str, a: float, b: float) -> bool:
     """Decisao 35/38: os dois canais de RTT (probe TCP e pcap
     SYN/SYN-ACK) devem concordar dentro de uma margem EXPLICITA --
     nao e so cada um passar sozinho, e os dois baterem um com o outro
     (confirmacao cruzada de verdade, nao dois numeros soltos que por
     acaso passam cada um na sua faixa)."""
-    if route in RTT_CONSISTENCY_ABS_MS:
-        return abs(a - b) <= RTT_CONSISTENCY_ABS_MS[route]
-    nominal = NOMINAL_RTT_MS[route]
-    return abs(a - b) <= RTT_CONSISTENCY_FRACTION * nominal
+    return _rtt_consistent_for_nominal(NOMINAL_RTT_MS[route], a, b)
 
 
 @_safe_criterion(7, "sanidade de latencia por rota")
@@ -1327,6 +1542,64 @@ def criterion_7_latency_sanity(aws_dir) -> dict:
     return {"criterion": 7, "name": "sanidade de latencia por rota", "rows": rows, "pass": all_ok}
 
 
+@_safe_criterion(7, "sanidade de latencia por rota (campanha)")
+def criterion_7_latency_sanity_campaign(aws_dir, routes=None) -> dict:
+    """Variante de campanha de `criterion_7_latency_sanity` -- MESMO
+    formato de arquivo e MESMA logica por rota, so iterando
+    `campaign_topology.CAMPAIGN_NOMINAL_RTT_MS` (8 rotulos) em vez de
+    `NOMINAL_RTT_MS` (3 do piloto), usando os helpers generalizados
+    por nominal (`_rtt_ok_for_nominal`/`_rtt_consistent_for_nominal`)
+    em vez dos por-nome-de-rota (as 3 rotas co-localizadas da
+    campanha tem rotulos distintos, nunca "L0")."""
+    criterion, name = 7, "sanidade de latencia por rota (campanha)"
+    if not aws_dir:
+        return {"criterion": criterion, "name": name, "pass": False,
+                "note": "nenhum --aws-dir fornecido -- sem medicao de RTT, nao ha evidencia"}
+    _ensure_campaign_topology_on_path()
+    import campaign_topology as ct
+    routes = list(routes) if routes is not None else list(ct.CAMPAIGN_ROUTES)
+    path = os.path.join(aws_dir, "criterio7_rtt_por_rota.json")
+    if not os.path.isfile(path):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo nao encontrado: {path}"}
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"arquivo malformado ({e})"}
+    if not isinstance(data, dict):
+        return {"criterion": criterion, "name": name, "pass": False, "note": f"esperado um objeto JSON, recebido {type(data).__name__}"}
+    rows = {}
+    all_ok = True
+    for route in routes:
+        nominal = ct.CAMPAIGN_NOMINAL_RTT_MS[route]
+        entry = data.get(route)
+        if not isinstance(entry, dict) or "rtt_ms_probe" not in entry or "rtt_ms_pcap" not in entry or "n_samples_probe" not in entry:
+            rows[route] = {"rtt_ms_probe": None, "rtt_ms_pcap": None, "ok": False,
+                           "note": "campos ausentes (rtt_ms_probe/rtt_ms_pcap/n_samples_probe)"}
+            all_ok = False
+            continue
+        probe, pcap, n_samples = entry["rtt_ms_probe"], entry["rtt_ms_pcap"], entry["n_samples_probe"]
+        numeric_ok = (
+            isinstance(probe, (int, float)) and not isinstance(probe, bool) and probe >= 0
+            and isinstance(pcap, (int, float)) and not isinstance(pcap, bool) and pcap >= 0
+        )
+        samples_ok = isinstance(n_samples, int) and not isinstance(n_samples, bool) and n_samples >= RTT_MIN_SAMPLES
+        if not (numeric_ok and samples_ok):
+            rows[route] = {"rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "n_samples_probe": n_samples,
+                           "numeric_ok": numeric_ok, "samples_ok": samples_ok, "ok": False}
+            all_ok = False
+            continue
+        probe_ok = _rtt_ok_for_nominal(nominal, probe)
+        pcap_ok = _rtt_ok_for_nominal(nominal, pcap)
+        consistent = _rtt_consistent_for_nominal(nominal, probe, pcap)
+        ok = probe_ok and pcap_ok and consistent
+        all_ok = all_ok and ok
+        rows[route] = {
+            "rtt_ms_probe": probe, "rtt_ms_pcap": pcap, "n_samples_probe": n_samples, "nominal_ms": nominal,
+            "probe_ok": probe_ok, "pcap_ok": pcap_ok, "consistent": consistent, "ok": ok,
+        }
+    return {"criterion": criterion, "name": name, "rows": rows, "pass": all_ok}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-t6-log", required=True)
@@ -1335,26 +1608,45 @@ def main():
                           '[{"profile","route","run","insurance":[...],"person":[...]}, ...]')
     ap.add_argument("--aws-dir")
     # Pedido do Luciano (achado B.5 -- wiring do criterio 2 pra
-    # campanha): sem a flag, comportamento do piloto INALTERADO
-    # (criterion_2_initcwnd, 1 arquivo fixo).
+    # campanha, agora estendido aos criterios 1/3/4/6/7 na mesma
+    # rodada): sem a flag, comportamento do piloto INALTERADO (os 7
+    # criterios originais, 1 arquivo/cardinalidade fixa cada).
     ap.add_argument("--campaign", action="store_true",
-                     help="usa criterion_2_initcwnd_campaign (N combinacoes rota/direcao rotuladas) "
-                          "em vez de criterion_2_initcwnd (1 arquivo fixo do piloto)")
+                     help="usa as variantes _campaign dos criterios 1/2/3/4/6/7 "
+                          "(cardinalidades/rotulos de campaign_topology.py) em vez das fixas do piloto")
+    ap.add_argument("--campaign-n", type=int,
+                     help="N execucoes por celula perfil x rota (obrigatorio com --campaign -- "
+                          "ensaio N=2 vs oficial N=30, depende da escala real, nunca assumido)")
     args = ap.parse_args()
 
     log_text = open(args.run_t6_log, encoding="utf-8", errors="replace").read()
     execucoes = json.load(open(args.calls_json)) if args.calls_json else None
 
-    criterio_2_result = criterion_2_initcwnd_campaign(args.aws_dir) if args.campaign else criterion_2_initcwnd(args.aws_dir)
-    results = [
-        criterion_1_message_sizes(log_text, args.aws_dir),
-        criterio_2_result,
-        criterion_3_distant_route(args.aws_dir),
-        criterion_4_counts(execucoes, log_text),
-        criterion_5_zero_errors(log_text),
-        criterion_6_instrumentation(log_text, args.aws_dir),
-        criterion_7_latency_sanity(args.aws_dir),
-    ]
+    if args.campaign:
+        if args.campaign_n is None:
+            ap.error("--campaign exige --campaign-n (N execucoes por celula perfil x rota)")
+        _ensure_campaign_topology_on_path()
+        import campaign_topology as ct
+        expected_total = len(PROFILES_ALL) * len(ct.CAMPAIGN_ROUTES) * args.campaign_n
+        results = [
+            criterion_1_message_sizes_campaign(args.aws_dir),
+            criterion_2_initcwnd_campaign(args.aws_dir),
+            criterion_3_distant_route_campaign(args.aws_dir, n_per_profile=args.campaign_n),
+            criterion_4_counts_campaign(execucoes, log_text, expected_total=expected_total),
+            criterion_5_zero_errors(log_text),
+            criterion_6_instrumentation_campaign(args.aws_dir, expected_total=expected_total),
+            criterion_7_latency_sanity_campaign(args.aws_dir),
+        ]
+    else:
+        results = [
+            criterion_1_message_sizes(log_text, args.aws_dir),
+            criterion_2_initcwnd(args.aws_dir),
+            criterion_3_distant_route(args.aws_dir),
+            criterion_4_counts(execucoes, log_text),
+            criterion_5_zero_errors(log_text),
+            criterion_6_instrumentation(log_text, args.aws_dir),
+            criterion_7_latency_sanity(args.aws_dir),
+        ]
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
     print()

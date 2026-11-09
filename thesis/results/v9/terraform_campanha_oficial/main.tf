@@ -143,6 +143,30 @@ data "aws_subnets" "ca_central_1_default" {
     values = [data.aws_vpc.ca_central_1.id]
   }
 }
+# AZ fixada por regiao (pedido do Luciano, item 5 -- fechamento dos
+# criterios 1/3/4/6/7 pra campanha): o smoke-test real (Decisao 108)
+# achou `InsufficientInstanceCapacity` real pra t4g.micro em
+# ca-central-1a (a AZ que `ca_central_1_default.ids[0]` resolveria
+# primeiro, ordem arbitraria da API) -- resolvido na hora trocando pra
+# ca-central-1b, que funcionou. PRIMARIA: ca-central-1b (confirmada
+# capaz pelo smoke-test real). FALLBACK documentado: ca-central-1a (a
+# original, que falhou para t4g.micro no smoke-test -- se
+# ca-central-1b tambem apresentar capacidade insuficiente para
+# m7i-flex.large no futuro, a alternativa e usar
+# `ca_central_1_default` de novo ou pedir uma 3a AZ). Letra de AZ
+# (nao AZ-id) de proposito aqui -- a letra e por-conta, a MESMA conta
+# que rodou o smoke-test real, nunca comparada entre contas.
+data "aws_subnets" "ca_central_1_b" {
+  provider = aws.ca_central_1
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.ca_central_1.id]
+  }
+  filter {
+    name   = "availability-zone"
+    values = ["ca-central-1b"]
+  }
+}
 data "aws_subnets" "eu_north_1_default" {
   provider = aws.eu_north_1
   filter {
@@ -345,7 +369,7 @@ module "client_ca_central_1_a" {
   instance_type                        = var.server_client_instance_type
   ami_id                                = local.pinned_ami_x86_by_region["ca-central-1"]
   vpc_id                                = data.aws_vpc.ca_central_1.id
-  subnet_id                             = data.aws_subnets.ca_central_1_default.ids[0]
+  subnet_id                             = data.aws_subnets.ca_central_1_b.ids[0]
   key_name                              = aws_key_pair.campaign_ca_central_1.key_name
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   # Generalizacao N-servidores (Decisao 107, gap fechado: direcao
@@ -369,7 +393,7 @@ module "client_ca_central_1_b" {
   instance_type                        = var.server_client_instance_type
   ami_id                                = local.pinned_ami_x86_by_region["ca-central-1"]
   vpc_id                                = data.aws_vpc.ca_central_1.id
-  subnet_id                             = data.aws_subnets.ca_central_1_default.ids[0]
+  subnet_id                             = data.aws_subnets.ca_central_1_b.ids[0]
   key_name                              = aws_key_pair.campaign_ca_central_1.key_name
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_us_east_1.public_ip}/32" }

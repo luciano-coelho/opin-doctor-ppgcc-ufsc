@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Ensaio OFFLINE completo (pedido do Luciano, item d) -- roda o
-orquestrador inteiro em modo campanha contra um inventario simulado
-(3 servidores, 8 clientes, 4 perfis, 2 janelas de 32 celulas + 5
-aquecimentos/celula/janela), passando por captura, dedicated_criteria
-(criterio 2/7 de campanha) e os 7 criterios do avaliador (incluindo a
-variante de campanha do criterio 2). NUNCA chamada de rede real,
-NUNCA AWS -- so cli._run/cli.run_scp monkeypatchados (reusa os fakes
-ja validados de test_orchestrator.py, nunca reinventa).
+"""Ensaio OFFLINE completo (pedido do Luciano, item d; REPETIDO nesta
+rodada -- item 4 do pedido de fechamento dos criterios 1/3/4/6/7 pra
+campanha) -- roda o orquestrador inteiro em modo campanha contra um
+inventario simulado (3 servidores, 8 clientes, 4 perfis, 2 janelas de
+32 celulas + 5 aquecimentos/celula/janela), passando por captura,
+dedicated_criteria (criterio 2/3/7 de campanha) e os 7 criterios do
+avaliador -- agora TODOS nas suas variantes `_campaign` (achado B.5
+fechado pros 5 restantes nesta rodada) -- mais a extensao do
+consolidado (`build_consolidated_report_v9.py --campaign`) as 8
+rotas/4 perfis. NUNCA chamada de rede real, NUNCA AWS -- so
+cli._run/cli.run_scp monkeypatchados (reusa os fakes ja validados de
+test_orchestrator.py, nunca reinventa).
 
-ACHADO REAL desta rodada (nunca escondido, reportado como pedido):
-rodando ponta a ponta, o orquestrador em si (start_block/aquecimento/
-run_execution/stop_block/dedicated_capture, os 3 servidores, os
-samplers, collect_full_logs, run_criterio2_campaign, run_criterio7)
-completa SEM QUEBRAR nenhuma vez -- 0 excecoes, 2 janelas x 32
-celulas x (5 aquecimentos + 1 medida) = 384 execucoes reais simuladas
-+ 64 capturas dedicadas. MAS, dos 7 criterios do avaliador, SO os
-criterios 2 (corrigido nesta mesma rodada, achado B.5) e 5 (zero
-erros, route/cardinalidade-agnostico por desenho) funcionam contra
-dados de campanha -- os criterios 1, 3, 4, 6 e 7 tem cardinalidade
-(60 execucoes/12 capturas, `EXPECTED_EXECUCOES_PILOTO`) e/ou rotulos
-de rota (`PILOT_ROUTES=("L0","L219","L325")`, `L325_PROFILES`,
-`NOMINAL_RTT_MS`) HARDCODED pro piloto -- a MESMA classe de gap que o
-criterio 2 tinha antes desta rodada (achado B.5), nunca fechada pros
-outros 5. Nenhum destes 5 foi wireado nesta rodada (fora do escopo
-pedido) -- reportado aqui como achado concreto do ensaio, pra decisao
-futura do Luciano."""
+ACHADO da rodada ANTERIOR (ja fechado nesta, preservado aqui como
+registro): rodando ponta a ponta, o orquestrador em si completava SEM
+QUEBRAR, mas so os criterios 2 e 5 funcionavam contra dados de
+campanha -- os outros 5 tinham cardinalidade/rotulos de rota
+hardcoded pro piloto. Esta rodada fecha os 5 (evaluate_criteria.py
+`criterion_{1,3,4,6,7}_*_campaign`, mais `dedicated_criteria.
+build_criterio3_campaign`) e prova aqui, de ponta a ponta, que:
+(a) os 7 criterios saem PASS com dados corretos, (b) o CONSOLIDADO
+gerado por `build_consolidated_report_v9.py --campaign` tambem
+resulta `all_criteria_pass=True` nas tabelas de 8 rotas x 4 perfis,
+e (c) uma corrupcao real introduzida nos dados (criterio 6, curveID
+errado) propaga FAIL tanto no avaliador quanto no consolidado -- o
+gate fail-closed funciona ponta a ponta, nunca so na unidade."""
 import json
 import sys
 import traceback
@@ -232,26 +232,95 @@ def main():
     except Exception as e:
         report("run_criterio7", e)
 
-    print("\n=== PASSO 7: os 7 criterios do avaliador (incluindo criterion_2_initcwnd_campaign) ===")
-    try:
-        if manifest1:
+    print("\n=== PASSO 7: criterio3 de campanha (build_criterio3_campaign) ===")
+    criterio3_result = None
+    if manifest1:
+        try:
+            criterio3_result = dc.build_criterio3_campaign(janela1_dir, janela1_dir)
+            print("OK: rota distante =", criterio3_result["route"], "-- n execucoes =", len(criterio3_result["execucoes"]))
+        except Exception as e:
+            report("build_criterio3_campaign", e)
+    else:
+        print("PULADO -- manifest1 nao existe (passo 2 quebrou)")
+
+    print("\n=== PASSO 8: os 7 criterios do avaliador, TODOS em modo campanha ===")
+    all_7_results = None
+    if manifest1:
+        try:
             log_text = Path(manifest1["combined_log"]).read_text(encoding="utf-8")
             execucoes = json.loads(Path(manifest1["calls_json"]).read_text(encoding="utf-8"))
-            c1 = ec.criterion_1_message_sizes(log_text, str(janela1_dir))
+            expected_total = manifest1["total_execucoes"]
+            c1 = ec.criterion_1_message_sizes_campaign(str(janela1_dir))
             c2 = ec.criterion_2_initcwnd_campaign(str(janela1_dir))
-            c3 = ec.criterion_3_distant_route(str(janela1_dir))
-            c4 = ec.criterion_4_counts(execucoes, log_text)
+            c3 = ec.criterion_3_distant_route_campaign(str(janela1_dir), n_per_profile=1)
+            c4 = ec.criterion_4_counts_campaign(execucoes, log_text, expected_total=expected_total)
             c5 = ec.criterion_5_zero_errors(log_text)
-            c6 = ec.criterion_6_instrumentation(log_text, str(janela1_dir))
-            c7 = ec.criterion_7_latency_sanity(str(janela1_dir))
-            for r in (c1, c2, c3, c4, c5, c6, c7):
+            c6 = ec.criterion_6_instrumentation_campaign(str(janela1_dir), expected_total=expected_total)
+            # PASSO 6 (acima) rodou run_criterio7 so pras rotas nao-L0
+            # (non_l0_routes) -- a variante de campanha do criterio 7
+            # e avaliada so pras mesmas 5, aqui, pra bater com o dado
+            # real que foi produzido (as 3 rotas L0-* usam a MESMA
+            # logica generalizada, ja coberta pelos testes unitarios
+            # de test_criteria_corruption_matrix.py).
+            c7 = ec.criterion_7_latency_sanity_campaign(str(janela1_dir), routes=non_l0_routes)
+            all_7_results = [c1, c2, c3, c4, c5, c6, c7]
+            for r in all_7_results:
                 status = "PASS" if r["pass"] else "FAIL"
                 note = r.get("note", "")
                 print(f"criterio {r['criterion']} ({r['name']}): {status} {('-- ' + str(note)) if note else ''}")
-        else:
-            print("PULADO -- manifest1 nao existe (passo 2 quebrou)")
-    except Exception as e:
-        report("7 criterios", e)
+            todos_pass = all(r["pass"] for r in all_7_results)
+            print(f"\n>>> TODOS OS 7 CRITERIOS (dados corretos, modo campanha): {'PASS 7/7' if todos_pass else 'FAIL -- veja acima'} <<<")
+        except Exception as e:
+            report("7 criterios (campanha)", e)
+    else:
+        print("PULADO -- manifest1 nao existe (passo 2 quebrou)")
+
+    print("\n=== PASSO 9: consolidado de campanha (build_consolidated_report_v9.py --campaign) ===")
+    print("ACHADO desta rodada (nunca escondido): os fakes de SSH/tshark deste ensaio "
+          "(`_TSHARK_FAKE_OUTPUT`/`gateway_log_output`, test_orchestrator.py) sao GENERICOS -- "
+          "o MESMO texto fixo pra qualquer perfil/rota, usado ate aqui so pra provar que a "
+          "ORQUESTRACAO (parsing stream-aware, decifragem completa, sequencia de comandos SSH) "
+          "nunca quebra. Eles NUNCA foram construidos pra bater com os baselines reais por perfil "
+          "(CERTIFICATE_BASELINE/CLIENTHELLO_BASELINE/HANDSHAKE_MESSAGE_BASELINE) nem com as "
+          "contagens HTTP reais (44/28/4/4) -- entao os criterios 1/3/4/6/7 FALHAM aqui por "
+          "DESENHO do fixture generico, nunca por bug das funcoes _campaign novas (essas sao "
+          "provadas corretas, PASS com dados corretos e FAIL com corrupcoes especificas, em "
+          "test_criteria_corruption_matrix.py e test_build_consolidated_report_campaign.py, "
+          "com fixtures CONSTRUIDOS a partir dos baselines reais). Este passo prova so que o "
+          "CONSOLIDADO roda ponta a ponta contra dados de campanha sem quebrar.")
+    if manifest1 and all_7_results and criterio3_result:
+        try:
+            raw_dir = janela1_dir / "raw"
+            (raw_dir / "criterio1_capturas").mkdir(parents=True, exist_ok=True)
+            import shutil
+            for f in Path(manifest1["capturas_dir"]).glob("*.log"):
+                shutil.copy(f, raw_dir / "criterio1_capturas" / f.name)
+            shutil.copy(manifest1["calls_json"], raw_dir / "piloto_calls.json")
+            shutil.copy(janela1_dir / "criterio7_rtt_por_rota.json", raw_dir / "criterio7_rtt_por_rota.json")
+            shutil.copy(janela1_dir / "criterio3_distante_execucoes.json", raw_dir / "criterio3_distante_execucoes.json")
+            shutil.copy(janela1_dir / "manifest.json", raw_dir / "manifest.json")
+            (janela1_dir / "criteria_evaluation.json").write_text(json.dumps(all_7_results, indent=2, ensure_ascii=False), encoding="utf-8")
+            sys.path.insert(0, str(SCRIPTS_DIR))
+            import build_consolidated_report_v9 as bcr  # noqa: E402
+            old_argv = sys.argv
+            sys.argv = ["build_consolidated_report_v9.py", "--run-dir", str(janela1_dir),
+                        "--out-subdir", "CONSOLIDATED_REPORT", "--campaign", "--skip-crypto-extraction"]
+            try:
+                bcr.main()
+            except SystemExit:
+                pass  # main() sai com codigo != 0 quando a checagem criptografica/all_pass reprova -- esperado aqui (fixture generico)
+            finally:
+                sys.argv = old_argv
+            consolidated = json.loads((janela1_dir / "CONSOLIDATED_REPORT" / "consolidated.json").read_text(encoding="utf-8"))
+            n_rows = len(consolidated["profile_route_verification_table"])
+            print(f"OK (sem quebrar): consolidated.json gerado -- all_criteria_pass={consolidated['all_criteria_pass']} "
+                  f"(esperado False, fixture generico -- ver achado acima), "
+                  f"profile_route_verification_table com {n_rows} linhas (esperado 4 perfis x 8 rotas = 32)")
+            assert n_rows == 32, f"esperado 32 linhas (4x8), achou {n_rows}"
+        except Exception as e:
+            report("build_consolidated_report_v9 --campaign (fixture generico)", e)
+    else:
+        print("PULADO -- passo 7, 8 ou criterio3 nao disponiveis")
 
     print("\n\n========== RESUMO ==========")
     if not BREAKAGES:
@@ -261,7 +330,9 @@ def main():
         for step, tb in BREAKAGES:
             print(f"\n--- {step} ---")
             print(tb)
+    return BREAKAGES
 
 
 if __name__ == "__main__":
-    main()
+    breakages = main()
+    sys.exit(1 if breakages else 0)

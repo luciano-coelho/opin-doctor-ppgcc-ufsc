@@ -336,6 +336,36 @@ def build_criterio3(collected_dir: Path, out_dir: Path) -> dict:
     return result
 
 
+def build_criterio3_campaign(collected_dir: Path, out_dir: Path, route: str | None = None) -> dict:
+    """Variante de campanha de `build_criterio3` (pedido do Luciano,
+    fechamento dos criterios 1/3/4/6/7 pra campanha) -- MESMO adapter
+    (reaproveita `evaluate_criteria.criterion_4_counts_campaign` pra
+    obter o `ok` por execucao, nunca reimplementado), so filtrando pra
+    `route` generico em vez de `"L325"` fixo. `route=None` deriva a
+    rota de MAIOR RTT nominal de `campaign_topology.CAMPAIGN_NOMINAL_
+    RTT_MS` (mesma formula que `criterion_3_distant_route_campaign` ja
+    usa como default -- nunca duplicada, so repetida aqui porque este
+    modulo nao importa `campaign_topology` por padrao)."""
+    combined_log = (collected_dir / "piloto_combined.log").read_text(encoding="utf-8", errors="replace")
+    execucoes = json.loads((collected_dir / "piloto_calls.json").read_text(encoding="utf-8"))
+    c4 = ec.criterion_4_counts_campaign(execucoes, combined_log, expected_total=len(execucoes))
+    if route is None:
+        _campaign_scripts_dir = str(Path(__file__).resolve().parent)
+        if _campaign_scripts_dir not in sys.path:
+            sys.path.insert(0, _campaign_scripts_dir)
+        import campaign_topology as ct
+        route = max(ct.CAMPAIGN_NOMINAL_RTT_MS, key=ct.CAMPAIGN_NOMINAL_RTT_MS.get)
+    execucoes_distante = [
+        {"profile": r["profile"], "route": route, "ok": r["ok"]}
+        for r in c4["rows"] if r["route"] == route
+    ]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "criterio3_distante_execucoes.json"
+    result = {"execucoes": execucoes_distante, "route": route}
+    out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
 def run_all(executor, collected_dir: Path, out_dir: Path) -> dict:
     """Roda os 3, na ordem -- criterio3 nunca depende de rede (so le
     dados ja coletados), roda primeiro; 2/7 precisam da fleet viva.
