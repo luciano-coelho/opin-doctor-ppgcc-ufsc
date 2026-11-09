@@ -1040,9 +1040,21 @@ def criterion_2_initcwnd(aws_dir) -> dict:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": "nenhum --aws-dir fornecido -- sem teste dedicado, nao ha evidencia de initcwnd"}
     path = os.path.join(aws_dir, "criterio2_initcwnd.json")
+    verdict = _evaluate_criterio2_file(path, valid_routes=PILOT_ROUTES)
+    return {"criterion": 2, "name": "initcwnd real", **verdict}
+
+
+def _evaluate_criterio2_file(path, valid_routes) -> dict:
+    """Logica de pass/fail de UM arquivo `criterio2_initcwnd*.json` --
+    extraida do corpo de `criterion_2_initcwnd` (pedido do Luciano,
+    achado B.5: wiring da campanha pro criterio 2) pra ser reusada,
+    sem duplicacao, tanto pelo piloto (1 arquivo, caminho fixo) quanto
+    pela campanha (`criterion_2_initcwnd_campaign`, N arquivos
+    rotulados). Nunca inclui "criterion"/"name" -- quem chama decide
+    isso, de acordo com o contexto (piloto vs. uma combinacao
+    especifica da campanha)."""
     if not os.path.isfile(path):
-        return {"criterion": 2, "name": "initcwnd real", "pass": False,
-                "note": f"arquivo nao encontrado: {path}"}
+        return {"pass": False, "note": f"arquivo nao encontrado: {path}"}
     try:
         data = json.load(open(path, encoding="utf-8"))
         total = data["bytes_sent_total"]
@@ -1060,11 +1072,9 @@ def criterion_2_initcwnd(aws_dir) -> dict:
         instance_type = data["instance_type"]
         profile = data["profile"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        return {"criterion": 2, "name": "initcwnd real", "pass": False,
-                "note": f"arquivo malformado ou campo ausente ({e})"}
-    if route not in PILOT_ROUTES or profile not in PROFILES_ALL:
-        return {"criterion": 2, "name": "initcwnd real", "pass": False,
-                "note": f"route={route!r}/profile={profile!r} nao reconhecidos"}
+        return {"pass": False, "note": f"arquivo malformado ou campo ausente ({e})"}
+    if route not in valid_routes or profile not in PROFILES_ALL:
+        return {"pass": False, "note": f"route={route!r}/profile={profile!r} nao reconhecidos"}
     # Pre-condicao: o proprio teste precisa ter mandado dado suficiente,
     # senao o resultado nao prova nada (mesmo problema que motivou a
     # correcao -- um teste pequeno de novo so mediria "quanto dado
@@ -1072,7 +1082,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     # que foi registrado) mas nunca participa do calculo de pass/fail
     # -- Decisao 37.
     if not isinstance(offloads, dict) or "tso" not in offloads or "gso" not in offloads or "gro" not in offloads:
-        return {"criterion": 2, "name": "initcwnd real", "pass": False,
+        return {"pass": False,
                 "note": "campo 'offloads' ausente ou incompleto -- precisa ser registrado (tso/gso/gro), mesmo que nao decida o resultado"}
     # Emenda MSS-efetivo: `mss_channels_agree` precisa ser o booleano
     # True estritamente -- ausente, None ou False reprova por si so,
@@ -1080,8 +1090,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     # canais discordantes nunca pode ser usado, mesmo que por acidente
     # o resultado parecesse bater).
     if mss_channels_agree is not True:
-        return {"criterion": 2, "name": "initcwnd real",
-                "route": route, "instance_type": instance_type, "profile": profile,
+        return {"route": route, "instance_type": instance_type, "profile": profile,
                 "mss_channels_agree": mss_channels_agree, "pass": False,
                 "note": "os dois canais do MSS efetivo (ss -ti e maior payload real do pcap) discordam "
                         "(ou 'mss_channels_agree' ausente) -- Emenda MSS-efetivo, nunca usa um canal por default"}
@@ -1092,14 +1101,52 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     agree = (segments_computed is not None and isinstance(ss_cwnd, (int, float))
              and abs(segments_computed - ss_cwnd) <= INITCWND_MAX_DIFF_SEGMENTS)
     ok = test_valid and segments_ok and ss_ok and agree
-    return {"criterion": 2, "name": "initcwnd real",
-            "route": route, "instance_type": instance_type, "profile": profile,
+    return {"route": route, "instance_type": instance_type, "profile": profile,
             "mss_channels_agree": mss_channels_agree,
             "bytes_sent_total": total, "min_bytes_required": INITCWND_MIN_BYTES_SENT, "test_valid": test_valid,
             "segments_computed": segments_computed, "ss_ti_cwnd": ss_cwnd, "threshold": INITCWND_MIN_SEGMENTS,
             "max_diff_segments": INITCWND_MAX_DIFF_SEGMENTS, "agree": agree,
             "offloads": offloads,
             "pass": ok}
+
+
+@_safe_criterion(2, "initcwnd real (campanha)")
+def criterion_2_initcwnd_campaign(aws_dir, routes=None) -> dict:
+    """Variante de campanha de `criterion_2_initcwnd` (pedido do
+    Luciano, achado B.5 -- antes desta funcao, uma falha de
+    `dedicated_criteria.run_criterio2_campaign()` numa combinacao
+    rota/direcao ficava SO no dict em memoria daquela funcao, nunca
+    chegava a nenhum PASS/FAIL nem ao relatorio consolidado).
+
+    Le os arquivos ROTULADOS que `run_criterio2_campaign()` produz
+    (`criterio2_initcwnd_{rota}_{direcao}.json`, achado B.5), aplica a
+    MESMA logica de pass/fail por arquivo que o piloto usa
+    (`_evaluate_criterio2_file`, nunca duplicada), e falha o CRITERIO
+    INTEIRO se QUALQUER combinacao faltar ou reprovar -- cada
+    combinacao aparece no resultado com seu proprio status, nunca um
+    agregado sem detalhe."""
+    criterion, name = 2, "initcwnd real (campanha)"
+    if not aws_dir:
+        return {"criterion": criterion, "name": name, "pass": False, "note": "nenhum --aws-dir fornecido"}
+    # Mesmo padrao que orchestrator.py ja usa pro sentido inverso
+    # (_INTEGRATION_DIR, import evaluate_criteria) -- nunca depende do
+    # sys.path de quem chama ja incluir campaign/scripts.
+    _campaign_scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "campaign", "scripts")
+    if _campaign_scripts_dir not in sys.path:
+        sys.path.insert(0, _campaign_scripts_dir)
+    import campaign_topology as ct
+    routes = routes if routes is not None else [r for r in ct.CAMPAIGN_ROUTES if ct.CAMPAIGN_NOMINAL_RTT_MS[r] > 0]
+    combinations = {}
+    for route in routes:
+        for direction in ("server-to-client", "client-to-server"):
+            label = f"{route}_{direction}"
+            path = os.path.join(aws_dir, f"criterio2_initcwnd_{label}.json")
+            combinations[label] = _evaluate_criterio2_file(path, valid_routes=ct.CAMPAIGN_ROUTES)
+    all_pass = bool(combinations) and all(c["pass"] for c in combinations.values())
+    failing = [label for label, c in combinations.items() if not c["pass"]]
+    return {"criterion": criterion, "name": name, "pass": all_pass,
+            "combinations": combinations, "failing_combinations": failing,
+            "note": None if all_pass else f"{len(failing)} combinacao(oes) faltando ou reprovada(s): {failing}"}
 
 
 @_safe_criterion(3, "zero erros na rota mais distante")
@@ -1287,14 +1334,21 @@ def main():
                      help="JSON com uma LISTA de execucoes (Decisao 40): "
                           '[{"profile","route","run","insurance":[...],"person":[...]}, ...]')
     ap.add_argument("--aws-dir")
+    # Pedido do Luciano (achado B.5 -- wiring do criterio 2 pra
+    # campanha): sem a flag, comportamento do piloto INALTERADO
+    # (criterion_2_initcwnd, 1 arquivo fixo).
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa criterion_2_initcwnd_campaign (N combinacoes rota/direcao rotuladas) "
+                          "em vez de criterion_2_initcwnd (1 arquivo fixo do piloto)")
     args = ap.parse_args()
 
     log_text = open(args.run_t6_log, encoding="utf-8", errors="replace").read()
     execucoes = json.load(open(args.calls_json)) if args.calls_json else None
 
+    criterio_2_result = criterion_2_initcwnd_campaign(args.aws_dir) if args.campaign else criterion_2_initcwnd(args.aws_dir)
     results = [
         criterion_1_message_sizes(log_text, args.aws_dir),
-        criterion_2_initcwnd(args.aws_dir),
+        criterio_2_result,
         criterion_3_distant_route(args.aws_dir),
         criterion_4_counts(execucoes, log_text),
         criterion_5_zero_errors(log_text),

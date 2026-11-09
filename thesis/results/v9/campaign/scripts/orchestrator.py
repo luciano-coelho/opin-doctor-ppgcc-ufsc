@@ -923,10 +923,27 @@ class SSHExecutor:
         # Achado 10 (implementado, modo campanha so -- ver docstring de
         # `_cpu_steal_sampler_start`): comeca a amostrar ANTES de
         # qualquer coisa do bloco, pra cobrir a janela INTEIRA.
+        #
+        # Paridade com a v8 real (achado desta rodada, pedido do
+        # Luciano: conferir antes de supor): `campaign_run.py` real
+        # SEMPRE amostrou os DOIS lados -- `_cpu_mem_sampler_start_cmd
+        # (label, "server")` E `_cpu_mem_sampler_start_cmd(label,
+        # "client")`, chamados juntos em todo bloco (linhas 2016-2020
+        # de v8/campaign/scripts/campaign_run.py). O porte inicial da
+        # Decisao 107 so cobria o servidor -- lacuna de paridade,
+        # nunca uma decisao deliberada de so medir 1 lado. Fechada
+        # agora: amostra os 2 hosts, rotulo distinto por lado pra
+        # nunca colidir ao coletar (mesmo arquivo remoto, hosts
+        # diferentes -- sem risco real de colisao la, mas o rotulo
+        # LOCAL de coleta precisaria do sufixo mesmo assim).
         if self.route_server is not None:
             label = f"{profile}_{route}".replace("/", "_")
-            out_path, pid_path = self._cpu_steal_sampler_start(self._server_ip(route), label)
-            self._cpu_steal_sampler_paths[(profile, route)] = (out_path, pid_path)
+            server_out, server_pid = self._cpu_steal_sampler_start(self._server_ip(route), f"{label}_server")
+            client_out, client_pid = self._cpu_steal_sampler_start(self._client_ip(route), f"{label}_client")
+            self._cpu_steal_sampler_paths[(profile, route)] = {
+                "server": (self._server_ip(route), server_out, server_pid),
+                "client": (self._client_ip(route), client_out, client_pid),
+            }
         if not self.local_shim_bridge_join:
             # Decisao 83/87: as 3 imagens CUSTOM do backend (Decisao
             # 68, mesmo mecanismo de sempre) -- uma vez por fleet,
@@ -1047,18 +1064,21 @@ class SSHExecutor:
                     f"cd {compose_dir} && docker compose --profile main stop auth mongo_seed mockapi "
                     f"2>/dev/null; true",
                     key_path=self.key_path)
-        # Achado 10 (implementado, modo campanha so): para o sampler
-        # iniciado em `start_block`, traz o JSONL, calcula o steal%
-        # real (delta 1a->ultima amostra, cobre a janela INTEIRA do
-        # bloco) -- nunca so um instantaneo antes/depois.
+        # Achado 10 (implementado, modo campanha so): para os samplers
+        # iniciados em `start_block` (servidor E cliente, paridade com
+        # a v8 real -- ver comentario la), traz o JSONL de CADA lado,
+        # calcula o steal% real (delta 1a->ultima amostra, cobre a
+        # janela INTEIRA do bloco) -- nunca so um instantaneo antes/
+        # depois, nunca so 1 dos 2 lados.
         if self.route_server is not None and (profile, route) in self._cpu_steal_sampler_paths:
-            out_path, pid_path = self._cpu_steal_sampler_paths.pop((profile, route))
+            sides = self._cpu_steal_sampler_paths.pop((profile, route))
             local_dir = self.images_staging_dir.parent / "cpu_steal_samples"
-            steal_pct = self._cpu_steal_sampler_stop_and_collect(self._server_ip(route), out_path, pid_path, local_dir)
-            self.cpu_steal_samples.append({
-                "profile": profile, "route": route, "server": self._server_ip(route),
-                "steal_pct": steal_pct, "sampled_at_utc": datetime.now(timezone.utc).isoformat(),
-            })
+            for host_role, (host, out_path, pid_path) in sides.items():
+                steal_pct = self._cpu_steal_sampler_stop_and_collect(host, out_path, pid_path, local_dir)
+                self.cpu_steal_samples.append({
+                    "profile": profile, "route": route, "host_role": host_role, "host": host,
+                    "steal_pct": steal_pct, "sampled_at_utc": datetime.now(timezone.utc).isoformat(),
+                })
         self._block_start_utc.pop((profile, route), None)
 
     def readiness_probe(self, profile, route):

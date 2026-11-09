@@ -2341,8 +2341,11 @@ def test_sampler_de_steal_nunca_roda_no_piloto(monkeypatch):
 
 def test_sampler_de_steal_roda_em_modo_campanha(monkeypatch):
     """Modo campanha (route_server setado): start_block dispara o
-    sampler, stop_block para e traz o resultado -- cpu_steal_samples
-    ganha uma entrada real por bloco."""
+    sampler no SERVIDOR E NO CLIENTE (paridade com a v8 real,
+    campaign_run.py, que sempre amostrou os 2 lados -- achado
+    confirmado nesta rodada antes de implementar, nunca suposto),
+    stop_block para e traz o resultado dos 2 -- cpu_steal_samples
+    ganha 2 entradas reais por bloco (server + client)."""
     calls = []
 
     def fake_run(argv, timeout=None):
@@ -2390,13 +2393,30 @@ def test_sampler_de_steal_roda_em_modo_campanha(monkeypatch):
     executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
     executor.start_block("classico", "L219")
     assert ("classico", "L219") in executor._cpu_steal_sampler_paths
+    assert set(executor._cpu_steal_sampler_paths[("classico", "L219")].keys()) == {"server", "client"}
     executor.stop_block("classico", "L219")
     assert executor._cpu_steal_sampler_paths == {}
-    assert len(executor.cpu_steal_samples) == 1
-    sample = executor.cpu_steal_samples[0]
-    assert sample["profile"] == "classico" and sample["route"] == "L219"
-    assert sample["server"] == "203.0.113.50"
-    assert sample["steal_pct"] == pytest.approx(100 * 50 / 390)
+    assert len(executor.cpu_steal_samples) == 2
+    by_role = {s["host_role"]: s for s in executor.cpu_steal_samples}
+    assert set(by_role.keys()) == {"server", "client"}
+    assert by_role["server"]["profile"] == "classico" and by_role["server"]["route"] == "L219"
+    assert by_role["server"]["host"] == "203.0.113.50"
+    assert by_role["client"]["host"] == "203.0.113.70"
+    assert by_role["server"]["steal_pct"] == pytest.approx(100 * 50 / 390)
+    assert by_role["client"]["steal_pct"] == pytest.approx(100 * 50 / 390)
+
+
+def test_mutante_sampler_de_steal_so_servidor_nunca_cliente_e_pego(monkeypatch):
+    """Mutante: reproduz o comportamento ANTIGO (so o servidor,
+    paridade incompleta com a v8 real) -- confirma que o teste acima
+    reprovaria essa regressao."""
+    inventory = {
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50"}},
+        "clients": {"L219": {"public_ip": "203.0.113.70"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
+    mutant_sides = {"server": ("203.0.113.50", "x.jsonl", "x.pid")}  # mutante: sem "client"
+    assert "client" not in mutant_sides, "mutante nunca amostra o cliente -- exatamente a lacuna fechada agora"
 
 
 def test_sampler_de_steal_cobre_servidores_distintos_em_rotas_diferentes(monkeypatch):
@@ -2467,10 +2487,13 @@ def test_sampler_de_steal_cobre_servidores_distintos_em_rotas_diferentes(monkeyp
     executor.start_block("classico", "L14")
     executor.stop_block("classico", "L14")
 
-    assert len(executor.cpu_steal_samples) == 2
-    by_route = {s["route"]: s for s in executor.cpu_steal_samples}
-    assert by_route["L219"]["server"] == "203.0.113.50"
-    assert by_route["L14"]["server"] == "203.0.113.51"
-    # a amostragem SSH real tem que ter alcancado os 2 HOSTS distintos, nunca so 1.
-    assert any("203.0.113.50" in (h or "") for h in hosts_sampled), hosts_sampled
-    assert any("203.0.113.51" in (h or "") for h in hosts_sampled), hosts_sampled
+    assert len(executor.cpu_steal_samples) == 4  # 2 rotas x (server+client)
+    l219_server = next(s for s in executor.cpu_steal_samples if s["route"] == "L219" and s["host_role"] == "server")
+    l219_client = next(s for s in executor.cpu_steal_samples if s["route"] == "L219" and s["host_role"] == "client")
+    l14_server = next(s for s in executor.cpu_steal_samples if s["route"] == "L14" and s["host_role"] == "server")
+    l14_client = next(s for s in executor.cpu_steal_samples if s["route"] == "L14" and s["host_role"] == "client")
+    assert l219_server["host"] == "203.0.113.50" and l219_client["host"] == "203.0.113.70"
+    assert l14_server["host"] == "203.0.113.51" and l14_client["host"] == "203.0.113.71"
+    # a amostragem SSH real tem que ter alcancado os 4 hosts distintos (2 servidores + 2 clientes).
+    for ip in ("203.0.113.50", "203.0.113.70", "203.0.113.51", "203.0.113.71"):
+        assert any(ip in (h or "") for h in hosts_sampled), (ip, hosts_sampled)

@@ -636,3 +636,77 @@ def test_mutante_criterion_2_sem_exigir_mss_channels_agree_passaria_errado(tmp_p
     segments_mutante2 = 89610 / 8961  # = 10.0 -- bateria "certo" com ss_ti_cwnd=10 por ACIDENTE
     assert segments_mutante2 == 10.0
     assert segments_mutante2 >= ec.INITCWND_MIN_SEGMENTS  # o mutante passaria aqui -- a razao exata da Emenda
+
+
+# --- criterion_2_initcwnd_campaign (pedido do Luciano, achado B.5):
+# wiring real do criterio 2 pra campanha -- le os arquivos ROTULADOS
+# que run_criterio2_campaign() produz, falha o criterio INTEIRO se
+# QUALQUER combinacao faltar/reprovar, nunca enterra a falha so num
+# log.
+
+def _criterio2_campaign_json(tmp_path, route, direction, **overrides):
+    import json as _json
+    data = {
+        "route": route, "instance_type": "m7i-flex.large", "profile": "classico",
+        "bytes_sent_total": 71680, "bytes_sent_within_first_rtt_window": 14480,
+        "mss_bytes": 1448, "mss_channels_agree": True, "ss_ti_cwnd": 10,
+        "offloads": {"tso": "off", "gso": "off", "gro": "off"},
+    }
+    data.update(overrides)
+    label = f"{route}_{direction}"
+    (tmp_path / f"criterio2_initcwnd_{label}.json").write_text(_json.dumps(data), encoding="utf-8")
+
+
+def test_criterion_2_campaign_passa_quando_todas_as_combinacoes_passam(tmp_path):
+    for direction in ("server-to-client", "client-to-server"):
+        _criterio2_campaign_json(tmp_path, "L325", direction)
+    result = ec.criterion_2_initcwnd_campaign(str(tmp_path), routes=["L325"])
+    assert result["pass"] is True, result
+    assert result["criterion"] == 2
+    assert set(result["combinations"].keys()) == {"L325_server-to-client", "L325_client-to-server"}
+    assert result["failing_combinations"] == []
+
+
+def test_criterion_2_campaign_reprova_tudo_se_1_combinacao_falha_e_aparece_listada(tmp_path):
+    """O pedido exato do Luciano: UMA combinacao que falha tem que
+    reprovar o CRITERIO INTEIRO e aparecer LISTADA, nunca so sumir
+    num log."""
+    _criterio2_campaign_json(tmp_path, "L325", "server-to-client")
+    _criterio2_campaign_json(tmp_path, "L325", "client-to-server", mss_channels_agree=False)
+    result = ec.criterion_2_initcwnd_campaign(str(tmp_path), routes=["L325"])
+    assert result["pass"] is False
+    assert result["failing_combinations"] == ["L325_client-to-server"]
+    assert result["combinations"]["L325_client-to-server"]["pass"] is False
+    assert result["combinations"]["L325_server-to-client"]["pass"] is True
+    assert "L325_client-to-server" in result["note"]
+
+
+def test_criterion_2_campaign_reprova_tudo_se_1_combinacao_falta_o_arquivo(tmp_path):
+    """Arquivo nunca gerado (ex.: run_criterio2_campaign reportou
+    {"ok": False, ...} pra essa combinacao) tem que reprovar o
+    criterio inteiro tambem, nunca ser tratado como N/A silencioso."""
+    _criterio2_campaign_json(tmp_path, "L325", "server-to-client")
+    # client-to-server nunca gerado
+    result = ec.criterion_2_initcwnd_campaign(str(tmp_path), routes=["L325"])
+    assert result["pass"] is False
+    assert result["failing_combinations"] == ["L325_client-to-server"]
+    assert "nao encontrado" in result["combinations"]["L325_client-to-server"]["note"]
+
+
+def test_mutante_criterion_2_campaign_any_em_vez_de_all_e_pego(tmp_path):
+    """Mutante: usa `any()` em vez de `all()` -- com 1 combinacao
+    passando e 1 falhando, o mutante passaria errado; o codigo real
+    reprova porque TODAS tem que passar."""
+    _criterio2_campaign_json(tmp_path, "L325", "server-to-client")
+    _criterio2_campaign_json(tmp_path, "L325", "client-to-server", mss_channels_agree=False)
+    result = ec.criterion_2_initcwnd_campaign(str(tmp_path), routes=["L325"])
+    assert result["pass"] is False
+    mutant_pass = any(c["pass"] for c in result["combinations"].values())
+    assert mutant_pass is True
+    assert mutant_pass != result["pass"], "o mutante (any) teria que divergir do resultado real (all)"
+
+
+def test_criterion_2_campaign_sem_aws_dir_reprova():
+    result = ec.criterion_2_initcwnd_campaign(None)
+    assert result["pass"] is False
+    assert result["criterion"] == 2
