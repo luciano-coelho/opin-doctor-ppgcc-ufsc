@@ -10,27 +10,30 @@ coisa está.
 - **Fase A (ensaio de infraestrutura, `INFRA_REHEARSAL.md`): COMPLETA
   E VERDE.** Passos 0–14 todos passaram numa execução real na AWS
   (segunda tentativa desta retomada).
-- **Fase B (piloto real de 60 execuções): backend de negócio PROVADO
-  (12/12, 0 falhas); mecanismo de medição do critério 1 CORRIGIDO
-  (Decisão 91) e PROVADO contra rede real nos 4 perfis (Decisão 92);
-  PARADA na calibração de `CERTIFICATE_BASELINE`.** Decisão 90 parou
-  na prova de captura (classificação de mensagens sob rede real,
-  tocando o critério 1). Decisão 91 corrigiu o mecanismo (classificação
-  por direção/stream, consistência obrigatória contra `handshakeBytesIn/
-  Out` real) com 13 testes + mutantes, validado localmente (4/4
-  perfis). 3ª tentativa real (Decisão 92): a correção funcionou
-  PERFEITAMENTE contra rede real nos 4 perfis (6/6 conexões mTLS
-  idênticas, consistência fechando exatamente, todas as mensagens
-  não-Certificate batendo o baseline oficial) — mas parou de novo em
-  `certificate_bytes`, consistentemente +14B/+28B sobre `CERTIFICATE_
-  BASELINE` nos 4 perfis: o certificado REALMENTE embutido nas imagens
-  pinadas (confirmado por sha256, Decisão 75) nunca bateu com o número
-  pré-registrado — um descompasso de calibração pré-existente, só
-  agora exposto porque esta é a primeira vez que a prova de captura
-  chega inteira a este ponto. 3 decisões pendentes do Luciano (Decisão
-  92). Os três ensaios reais (evidência, nunca critério oficial) ficam
-  em `tentativas/`, marcados `conta_como_dado: false`.
-- **Fase C (consolidação):** não aplicável ainda (depende da Fase B).
+- **Fase B (piloto real de 60 execuções): COMPLETA DE PONTA A PONTA
+  pela primeira vez (Decisão 95, 4ª tentativa real) — 60/60 execuções,
+  12/12 capturas, os 7 critérios avaliados com dados 100% reais.
+  Resultado: 4/7 PASS (critérios 3/4/5/6), 3/7 FAIL (critérios 1/2/7).**
+  Resumo da sequência: Decisão 90 parou na prova de captura (classificação
+  de mensagens sob rede real). Decisão 91 corrigiu o mecanismo
+  (classificação por direção/stream, consistência obrigatória). Decisão
+  92 (3ª tentativa): mecanismo provado perfeito nos 4 perfis, mas parou
+  de novo em `certificate_bytes` — descompasso de calibração pré-existente
+  do `CERTIFICATE_BASELINE` (Decisão 75 já tinha revertido a premissa que
+  o motivou, sem reconferir o número). Decisão 93: baseline recalibrado
+  por DERIVAÇÃO (fórmula RFC 8446 a partir do DER real), opção 2 do
+  Luciano, confirmada nos 5 pontos pedidos. Decisão 94 (4ª tentativa): 4
+  achados reais de infraestrutura/lógica nos produtores dos critérios
+  2/3/7 (nunca exercitados contra o piloto real antes), todos corrigidos
+  ao vivo. Decisão 95: Fase B completa — os 3 FAILs (critérios 1/2/7) são
+  achados NOVOS de MÉTODO de medição (nunca de infraestrutura), nunca
+  vistos antes porque nenhuma tentativa anterior chegou tão longe — 3
+  decisões pendentes do Luciano. Os quatro ensaios reais (evidência,
+  nunca critério oficial) ficam em `tentativas/`, marcados `conta_como_
+  dado: false`; o resultado OFICIAL completo fica em `dados_oficiais/
+  piloto-real-aws-2026-11-09/`.
+- **Fase C (consolidação):** feita (Decisão 95) — ver `dados_oficiais/
+  piloto-real-aws-2026-11-09/RELATORIO_PILOTO.md`.
 
 ## Arquivos neste diretório
 
@@ -47,6 +50,7 @@ coisa está.
 | `tentativas/ensaio_fase_b_real_v2/` | Logs da segunda tentativa real da Fase B — backend provado (12/12, 0 falhas), parou na prova de captura (Decisões 81/87/88/89/90) — `conta_como_dado: false`, nunca um dos 7 critérios oficiais. Ver `tentativas/ensaio_fase_b_real_v2/IDENTIDADE.json`. |
 | `dados_oficiais/validacao-local-decisao-91/` | Validação local REAL (6 conexões mTLS reais, fluxo de negócio completo) do mecanismo corrigido pela Decisão 91, antes de qualquer tentativa real na AWS. Ver `dados_oficiais/validacao-local-decisao-91/IDENTIDADE.json`. |
 | `tentativas/ensaio_fase_b_real_v3/` | Logs da terceira tentativa real da Fase B — mecanismo da Decisão 91 provado perfeito contra rede real nos 4 perfis, parou em `certificate_bytes`/`CERTIFICATE_BASELINE` (Decisão 92) — `conta_como_dado: false`. Ver `tentativas/ensaio_fase_b_real_v3/IDENTIDADE.json`. |
+| `dados_oficiais/piloto-real-aws-2026-11-09/` | **Resultado OFICIAL completo da Fase B** (Decisão 95, 4ª tentativa) — 60/60 execuções, 12/12 capturas, os 7 critérios reais (4 PASS, 3 FAIL — achados novos de método, nunca de infraestrutura). `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (19 arquivos coletados). |
 
 ## Convenção
 

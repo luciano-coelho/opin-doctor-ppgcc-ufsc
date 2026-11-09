@@ -10229,3 +10229,198 @@ residuo NAO era constante antes). As 3 capturas de referencia
 **Commit e push** (`v9/fase1-local`): `thesis/results/v9/integration/
 evaluate_criteria.py`, `thesis/results/v9/campaign/tests/test_
 evaluate_criteria.py`, esta Decisao.
+
+## 94. Quarta tentativa real da Fase B -- quatro achados reais corrigidos ao vivo em sequencia no Passo 11.5 (produtores dedicados dos criterios 2/3/7), nenhum deles tocando o que e medido
+
+**Fleet real aplicada** (31 recursos), Passos 0-10 verdes -- `smoke_ok:
+true`, `capture_proof_ok: true` nos 4 perfis (Decisao 93 confirmada de
+novo contra rede real). Passo 11 (60 execucoes + 12 capturas): verde,
+`total_execucoes: 60`, zero falhas. **Passo 11.5
+(`dedicated_criteria.py`, produtores dos criterios 2/3/7, Decisao 85)
+-- a PRIMEIRA vez que este script roda contra o piloto real completo
+-- encontrou 4 achados reais em sequencia, cada um investigado por
+conteudo (nunca suposto) antes de corrigir:**
+
+1. **Sessao SSH que sobe `criterio2_probe.py` nunca retornava
+   (timeout de 50s), mesmo com o processo ja rodando de verdade no
+   servidor (confirmado por `ps aux`/log, repetidas vezes).** Cinco
+   tentativas de correcao por SINTAXE de comando (`< /dev/null`
+   explicito, `stdin=subprocess.DEVNULL` no `cli._run`, `setsid`, o
+   padrao `sh -c '...& echo $!'` que `_launch_gateway` ja usa pro
+   tcpdump, `ssh -f`) -- NENHUMA mudou nada. Causa real, confirmada
+   manualmente: throttling TRANSITORIO do servidor logo apos o Passo
+   11 (60 execucoes, muitas conexoes SSH em sequencia rapida) -- o
+   MESMO comando simples de sempre retornou em ~1,3s depois de so uns
+   15s de espera. Corrigido com retry simples (3 tentativas, 15s de
+   intervalo) em `run_criterio2`, nunca mudando o mecanismo de
+   lancamento. `cli._run` ganhou `stdin=subprocess.DEVNULL` por
+   higiene defensiva (nunca a causa nem a correcao deste achado
+   especifico, documentado honestamente no codigo).
+2. **`ethtool` ausente na AMI real (Amazon Linux 2023) -- derrubava o
+   script INTEIRO** com `FileNotFoundError`, apesar deste campo
+   (Decisao 37) nunca decidir o resultado do criterio 2.
+   `ethtool_offloads` ganha um `try/except` -- `"indisponivel"`
+   explicito, nunca None silencioso, nunca mais derruba o script.
+3. **`tcpdump` sem `sudo` em `criterio2_probe.py` -- falhava com
+   "CAP_NET_RAW may be required", SILENCIOSAMENTE** (o `Popen` nunca
+   verificava o retorno) -- confirmado rodando `tcpdump` manualmente
+   como `ec2-user` no servidor real. Nenhum pcap era escrito,
+   `mss_bytes`/`bytes_sent_before_first_client_ack` ficavam `None`
+   sem nenhum erro visivel. Corrigido com `sudo` (mesma correcao que
+   `dedicated_capture`/`_launch_gateway` ja usam pro tcpdump real do
+   criterio 1).
+4. **Bug de logica real em `extract_mss_and_bytes_before_ack`**,
+   confirmado por conteudo contra o pcap real: a funcao usava o
+   PRIMEIRO ACK do cliente (`ack_out[0]`) pra calcular quantos bytes o
+   servidor mandou antes dele -- mas esse PRIMEIRO ACK e o que FECHA o
+   3-way handshake (`ack_num == first_seq`, reconhece so o SYN, nunca
+   nenhum byte de dado), fazendo `bytes_sent_before_first_client_ack`
+   ser SEMPRE `None` por construcao, NUNCA refletindo o que a funcao
+   de fato tentava medir. A propria docstring da funcao ja descrevia o
+   comportamento CERTO ("ack_num > seq inicial dos dados do
+   servidor") -- o codigo nunca implementava essa condicao. Corrigido:
+   pula qualquer ACK que reconheca <= `first_seq`, usa o primeiro que
+   de fato reconhece dado real (verificado com os numeros reais do
+   pcap: 2896 bytes, nao `None`).
+
+**Achado adicional, antes mesmo do Passo 11.5 (corrigido ANTES de
+qualquer execucao real usar o resultado errado):** `PILOT_RUNBOOK.md`
+nunca tinha um passo entregando as 3 imagens do backend de negocio
+(`auth`/`mongo_seed`/`mockapi`, Decisao 83) via `deliver_images.py
+--images` -- `deliver_images.py` sem `--images` explicito usa
+`ALL_IMAGE_KEYS` (nome enganoso, nunca inclui o backend). `start_block`
+(dentro do Passo 10) quebrou com `auth.tar nao encontrado` na primeira
+tentativa desta rodada. Corrigido com um Passo 8b novo no roteiro.
+
+**Por que nenhum destes e um STOP:** os 4 achados do Passo 11.5 e o
+achado do Passo 8b sao todos bugs de INFRAESTRUTURA/TRANSPORTE/LOGICA
+DE PARSING de um produtor dedicado -- nenhum toca `CERTIFICATE_
+BASELINE` nem qualquer outro limiar pre-registrado, nenhum muda o que
+os criterios 2/3/7 realmente medem (so corrige o MECANISMO de medir).
+Mesma classe das Decisoes 81/86/87/88/89 (achados reais de
+infraestrutura, corrigidos ao vivo, nunca STOP).
+
+**Testes:** `test_dedicated_criteria.py` ganha 3 testes (retry com
+backoff, falha-alto apos 3 tentativas, mutante sem retry); `test_
+producers.py` ganha 6 (ethtool ausente + mutante + caso normal, sudo
+no tcpdump + mutante, ack-skip com dados reais do pcap + mutante).
+233 testes no total, todos verdes.
+
+**Custo acumulado estimado:** ~US$3,50 (teto US$8, elevado pelo
+Luciano nesta rodada pra nao disparar o alarme de 80% no meio do
+piloto).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/campaign/
+scripts/{dedicated_criteria,cli}.py`, `thesis/results/v9/integration/
+producers/criterio2_probe.py`, `thesis/results/v9/campaign/tests/
+{test_dedicated_criteria,test_producers}.py`, `thesis/results/v9/
+campaign/PILOT_RUNBOOK.md` (Passo 8b), esta Decisao.
+
+## 95. Fase B completa, de ponta a ponta, pela primeira vez na historia deste pacote -- 60/60 execucoes, 12/12 capturas, os 7 criterios avaliados com dados 100% reais; 3 achados NOVOS (nunca vistos antes, nunca testaveis localmente) encontrados nos resultados, nenhum corrigido ao vivo (seriam mudancas de METODO de medicao, nao de infraestrutura)
+
+**Passos 12-15, todos verdes:** `collect_artifacts.py` (19 arquivos
+verificados por manifesto sha256, puxados pro operador ANTES de
+qualquer teardown -- lição aplicada depois de um erro de
+sequenciamento na Decisao 92); `consolidate_v9_pilot.py` (gerou
+`RELATORIO_PILOTO.md`+`criteria_evaluation.json` em `thesis/results/
+v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09/`); `emergency_
+stop.py` dry (5/5/3/4 recursos esperados, sem drift); `cleanup.py
+--release-eips --force` (`all_clean: true`); verificacao final
+independente (12 chamadas `describe-*`, 3 regioes, todas vazias).
+
+**Resultado geral: 4/7 PASS (criterios 3/4/5/6), 3/7 FAIL (criterios
+1/2/7) -- a PRIMEIRA vez que os 7 criterios sao avaliados contra dados
+100% reais, de ponta a ponta, nesta historia. Os 3 FAILs sao achados
+NOVOS e REAIS, nunca vistos antes porque nenhuma tentativa anterior
+chegou tao longe -- nenhum e um bug de infraestrutura/transporte
+(a classe que Decisoes 81/86/87/88/89/94 ja resolveram ao vivo); os 3
+tocam o METODO de medicao em si, exigindo decisao do Luciano antes de
+qualquer correcao (regra 7(e)).**
+
+**Criterio 1 (tamanhos por mensagem) -- FAIL.** Classico/pqc/hibrido-
+v8/hibrido-and: L219 e L325 PASSAM nos 4 (confirma a Decisao 91/93
+funcionando perfeitamente contra rede real, de novo, agora nas 12
+capturas OFICIAIS, nao so na prova de mecanismo da porta de fumaca).
+**L0 falha nos 4 perfis, sempre do MESMO jeito:** das 6 conexoes mTLS
+de cada captura L0, SO o ClientHello e o ServerHello decifram (183B,
+sempre certo) -- EncryptedExtensions/CertificateRequest/Certificate/
+CertificateVerify/Finished nunca aparecem, em NENHUM frame posterior,
+pras 6 conexoes, nos 4 perfis -- confirmado que os pacotes brutos
+EXISTEM no pcap (tcp.len>0 real, nunca frames faltando), so o
+dissector TLS nunca os decifra. Hipotese (nunca confirmada byte a
+byte, precisa de investigacao mais profunda): L0 e a UNICA rota de RTT
+quase zero -- as 6 conexoes completam tao rapido que o keylog
+(`/tmp/v9_keylog.txt`, escrito pelo gateway em Go) pode nao estar
+totalmente sincronizado em disco no momento em que `dedicated_capture`
+faz `docker exec cat` nele, momentos depois -- L219/L325 (RTT real)
+dao ao processo mais tempo natural pra flush entre segredos.
+
+**Criterio 2 (initcwnd real) -- FAIL.** `segments_computed ≈ 0,32`
+(2896B / 8961B de MSS) vs `ss_ti_cwnd = 10` -- as duas fontes
+discordam MUITO (diff ≈ 9,7 >> tolerancia de 2). Investigado: o `mss_
+bytes` extraido vem do SYN-ACK do servidor (8961B, capacidade LOCAL de
+jumbo frame do NIC, `pmtu:9001` confirmado no proprio `ss -ti`), mas o
+MSS EFETIVO da conexao real (`ss -ti` mostra `mss:1448`, o valor que o
+KERNEL de fato usa) e bem menor -- PMTU discovery reduz pra ~1500 no
+caminho publico entre regioes. Mesmo recalculando com 1448 (2
+segmentos), ainda diverge do cwnd=10 informado pelo kernel -- `ss -ti`
+tambem mostra `pacing_rate 1.05Mbps`: TCP PACING (BBR/fq, padrao em
+kernels Linux modernos) limita deliberadamente a taxa de envio
+INDEPENDENTE do cwnd disponivel, entao "bytes mandados antes do
+primeiro ACK" pode nunca refletir o cwnd configurado numa conexao
+REAL com pacing ligado -- um canal pode estar medindo o cwnd
+(configuracao do kernel) e o outro a taxa de pacing (politica de
+envio), nunca a mesma grandeza. Nunca testado contra um kernel/NIC
+reais antes desta tentativa.
+
+**Criterio 7 (sanidade de latencia por rota) -- FAIL em L219/L325
+(L0 PASSA).** `rtt_ms_pcap` sai ~0,06-0,10ms nas 3 rotas, MUITO abaixo
+do nominal (0/219/325ms) pra L219/L325 -- so bate pra L0 (que
+coincidentemente TAMBEM e ~0). Investigado: o canal `pcap` extrai o
+delta entre o frame do SYN chegando e o frame do SYN-ACK saindo, os
+DOIS capturados na MESMA interface do SERVIDOR (`dedicated_capture`,
+Decisao 52) -- isso mede so o TEMPO DE PROCESSAMENTO do servidor
+(SYN->SYN-ACK no mesmo host), NUNCA o RTT de rede de verdade (que
+precisaria dos DOIS trechos de propagacao, cliente->servidor E
+servidor->cliente, invisiveis numa captura feita so no servidor).
+Design que nunca foi exercitado contra uma rota com RTT real >0 antes
+desta tentativa -- L0 "passou" por coincidencia (RTT real e tempo de
+processamento sao os dois minusculos).
+
+**Por que estes 3 sao PARADAS, nunca correcoes-e-repete:** os tres
+tocam o METODO/mecanismo de medicao dos criterios 1/2/7 (nunca so
+infraestrutura/transporte) -- mudar qualquer um deles MUDA o que e
+medido, exatamente o que a regra 7(e) desta autorizacao pede pra
+tratar com parada. Os criterios 3 (zero erros, L325), 4 (contagens do
+fluxo), 5 (zero erros) e 6 (instrumentacao+assercoes) PASSAM com dados
+100% reais, sem ressalva.
+
+**Decisoes pendentes do Luciano:**
+1. Criterio 1 -- investigar a causa real do gap de decifragem em L0
+   (precisa do pcap bruto + keylog brutos desta tentativa, ja
+   descartados com o teardown -- proxima tentativa deveria arquiva-
+   los antes de qualquer `cleanup.py`) e decidir se aumenta a janela
+   antes do `docker exec cat keylog` em `dedicated_capture`, ou outra
+   abordagem.
+2. Criterio 2 -- decidir se `mss_bytes` deveria vir do MSS EFETIVO
+   (`ss -ti`) em vez do SYN-ACK, e/ou se o pacing precisa entrar na
+   formula de concordancia entre os 2 canais (ou numa tolerancia
+   diferente), ou se o metodo do criterio precisa ser revisto.
+3. Criterio 7 -- o canal `pcap` precisa de captura NOS DOIS LADOS
+   (cliente E servidor) pra medir RTT de verdade, ou precisa ser
+   redesenhado/descartado como canal independente deste criterio.
+
+**Evidencia completa** (consolidado + os 19 arquivos coletados, 12
+capturas OFICIAIS, `piloto_calls.json` das 60 execucoes reais) em
+`thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09/`.
+
+**Custo final acumulado estimado:** ~US$4,20 (teto US$8).
+
+**Testes:** nenhum novo (3 achados de METODO de medicao contra
+infraestrutura/kernel/rede reais, nenhum reproduzivel localmente da
+mesma forma -- precisaria de pcaps/keylogs reais equivalentes, que
+ficam arquivados como evidencia desta Decisao, nunca reconstruidos).
+
+**Commit e push** (`v9/fase1-local`): `thesis/results/v9/piloto/
+dados_oficiais/piloto-real-aws-2026-11-09/` (resultado completo),
+`thesis/results/v9/piloto/README.md`/`estado.json`, esta Decisao.
