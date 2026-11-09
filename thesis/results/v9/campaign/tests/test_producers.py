@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "integration" / "producers"))
 import criterio2_probe as c2  # noqa: E402
 import criterio3_collector as c3  # noqa: E402
@@ -103,46 +105,138 @@ def test_mutante_ethtool_offloads_sem_try_except_quebra_o_script(monkeypatch):
         mutant_ethtool_offloads("eth0")
 
 
-# --- Decisao 94 (achado real, ao vivo, Passo 11.5, confirmado por
-# conteudo contra um pcap real de producao -- 54.233.213.235, Passo
-# 11.5, 2026-11-09): o primeiro ACK do cliente so reconhece o SYN
-# (ack_num == first_seq), nunca nenhum byte de dado -- usar esse ACK
-# (o bug original, `ack_out[0]` sem filtro) faz `sent_before_ack` ser
-# SEMPRE 0. Dados reais usados abaixo (tshark -r criterio2.pcap):
-# server seq/len: (1,1448),(1449,1448),(2897,1448),(4345,1448),...;
-# client acks, em ordem: 1 (handshake), 2897, 5793, 8689, 11585, 14481.
+# --- Decisao 94 (achado real, confirmado por conteudo contra um pcap
+# real de producao, Passo 11.5): o primeiro ACK do cliente so
+# reconhece o SYN, nunca dado -- corrigido entao pra pular esse ACK e
+# usar o PRIMEIRO pacote de ACK que de fato reconhece dado real.
+#
+# Emenda robustez-de-janela (pedido do Luciano, achado real contra a
+# AWS real desta rodada -- Decisao 101 relatou segments_computed=2,0
+# e atribuiu, ERRADO, a TCP pacing): mesmo a correcao da Decisao 94
+# ainda discorda sob RTT real, porque o cliente manda VARIOS pacotes
+# de ACK chegando num cluster bem apertado -- o PRIMEIRO deles so
+# cobre 2 dos 10 segmentos REALMENTE mandados no 1o voo. Dados reais
+# usados abaixo, extraidos por tshark do pcap real desta rodada
+# (thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09-
+# v2/raw/criterio2_probe.pcap, L219, classico): SYN-ACK do servidor
+# sai em t=1794237381.245875; handshake ACK do cliente chega em
+# t=1794237381.465820 (RTT real = 219,945ms, bate com ss -ti:
+# rtt=219,99ms); os 10 segmentos do 1o voo saem entre t=.484441 e
+# t=.484522 (seq 1 a 13033+1448=14481, todos 1448B); o CLUSTER de 5
+# ACKs do cliente chega so em t=.704618-.704619 (acks 2897/5793/8689/
+# 11585/14481) -- o PRIMEIRO (2897) cobre so os 2 primeiros segmentos.
+# O 2o voo (20 segmentos, slow-start dobrando de 10) comeca em
+# t=.704672, DEPOIS do fim da janela de 1 RTT (.484441+0,219945=
+# .704386) -- confirma que a janela corrigida inclui o 1o voo
+# completo e exclui corretamente o 2o.
 
-_REAL_SERVER_SEGMENTS = "\n".join(
+_REAL_SYNACK_OUT_EPOCH = "1794237381.245875"
+_REAL_HANDSHAKE_ACK_IN_EPOCH = "1794237381.465820"
+_REAL_RTT_S = float(_REAL_HANDSHAKE_ACK_IN_EPOCH) - float(_REAL_SYNACK_OUT_EPOCH)  # 0.219945
+
+_REAL_FIRST_FLIGHT_TIMES = [
+    "1794237381.484441", "1794237381.484447", "1794237381.484455", "1794237381.484455",
+    "1794237381.484484", "1794237381.484485", "1794237381.484488", "1794237381.484489",
+    "1794237381.484522", "1794237381.484523",
+]
+_REAL_SECOND_FLIGHT_TIMES = [f"1794237381.70467{d}" for d in range(2, 9, 3)]  # amostra do 2o voo real
+_REAL_DATA_SEGMENTS = "\n".join(f"{t}\t1448" for t in _REAL_FIRST_FLIGHT_TIMES + _REAL_SECOND_FLIGHT_TIMES)
+_REAL_SERVER_SEGMENTS_BY_SEQ = "\n".join(
     f"{seq}\t1448" for seq in (1, 1449, 2897, 4345, 5793, 7241, 8689, 10137, 11585, 13033)
 )
 _REAL_CLIENT_ACKS = "1\n2897\n5793\n8689\n11585\n14481"
 
 
-def test_extract_mss_e_bytes_before_ack_pula_o_ack_do_handshake(monkeypatch):
-    calls = {"n": 0}
+def _fake_run_criterio2_real_pcap(cmd, **kw):
+    argv_str = " ".join(cmd)
+    if "tcp.options.mss_val" in argv_str:
+        return type("P", (), {"stdout": "8961\n"})()
+    if "tcp.seq" in argv_str:
+        return type("P", (), {"stdout": _REAL_SERVER_SEGMENTS_BY_SEQ + "\n"})()
+    if "tcp.flags.syn==0" in argv_str:
+        # ack_in: tcp.dstport==... && tcp.flags.ack==1 && tcp.flags.syn==0
+        if "frame.time_epoch" in argv_str:
+            return type("P", (), {"stdout": _REAL_HANDSHAKE_ACK_IN_EPOCH + "\n"})()
+        return type("P", (), {"stdout": _REAL_CLIENT_ACKS + "\n"})()
+    if "tcp.flags.syn==1" in argv_str and "tcp.flags.ack==1" in argv_str and "frame.time_epoch" in argv_str:
+        return type("P", (), {"stdout": _REAL_SYNACK_OUT_EPOCH + "\n"})()
+    if "frame.time_epoch" in argv_str and "tcp.len" in argv_str:
+        return type("P", (), {"stdout": _REAL_DATA_SEGMENTS + "\n"})()
+    raise AssertionError(f"chamada tshark inesperada: {cmd}")
 
-    def fake_run(cmd, **kw):
-        calls["n"] += 1
-        if "tcp.options.mss_val" in cmd:
-            return type("P", (), {"stdout": "8961\n"})()
-        if "tcp.seq" in cmd and "-e" in cmd:
-            return type("P", (), {"stdout": _REAL_SERVER_SEGMENTS + "\n"})()
-        if "tcp.ack" in cmd:
-            return type("P", (), {"stdout": _REAL_CLIENT_ACKS + "\n"})()
-        raise AssertionError(f"chamada tshark inesperada: {cmd}")
 
-    monkeypatch.setattr(c2, "run", fake_run)
+def test_extract_mss_separado_do_bug_antigo_de_bytes(monkeypatch):
+    monkeypatch.setattr(c2, "run", _fake_run_criterio2_real_pcap)
     monkeypatch.setattr(c2, "_tshark_argv", lambda pcap: [])
-    mss_announced, mss_pcap_max_payload, bytes_before_ack = c2.extract_mss_and_bytes_before_ack("/tmp/x.pcap", 9876)
-    # Emenda MSS-efetivo: o MSS anunciado no SYN-ACK (8961, capacidade
-    # LOCAL de jumbo frame) e so diagnostico -- o canal que entra no
-    # calculo e o MAIOR payload real observado (1448, todos os
-    # segmentos de _REAL_SERVER_SEGMENTS).
+    mss_announced, mss_pcap_max_payload = c2.extract_mss("/tmp/x.pcap", 9876)
     assert mss_announced == 8961
     assert mss_pcap_max_payload == 1448
-    # primeiro ACK que de fato reconhece dado = 2897 (pula o 1, so-handshake)
-    # -- 2 segmentos (1449,2897) tem seq_end <= 2897 -- 2896 bytes (2897-1).
-    assert bytes_before_ack == 2896
+
+
+def test_rtt_from_handshake_same_connection_bate_o_real():
+    import unittest.mock as mock
+    with mock.patch.object(c2, "run", _fake_run_criterio2_real_pcap), \
+         mock.patch.object(c2, "_tshark_argv", lambda pcap: []):
+        rtt_s = c2.rtt_from_handshake_same_connection("/tmp/x.pcap", 9876)
+    assert rtt_s == pytest.approx(_REAL_RTT_S, abs=1e-6)
+
+
+def test_bytes_sent_within_first_rtt_window_conta_o_1o_voo_completo():
+    """O achado real: o metodo ANTIGO (ate a Decisao 94) contava so
+    2896B (2 segmentos) porque parava no PRIMEIRO pacote de ACK visto
+    -- o voo real tinha 10 segmentos (14480B), confirmado por ss -ti
+    (cwnd:10) E pela contagem real de segmentos no pcap. O metodo
+    NOVO, contando por timestamp de envio dentro de 1 RTT, acerta os
+    10 segmentos completos (14480B) -- nunca mais refem de quantos
+    pacotes de ACK chegaram juntos."""
+    import unittest.mock as mock
+    with mock.patch.object(c2, "run", _fake_run_criterio2_real_pcap), \
+         mock.patch.object(c2, "_tshark_argv", lambda pcap: []):
+        bytes_in_window = c2.extract_bytes_sent_within_rtt_window("/tmp/x.pcap", 9876, _REAL_RTT_S)
+    assert bytes_in_window == 14480  # 10 segmentos x 1448B -- o voo REAL completo
+    assert bytes_in_window != 2896  # o numero ERRADO que o metodo antigo dava
+
+
+def test_mutante_contar_por_numero_de_ack_da_o_numero_antigo_errado():
+    """Mutante = a logica ANTES desta Emenda (Decisao 94): conta so os
+    bytes cobertos pelo PRIMEIRO pacote de ACK que reconhece dado real
+    -- com os MESMOS dados reais, da 2896B (2 segmentos), nunca os
+    14480B (10 segmentos) que o metodo novo (por timestamp de envio)
+    acerta."""
+    ack_out = _REAL_CLIENT_ACKS.splitlines()
+    data_out = _REAL_SERVER_SEGMENTS_BY_SEQ.splitlines()
+    first_seq = int(data_out[0].split("\t")[0])
+    server_bytes_by_seq_end = [int(line.split("\t")[0]) + int(line.split("\t")[1]) for line in data_out]
+    first_client_ack_mutante = None
+    for line in ack_out:
+        candidate = int(line)
+        if candidate > first_seq:
+            first_client_ack_mutante = candidate
+            break
+    sent_before_ack = sum(1 for end in server_bytes_by_seq_end if end <= first_client_ack_mutante)
+    bytes_mutante = server_bytes_by_seq_end[sent_before_ack - 1] - first_seq
+    assert bytes_mutante == 2896  # o bug antigo, reproduzido
+    assert bytes_mutante != 14480  # nunca o valor real do voo completo
+
+
+def test_mutante_janela_de_1_rtt_errada_da_resposta_errada():
+    """Mutante: janela MUITO CURTA (metade do RTT real) exclui parte
+    do 1o voo real; janela MUITO LONGA (2x o RTT real) inclui parte
+    do 2o voo (amostrado em _REAL_SECOND_FLIGHT_TIMES) -- as duas
+    dao um numero DIFERENTE do real (14480B), provando que a janela
+    de EXATAMENTE 1 RTT (nem menos, nem mais) e o que importa."""
+    import unittest.mock as mock
+    # janela curta demais: menor que a propria duracao do 1o voo real
+    # (~81us entre o 1o e o 10o segmento) -- corta o voo no meio.
+    janela_curta_s = 0.00005
+    with mock.patch.object(c2, "run", _fake_run_criterio2_real_pcap), \
+         mock.patch.object(c2, "_tshark_argv", lambda pcap: []):
+        bytes_janela_curta = c2.extract_bytes_sent_within_rtt_window("/tmp/x.pcap", 9876, janela_curta_s)
+        bytes_janela_longa = c2.extract_bytes_sent_within_rtt_window("/tmp/x.pcap", 9876, _REAL_RTT_S * 2)
+        bytes_janela_certa = c2.extract_bytes_sent_within_rtt_window("/tmp/x.pcap", 9876, _REAL_RTT_S)
+    assert bytes_janela_certa == 14480
+    assert bytes_janela_curta < 14480  # janela curta demais perde parte do 1o voo
+    assert bytes_janela_longa > 14480  # janela longa demais pega parte do 2o voo
 
 
 # --- Emenda MSS-efetivo (pedido do Luciano, apos a Decisao 95): MSS
@@ -198,7 +292,7 @@ def test_mutante_extract_mss_sem_pular_o_ack_do_handshake_sempre_da_none(monkeyp
     SEMPRE None, mesmo com os MESMOS dados reais onde a resposta
     certa e 2896."""
     ack_out = _REAL_CLIENT_ACKS.splitlines()
-    data_out = _REAL_SERVER_SEGMENTS.splitlines()
+    data_out = _REAL_SERVER_SEGMENTS_BY_SEQ.splitlines()
     first_seq = int(data_out[0].split("\t")[0])
     server_bytes_by_seq_end = [int(l.split("\t")[0]) + int(l.split("\t")[1]) for l in data_out]
     first_client_ack_mutante = int(ack_out[0])  # mutante: nunca filtra

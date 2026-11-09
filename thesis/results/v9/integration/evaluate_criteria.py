@@ -1019,14 +1019,23 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     constante, com a justificativa de porque esse numero, nao outro).
 
     Formato esperado em `<aws_dir>/criterio2_initcwnd.json`:
-    `{"bytes_sent_total": int, "bytes_sent_before_first_client_ack": int,
+    `{"bytes_sent_total": int, "bytes_sent_within_first_rtt_window": int,
     "mss_bytes": int|None, "mss_channels_agree": bool, "ss_ti_cwnd": int,
     "offloads": {"tso": "on"|"off", "gso": "on"|"off", "gro": "on"|"off"}}`
     -- `offloads` e sempre exigido no arquivo (pra garantir que foi de
     fato registrado), mas seu CONTEUDO nunca decide pass/fail.
     `mss_channels_agree` e exigido explicitamente -- ausente ou False
     reprova por si so (Emenda MSS-efetivo).
-    """
+
+    Emenda robustez-de-janela (pedido do Luciano, achado real contra a
+    AWS real -- Decisao 101 atribuiu `segments_computed=2,0` errado a
+    TCP pacing; o pcap real provou que nao havia pacing nenhum, so um
+    bug de contagem): `bytes_sent_within_first_rtt_window` (antes
+    `bytes_sent_before_first_client_ack`) conta por TIMESTAMP DE ENVIO
+    do servidor, dentro de 1 RTT medido na MESMA conexao -- nunca mais
+    pelo numero do primeiro pacote de ACK visto (que sob RTT real pode
+    cobrir so uma FRACAO do voo real, se o cliente mandar varios ACKs
+    em cluster apertado, como confirmado por conteudo real)."""
     if not aws_dir:
         return {"criterion": 2, "name": "initcwnd real", "pass": False,
                 "note": "nenhum --aws-dir fornecido -- sem teste dedicado, nao ha evidencia de initcwnd"}
@@ -1037,7 +1046,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
     try:
         data = json.load(open(path, encoding="utf-8"))
         total = data["bytes_sent_total"]
-        before_ack = data["bytes_sent_before_first_client_ack"]
+        bytes_in_window = data["bytes_sent_within_first_rtt_window"]
         mss = data["mss_bytes"]
         mss_channels_agree = data["mss_channels_agree"]
         ss_cwnd = data["ss_ti_cwnd"]
@@ -1077,7 +1086,7 @@ def criterion_2_initcwnd(aws_dir) -> dict:
                 "note": "os dois canais do MSS efetivo (ss -ti e maior payload real do pcap) discordam "
                         "(ou 'mss_channels_agree' ausente) -- Emenda MSS-efetivo, nunca usa um canal por default"}
     test_valid = isinstance(total, (int, float)) and total >= INITCWND_MIN_BYTES_SENT
-    segments_computed = (before_ack / mss) if (isinstance(before_ack, (int, float)) and isinstance(mss, (int, float)) and mss > 0) else None
+    segments_computed = (bytes_in_window / mss) if (isinstance(bytes_in_window, (int, float)) and isinstance(mss, (int, float)) and mss > 0) else None
     segments_ok = segments_computed is not None and segments_computed >= INITCWND_MIN_SEGMENTS
     ss_ok = isinstance(ss_cwnd, (int, float)) and ss_cwnd >= INITCWND_MIN_SEGMENTS
     agree = (segments_computed is not None and isinstance(ss_cwnd, (int, float))

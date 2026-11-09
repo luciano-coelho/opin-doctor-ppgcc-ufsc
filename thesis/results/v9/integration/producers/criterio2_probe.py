@@ -40,6 +40,24 @@ default"). O MSS anunciado no SYN-ACK continua registrado
 (`mss_synack_announced_bytes`), so como diagnostico/evidencia do
 porque o metodo anterior estava errado -- nunca entra no calculo.
 
+Emenda robustez-de-janela (pedido do Luciano, achado real contra a
+AWS real -- Decisao 101 relatou `segments_computed=2,0` e atribuiu
+(errado) a TCP pacing; investigacao ao vivo do pcap real provou que
+NAO havia pacing nenhum -- os 10 segmentos do 1o voo saem com ~9us
+de distancia um do outro, ~1000x mais rapido do que o `pacing_rate`
+reportado exigiria): a causa real era `extract_mss_and_bytes_before_
+ack` contar so os bytes cobertos pelo PRIMEIRO pacote de ACK que via
+-- sob RTT real, o cliente manda VARIOS ACKs chegando num cluster bem
+apertado (confirmado: 5 ACKs em ~60us um do outro), e o primeiro
+deles so cobria 2 dos 10 segmentos REALMENTE mandados no 1o voo.
+Corrigido: `bytes_sent_within_first_rtt_window` conta por TIMESTAMP
+DE ENVIO (nunca por numero de ACK), dentro da janela `[tempo do 1o
+segmento de dados, +1 RTT]` -- o RTT vem de uma medicao
+INDEPENDENTE, na MESMA conexao (SYN-ACK saindo -> ACK do handshake
+voltando, mesmo metodo da Emenda RTT-pcap do criterio 7, Decisao 97)
+-- nunca do comportamento dos ACKs de DADOS, que e exatamente o que
+causava o bug original.
+
 Uso:
   python criterio2_probe.py --listen-port 9999 --iface eth0 \
     --route L219 --instance-type m7i-flex.large --profile classico \
@@ -155,81 +173,94 @@ def _tshark_argv(pcap_path):
             "mockopin-v9-measure", "-r", pcap_path]
 
 
-def extract_mss_and_bytes_before_ack(pcap_path, port) -> tuple[int | None, int | None, int | None]:
+def extract_mss(pcap_path, port) -> tuple[int | None, int | None]:
     """tshark: (1) MSS ANUNCIADO pelo SERVIDOR no seu SYN-ACK --
     diagnostico, NUNCA usado no calculo (Emenda MSS-efetivo, ver
     docstring do modulo: e so a capacidade LOCAL da NIC, nunca o MSS
     que de fato vai ser usado no caminho real); (2) o MAIOR payload
     real (`tcp.len`) entre os segmentos de dados que o SERVIDOR
     mandou -- canal 2 do MSS EFETIVO (cross-check obrigatorio contra
-    `ss -ti`, feito no chamador); (3) bytes que o SERVIDOR mandou (seq
-    final - seq inicial do primeiro segmento de dados) ANTES do
-    primeiro segmento vindo do CLIENTE com flag ACK que reconhece
-    esses bytes (ack_num > seq inicial dos dados do servidor)."""
-    # MSS anunciado pelo SERVIDOR no seu SYN-ACK (tcp.flags.syn==1 &&
-    # tcp.flags.ack==1, origem = porta do servidor) -- SO diagnostico.
+    `ss -ti`, feito no chamador)."""
     mss_out = run(
         _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
                                     "-T", "fields", "-e", "tcp.options.mss_val"],
     ).stdout.strip().splitlines()
     mss_announced = int(mss_out[0]) if mss_out and mss_out[0] else None
 
-    # Todos os segmentos de DADOS que o servidor mandou (porta de
-    # origem = porta do servidor, len>0), em ordem.
     data_out = run(
         _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.len>0",
                                     "-T", "fields", "-e", "tcp.seq", "-e", "tcp.len"],
     ).stdout.strip().splitlines()
     if not data_out:
-        return mss_announced, None, None
-    first_seq = int(data_out[0].split("\t")[0])
-    server_bytes_by_seq_end = [int(line.split("\t")[0]) + int(line.split("\t")[1]) for line in data_out if line]
+        return mss_announced, None
     # Canal 2 do MSS EFETIVO: o MAIOR payload real que o servidor de
     # fato colocou no fio nesta conexao -- se TSO/GSO estiver ligado
     # isso pode inflar pra um "superpacote" (registrado em `offloads`,
     # Decisao 37), o que faz esse canal DISCORDAR de `ss -ti` de
     # proposito (nunca concordar por acidente com um numero inflado).
     mss_pcap_max_payload = max(int(line.split("\t")[1]) for line in data_out if line)
+    return mss_announced, mss_pcap_max_payload
 
-    # Primeiro ACK do CLIENTE (porta de destino = porta do servidor,
-    # flag ACK, sem SYN) e o numero de ACK que ele carrega.
-    #
-    # Decisao 94 (achado real, ao vivo, Passo 11.5, confirmado por
-    # conteudo contra o pcap real): o PRIMEIRO ACK do cliente apos o
-    # handshake e o que FECHA o 3-way handshake (ack_num == first_seq,
-    # reconhece so o SYN, nunca nenhum byte de dado -- o servidor
-    # normalmente nem comecou a mandar nada ainda) -- usar ESSE
-    # (`ack_out[0]`, o bug original) faz `sent_before_ack` ser SEMPRE
-    # 0 por construcao, nunca refletindo quantos bytes o servidor
-    # realmente mandou antes do primeiro ACK relevante. A docstring
-    # desta funcao ja dizia o certo ("ack_num > seq inicial dos dados
-    # do servidor") -- o codigo nunca implementava essa condicao.
-    # Corrigido: pula qualquer ACK que reconheca <= first_seq (so o
-    # handshake), usa o primeiro que de fato reconhece algum byte de
-    # dado real.
-    ack_out = run(
-        _tshark_argv(pcap_path) + ["-Y", f"tcp.dstport=={port} && tcp.flags.ack==1 && tcp.flags.syn==0",
-                                    "-T", "fields", "-e", "tcp.ack"],
+
+def rtt_from_handshake_same_connection(pcap_path, port) -> float | None:
+    """Emenda robustez-de-janela (pedido do Luciano, achado real:
+    `extract_mss_and_bytes_before_ack` contava so os bytes cobertos
+    pelo PRIMEIRO pacote de ACK visto, mas sob RTT real o cliente
+    manda VARIOS ACKs chegando em cluster bem apertado -- confirmado
+    por conteudo contra o pcap real desta rodada: 5 ACKs em ~60us um
+    do outro, o primeiro cobrindo so 2 dos 10 segmentos REALMENTE
+    mandados no 1o voo, fazendo `segments_computed` sair 2,0 em vez
+    de 10 -- NUNCA um achado de pacing, como a Decisao 101 relatou
+    por engano: a distancia real entre os 10 segmentos do 1o voo foi
+    ~9us, ~1000x mais rapido do que o `pacing_rate` reportado exigiria
+    -- sem nenhuma assinatura de pacing nos pacotes).
+
+    RTT real desta MESMA conexao, medido do MESMO jeito que a Emenda
+    RTT-pcap do criterio 7 (Decisao 97) -- SYN-ACK do servidor SAINDO
+    -> primeiro ACK do cliente fechando o handshake CHEGANDO de volta
+    (ida+volta completas) -- nunca derivado do numero de ACK de
+    dados, que e exatamente o que causava o bug."""
+    synack_out = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.flags.syn==1 && tcp.flags.ack==1",
+                                    "-T", "fields", "-e", "frame.time_epoch"],
     ).stdout.strip().splitlines()
-    first_client_ack = None
-    for line in ack_out:
+    ack_in = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.dstport=={port} && tcp.flags.ack==1 && tcp.flags.syn==0",
+                                    "-T", "fields", "-e", "frame.time_epoch"],
+    ).stdout.strip().splitlines()
+    if not synack_out or not synack_out[0] or not ack_in or not ack_in[0]:
+        return None
+    return float(ack_in[0]) - float(synack_out[0])
+
+
+def extract_bytes_sent_within_rtt_window(pcap_path, port, rtt_s) -> int | None:
+    """Conta bytes de dados do SERVIDOR por TIMESTAMP DE ENVIO, dentro
+    da janela `[tempo do 1o segmento de dados, +rtt_s]` -- NUNCA
+    derivado do numero de ACK (o bug original) nem do PRIMEIRO pacote
+    de ACK visto (o bug que a Decisao 101 corrigiu so parcialmente --
+    ainda discordava quando varios ACKs chegam em cluster). Robusto a
+    ACKs em cluster e a ACK atrasado/perdido, porque nunca olha pros
+    ACKs pra decidir QUANTO foi mandado -- so para decidir ATE QUANDO
+    (a janela de `rtt_s`, medida independentemente pelo handshake,
+    `rtt_from_handshake_same_connection`)."""
+    if rtt_s is None:
+        return None
+    data_out = run(
+        _tshark_argv(pcap_path) + ["-Y", f"tcp.srcport=={port} && tcp.len>0",
+                                    "-T", "fields", "-e", "frame.time_epoch", "-e", "tcp.len"],
+    ).stdout.strip().splitlines()
+    rows = []
+    for line in data_out:
         if not line:
             continue
-        candidate = int(line)
-        if candidate > first_seq:
-            first_client_ack = candidate
-            break
-    if first_client_ack is None:
-        return mss_announced, mss_pcap_max_payload, None
-
-    # Bytes do servidor cujo seq_end <= o que esse primeiro ACK ja
-    # reconhece foram mandados ANTES desse ACK chegar -- soma deles,
-    # menos o seq inicial, da os bytes enviados antes do primeiro ACK.
-    sent_before_ack = sum(1 for end in server_bytes_by_seq_end if end <= first_client_ack)
-    bytes_before_ack = None
-    if sent_before_ack > 0:
-        bytes_before_ack = server_bytes_by_seq_end[sent_before_ack - 1] - first_seq
-    return mss_announced, mss_pcap_max_payload, bytes_before_ack
+        t_s, len_s = line.split("\t")
+        rows.append((float(t_s), int(len_s)))
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r[0])
+    t0 = rows[0][0]
+    window_end = t0 + rtt_s
+    return sum(length for t, length in rows if t <= window_end)
 
 
 # Emenda MSS-efetivo: diferenca maxima aceitavel (bytes) entre os dois
@@ -282,15 +313,18 @@ def main():
     stop_tcpdump(tcpdump_proc)
 
     offloads = ethtool_offloads(args.iface)
-    mss_announced, mss_pcap_max_payload, bytes_before_ack = extract_mss_and_bytes_before_ack(args.pcap, args.listen_port)
+    mss_announced, mss_pcap_max_payload = extract_mss(args.pcap, args.listen_port)
     mss_bytes, mss_channels_agree = effective_mss(snapshot["mss"], mss_pcap_max_payload)
+    rtt_s = rtt_from_handshake_same_connection(args.pcap, args.listen_port)
+    bytes_in_window = extract_bytes_sent_within_rtt_window(args.pcap, args.listen_port, rtt_s)
 
     out = {
         "route": args.route,
         "instance_type": args.instance_type,
         "profile": args.profile,
         "bytes_sent_total": PAYLOAD_BYTES,
-        "bytes_sent_before_first_client_ack": bytes_before_ack,
+        "bytes_sent_within_first_rtt_window": bytes_in_window,
+        "rtt_ms_used_for_window": round(rtt_s * 1000.0, 3) if rtt_s is not None else None,
         "mss_synack_announced_bytes": mss_announced,  # diagnostico, nunca usado no calculo (ver docstring do modulo)
         "mss_pcap_max_payload_bytes": mss_pcap_max_payload,
         "ss_ti_mss": snapshot["mss"],

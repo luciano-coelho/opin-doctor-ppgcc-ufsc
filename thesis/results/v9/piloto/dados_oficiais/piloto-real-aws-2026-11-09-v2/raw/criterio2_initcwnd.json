@@ -3,7 +3,8 @@
   "instance_type": "m7i-flex.large",
   "profile": "classico",
   "bytes_sent_total": 71680,
-  "bytes_sent_before_first_client_ack": 2896,
+  "bytes_sent_within_first_rtt_window": 14480,
+  "rtt_ms_used_for_window": 219.945,
   "mss_synack_announced_bytes": 8961,
   "mss_pcap_max_payload_bytes": 1448,
   "ss_ti_mss": 1448,
@@ -15,5 +16,6 @@
     "tso": "indisponivel",
     "gso": "indisponivel",
     "gro": "indisponivel"
-  }
+  },
+  "_reanalise": "Decisao 102 -- bytes_sent_within_first_rtt_window (14480B, 10 segmentos) substitui bytes_sent_before_first_client_ack (2896B, 2 segmentos, ver criterio2_initcwnd_original_bug_decisao_95_101.json) -- reanalise OFFLINE do MESMO pcap bruto preservado, pelo metodo corrigido (contagem por timestamp de envio dentro de 1 RTT medido na mesma conexao, nunca por numero de pacote de ACK), validado com verdade conhecida (N=4/10/20, com e sem fq, campaign/tc_netem_ground_truth/evidencia_initcwnd/) antes de ser aplicado aqui. Nenhum dado bruto novo coletado -- mesmo pcap, mesmo ss -ti, so a analise derivada corrigida."
 }

@@ -1,0 +1,18 @@
+{
+  "o_que_e": "Validacao local com verdade conhecida da Emenda robustez-de-janela ao criterio 2 (pedido do Luciano, apos o pcap real da AWS provar que segments_computed=2,0 NAO era pacing, e sim um bug de contagem por numero de ACK). initcwnd configurado de verdade via 'ip route ... initcwnd N' no servidor, N=4/10/20, com e sem fq (pacing de verdade), contra o producer REAL (criterio2_probe.py), sem nenhuma modificacao.",
+  "quando": "2026-11-09",
+  "metodo": "Mesma topologia de rede do Decisao 100 (delay via netem, offloads desligados). initcwnd setado na rota conectada do servidor (172.22.0.0/16 dev eth0 initcwnd N) antes de cada execucao -- GROUND TRUTH real do kernel, nao suposto. Para o teste 'com fq', netem (delay) e fq (pacing real) foram empilhados (netem root, fq filho) -- confirmado via 'tc qdisc show' que os dois estavam ativos.",
+  "resultados": {
+    "N4_sem_fq": {"ss_ti_cwnd": 4, "bytes_sent_within_first_rtt_window": 5792, "segments_computed": 4.0, "bate_a_configuracao": true},
+    "N10_sem_fq": {"ss_ti_cwnd": 10, "bytes_sent_within_first_rtt_window": 14480, "segments_computed": 10.0, "bate_a_configuracao": true},
+    "N20_sem_fq": {"ss_ti_cwnd": 20, "bytes_sent_within_first_rtt_window": 28960, "segments_computed": 20.0, "bate_a_configuracao": true},
+    "N10_com_fq_pacing_real": {"ss_ti_cwnd": 10, "bytes_sent_within_first_rtt_window": 14480, "segments_computed": 10.0, "bate_a_configuracao": true, "nota": "fq pacing de verdade ativo (confirmado via tc qdisc show) -- o metodo corrigido continua acertando o valor real, nunca enganado pelo pacing"}
+  },
+  "mutante_data_limited": {
+    "descricao": "resposta de apenas 2048B (menor que 1 janela de cwnd=10, 14480B) -- o metodo tem que reportar o numero MENOR real (data-limited), nunca fingir window-limited",
+    "resultado": {"ss_ti_cwnd": 10, "bytes_sent_total": 2048, "bytes_sent_within_first_rtt_window": 2048, "segments_computed": 1.415},
+    "confirma": "o metodo nunca inventa um numero maior que os dados reais disponiveis -- distingue corretamente data-limited de window-limited"
+  },
+  "conclusao": "As 4 configuracoes reais de initcwnd (4/10/20, com e sem pacing real) bateram EXATAMENTE nos dois canais (ss -ti e o novo metodo de janela por timestamp de envio) -- prova que o metodo corrigido NAO e enviesado pra sempre reportar 10, e genuinamente mede o valor real configurado no kernel, robusto a pacing real (fq) e corretamente distingue data-limited de window-limited.",
+  "evidencia_preservada": "*.json nesta pasta -- saidas REAIS do producer (nunca fixtures escritos a mao). Containers/redes/imagens Docker usados aqui foram todos removidos apos a coleta."
+}

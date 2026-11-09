@@ -572,7 +572,7 @@ def _criterio2_json(tmp_path, **overrides):
     import json as _json
     data = {
         "route": "L219", "instance_type": "m7i-flex.large", "profile": "classico",
-        "bytes_sent_total": 71680, "bytes_sent_before_first_client_ack": 14480,
+        "bytes_sent_total": 71680, "bytes_sent_within_first_rtt_window": 14480,
         "mss_bytes": 1448, "mss_channels_agree": True, "ss_ti_cwnd": 10,
         "offloads": {"tso": "off", "gso": "off", "gro": "off"},
     }
@@ -617,7 +617,7 @@ def test_mutante_criterion_2_sem_exigir_mss_channels_agree_passaria_errado(tmp_p
     com o MESMO JSON que discorda de verdade (Decisao 95), o mutante
     passaria incorretamente onde o codigo real reprova."""
     _criterio2_json(tmp_path, mss_bytes=8961, mss_channels_agree=False,
-                     bytes_sent_before_first_client_ack=2896)
+                     bytes_sent_within_first_rtt_window=2896)
     real = ec.criterion_2_initcwnd(str(tmp_path))
     assert real["pass"] is False
 
@@ -630,7 +630,7 @@ def test_mutante_criterion_2_sem_exigir_mss_channels_agree_passaria_errado(tmp_p
     # segments_computed (com MSS errado) e ss_ti_cwnd, enquanto o codigo real bloqueia MESMO ASSIM
     # por causa de mss_channels_agree=False.
     _criterio2_json(tmp_path, mss_bytes=8961, mss_channels_agree=False,
-                     bytes_sent_before_first_client_ack=89610, ss_ti_cwnd=10)
+                     bytes_sent_within_first_rtt_window=89610, ss_ti_cwnd=10)
     real2 = ec.criterion_2_initcwnd(str(tmp_path))
     assert real2["pass"] is False  # bloqueado por mss_channels_agree, nunca chega a calcular segments
     segments_mutante2 = 89610 / 8961  # = 10.0 -- bateria "certo" com ss_ti_cwnd=10 por ACIDENTE

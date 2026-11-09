@@ -13,7 +13,8 @@ coisa está.
 - **Fase B (piloto real de 60 execuções): COMPLETA DE PONTA A PONTA
   pela SEGUNDA vez (Decisão 101, 5ª tentativa real) — 60/60 execuções,
   12/12 capturas, os 7 critérios avaliados com dados 100% reais.
-  Resultado: 6/7 PASS (critérios 1/3/4/5/6/7), 1/7 FAIL (critério 2).**
+  Resultado FINAL (após a reanálise offline do critério 2, Decisão
+  102): 7/7 PASS — primeira vez na história deste pacote.**
   Resumo da sequência: Decisão 90 parou na prova de captura (classificação
   de mensagens sob rede real). Decisão 91 corrigiu o mecanismo
   (classificação por direção/stream, consistência obrigatória). Decisão
@@ -30,20 +31,29 @@ coisa está.
   infraestrutura). Decisões 96-100: Emenda fail-closed de teardown (96),
   Emenda RTT-pcap ao critério 7 (97), Emenda MSS-efetivo ao critério 2
   (98), Emenda robustez-de-captura ao critério 1 com retry (99),
-  validação local com tc netem e verdade conhecida (100). **Decisão 101
+  validação local com tc netem e verdade conhecida (100). Decisão 101
   (5ª tentativa, COMPLETA): os critérios 1 e 7 — alvo direto das
   Emendas 99 e 97 — PASSAM pela primeira vez; só o critério 2 continua
-  FAIL, pelo motivo JÁ conhecido (pacing, nunca mais o bug de MSS,
-  confirmado corrigido por `mss_channels_agree: true`); teardown pela
-  PRIMEIRA vez usando o gate fail-closed de verdade
-  (`--pull-verified-marker`, nunca `--force`).** Os cinco ensaios reais
-  (evidência, nunca critério oficial além do resultado final) ficam em
-  `tentativas/`, marcados `conta_como_dado: false`; o resultado OFICIAL
-  mais recente fica em `dados_oficiais/piloto-real-aws-2026-11-09-v2/`
-  (o resultado anterior, Decisão 95, permanece em `piloto-real-
-  aws-2026-11-09/` como histórico, nunca sobrescrito).
-- **Fase C (consolidação):** feita (Decisão 101) — ver `dados_oficiais/
-  piloto-real-aws-2026-11-09-v2/RELATORIO_PILOTO.md`.
+  FAIL, atribuído (ERRADO, corrigido na Decisão 102) a TCP pacing;
+  teardown pela PRIMEIRA vez usando o gate fail-closed de verdade
+  (`--pull-verified-marker`, nunca `--force`). **Decisão 102: a
+  reconstrução do timeline real do pcap (microssegundo a
+  microssegundo) provou que NÃO havia pacing nenhum (segmentos do 1º
+  voo saem ~1000× mais rápido do que o `pacing_rate` reportado
+  exigiria) — a causa real era um bug de contagem (parava no 1º
+  pacote de ACK visto, mas o cliente manda vários ACKs em cluster sob
+  RTT real). Corrigido (conta por timestamp de envio dentro de 1 RTT
+  medido na mesma conexão), validado com verdade conhecida real
+  (`ip route ... initcwnd` 4/10/20, com e sem fq pacing real) ANTES de
+  tocar o dado real, reanalisado OFFLINE do MESMO pcap preservado
+  (nenhuma nova rodada de AWS) — critério 2 PASSA.** Os cinco ensaios
+  reais (evidência, nunca critério oficial além do resultado final)
+  ficam em `tentativas/`, marcados `conta_como_dado: false`; o
+  resultado OFICIAL mais recente fica em `dados_oficiais/piloto-real-
+  aws-2026-11-09-v2/` (o resultado anterior, Decisão 95, permanece em
+  `piloto-real-aws-2026-11-09/` como histórico, nunca sobrescrito).
+- **Fase C (consolidação):** feita (Decisões 101-102) — ver
+  `dados_oficiais/piloto-real-aws-2026-11-09-v2/RELATORIO_PILOTO.md`.
 
 ## Arquivos neste diretório
 
@@ -62,7 +72,8 @@ coisa está.
 | `tentativas/ensaio_fase_b_real_v3/` | Logs da terceira tentativa real da Fase B — mecanismo da Decisão 91 provado perfeito contra rede real nos 4 perfis, parou em `certificate_bytes`/`CERTIFICATE_BASELINE` (Decisão 92) — `conta_como_dado: false`. Ver `tentativas/ensaio_fase_b_real_v3/IDENTIDADE.json`. |
 | `dados_oficiais/piloto-real-aws-2026-11-09/` | Resultado da 4ª tentativa (Decisão 95) — 60/60 execuções, 12/12 capturas, 4/7 PASS, 3/7 FAIL (achados novos de método, nunca de infraestrutura) — **histórico, superado pela 5ª tentativa**, nunca sobrescrito. `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (19 arquivos coletados). |
 | `tentativas/investigacao_passo10_2026-11-09/` | Investigação ao vivo (Decisão 101, achado 2) confirmando que o Passo 10 da 5ª tentativa estava genuinamente progredindo (nunca travado) antes de uma queda de conexão SSH — `conta_como_dado: false`. |
-| `dados_oficiais/piloto-real-aws-2026-11-09-v2/` | **Resultado OFICIAL mais recente da Fase B** (Decisão 101, 5ª tentativa) — 60/60 execuções, 12/12 capturas, os 7 critérios reais (6 PASS, 1 FAIL — critérios 1 e 7 agora passam, só o critério 2 continua FAIL por pacing, já conhecido). `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (92 arquivos coletados, incluindo pcaps/keylogs brutos de toda tentativa de captura). |
+| `dados_oficiais/piloto-real-aws-2026-11-09-v2/` | **Resultado OFICIAL mais recente da Fase B** (Decisões 101-102, 5ª tentativa + reanálise offline do critério 2) — 60/60 execuções, 12/12 capturas, **os 7 critérios reais, 7/7 PASS** — primeira vez na história deste pacote. `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` (93 arquivos coletados, incluindo pcaps/keylogs brutos de toda tentativa de captura; `raw/criterio2_initcwnd_original_bug_decisao_95_101.json` preserva o valor original com o bug de contagem, nunca apagado). |
+| `campaign/tc_netem_ground_truth/evidencia_initcwnd/` | Validação local com verdade conhecida (Decisão 102) do método corrigido do critério 2 — `ip route ... initcwnd` real 4/10/20, com e sem fq pacing real, contra o `criterio2_probe.py` real. |
 
 ## Convenção
 

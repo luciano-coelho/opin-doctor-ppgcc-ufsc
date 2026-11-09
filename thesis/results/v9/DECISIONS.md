@@ -10896,5 +10896,160 @@ do throttling de pacing, ou o metodo precisa ser revisto? (mesma
 pergunta da Decisao 95, agora reconfirmada com o MSS corrigido --
 nunca mais uma questao de MSS incorreto).
 
+**NOTA DATADA (2026-11-09, mesmo dia, correcao apos investigacao
+direta do pcap real -- texto original acima mantido intacto, nunca
+reescrito): a explicacao de "TCP pacing" acima e de Decisoes
+anteriores (94/95/100) para `segments_computed` baixo FICA
+SUPERADA POR Decisao 102** -- a reconstrucao do timeline real do
+pcap (frame a frame, timestamp de microssegundo) provou que os 10
+segmentos do 1o voo saem com ~9us de distancia um do outro, ~1000x
+mais RAPIDO do que o `pacing_rate` reportado exigiria -- NENHUMA
+assinatura de pacing nos pacotes reais. A causa real era um bug de
+contagem (`extract_mss_and_bytes_before_ack` parava no PRIMEIRO
+pacote de ACK visto, mas sob RTT real o cliente manda VARIOS ACKs
+chegando num cluster apertado -- o primeiro cobria so 2 dos 10
+segmentos reais). Corrigido na Decisao 102 -- `segments_computed`
+reanalisado do MESMO pcap preservado da-se 10,0, batendo exato
+`ss_ti_cwnd=10`. **Criterio 2 PASSA** -- a "decisao pendente" acima
+fica RESOLVIDA, nunca mais uma pergunta aberta pro Luciano.
+
+Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
+relatorio no chat.
+
+## 102. Emenda robustez-de-janela ao criterio 2 -- achado real investigado por conteudo (nunca suposicao): segments_computed=2,0 NAO era TCP pacing (a Decisao 101 relatou errado) -- era um bug de contagem por numero de ACK, nunca por timestamp de envio. Corrigido, validado com verdade conhecida real (initcwnd 4/10/20, com e sem fq), reanalisado OFFLINE do MESMO pcap preservado -- criterio 2 PASSA. Fase B: 7/7 PASS
+
+**Investigacao, por pedido explicito do Luciano: provar ou refutar
+pacing a partir do timeline real dos pacotes, nunca por suposicao.**
+Reconstruido o timeline completo (timestamp de microssegundo,
+tshark) do pcap real desta rodada (criterio2_probe.pcap, L219,
+classico, ja preservado pela Decisao 96):
+
+- SYN-ACK do servidor sai em t=.245875; handshake ACK do cliente
+  chega em t=.465820 -- RTT real = 219,945ms (bate com `ss -ti`:
+  219,99ms).
+- **Os 10 segmentos do 1o voo saem entre t=.484441 e t=.484522 --
+  81us de ponta a ponta, ~9us entre segmentos consecutivos.** O
+  `pacing_rate` reportado (1,05Mbps) exigiria ~11ms de distancia
+  entre segmentos de 1448B -- **~1000x mais lento** do que o
+  observado. NENHUMA assinatura de pacing nos pacotes reais.
+- O 1o voo tem EXATAMENTE 10 segmentos (14.480B) -- bate exato com
+  `ss_ti_cwnd=10` (snapshot tirado ANTES de qualquer envio) e com o
+  2o voo (20 segmentos, slow-start dobrando de 10 pra 20,
+  comecando em t=.704672).
+- O servidor tinha 71.680B pra mandar (5x mais que 1 janela de
+  14.480B) -- nunca limitado por falta de dado.
+- O cliente manda 5 pacotes de ACK chegando num CLUSTER apertado
+  (t=.704618-.704619, acks 2897/5793/8689/11585/14481) -- o
+  PRIMEIRO desses (2897) cobre so os 2 PRIMEIROS segmentos do voo
+  real de 10.
+
+**Causa raiz confirmada:** `extract_mss_and_bytes_before_ack`
+(Decisao 94) parava no PRIMEIRO pacote de ACK que via com `ack_num >
+first_seq` -- sob RTT real, o cliente nunca manda so 1 ACK, manda
+VARIOS chegando quase juntos, e o metodo contava so o que ESSE
+PRIMEIRO cobria (2 de 10 segmentos = 2896B), nunca o voo completo. A
+Decisao 101 atribuiu isso a TCP pacing -- **ERRADO**, corrigido pela
+nota datada na Decisao 101 acima.
+
+**Branch, conforme pedido:** o `ss -ti` real, tirado ANTES de
+qualquer envio, reporta `cwnd:10` -- NUNCA menor que 10. Isso NAO e
+um achado de configuracao de host/kernel (nao e STOP) -- e um bug de
+METODO, corrigido abaixo.
+
+**Metodo corrigido (`criterio2_probe.py`):** `extract_bytes_sent_
+within_rtt_window` conta bytes de dados do SERVIDOR por TIMESTAMP DE
+ENVIO (nunca por numero de ACK), dentro da janela `[tempo do 1o
+segmento de dados, +1 RTT]`. O RTT vem de uma medicao INDEPENDENTE,
+na MESMA conexao (`rtt_from_handshake_same_connection`: SYN-ACK do
+servidor SAINDO -> ACK do handshake do cliente CHEGANDO de volta --
+MESMO metodo da Emenda RTT-pcap do criterio 7, Decisao 97) -- nunca
+derivado do comportamento dos ACKs de DADOS, que e exatamente o que
+causava o bug. Robusto a ACKs em cluster e a ACK atrasado/perdido,
+porque nunca olha pros ACKs de dados pra decidir QUANTO foi mandado,
+so ATE QUANDO contar. Campo renomeado de `bytes_sent_before_first_
+client_ack` pra `bytes_sent_within_first_rtt_window` (desvio
+explicito, nunca um nome que mente sobre o que mede) -- novo campo
+`rtt_ms_used_for_window` registrado pra auditoria.
+`evaluate_criteria.criterion_2_initcwnd` atualizado pro novo nome de
+campo.
+
+**Validado com verdade conhecida ANTES de tocar qualquer dado real**
+(pedido explicito do Luciano) -- `ip route ... initcwnd N` de
+verdade no servidor (nao suposto), N=4/10/20, mesma topologia tc
+netem da Decisao 100, contra o `criterio2_probe.py` real, sem
+nenhuma modificacao:
+
+| Configuracao | `ss_ti_cwnd` | `bytes_sent_within_first_rtt_window` | `segments_computed` |
+|---|---|---|---|
+| N=4, sem fq | 4 | 5.792 | **4,0** |
+| N=10, sem fq | 10 | 14.480 | **10,0** |
+| N=20, sem fq | 20 | 28.960 | **20,0** |
+| N=10, **fq (pacing real) ligado**, confirmado por `tc qdisc show` | 10 | 14.480 | **10,0** |
+
+Os 2 canais bateram EXATO a configuracao real nos 4 casos, incluindo
+com pacing de verdade ativo -- prova que o metodo NAO e enviesado
+pra sempre reportar 10. Mutante (resposta de so 2.048B, menor que 1
+janela de cwnd=10): o metodo reporta corretamente 2.048B (nunca
+finge window-limited quando e genuinamente limitado por dados).
+Evidencia em `campaign/tc_netem_ground_truth/evidencia_initcwnd/`.
+
+**Reanalise OFFLINE do pcap real ja preservado (NUNCA uma nova
+rodada de AWS, exatamente como pedido) -- so DEPOIS da validacao
+acima passar:** `criterio2_probe.pcap` (L219, classico, Decisao 96)
+reanalisado pelo metodo corrigido e validado:
+
+```
+mss_pcap_max_payload = 1448 (mss_channels_agree=true, inalterado)
+rtt_ms_used_for_window = 219,945
+bytes_sent_within_first_rtt_window = 14.480
+segments_computed = 10,0 (== ss_ti_cwnd, agree=true)
+```
+
+`thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-2026-11-09-
+v2/raw/criterio2_initcwnd.json` atualizado com os campos reanalisados
+(o valor ORIGINAL, pelo metodo antigo com o bug, preservado
+integralmente em `criterio2_initcwnd_original_bug_decisao_95_101.
+json`, nunca apagado -- auditoria completa). `criteria_evaluation.
+json`/`RELATORIO_PILOTO.md` regenerados por `consolidate_v9_pilot.py`
+contra o MESMO `raw/` (nenhum dado bruto novo).
+
+**Resultado final da Fase B, 5a tentativa, reanalisado: 7/7 PASS.**
+Primeira vez na historia deste pacote com os 7 criterios passando
+sobre dados 100% reais da AWS.
+
+**Limitacao honesta do metodo, registrada explicitamente (pedido do
+Luciano, NUNCA scope creep pra resolver agora):** `criterio2_probe.py`
+so roda na rota L219 (`CRITERIO2_PROBE_ROUTE`, Decisao 85 -- L0
+excluido por desenho, RTT~0 torna o metodo sem sentido; L325 NUNCA
+foi ligado, gap preexistente, nunca notado antes por falta de
+evidencia que o expusesse). O probe so mede o SENTIDO servidor->
+cliente (o servidor mandando dados pro cliente que conectou) --
+NUNCA o sentido cliente->servidor, que e relevante pros voos do
+PROPRIO cliente durante os handshakes mTLS reais (ex.: Certificate
+do cliente, Finished). O criterio pre-registrado (Decisao 14/24/34)
+nao especifica rota nem sentido explicitamente -- este e um GAP DE
+COBERTURA real, declarado aqui, nunca escondido, nunca resolvido
+nesta rodada.
+
+**Testes:** `test_producers.py` ganha 5 (MSS separado do bug antigo,
+RTT do handshake bate o real, janela de 1 RTT conta o voo completo
+real -- 14.480B nunca 2.896B --, mutante "conta por numero de ACK"
+reproduz o bug antigo, mutante "janela errada" curta/longa erra pro
+lado errado), usando os dados REAIS deste pcap como fixture (nunca
+so sintetico). `test_evaluate_criteria.py` atualizado pro novo nome
+de campo. 263 testes no total, todos verdes.
+
+**Achado de processo, corrigido ao vivo:** `consolidate_v9_pilot.py`
+faz `shutil.rmtree(dest_raw)` ANTES de `shutil.copytree(collected_
+dir, dest_raw)` -- passar `--collected-dir`/`--out-dir` apontando pro
+MESMO `raw/` (erro real desta sessao) apaga a origem antes de copiar
+dela, `FileNotFoundError`. Recuperado imediatamente via `git
+checkout` (o commit da Decisao 101 ja tinha tudo versionado) --
+nenhum dado perdido de verdade, confirmado por `git status` antes e
+depois. Corrigido reaplicando a reanalise numa copia STAGING fora da
+arvore de destino. Nunca um bug em `consolidate_v9_pilot.py` em si
+(o script sempre assumiu origem != destino) -- erro de invocacao,
+registrado aqui pra nunca repetir.
+
 Mesmas regras: nenhuma acao em AWS, sem commit antes do scanner,
 relatorio no chat.
