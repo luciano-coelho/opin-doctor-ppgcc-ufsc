@@ -10,11 +10,13 @@
 // unlike Decision 9's Strong Nesting, there is nothing to truncate here
 // anymore. PS256 since 2026-11-10 (was RS256 before -- see the dated
 // note on Decision 13, thesis/results/v4/DECISIONS.md). This middleware's
-// only remaining job is the ADDITIONAL check oidc-provider has no way to
-// perform on its own: if `pqc` is present but its ML-DSA-65 signature
-// doesn't verify, reject the request outright (oidc-provider's own
-// PS256-only check would otherwise still accept it, silently downgrading
-// the AND gate to an OR gate). This module supplies
+// job is the ADDITIONAL check oidc-provider has no way to perform on its
+// own: reject the request outright if `pqc` is either present-but-invalid
+// or absent (oidc-provider's own PS256-only check would otherwise still
+// accept a classical-only assertion, silently downgrading the AND gate to
+// an OR gate -- Decision 115, 2026-11-10: the original Decision 13 text
+// already named "invalid or absent" as the same risk, but the code only
+// ever implemented the "invalid" half until now). This module supplies
 // client_one's own classical and ML-DSA-65 public keys -- read from
 // static files, not oidc-provider's client registry, since only the
 // classical key is registered there (unchanged from classic/pqc mode) and
@@ -86,16 +88,19 @@ export async function inboundHybridClientAuthMiddleware(ctx, next) {
       const value = parsed[field];
       if (typeof value === 'string' && COMPACT_JWS_RE.test(value)) {
         const result = await verifyPayloadExtension(value, classicPublicJwk, pqcPublicJwk);
-        // hybridShaped is only ever set once PS256 has already verified
-        // (see payloadExtensionVerification.js) -- so this specifically
-        // catches "PS256 is valid, a pqc claim is present, but it doesn't
-        // verify", the one case oidc-provider's own subsequent PS256-only
-        // check cannot catch on its own. No pqc claim at all, or PS256
-        // itself invalid, both fall through unchanged: oidc-provider's
-        // normal alg/signature check already does the right thing either
-        // way (accept a legitimately classical-only assertion, or reject
-        // an invalid one with its own standard error).
-        if (result.hybridShaped && !result.valid) {
+        // Decision 115 (v9 DECISIONS.md): reject BOTH an invalid pqc claim
+        // AND a missing one. This middleware only ever runs when
+        // CRYPTO_PROFILE=hybrid (see express.js's isHybridProfile gate),
+        // which is identical for Hibrido dual=false (control) and Hibrido
+        // dual=true (AND) -- there is no signal here to distinguish them,
+        // and Decision 115 deliberately did not add one, so this applies
+        // uniformly to both. PS256-only validity (oidc-provider's own
+        // subsequent check) is necessary but no longer sufficient on its
+        // own: a classical-only assertion with no pqc claim at all used to
+        // fall through unchanged (Decision 13's original text already
+        // named "invalid or absent" as the same downgrade risk; the code
+        // only ever implemented "invalid" until now).
+        if (!result.hybridShaped || !result.valid) {
           ctx.status = 400;
           ctx.body = {
             error: 'invalid_request',

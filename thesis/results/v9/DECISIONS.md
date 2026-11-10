@@ -11423,6 +11423,40 @@ Autorizado pelo Luciano (decisao repassada pelo coordenador), investigacao pedid
 
 RSA-2048 (256 bytes) agora uniforme em TODA chave RSA do caminho real da campanha -- client, AS e RS.
 
+## Decisao 115 -- AS passa a rejeitar `pqc` AUSENTE (nao so invalido) no client_assertion/PAR dos dois perfis hibridos, sem variavel de ambiente nova (2026-11-10)
+
+Autorizado pelo Luciano apos a FASE 1 (somente leitura) de uma investigacao sobre o AND-gate. Achado da Fase 1: `mock-service-os/mock_as/utils/opin/clientHybridAuth.js:98` rejeitava `pqc` PRESENTE e invalido, mas aceitava `pqc` AUSENTE como autenticacao classica pura -- o unico ponto fail-open de toda a arquitetura hibrida (TLS dual, id_token/JARM e respostas do RS ja eram fail-closed nos dois casos). O proprio texto original da Decisao 13 (`thesis/results/v4/DECISIONS.md`) ja nomeava "invalido OU ausente" como o mesmo risco de downgrade AND->OR -- mas o codigo so implementou a metade "invalido", nunca a "ausente", divergencia nunca antes notada. Esta decisao ratifica e fecha essa divergencia.
+
+**Decisao do Luciano sobre como aplicar:** sem variavel de ambiente nova. `clientHybridAuth.js` so roda quando `CRYPTO_PROFILE=hybrid` no processo do AS (`express.js`'s `isHybridProfile`), que e identico nos dois perfis hibridos da campanha (`orchestrator.py`'s `BACKEND_CRYPTO_PROFILE_ENV` -- Hibrido dual=false/controle e Hibrido dual=true/AND usam o MESMO valor "hybrid"). A correcao se aplica aos dois igualmente, sem ponto de configuracao novo -- justificativa: a camada de aplicacao ser identica entre os dois perfis e o que isola o controle para medir so o efeito da autenticacao dupla no TLS; introduzir uma excecao de app so para o controle quebraria essa isolacao.
+
+**Mudanca de codigo:** uma linha, `clientHybridAuth.js:98` -- `if (result.hybridShaped && !result.valid)` (so invalido) -> `if (!result.hybridShaped || !result.valid)` (invalido OU ausente). Nenhuma mudanca em `payloadExtensionVerification.js` (ja distinguia os dois casos via `hybridShaped`). Comentarios do cabecalho do arquivo atualizados para refletir o novo comportamento (nunca removendo o historico, so adicionando o que mudou e por que).
+
+**Verificacao, 4 perfis reais, chaves pos-Decisao 114 (RSA-2048/ML-DSA-65 rotacionadas):**
+
+| Perfil | Fluxo completo (44 chamadas) | Negativos novos |
+|---|---|---|
+| Classic | 0 erro real | n/a (middleware nunca carregado -- confirmado por chamada real, token emitido normalmente) |
+| PQC | 0 erro real | n/a (middleware nunca carregado -- confirmado por chamada real, token emitido normalmente) |
+| Hibrido dual=false (controle) | 0 erro real, gateway `hibrido-v8` | `pqc` ausente: 400 `hybrid AND-gate failed`; `pqc` invalido (classica genuina, pqc corrompido e reassinado): 400; `pqc` valido: 200, token emitido |
+| Hibrido dual=true (AND) | 0 erro real, gateway `hibrido-and`, `dualAuthenticated=true` confirmado no log real do gateway | mesmos 3 casos acima, identicos (mesmo codigo, mesma config de backend) |
+
+Testes novos: `thesis/scripts/tests/test_hybrid_and_gate.py` (`test_pqc_absent_rejected`, `test_pqc_invalid_rejected`, `test_pqc_valid_accepted`, `test_classic_and_pqc_unaffected`) -- os 3 primeiros rodam contra os 2 perfis hibridos (fixture compartilhada, mesmo comportamento confirmado identico nos dois), o ultimo roda contra Classic/PQC. Todos passaram, evidencia real (chamada HTTP contra o stack real, nunca mock).
+
+**Verificacao independente (fora do codigo do projeto):** capturado um `client_assertion` real, valido, do perfil Hibrido dual=true. Metade classica: `openssl dgst -verify` com PSS confirmou "Verified OK" (PKCS1v1.5 confirmado FALHAR na mesma assinatura, provando que e PSS mesmo); `node:crypto`+`jose` (biblioteca generica, fora do codigo do projeto) confirmou PS256 e ML-DSA-65 validos de forma independente. `node --check` limpo no arquivo alterado (via Docker `node:24-alpine`); nenhuma mudanca em codigo Go, `go vet`/`go build` nao se aplicam a esta rodada.
+
+**Captura real do JWE bruto do id_token (pendencia da auditoria pre-congelamento, item B), medida nesta mesma verificacao, nunca deduzida:**
+
+| Perfil | Tamanho real medido (bytes) |
+|---|---|
+| Classic | 1471 |
+| PQC | 6905 |
+| Hibrido dual=false | 7354 |
+| Hibrido dual=true | 7354 (identico ao dual=false -- esperado, a camada de aplicacao que produz o id_token/JWE e a mesma nos dois, so o TLS difere) |
+
+**Tamanho de artefato, regressao verificada:** assinatura RSA do `client_assertion` continua 256 bytes (identico a Decisao 114/113) -- esta rodada muda so a POLITICA de aceitacao, nunca o formato ou tamanho de nenhum artefato assinado.
+
+**Atualizacao da auditoria pre-congelamento (itens A-E) e da investigacao do AND-gate (Fase 1):** a linha "AS <- client_assertion/PAR: ACEITO como classico" no mapa de verificacao da Fase 1 do AND-gate passa a "REJEITADO (400, Decisao 115)" -- o AS agora e fail-closed em todos os 5 pontos de verificacao do fluxo hibrido, nao mais 4 de 5. O item B (pendente) da auditoria pre-congelamento fica resolvido com a tabela de JWE acima.
+
 ## Decisao 114 -- chaves privadas expostas no historico publico do GitHub tratadas como queimadas, rotacionadas daqui pra frente, Decisao 11 estendida a mock-service-os/certs/ e aos crypto-profiles/*.json do AS e do RS; sem reescrita de historico remoto (2026-11-10)
 
 Autorizado pelo Luciano, duas fases (A leitura, B execucao), apos a auditoria pre-congelamento (itens A-E) achar que `mock-service-os/certs/`, `mock-service-os/mock_as/crypto-profiles/` e `insurance-server-lambdas/.../crypto-profiles/` estavam versionados em texto puro no git, sem gitignore cobrindo esses diretorios -- achado real, nao hipotetico: o commit `a0cce9ef` desta mesma sessao (Decisao 113) commitou as chaves RSA-2048 novas do client_one, repetindo o padrao.
