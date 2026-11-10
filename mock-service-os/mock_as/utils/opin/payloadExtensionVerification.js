@@ -1,18 +1,22 @@
-// Payload-extension verification (RS256 + ML-DSA-65 via a `pqc` claim),
-// per thesis/results/v4/DECISIONS.md (Decision 13) -- replaces Strong
-// Nesting (hybridVerification.js/hybridSigning.js) for every hybrid
-// artifact EXCEPT the id_token and JARM, which stay Strong Nesting (see
-// the same decision for why: both depend on an oidc-provider extension
-// point -- injecting a claim into the payload before its native signing
-// pass -- that the library does not expose publicly).
+// Payload-extension verification (PS256 + ML-DSA-65 via a `pqc` claim),
+// per thesis/results/v4/DECISIONS.md (Decision 13, updated 2026-11-10 --
+// see the dated note there) -- replaces Strong Nesting
+// (hybridVerification.js/hybridSigning.js) for every hybrid artifact
+// EXCEPT the id_token and JARM, which stay Strong Nesting (see the same
+// decision for why: both depend on an oidc-provider extension point --
+// injecting a claim into the payload before its native signing pass --
+// that the library does not expose publicly).
 //
 // Signing order (the deliberate inversion from Strong Nesting): ML-DSA-65
 // signs first, over the RFC 8785 (JCS) canonical bytes of the claims
-// WITHOUT the `pqc` extension; RS256 signs last, over the ordinary
+// WITHOUT the `pqc` extension; PS256 signs last, over the ordinary
 // `base64url(header) + "." + base64url(payload)` JWS signing input, where
 // `payload` already has `pqc` embedded. The result is an entirely
-// ordinary RS256 JWT -- `pqc` is just an extra claim an unmodified
-// verifier ignores.
+// ordinary PS256 JWT -- `pqc` is just an extra claim an unmodified
+// verifier ignores. Was RS256 (RSASSA-PKCS1-v1_5) through 2026-11-09;
+// switched to PS256 (RSASSA-PSS, same padding as Classic's own JWTs and
+// Strong Nesting's classical half) to remove the padding-scheme confound
+// from the Classic x Hibrido comparison.
 //
 // JCS, not any language's default JSON serialization, for the
 // ML-DSA-65-signed portion specifically: verification has to remove
@@ -41,17 +45,18 @@ export async function verifyPayloadExtension(compactJws, classicPublicJwk, pqcPu
     return { valid: false, reason: 'signature segment is not valid base64url' };
   }
 
-  const rs256Ok = cryptoVerify(
+  const ps256Ok = cryptoVerify(
     'sha256',
     message,
     {
       key: createPublicKey({ key: classicPublicJwk, format: 'jwk' }),
-      padding: constants.RSA_PKCS1_PADDING,
+      padding: constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
     },
     sig,
   );
-  if (!rs256Ok) {
-    return { valid: false, reason: 'RS256 verification failed' };
+  if (!ps256Ok) {
+    return { valid: false, reason: 'PS256 verification failed' };
   }
 
   let payload;
@@ -82,5 +87,5 @@ export async function verifyPayloadExtension(compactJws, classicPublicJwk, pqcPu
     return { valid: false, reason: 'ML-DSA-65 (payload.pqc.signature) verification failed', hybridShaped: true };
   }
 
-  return { valid: true, reason: 'both RS256 and ML-DSA-65 verified', hybridShaped: true };
+  return { valid: true, reason: 'both PS256 and ML-DSA-65 verified', hybridShaped: true };
 }

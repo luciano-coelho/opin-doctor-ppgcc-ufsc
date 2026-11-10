@@ -1648,3 +1648,84 @@ currently lacks. The broader question of whether the composed single-entry
 publication still makes sense at all, now that the two signatures verify
 independently of each other, remains open -- this decision only closed the
 concrete, demonstrated discovery failure, not the general design question.
+
+---
+
+**NOTA DATADA (2026-11-10) -- a escolha de RS256 acima foi SUBSTITUIDA por
+PS256. O texto da decisao original, acima, e preservado sem alteracao;
+esta nota registra a mudanca, nunca reescreve o historico.**
+
+Pedido do Luciano, antes do tag de congelamento da campanha oficial v9,
+por tres razoes: (1) coerencia com o que o ecossistema OPIN/Open Finance
+Brasil realmente usa -- nao achei, nesta auditoria, nenhum texto literal
+de especificacao FAPI/OPIN neste repositorio que proiba RS256 ou exija
+PS256 explicitamente (procurado e nao encontrado, registrado honesto, nao
+inventado); a evidencia real e circunstancial mas concreta: o cliente de
+conformance-suite REAL (Raidiam/Open Finance Brasil,
+`insurance-server-lambdas/conformance-suite/scripts/configs/clients.json`)
+publica sua propria chave de assinatura com `"alg": "PS256"`, nunca RS256;
+(2) eliminar o confundidor de padding (PSS contra PKCS1v1.5) na
+comparacao Classic x Hibrido nos tres artefatos que usam payload
+extension -- Classic e o meio classico do Strong Nesting ja eram PS256,
+so a payload extension divergia; (3) remover um desvio a declarar na
+tese.
+
+**O que mudou de verdade, nos mesmos tres artefatos desta decisao
+(client_assertion, PAR, resposta do RS) -- id_token/JARM continuam Strong
+Nesting, nunca tocados:**
+- `insurance-server-lambdas/.../crypto/ResponseSigningService.java`:
+  `JWSAlgorithm.RS256` -> `JWSAlgorithm.PS256` (a assinatura real; Nimbus
+  `RSASSASigner` ja faz RSASSA-PSS automaticamente pra `PS256`, mesmo
+  padrao que `loadPs256Signer()` ja usava para o perfil Classic); `alg()`
+  e o `plainRsaJwk` publicado em `publicJwks()` tambem passam a dizer
+  `"PS256"`.
+- `mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js` e
+  `thesis/scripts/pqc-signer/signer_core.mjs` (duas implementacoes
+  espelhadas, mesma raiz): `constants.RSA_PKCS1_PADDING` ->
+  `constants.RSA_PKCS1_PSS_PADDING` com `saltLength:
+  constants.RSA_PSS_SALTLEN_DIGEST` -- o MESMO padrao ja usado por
+  `verifyStrongNesting`/`hybridVerification.js` pro meio classico do
+  Strong Nesting, nao uma tecnica nova.
+- `thesis/scripts/opin_flow.py` (`_sign_jwt_hybrid`, assinatura do
+  client_assertion/PAR do lado do cliente): `algorithm="RS256"` ->
+  `algorithm="PS256"` via `pyjwt`, mesma chamada, so o parametro muda.
+- `mock-service-os/mock_as/utils/opin/configuration.js`: `clientSigningAlgs`
+  passa a ser `['PS256']` em vez de `['RS256']` -- fonte unica que
+  alimenta `requestObjectSigningAlgValues`/`clientAuthSigningAlgValues`/
+  `request_object_signing_alg` no discovery metadata do AS.
+- `mock-service-os/certs/client_one_hybrid_pub.jwks`: campo `"alg"`
+  republicado como `"PS256"` (mesma chave RSA, mesmo `kid` -- so o
+  rotulo de algoritmo muda). Com isso o arquivo fica byte-identico ao
+  `client_one_pub.jwks` do perfil Classic (mesma chave, agora mesmo alg).
+
+**Efeito colateral honesto, nao escondido:** antes desta mudanca,
+`alg: "RS256"` no cabecalho de um artefato hibrido era um sinal facil de
+"isto e payload extension, nao Strong Nesting". Depois dela, TODOS os
+artefatos hibridos (id_token, JARM, client_assertion, PAR, resposta do
+RS) dizem `alg: "PS256"` no cabecalho, iguais entre si -- a distincao
+entre os dois esquemas passa a depender inteiramente do comprimento da
+assinatura (`isStrongNestingShaped()`, ja o mecanismo real de despacho,
+nunca mudou) e da presenca do claim `pqc`, nunca mais do `alg` do
+cabecalho sozinho. Isso nao quebra nada (o despacho real ja nao usava
+`alg` para decidir), mas um leitor externo olhando so o cabecalho perde
+aquele sinal.
+
+**Tamanhos de assinatura confirmados inalterados:** RSA-2048 continua
+256 bytes de assinatura (PSS e PKCS1v1.5 produzem assinaturas do mesmo
+tamanho, o modulo da chave); ML-DSA-65 continua 3309 bytes. Nenhum dado
+de tamanho/byte ja coletado em rodadas anteriores precisa de re-coleta
+por causa desta mudanca especifica de padding.
+
+**Teste de regressao novo:**
+`thesis/scripts/tests/test_signature_verification.py::test_hybrid_rs256_payload_extension_rejected`
+-- forja um artefato de payload extension assinado com RS256 (o esquema
+ANTIGO, chave RSA-2048 gerada localmente so pro teste) e confirma que o
+verificador atual REJEITA, nunca aceita por engano. O teste
+`test_wrong_algorithm_rejected` (citado originalmente como
+`test_signature_verification.py:116`) NAO foi invertido: lido de novo
+com cuidado, aquele teste e pulado inteiramente pro perfil hybrid
+(`pytest.skip` explicito) e testa uma propriedade ortogonal (rejeicao por
+`expected_alg` incorreto nos perfis classic/pqc de chave unica) que nunca
+dependeu de RS256 nem de payload extension -- inverter aquela linha
+teria sido um erro, registrado aqui para nao esconder a divergencia entre
+o pedido original e o que de fato fazia sentido fazer.

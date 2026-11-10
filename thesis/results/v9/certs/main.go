@@ -1,8 +1,13 @@
 // T4 (v9, Fase 1): gera e valida os certificados dos 4 perfis medidos
-// na v9 -- Classico, PQC (reaproveitado da v8, sem mudanca), Hibrido-v8
-// (reemitido em RSA-2048) e Hibrido-AND (duas cadeias independentes,
-// RSA-2048 e ML-DSA-65, mesma identidade SAN). Nenhum arquivo da v8 e
-// sobrescrito; tudo aqui e novo, sob thesis/results/v9/certs/certs/.
+// na v9 -- Classico, PQC (REEMITIDO do zero, mesmo template da cadeia
+// ML-DSA-65 do Hibrido-AND -- ver "=== PQC (v9, REEMITIDO..." no main()
+// abaixo; correcao datada 2026-11-10: este comentario dizia antes
+// "reaproveitado da v8, sem mudanca", o que nunca foi verdade pro codigo
+// real deste arquivo, achado numa auditoria de leitura independente),
+// Hibrido-v8 (reemitido em RSA-2048) e Hibrido-AND (duas cadeias
+// independentes, RSA-2048 e ML-DSA-65, mesma identidade SAN). Nenhum
+// arquivo da v8 e sobrescrito; tudo aqui e novo, sob thesis/results/v9/
+// certs/certs/.
 //
 // Toda cadeia e validada com o verificador padrao do Go
 // (x509.Certificate.Verify), sem InsecureSkipVerify em lugar nenhum --

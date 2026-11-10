@@ -200,15 +200,21 @@ public class ResponseSigningService {
         };
     }
 
-    // Payload extension (RS256 + a `pqc` claim), per thesis/results/v4/
-    // DECISIONS.md (Decision 13) -- replaces Strong Nesting for RS-issued
-    // responses. ML-DSA-65 signs first, over the RFC 8785 (JCS) canonical
-    // bytes of the claims WITHOUT the `pqc` extension (preparePayload,
-    // called by sign() before the header/signingInput are ever built);
-    // RS256 signs last, over the ordinary JWS signing input that already
-    // has `pqc` embedded in it (signToBase64Url below) -- an entirely
-    // standard RS256 JWS an unmodified verifier accepts without any
-    // special-casing, the `pqc` claim just along for the ride.
+    // Payload extension (PS256 + a `pqc` claim), per thesis/results/v4/
+    // DECISIONS.md (Decision 13, updated 2026-11-10 -- see the dated note
+    // there) -- replaces Strong Nesting for RS-issued responses. ML-DSA-65
+    // signs first, over the RFC 8785 (JCS) canonical bytes of the claims
+    // WITHOUT the `pqc` extension (preparePayload, called by sign() before
+    // the header/signingInput are ever built); PS256 signs last, over the
+    // ordinary JWS signing input that already has `pqc` embedded in it
+    // (signToBase64Url below) -- an entirely standard PS256 JWS an
+    // unmodified verifier accepts without any special-casing, the `pqc`
+    // claim just along for the ride. Was RS256 (RSASSA-PKCS1-v1_5) through
+    // 2026-11-09; switched to PS256 (RSASSA-PSS) to match Classic and
+    // Strong Nesting's own classical half, removing the PSS-vs-PKCS1v1.5
+    // padding confound from the Classic x Hibrido comparison and matching
+    // what the OPIN/Open Finance Brasil ecosystem's own conformance-suite
+    // client JWKS actually publish (PS256) -- see the Decision 13 note.
     private JwsSigner loadHybridSigner() throws Exception {
         Map<?, ?> hybridJson = objectMapper.readValue(readResource("hybrid.json"), Map.class);
         Map<?, ?> classicJwk = (Map<?, ?>) hybridJson.get("classicSigningKey");
@@ -216,7 +222,7 @@ public class ResponseSigningService {
 
         RSAKey rsaKey = RSAKey.parse(objectMapper.writeValueAsString(classicJwk));
         RSASSASigner rsaSigner = new RSASSASigner(rsaKey);
-        JWSHeader nimbusHeader = new JWSHeader.Builder(JWSAlgorithm.RS256).build();
+        JWSHeader nimbusHeader = new JWSHeader.Builder(JWSAlgorithm.PS256).build();
         // Decoded directly from the JWK's own "n" field (not
         // rsaKey.toRSAPublicKey().getModulus().toByteArray()) -- BigInteger's
         // two's-complement encoding adds a leading zero byte whenever the
@@ -255,7 +261,7 @@ public class ResponseSigningService {
 
         return new JwsSigner() {
             public String alg() {
-                return "RS256";
+                return "PS256";
             }
 
             public String kid() {
@@ -311,7 +317,7 @@ public class ResponseSigningService {
             // a real JWKS consumer's ordinary kid+kty+alg discovery finds
             // it -- confirmed empirically (jose.createLocalJWKSet) that
             // without this, discovery fails outright, since kty: "HYBRID"
-            // is not a type any standard JOSE library's RS256 path
+            // is not a type any standard JOSE library's PS256 path
             // recognizes. classicJwk's own "n"/"e" (the same key
             // signToBase64Url above actually signs with), not a
             // re-derivation from hybridPk's first 256 bytes -- identical
@@ -320,7 +326,7 @@ public class ResponseSigningService {
                 Map<String, Object> plainRsaJwk = new LinkedHashMap<>();
                 plainRsaJwk.put("kty", "RSA");
                 plainRsaJwk.put("use", "sig");
-                plainRsaJwk.put("alg", "RS256");
+                plainRsaJwk.put("alg", "PS256");
                 plainRsaJwk.put("kid", hybridKid);
                 plainRsaJwk.put("n", classicJwk.get("n"));
                 plainRsaJwk.put("e", classicJwk.get("e"));

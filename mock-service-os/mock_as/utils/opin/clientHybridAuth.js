@@ -4,15 +4,17 @@
 // opin_flow.py drives in hybrid mode.
 //
 // As of Decision 13, the client signs these via the payload-extension
-// scheme (RS256 last, over claims carrying a `pqc` extension -- see
-// payloadExtensionVerification.js), an entirely ordinary RS256 JWT that
+// scheme (PS256 last, over claims carrying a `pqc` extension -- see
+// payloadExtensionVerification.js), an entirely ordinary PS256 JWT that
 // oidc-provider's own native verification already accepts unmodified --
 // unlike Decision 9's Strong Nesting, there is nothing to truncate here
-// anymore. This middleware's only remaining job is the ADDITIONAL check
-// oidc-provider has no way to perform on its own: if `pqc` is present but
-// its ML-DSA-65 signature doesn't verify, reject the request outright
-// (oidc-provider's own RS256-only check would otherwise still accept it,
-// silently downgrading the AND gate to an OR gate). This module supplies
+// anymore. PS256 since 2026-11-10 (was RS256 before -- see the dated
+// note on Decision 13, thesis/results/v4/DECISIONS.md). This middleware's
+// only remaining job is the ADDITIONAL check oidc-provider has no way to
+// perform on its own: if `pqc` is present but its ML-DSA-65 signature
+// doesn't verify, reject the request outright (oidc-provider's own
+// PS256-only check would otherwise still accept it, silently downgrading
+// the AND gate to an OR gate). This module supplies
 // client_one's own classical and ML-DSA-65 public keys -- read from
 // static files, not oidc-provider's client registry, since only the
 // classical key is registered there (unchanged from classic/pqc mode) and
@@ -20,14 +22,18 @@
 import { readFileSync } from 'node:fs';
 import { verifyPayloadExtension } from './payloadExtensionVerification.js';
 
-// client_one_hybrid_pub.jwks, not client_one_pub.jwks -- same RSA key/kid,
-// but "alg": "RS256" instead of "PS256" (see mongo-seed/start.sh's own
-// comment on this same file for why: a real JWKS consumer doing ordinary
-// kid+alg discovery needs the published alg to match what's actually in
-// the token header). Doesn't change what THIS module verifies with (only
-// n/e are used, alg is never inspected here), but keeps every place that
-// reads client_one's hybrid-mode public key pointed at the one file
-// that's actually correct to publish.
+// client_one_hybrid_pub.jwks, not client_one_pub.jwks -- same RSA key/kid
+// (see mongo-seed/start.sh's own comment on this same file for why: a real
+// JWKS consumer doing ordinary kid+alg discovery needs the published alg
+// to match what's actually in the token header). Since 2026-11-10 both
+// files publish "alg": "PS256" -- identical content, in fact -- because
+// the payload-extension scheme no longer uses a different alg than
+// classic mode (was "alg": "RS256" here, distinct from classic's "PS256",
+// through 2026-11-09; see the dated note on Decision 13). Doesn't change
+// what THIS module verifies with (only n/e are used, alg is never
+// inspected here), but keeps every place that reads client_one's
+// hybrid-mode public key pointed at the one file that's actually correct
+// to publish.
 const CLASSIC_JWKS_PATH = '/certs/client_one_hybrid_pub.jwks';
 const PQC_JWKS_PATH = '/certs/client_one_pqc_pub.jwks';
 
@@ -80,11 +86,11 @@ export async function inboundHybridClientAuthMiddleware(ctx, next) {
       const value = parsed[field];
       if (typeof value === 'string' && COMPACT_JWS_RE.test(value)) {
         const result = await verifyPayloadExtension(value, classicPublicJwk, pqcPublicJwk);
-        // hybridShaped is only ever set once RS256 has already verified
+        // hybridShaped is only ever set once PS256 has already verified
         // (see payloadExtensionVerification.js) -- so this specifically
-        // catches "RS256 is valid, a pqc claim is present, but it doesn't
-        // verify", the one case oidc-provider's own subsequent RS256-only
-        // check cannot catch on its own. No pqc claim at all, or RS256
+        // catches "PS256 is valid, a pqc claim is present, but it doesn't
+        // verify", the one case oidc-provider's own subsequent PS256-only
+        // check cannot catch on its own. No pqc claim at all, or PS256
         // itself invalid, both fall through unchanged: oidc-provider's
         // normal alg/signature check already does the right thing either
         // way (accept a legitimately classical-only assertion, or reject

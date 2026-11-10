@@ -33,9 +33,12 @@ import canonicalize from 'canonicalize';
 // schemes (thesis/results/v4/DECISIONS.md, Decision 13): the AS's own
 // id_token/JARM are Strong Nesting (a concatenated sigma1||sigma2), while
 // the RS's own response bodies (a separate Java codebase) use payload
-// extension (an ordinary RS256 JWS with ML-DSA-65 embedded as an extra
-// `pqc` claim). See isStrongNestingShaped() below for why signature
-// LENGTH, not header.alg, is what actually distinguishes them here.
+// extension (an ordinary PS256 JWS with ML-DSA-65 embedded as an extra
+// `pqc` claim -- RS256 through 2026-11-09, see the dated note on
+// Decision 13). See isStrongNestingShaped() below for why signature
+// LENGTH, not header.alg, is what actually distinguishes them here (now
+// doubly true: both schemes' classical half is PS256, so the header
+// alone can no longer tell them apart either).
 
 // Strong Nesting verification (PS256 + ML-DSA-65) for SERVER-issued
 // (AS/RS) artifacts -- mirrors mock-service-os/mock_as/utils/opin/
@@ -88,7 +91,7 @@ async function verifyStrongNesting(compactJwt, classicJwk, pqcJwk) {
   return { valid: true, reason: 'both sigma1 and sigma2 verified', claims };
 }
 
-// Payload-extension verification (RS256 + ML-DSA-65 via a `pqc` claim) --
+// Payload-extension verification (PS256 + ML-DSA-65 via a `pqc` claim) --
 // mirrors mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js's
 // own verifyPayloadExtension() exactly (same RFC 8785/JCS canonicalization,
 // same claim-stripping order, same AND-gate), duplicated here for the same
@@ -96,7 +99,9 @@ async function verifyStrongNesting(compactJwt, classicJwk, pqcJwk) {
 // for the RS's own hybrid-signed response bodies (insurance-server-lambdas'
 // ResponseSigningService.java implements this scheme independently of the
 // AS's rehybridizeJwt(), per Decision 13 -- "every hybrid artifact EXCEPT
-// the id_token and JARM").
+// the id_token and JARM"). Was RS256 (RSASSA-PKCS1-v1_5) through
+// 2026-11-09; switched to PS256 (RSASSA-PSS) -- see the dated note on
+// Decision 13, thesis/results/v4/DECISIONS.md.
 async function verifyPayloadExtension(compactJws, classicJwk, pqcJwk) {
   const parts = compactJws.split('.');
   if (parts.length !== 3) {
@@ -112,13 +117,13 @@ async function verifyPayloadExtension(compactJws, classicJwk, pqcJwk) {
     return { valid: false, reason: 'signature segment is not valid base64url' };
   }
 
-  const rs256Ok = cryptoVerify(
+  const ps256Ok = cryptoVerify(
     'sha256', message,
-    { key: createPublicKey({ key: classicJwk, format: 'jwk' }), padding: constants.RSA_PKCS1_PADDING },
+    { key: createPublicKey({ key: classicJwk, format: 'jwk' }), padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: constants.RSA_PSS_SALTLEN_DIGEST },
     sig,
   );
-  if (!rs256Ok) {
-    return { valid: false, reason: 'RS256 verification failed' };
+  if (!ps256Ok) {
+    return { valid: false, reason: 'PS256 verification failed' };
   }
 
   let payload;
@@ -149,7 +154,7 @@ async function verifyPayloadExtension(compactJws, classicJwk, pqcJwk) {
     return { valid: false, reason: 'ML-DSA-65 (payload.pqc.signature) verification failed' };
   }
 
-  return { valid: true, reason: 'both RS256 and ML-DSA-65 verified', claims: payload };
+  return { valid: true, reason: 'both PS256 and ML-DSA-65 verified', claims: payload };
 }
 
 // Single-key verification (classic PS256 or pure pqc ML-DSA-65) -- one
@@ -181,7 +186,7 @@ async function verifySingleKey(compactJwt, jwk, expectedAlg) {
 // LENGTH instead (mirrors hybridVerification.js's own truncateIfHybrid()
 // detection) works for both: Strong Nesting's sigma1||sigma2 blob is
 // always longer than one classical signature's worth of bytes; Payload
-// Extension's RS256 signature is always ordinary-length, decodable
+// Extension's PS256 signature is always ordinary-length, decodable
 // separately as JSON with its own `pqc` claim confirming which case
 // applies before either verifier is run for real.
 // Returns null (not a boolean) when classicJwk isn't a usable RSA JWK at

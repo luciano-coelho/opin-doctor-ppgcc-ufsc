@@ -1458,11 +1458,15 @@ def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
     2. That signature is embedded as `claims["pqc"] = {"alg": "ML-DSA-65",
        "signature": base64url(...)}`.
     3. The classic_key half of signing_key signs the claims-with-pqc
-       normally via pyjwt, alg RS256 (not PS256 -- a deliberate part of
-       this scheme, chosen for maximal legacy-verifier compatibility, see
-       DECISIONS.md), header alg "RS256" from the start.
+       normally via pyjwt, alg PS256, header alg "PS256" from the start.
+       Was RS256 through 2026-11-09 (a deliberate part of this scheme at
+       the time, chosen for maximal legacy-verifier compatibility) --
+       switched to PS256 to match Classic and Strong Nesting's own
+       classical half, removing the PSS-vs-PKCS1v1.5 padding confound
+       from the Classic x Hibrido comparison; see the dated note on
+       Decision 13 in DECISIONS.md.
 
-    The result is an entirely ordinary RS256 JWT: no truncation is needed
+    The result is an entirely ordinary PS256 JWT: no truncation is needed
     on the AS side (unlike Decision 9), since nothing about this token's
     shape is unusual to a standard verifier -- `pqc` is just an extra,
     ignorable claim. clientHybridAuth.js additionally verifies it and
@@ -1480,8 +1484,8 @@ def _sign_jwt_hybrid(claims: dict, headers: dict, signing_key) -> str:
     pqc_sig_b64url = base64.urlsafe_b64encode(pqc_sig_raw).rstrip(b"=").decode("ascii")
 
     claims_with_pqc = {**claims, "pqc": {"alg": "ML-DSA-65", "signature": pqc_sig_b64url}}
-    rs256_headers = {**headers, "alg": "RS256"}
-    return pyjwt.encode(claims_with_pqc, classic_key, algorithm="RS256", headers=rs256_headers)
+    ps256_headers = {**headers, "alg": "PS256"}
+    return pyjwt.encode(claims_with_pqc, classic_key, algorithm="PS256", headers=ps256_headers)
 
 
 def make_client_assertion(signing_key, kid, alg, audience: str, *, artifact: str = "client_assertion") -> str:

@@ -15,6 +15,7 @@ time) -- invoke as:
   CRYPTO_PROFILE=pqc     python -m pytest tests/test_signature_verification.py
   CRYPTO_PROFILE=hybrid  python -m pytest tests/test_signature_verification.py
 """
+import base64
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import opin_flow as of
 import pytest
 import requests
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 PROFILE = os.environ.get("CRYPTO_PROFILE", "classic")
 
@@ -116,6 +118,47 @@ def test_wrong_algorithm_rejected(live_artifacts):
     wrong_alg = "RS256" if PROFILE == "classic" else "PS256"
     with pytest.raises(of.SignatureVerificationError):
         of.verify_jwt(live_artifacts["rs_response_jwt"], classic_jwk=classic_jwk, pqc_jwk=pqc_jwk, expected_alg=wrong_alg)
+
+
+def _b64url_uint(value: int, length: int) -> str:
+    return base64.urlsafe_b64encode(value.to_bytes(length, "big")).rstrip(b"=").decode("ascii")
+
+
+def test_hybrid_rs256_payload_extension_rejected():
+    """Decisao de hoje (nota datada na Decisao 13, thesis/results/v4/
+    DECISIONS.md): a payload extension (client_assertion, PAR, resposta do
+    RS) passou a exigir PS256 (RSASSA-PSS), nao mais RS256 (RSASSA-
+    PKCS1-v1_5, o esquema antigo ate 2026-11-09). Esta e a regressao que
+    garante isso: um artefato assinado com RS256 -- o esquema ANTIGO --
+    tem que ser REJEITADO pelo verificador atual, nunca aceito por engano
+    so porque o padding bate em algum library mais tolerante.
+
+    Chave RSA-2048 gerada localmente so para este teste (nunca a chave
+    real de producao) -- nao depende do stack real/live_artifacts, roda
+    em qualquer profile, so pula fora do hybrid (payload extension nao
+    existe nos outros dois)."""
+    if PROFILE != "hybrid":
+        pytest.skip("payload extension so existe no perfil hybrid")
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    classic_jwk = {
+        "kty": "RSA",
+        "n": _b64url_uint(public_numbers.n, 256),
+        "e": _b64url_uint(public_numbers.e, 3),
+    }
+    # pqc_jwk is never reached: verifyPayloadExtension checks the classical
+    # signature FIRST (payloadExtensionVerification.js/signer_core.mjs) and
+    # returns valid=False immediately on a padding mismatch, before ever
+    # looking at the `pqc` claim -- a syntactically well-shaped but unused
+    # AKP JWK is enough to prove that, never a real key.
+    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_uint(0, 1952)}
+
+    claims = {"iss": "test-rs256-rejection", "pqc": {"alg": "ML-DSA-65", "signature": "AA"}}
+    forged = of.pyjwt.encode(claims, private_key, algorithm="RS256", headers={"alg": "RS256", "typ": "JWT"})
+
+    with pytest.raises(of.SignatureVerificationError):
+        of.verify_jwt(forged, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk, artifact="rs256_regression")
 
 
 def test_hybrid_scheme_confusion_rejected(live_artifacts):

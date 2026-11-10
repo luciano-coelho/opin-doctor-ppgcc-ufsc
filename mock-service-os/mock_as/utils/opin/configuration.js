@@ -45,12 +45,16 @@ const internalSigningKey = isHybrid ? cryptoProfile.classicSigningKey : cryptoPr
 
 // Client-to-AS direction only (client_assertion, the PAR request object) --
 // Decision 13 moved these two off Strong Nesting onto the payload-extension
-// scheme (RS256 last, over claims carrying a `pqc` extension), which the
-// client signs under an ordinary `alg: "RS256"` header from the start (see
-// clientHybridAuth.js/payloadExtensionVerification.js). id_token/JARM stay
-// on internalSigningAlgs/PS256 above -- unaffected by Decision 13, still
-// Strong Nesting, still signed by the AS itself, not the client.
-const clientSigningAlgs = isHybrid ? ['RS256'] : cryptoProfile.signingAlgs;
+// scheme (PS256 last, over claims carrying a `pqc` extension), which the
+// client signs under an ordinary `alg: "PS256"` header from the start (see
+// clientHybridAuth.js/payloadExtensionVerification.js). Was `alg: "RS256"`
+// through 2026-11-09 (see the dated note on Decision 13, thesis/results/
+// v4/DECISIONS.md) -- now identical to internalSigningAlgs below, since
+// payload extension no longer uses a different classical alg than Strong
+// Nesting or Classic. id_token/JARM stay on internalSigningAlgs/PS256
+// above -- unaffected by Decision 13, still Strong Nesting, still signed
+// by the AS itself, not the client.
+const clientSigningAlgs = isHybrid ? ['PS256'] : cryptoProfile.signingAlgs;
 
 // The AS's encryption key -- unaffected by CRYPTO_PROFILE (see enabledJWA
 // below: encryption stays classical regardless of profile).
