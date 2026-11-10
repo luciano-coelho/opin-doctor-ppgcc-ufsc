@@ -478,7 +478,13 @@ func main() {
 	verifyPQCName := flag.String("verify-pqc-cert", "", "Sign a fresh challenge with <name>.key (ML-DSA-65) and verify it against <name>.crt's own SubjectPublicKeyInfo, also printing the certificate's (classical RSA) issuer signature algorithm -- proof the PQC leaf keypair is real and functional, not just a correctly-sized/OID-tagged field. See thesis/results/v7/artifacts/pqc/.")
 	pqcCAFullyPostQuantum := flag.Bool("pqc-ca-fully-post-quantum", false, "Re-issues root_ca_pqc.crt (self-signed) and issuer_ca_pqc.crt (signed by root_ca_pqc's own ML-DSA-65 key) as a genuinely self-contained ML-DSA-65 chain, replacing the classical-RSA-signed wrapper both have used since v2's Decision 12. Reuses both certs' existing ML-DSA-65 keys unchanged (root_ca_pqc.key/issuer_ca_pqc.key) -- only the certificate wrapper (issuer field, signature) changes. Does not touch client_one_pqc.crt, mtls_pqc.crt, op_pqc.crt, or any live mTLS trust chain: root_ca_pqc/issuer_ca_pqc are PKI/CRL simulation stand-ins only, downloaded by opin_flow.py purely to measure PEM size, never used to verify a real connection. See thesis/results/v7/DECISIONS.md.")
 	pqcLiveCertsFullyPostQuantum := flag.Bool("pqc-live-certs-fully-post-quantum", false, "Re-issues client_one_pqc.crt, mtls_pqc.crt, and op_pqc.crt signed directly by root_ca_pqc's ML-DSA-65 key instead of the classical ca.crt -- requires -pqc-ca-fully-post-quantum to have already been run. Reuses each cert's existing ML-DSA-65 key unchanged. mock_mtls's caCertPool() must also trust root_ca_pqc.crt under CRYPTO_PROFILE=pqc for the handshake to keep working -- see mock_mtls/main.go. See thesis/results/v7/DECISIONS.md.")
+	clientOneRSA2048 := flag.Bool("client-one-rsa2048", false, "Regenerates ALL of client_one's own RSA keys (never mtls/op/client_two, never the AS/RS's own crypto-profiles/*.json keys, never client_one_pqc's ML-DSA-65 sig key) at 2048 bits instead of the inherited 4096: the sig key backing client_one.crt/client_one_hybrid.crt/client_one.jwks, the enc key in client_one.jwks, and the separate enc key in client_one_pqc.jwks. Fresh keys, fresh kids -- a real rotation, not a re-wrap. Writes client_one.crt/.key, client_one_hybrid.crt (RSA half re-issued, reuses the EXISTING client_one_pqc.key/.crt's ML-DSA-65 material unchanged), client_one.jwks/_pub.jwks, client_one_hybrid_pub.jwks, client_one_pqc.jwks/_pub.jwks (enc entry only -- the AKP sig entry is copied through byte-for-byte). Does not touch the CA. See the Decisao this flag's own commit registers in thesis/results/v9/DECISIONS.md.")
 	flag.Parse()
+
+	if *clientOneRSA2048 {
+		regenClientOneRSA2048(sourceDir, *orgID)
+		return
+	}
 
 	if *verifyHybridName != "" {
 		verifyHybridCert(*verifyHybridName, sourceDir)
@@ -885,7 +891,25 @@ func generateCert(
 	*x509.Certificate,
 	*rsa.PrivateKey,
 ) {
-	key, err := rsa.GenerateKey(rand.Reader, 4096)
+	return generateCertWithBits(name, orgID, caCert, caKey, dir, 4096)
+}
+
+// generateCertWithBits: same as generateCert, with the RSA key size as an
+// explicit parameter -- Decisao [client_one RSA-2048] needs a 2048-bit
+// client_one identity without touching mtls/op/client_two's own 4096-bit
+// default (every other call site keeps passing 4096 via generateCert
+// above, unchanged).
+func generateCertWithBits(
+	name, orgID string,
+	caCert *x509.Certificate,
+	caKey *rsa.PrivateKey,
+	dir string,
+	bits int,
+) (
+	*x509.Certificate,
+	*rsa.PrivateKey,
+) {
+	key, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		log.Fatalf("Failed to generate private key: %v", err)
 	}
@@ -972,6 +996,21 @@ func generateJWKS(
 	key *rsa.PrivateKey,
 	dir string,
 ) {
+	generateJWKSWithBits(name, cert, key, dir, 4096)
+}
+
+// generateJWKSWithBits: same as generateJWKS, with the encryption JWK's RSA
+// key size as an explicit parameter (the signature JWK's own size is
+// whatever `key` already is -- that part never regenerates a key, see
+// generateCertWithBits above for the signing half). See that function's
+// own comment for why this exists alongside the unparameterized wrapper.
+func generateJWKSWithBits(
+	name string,
+	cert *x509.Certificate,
+	key *rsa.PrivateKey,
+	dir string,
+	encBits int,
+) {
 	sigJWK := goidc.JSONWebKey{
 		Key:          key,
 		KeyID:        uuid.NewString(),
@@ -983,7 +1022,7 @@ func generateJWKS(
 	_, _ = hash.Write(cert.Raw)
 	sigJWK.CertificateThumbprintSHA256 = hash.Sum(nil)
 
-	encKey := generateEncryptionJWK()
+	encKey := generateEncryptionJWK(encBits)
 	jwks := goidc.JSONWebKeySet{
 		Keys: []goidc.JSONWebKey{sigJWK, encKey},
 	}
@@ -1011,6 +1050,158 @@ func generateJWKS(
 	err = os.WriteFile(filepath.Join(dir, name+"_pub.jwks"), publicJWKSBytes, 0644)
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// regenClientOneRSA2048 (-client-one-rsa2048): real key rotation, every RSA
+// key client_one itself owns, from 4096 to 2048 bits -- never mtls/op/
+// client_two (their own 4096-bit identities are out of scope here, untouched
+// on purpose), never client_one_pqc's ML-DSA-65 SIGNING key (only its
+// separate RSA ENCRYPTION entry is RSA at all). Reuses the existing CA and
+// the existing client_one_pqc ML-DSA-65 key pair unchanged -- only new RSA
+// material, fresh kids throughout (a real rotation, not a re-wrap under the
+// old kid).
+func regenClientOneRSA2048(dir, orgID string) {
+	const clientOneRSABits = 2048
+
+	caCert, caKey := loadCACert(dir)
+	caKeyMLDSA := loadMLDSAKeyPEM(filepath.Join(dir, "issuer_ca_pqc.key"))
+	subjectMLDSAKey := loadMLDSAKeyPEM(filepath.Join(dir, "client_one_pqc.key"))
+
+	// 1. client_one.crt/.key: fresh RSA-2048 key, re-issued cert, same
+	// template/SANs/org_id this tool has always used for this identity.
+	cert, key := generateCertWithBits("client_one", orgID, caCert, caKey, dir, clientOneRSABits)
+	fmt.Println("client_one: nova chave RSA-2048 gerada, client_one.crt reemitido")
+
+	// 2. client_one_hybrid.crt: RSA half re-issued with the SAME new key
+	// (generateHybridCert's own convention: the hybrid cert always reuses
+	// whatever RSA key client_one.crt already has) -- ML-DSA-65 half
+	// (subjectMLDSAKey, the CA that signs AltSignatureValue) untouched.
+	generateHybridCert("client_one", orgID, caCert, caKey, caKeyMLDSA, key, subjectMLDSAKey, dir)
+	fmt.Println("client_one_hybrid.crt reemitido (metade RSA nova, metade ML-DSA-65 intocada)")
+
+	// 3. client_one.jwks/_pub.jwks: sig = the new 2048-bit key above, enc =
+	// a SEPARATE fresh 2048-bit key (generateJWKSWithBits's own existing
+	// convention -- sig and enc have always been two different keys here,
+	// confirmed by their different kids before this change too).
+	generateJWKSWithBits("client_one", cert, key, dir, clientOneRSABits)
+	fmt.Println("client_one.jwks/_pub.jwks regenerados (sig e enc, ambos RSA-2048 agora)")
+
+	// 4. client_one_hybrid_pub.jwks: byte-for-byte copy of the just-written
+	// client_one_pub.jwks -- both have published "alg":"PS256" since the
+	// payload-extension RS256->PS256 change, so they are identical content
+	// now, not just identical key material under two different alg labels.
+	pubBytes, err := os.ReadFile(filepath.Join(dir, "client_one_pub.jwks"))
+	if err != nil {
+		log.Fatalf("regenClientOneRSA2048: read client_one_pub.jwks: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "client_one_hybrid_pub.jwks"), pubBytes, 0644); err != nil {
+		log.Fatalf("regenClientOneRSA2048: write client_one_hybrid_pub.jwks: %v", err)
+	}
+	fmt.Println("client_one_hybrid_pub.jwks regenerado (copia de client_one_pub.jwks)")
+
+	// 5. client_one_pqc.jwks's own RSA "enc" entry: regenerated at 2048
+	// bits too, as its own SEPARATE key (never the same key as client_one.
+	// jwks's enc entry -- confirmed independently by opin_flow.py's own
+	// load_client_encryption_key() docstring). The AKP "sig" entry
+	// (ML-DSA-65) is copied through byte-for-byte, never touched.
+	regenRSAEncEntryOnly(filepath.Join(dir, "client_one_pqc.jwks"), filepath.Join(dir, "client_one_pqc_pub.jwks"), clientOneRSABits)
+	fmt.Println("client_one_pqc.jwks/_pub.jwks: entrada \"enc\" (RSA) regenerada em 2048 bits, entrada \"sig\" (ML-DSA-65) intocada")
+
+	fmt.Println("\nclient_one: rotacao completa para RSA-2048 (sig + enc + enc-pqc). kids novos em todas as 5 chaves RSA tocadas -- nao e um re-wrap da chave antiga.")
+}
+
+// regenRSAEncEntryOnly: reads TWO existing JWKS files (the private one and
+// its already-published public counterpart) whose "keys" array mixes an
+// untouched non-RSA "sig" entry (AKP/ML-DSA-65, here) with an RSA "enc"
+// entry to regenerate -- plain map[string]interface{} JSON surgery, not
+// goidc's typed JSONWebKeySet, because goidc has no AKP key type to
+// round-trip through (confirmed: it would silently drop or error on the
+// "sig" entry).
+//
+// Real bug found and fixed here, not assumed away: an earlier version of
+// this function read the "sig" entry from privPath ALONE and copied that
+// SAME map into both outputs -- but client_one_pqc.jwks's own AKP "sig"
+// entry DOES carry a private "priv" field (confirmed by inspecting the
+// real file; the comment that used to be here claimed otherwise, without
+// checking), so that copy leaked the private ML-DSA-65 key into the
+// PUBLIC jwks file. Fixed by reading each file's own "sig" entry
+// separately and copying it only into that SAME file's own output --
+// the public file's "sig" entry now only ever comes from the public
+// file's own prior content, never from privPath.
+func regenRSAEncEntryOnly(privPath, pubPath string, bits int) {
+	readKeys := func(path string) []map[string]interface{} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatalf("regenRSAEncEntryOnly: read %s: %v", path, err)
+		}
+		var doc struct {
+			Keys []map[string]interface{} `json:"keys"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			log.Fatalf("regenRSAEncEntryOnly: parse %s: %v", path, err)
+		}
+		return doc.Keys
+	}
+	privDocKeys := readKeys(privPath)
+	pubDocKeys := readKeys(pubPath)
+	if len(privDocKeys) != len(pubDocKeys) {
+		log.Fatalf("regenRSAEncEntryOnly: %s has %d keys but %s has %d -- refusing to guess a correspondence", privPath, len(privDocKeys), pubPath, len(pubDocKeys))
+	}
+
+	newEnc := generateEncryptionJWK(bits)
+	newEncBytes, err := json.Marshal(newEnc)
+	if err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: marshal new enc key: %v", err)
+	}
+	var newEncMap map[string]interface{}
+	if err := json.Unmarshal(newEncBytes, &newEncMap); err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: unmarshal new enc key: %v", err)
+	}
+	newEncPubBytes, err := json.Marshal(newEnc.Public())
+	if err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: marshal new enc public key: %v", err)
+	}
+	var newEncPubMap map[string]interface{}
+	if err := json.Unmarshal(newEncPubBytes, &newEncPubMap); err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: unmarshal new enc public key: %v", err)
+	}
+
+	replaced := false
+	privKeys := make([]map[string]interface{}, len(privDocKeys))
+	pubKeys := make([]map[string]interface{}, len(pubDocKeys))
+	for i, k := range privDocKeys {
+		if k["use"] == "enc" {
+			privKeys[i] = newEncMap
+			pubKeys[i] = newEncPubMap
+			replaced = true
+			continue
+		}
+		// "sig" (AKP/ML-DSA-65): each output keeps ONLY its own file's
+		// pre-existing entry at this index -- privKeys from privDocKeys
+		// (may legitimately carry "priv"), pubKeys from pubDocKeys
+		// (never does, and must never be made to from the private side).
+		privKeys[i] = k
+		pubKeys[i] = pubDocKeys[i]
+	}
+	if !replaced {
+		log.Fatalf("regenRSAEncEntryOnly: no \"enc\" entry found in %s -- refusing to write anything", privPath)
+	}
+
+	privOut, err := json.MarshalIndent(map[string]interface{}{"keys": privKeys}, "", " ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(privPath, privOut, 0644); err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: write %s: %v", privPath, err)
+	}
+
+	pubOut, err := json.MarshalIndent(map[string]interface{}{"keys": pubKeys}, "", " ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(pubPath, pubOut, 0644); err != nil {
+		log.Fatalf("regenRSAEncEntryOnly: write %s: %v", pubPath, err)
 	}
 }
 
@@ -1100,7 +1291,14 @@ func resignEverything(dir, _ string) {
 	for _, name := range []string{"client_one", "client_two"} {
 		cert := loadCertPEM(filepath.Join(dir, name+".crt"))
 		key := loadRSAKeyPEM(filepath.Join(dir, name+".key"))
-		generateJWKS(name, cert, key, dir)
+		// encBits derived from the EXISTING signing key's own real size,
+		// never hardcoded -- after -client-one-rsa2048 (see that flag's own
+		// comment), client_one.key is 2048 bits and this must regenerate
+		// its enc key at 2048 too, not silently revert it to the old
+		// 4096-bit default on the next CA-expiry resign. client_two keeps
+		// resolving to 4096 here exactly as before, since ITS key on disk
+		// is still 4096 bits -- this line changes no behavior for it.
+		generateJWKSWithBits(name, cert, key, dir, key.N.BitLen())
 	}
 
 	fmt.Println("Resign complete for: " + fmt.Sprint(append(append([]string{}, resignRSANames...), resignMLDSANames...)))
@@ -1318,8 +1516,8 @@ func resignMLDSACert(name, orgID string, caCert *x509.Certificate, caKey *rsa.Pr
 	fmt.Printf("Re-signed %s.crt (same ML-DSA-65 key, new CA, 5-year validity)\n", name)
 }
 
-func generateEncryptionJWK() goidc.JSONWebKey {
-	key, err := rsa.GenerateKey(rand.Reader, 4096)
+func generateEncryptionJWK(bits int) goidc.JSONWebKey {
+	key, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		log.Fatalf("Failed to generate RSA private key: %v", err)
 	}
