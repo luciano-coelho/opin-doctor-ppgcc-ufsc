@@ -380,6 +380,31 @@ def run_all(executor, collected_dir: Path, out_dir: Path) -> dict:
     return report
 
 
+def run_all_campaign(executor, collected_dir: Path, out_dir: Path) -> dict:
+    """Variante de campanha de `run_all` (achado real ao preparar o
+    ensaio/campanha de verdade: a CLI deste modulo nunca tinha sido
+    wireada pra campanha -- so chamada em processo). MESMA ordem,
+    so com as variantes de campanha: `build_criterio3_campaign`
+    (rota default = maior RTT nominal), `run_criterio2_campaign`
+    (rotas default = so RTT>0, Decisao 108/B.5), `run_criterio7` com
+    `routes` = as rotas nao-L0 de `campaign_topology.CAMPAIGN_ROUTES`
+    (mesma convencao do ensaio offline -- as 3 rotas L0-* tem RTT
+    nominal 0, usam o mesmo piso absoluto que a logica generalizada
+    de `_rtt_ok_for_nominal` ja cobre, testado em `test_criteria_
+    corruption_matrix.py`; nunca medidas por este probe especifico
+    nesta rodada)."""
+    _scripts_dir = str(Path(__file__).resolve().parent)
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    import campaign_topology as ct
+    non_l0_routes = tuple(r for r in ct.CAMPAIGN_ROUTES if not r.startswith("L0-"))
+    report = {"criterio3": build_criterio3_campaign(collected_dir, out_dir)}
+    report["criterio2"] = run_criterio2_campaign(executor, out_dir)
+    report["criterio7"] = run_criterio7(executor, out_dir, routes=non_l0_routes)
+    report["full_logs"] = collect_full_logs(executor, out_dir)
+    return report
+
+
 def main():
     """Roda DO CONTROLE (mesma convencao de orchestrator.py -- so o
     controle alcanca servidor/clientes direto), DEPOIS que `run_pilot`
@@ -392,11 +417,18 @@ def main():
     ap.add_argument("--inventory-json", required=True)
     ap.add_argument("--ssh-key", required=True)
     ap.add_argument("--dir", required=True, help="o MESMO --out que run_pilot/run_smoke_gate ja usou")
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa run_all_campaign (route_server + variantes _campaign) em vez de run_all (piloto)")
     args = ap.parse_args()
 
     inventory = json.load(open(args.inventory_json, encoding="utf-8"))
-    executor = orch.SSHExecutor(inventory, key_path=args.ssh_key)
-    report = run_all(executor, Path(args.dir), Path(args.dir))
+    route_server = None
+    if args.campaign:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import campaign_topology as ct
+        route_server = dict(ct.CAMPAIGN_ROUTE_SERVER)
+    executor = orch.SSHExecutor(inventory, key_path=args.ssh_key, route_server=route_server)
+    report = run_all_campaign(executor, Path(args.dir), Path(args.dir)) if args.campaign else run_all(executor, Path(args.dir), Path(args.dir))
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 

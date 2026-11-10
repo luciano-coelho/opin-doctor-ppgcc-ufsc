@@ -1819,7 +1819,35 @@ def main():
                           "perfil/rota, sem execucao cronometrada, nunca contado nas 60/12 oficiais")
     ap.add_argument("--exercise-profile", default="classico")
     ap.add_argument("--exercise-route", default="L0")
+    # Pedido do Luciano (achado real ao preparar o ensaio/campanha de
+    # verdade: a CLI nunca tinha sido wireada pra campanha -- so
+    # chamada em processo, nunca via `--mode ssh` do controle real,
+    # que e como o PILOT_RUNBOOK.md de fato invoca este script).
+    # Sem a flag, comportamento INALTERADO (route_server=None,
+    # routes/profiles=None -- os defaults do piloto, 3 rotas).
+    ap.add_argument("--campaign", action="store_true",
+                     help="usa a topologia de 3 servidores/8 rotas de campaign_topology.py "
+                          "(route_server/routes) em vez do piloto de 1 servidor/3 rotas")
+    ap.add_argument("--n-per-profile", type=int, default=None,
+                     help="N execucoes por celula perfil x rota -- com --campaign, obrigatorio "
+                          "(depende da escala real: ensaio N=1/janela, oficial N=30); sem --campaign, "
+                          f"default do piloto ({N_PER_PROFILE})")
+    ap.add_argument("--n-warmup-per-profile", type=int, default=0,
+                     help="Decisao 108 item 1: N aquecimentos full-flow por celula ANTES das "
+                          "execucoes contadas (default 0 -- nenhum aquecimento, comportamento de sempre)")
     args = ap.parse_args()
+
+    campaign_routes = campaign_profiles = route_server = None
+    if args.campaign:
+        _scripts_dir = str(Path(__file__).resolve().parent)
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import campaign_topology as ct
+        campaign_routes = list(ct.CAMPAIGN_ROUTES)
+        campaign_profiles = list(PROFILES)
+        route_server = dict(ct.CAMPAIGN_ROUTE_SERVER)
+        if args.n_per_profile is None:
+            ap.error("--campaign exige --n-per-profile (depende da escala real, nunca assumido)")
 
     if args.mode == "simulate":
         executor = LocalExecutor()
@@ -1827,7 +1855,8 @@ def main():
         if not args.inventory_json:
             ap.error("--mode ssh exige --inventory-json")
         inventory = json.load(open(args.inventory_json, encoding="utf-8"))
-        executor = SSHExecutor(inventory, key_path=args.ssh_key, images_staging_dir=args.images_staging_dir)
+        executor = SSHExecutor(inventory, key_path=args.ssh_key, images_staging_dir=args.images_staging_dir,
+                                route_server=route_server)
 
     if args.exercise_start_stop:
         report = exercise_start_stop(executor, args.exercise_profile, args.exercise_route)
@@ -1837,10 +1866,13 @@ def main():
     if not args.out:
         ap.error("--out e obrigatorio fora do modo --exercise-start-stop")
 
+    n_per_profile = args.n_per_profile if args.n_per_profile is not None else N_PER_PROFILE
     if args.smoke:
         manifest = run_smoke_gate(executor, args.seed, Path(args.out))
     else:
-        manifest = run_pilot(executor, args.seed, Path(args.out))
+        manifest = run_pilot(executor, args.seed, Path(args.out), n_per_profile=n_per_profile,
+                              routes=campaign_routes, profiles=campaign_profiles,
+                              n_warmup_per_profile=args.n_warmup_per_profile)
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
     if args.smoke and not manifest["smoke_ok"]:
         # Decisao 49 (Emenda 12, revisada): este script NUNCA destroi
