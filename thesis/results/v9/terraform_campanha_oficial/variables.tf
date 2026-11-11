@@ -1,6 +1,6 @@
 variable "aws_profile" {
-  type    = string
-  default = "mockopin-pqc-campanha"
+  description = "Profile AWS local a usar (-var=aws_profile=... ou TF_VAR_aws_profile). Sem default de proposito (mesma politica de server_client_instance_type abaixo): o nome de um profile identifica a conta por tras dele, e este repositorio e publico -- nunca grave aqui o nome real do profile da sua conta."
+  type        = string
 }
 
 variable "project_tag" {
