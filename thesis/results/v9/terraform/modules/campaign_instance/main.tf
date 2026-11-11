@@ -128,7 +128,13 @@ resource "aws_vpc_security_group_ingress_rule" "criterio2_probe" {
 resource "aws_vpc_security_group_ingress_rule" "criterio2_probe_reverse" {
   for_each          = var.role == "client" ? var.criterio2_reverse_ingress_cidrs : {}
   security_group_id = aws_security_group.this.id
-  description       = "Criterio 2 (initcwnd real, direcao cliente->servidor) -- porta dedicada do produtor, scoped ao servidor /32"
+  # Achado real do piloto Etapa 2 (2026-11-11): "->" tem ">" , caractere fora
+  # do conjunto permitido pela AWS pra description de SG rule
+  # (a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*) -- AuthorizeSecurityGroupIngress
+  # rejeitava com InvalidParameterValue. Nunca tinha sido exercitado de
+  # verdade antes (role=="client" com criterio2_reverse_ingress_cidrs
+  # preenchido só nesta rodada).
+  description       = "Criterio 2 (initcwnd real, direcao cliente para servidor) -- porta dedicada do produtor, scoped ao servidor /32"
   from_port         = 9876
   to_port           = 9876
   ip_protocol       = "tcp"
