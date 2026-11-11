@@ -279,6 +279,83 @@ def extract_jwts(*texts):
     return found
 
 
+def _b64url_decode(segment):
+    pad = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment + pad)
+
+
+# Signature-breakdown rule (piloto v9, vendorizacao/coletor round): raw
+# signature bytes by construction, never the raw token/claims (only sizes
+# and a construction label are returned -- safe to persist). alg strings
+# are the real ones this project signs with (see mock_as/crypto-profiles/
+# {classic,pqc,hybrid}.json's signingAlgs and hybridSigning.js's
+# HYBRID_ALG): "PS256" (classic, or payload-extension's outer classical
+# JWS when a sibling "pqc" claim is present), "ML-DSA-65" (pqc-exclusive
+# profile, pure PQ signature, no classical half at all), and
+# "MLDSA65-RSA2048-PSS-SHA256" (Strong Nesting -- id_token/JARM in both
+# hybrid profiles: sigma1 is always exactly 256 raw bytes, RSA-2048's
+# fixed signature length regardless of padding scheme; sigma2 is
+# whatever raw bytes remain). A 5-dot-segment JWE is not a signed JWT at
+# all (3rd segment isn't a signature) and returns construction="jwe",
+# with both sizes None -- it only ever reaches jwt_sizes_bytes, never
+# this breakdown.
+def jwt_sig_breakdown(token):
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {"construction": "jwe", "classical_sig_bytes": None, "pq_sig_bytes": None}
+    header_b64, payload_b64, sig_b64 = parts
+    try:
+        header = json.loads(_b64url_decode(header_b64))
+        sig_raw = _b64url_decode(sig_b64)
+    except Exception:
+        return {"construction": "unparseable", "classical_sig_bytes": None, "pq_sig_bytes": None}
+    alg = header.get("alg")
+
+    if alg == "ML-DSA-65":
+        return {"construction": "pqc_pure", "classical_sig_bytes": None, "pq_sig_bytes": len(sig_raw)}
+
+    if alg == "MLDSA65-RSA2048-PSS-SHA256":
+        # sigma1||sigma2 (hybridSigning.js:signStrongNesting) -- sigma1 is
+        # always the fixed-length RSA-2048 signature (256 bytes under
+        # either PKCS1v1.5 or PSS padding; this project uses PSS).
+        classical_len = 256
+        return {
+            "construction": "strong_nesting",
+            "classical_sig_bytes": classical_len,
+            "pq_sig_bytes": len(sig_raw) - classical_len,
+        }
+
+    if alg == "PS256":
+        try:
+            payload = json.loads(_b64url_decode(payload_b64))
+        except Exception:
+            payload = {}
+        pqc_claim = payload.get("pqc") if isinstance(payload, dict) else None
+        if isinstance(pqc_claim, dict) and isinstance(pqc_claim.get("signature"), str):
+            # Payload extension (client_assertion/PAR/RS responses): the
+            # classical PS256 signature (sig_b64, this JWS's own 3rd
+            # segment) and the PQ signature embedded as a sibling claim
+            # (payload.pqc.signature) are two physically separate
+            # signatures, never concatenated -- see
+            # payloadExtensionVerification.js.
+            try:
+                pq_raw = _b64url_decode(pqc_claim["signature"])
+            except Exception:
+                return {"construction": "payload_extension_malformed", "classical_sig_bytes": len(sig_raw), "pq_sig_bytes": None}
+            return {"construction": "payload_extension", "classical_sig_bytes": len(sig_raw), "pq_sig_bytes": len(pq_raw)}
+        return {"construction": "classic_only", "classical_sig_bytes": len(sig_raw), "pq_sig_bytes": None}
+
+    return {"construction": f"unknown_alg:{alg}", "classical_sig_bytes": None, "pq_sig_bytes": None}
+
+
+def extract_jwt_sig_breakdowns(jwts):
+    """jwts: the transient, in-memory list extract_jwts() already returns
+    for one call -- never persisted itself. Returns one breakdown dict
+    per token (see jwt_sig_breakdown), positionally paired with
+    jwt_sizes, safe to persist (sizes + a label only, no token/claims)."""
+    return [jwt_sig_breakdown(j) for j in jwts]
+
+
 def classify_participant(uri: str) -> str:
     """Maps a request URI to the OPIN participant it targets (AS/RS/Directory/...)."""
     path = urlparse(uri).path
@@ -474,6 +551,7 @@ def parse_calls(log_entries):
                 "authorization_header": req_headers.get("Authorization"),
                 "jwts": jwts,
                 "jwt_sizes": [len(j) for j in jwts],
+                "jwt_sig_breakdown": extract_jwt_sig_breakdowns(jwts),
                 "jwk_sizes": jwk_sizes,
                 "status_code": (resp or {}).get("response_status_code"),
             })
@@ -668,9 +746,15 @@ def compute_metrics(all_calls, gateway_entries=None, latency_scenario_ms=None, c
         other["received_bytes"] += c["request_bytes"]
 
     all_jwt_sizes = []
+    all_jwt_sig_breakdown = []
     all_jwk_sizes = []
     for c in all_calls:
         all_jwt_sizes.extend(c["jwt_sizes"])
+        # .get(...): defensive against any call-construction site this
+        # round didn't touch -- positionally paired with jwt_sizes above,
+        # never with the raw jwts list (which is never persisted past
+        # this per-call dict).
+        all_jwt_sig_breakdown.extend(c.get("jwt_sig_breakdown", []))
         all_jwk_sizes.extend(c["jwk_sizes"])
 
     # 4.3: handshake vs. OPIN-processing time, as measured at the gateway

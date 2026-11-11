@@ -1790,6 +1790,7 @@ def simulate_login(auth_url: str, cert, login_calls: list) -> None:
             "authorization_header": None,
             "jwts": jwts,
             "jwt_sizes": jwt_sizes,
+            "jwt_sig_breakdown": ba.extract_jwt_sig_breakdowns(jwts),
             "jwk_sizes": [],
             "status_code": f"{resp.status_code} {resp.reason}",
         })
@@ -2096,6 +2097,7 @@ def do_call(session: requests.Session, method: str, url: str, *, cert, headers=N
         "authorization_header": req_headers.get("Authorization"),
         "jwts": jwts,
         "jwt_sizes": [len(j) for j in jwts],
+        "jwt_sig_breakdown": ba.extract_jwt_sig_breakdowns(jwts),
         "jwk_sizes": jwk_sizes,
         "status_code": f"{response.status_code} {response.reason}",
     }

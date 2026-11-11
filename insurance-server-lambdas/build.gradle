@@ -48,6 +48,13 @@ dependencyCheck {
 }
 
 repositories {
+    // insurance-swagger:1.2.0.2 (com.raidiam.trustframework.mockinsurance) is a
+    // Raidiam-internal artifact never published to Maven Central or any public
+    // repository -- without this, a clean build container (no host ~/.m2 cache)
+    // fails to resolve it. Vendored here with Raidiam's redistribution
+    // authorization informed by the author (see DECISIONS.md v9); see
+    // vendor/maven-repo/README.md for how a third party rebuilds this image.
+    maven { url "file://${projectDir}/vendor/maven-repo" }
     mavenLocal()
     mavenCentral()
 }
