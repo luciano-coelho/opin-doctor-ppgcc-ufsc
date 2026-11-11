@@ -27,7 +27,22 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "integration"))
+import evaluate_criteria as ec  # noqa: E402  -- mesmo EXPECTED_CURVE que orchestrator.py usa no assert por execucao (_assert_profile_negotiated), nunca reinventado aqui
+
 _DEFAULT_CERTS_DIR = Path(__file__).resolve().parents[2] / "certs" / "generated"
+
+# Pedido do Luciano (Etapa 1, adendo "asserção do grupo TLS"): o
+# manifesto pre-campanha tambem registra o grupo de troca de chaves
+# ESPERADO por perfil -- fonte unica, igual ao assert ativo por
+# execucao (_assert_profile_negotiated em orchestrator.py). Este
+# manifesto nao negocia TLS nenhum (so le certificados estaticos), por
+# isso so registra o ESPERADO aqui -- a confirmacao do NEGOCIADO de
+# verdade, por execucao, e tarefa do assert em orchestrator.py, nunca
+# duplicada neste script.
+_MANIFEST_PROFILE_TO_EC_PROFILE = {
+    "classico": "classico", "pqc": "pqc", "hibrido_v8": "hibrido-v8", "hibrido_and": "hibrido-and",
+}
 
 # OIDs das extensoes alt-signature do X.509 estendido (RFC draft de
 # assinatura dupla, usado so pelo perfil Hibrido-v8 -- uma UNICA
@@ -207,6 +222,10 @@ def main():
     manifest = {
         "_policy": "Manifesto pre-campanha, somente leitura. Nenhuma chave privada, ID de conta, ARN ou perfil neste arquivo -- so material publico (certificados) e hashes/tamanhos.",
         "certs_dir": str(certs_dir.resolve()),
+        "grupo_tls_esperado_por_perfil": {
+            profile: ec.EXPECTED_CURVE.get(ec_profile)
+            for profile, ec_profile in _MANIFEST_PROFILE_TO_EC_PROFILE.items()
+        },
         "matriz_artefato_perfil_participante": matrix,
         "invariantes_san": [{"check": desc, "ok": ok, "detalhe": detalhe} for desc, ok, detalhe in checks],
         "abortado": bool(failed),

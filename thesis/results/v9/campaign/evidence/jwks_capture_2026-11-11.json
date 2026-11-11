@@ -1,0 +1,45 @@
+{
+  "_comment": "Captura ao vivo do /jwks real (AS e RS), nos 4 perfis, contra a pilha local da campanha (docker compose --profile main up -d --force-recreate auth mongo_seed mockapi, mesmo comando real do orchestrator.py). Material inteiramente publico (so chaves publicas em JWKS por natureza nao tem componente privado). Objetivo: resolver com evidencia real a definicao de N_JWK usada por opinsize_analysis.py -- ver nota no proprio script.",
+  "captured_at_utc": "2026-11-11",
+  "method": "CRYPTO_PROFILE=<classic|pqc|hybrid> docker compose --profile main up -d --force-recreate auth mongo_seed mockapi; curl http://127.0.0.1:3000/jwks (AS); curl http://127.0.0.1:8081/jwks (RS). hibrido-v8 e hibrido-and compartilham o MESMO backend (BACKEND_CRYPTO_PROFILE_ENV mapeia os dois para 'hybrid'), por isso as capturas sao identicas.",
+  "profiles": {
+    "classico": {
+      "as": {"body_bytes": 917, "n_entries": 2, "entries": [
+        {"kid": "RGbe0ltbjy9MkRjwxF2FUTJpX1-gnelCrFjaDjFov5c", "kty": "RSA", "use": "sig", "alg": "PS256", "key_bytes": 256},
+        {"kid": "AsnNSC2ubVrgn8NjhuQgItg7nTpgjuieL1G8R3HsG4k", "kty": "RSA", "use": "enc", "alg": "RSA-OAEP", "key_bytes": 256}
+      ]},
+      "rs": {"body_bytes": 455, "n_entries": 1, "entries": [
+        {"kid": "6ee75400-90db-420b-9314-3a61d87354b8", "kty": "RSA", "use": "sig", "alg": "PS256", "key_bytes": 256}
+      ]}
+    },
+    "pqc": {
+      "as": {"body_bytes": 3173, "n_entries": 2, "entries": [
+        {"kid": "lpaWnzWOS7X0vzQV3UxOP8VZAqldjjIQ_Myaiu8aTO4", "kty": "AKP", "use": "sig", "alg": "ML-DSA-65", "key_bytes": 1952},
+        {"kid": "AsnNSC2ubVrgn8NjhuQgItg7nTpgjuieL1G8R3HsG4k", "kty": "RSA", "use": "enc", "alg": "RSA-OAEP", "key_bytes": 256}
+      ]},
+      "rs": {"body_bytes": 2711, "n_entries": 1, "entries": [
+        {"kid": "ba6877cb-b5cd-414f-8f4c-3f0f6fe7755c", "kty": "AKP", "use": "sig", "alg": "ML-DSA-65", "key_bytes": 1952}
+      ]}
+    },
+    "hibrido-v8": {
+      "as": {"body_bytes": 3540, "n_entries": 2, "entries": [
+        {"kid": "ourKo70ND_sDynk6w-LH_elCa63dvSvRuPWDHPdtRLQ", "kty": "HYBRID", "use": "sig", "alg": "MLDSA65-RSA2048-PSS-SHA256", "key_bytes": 2208},
+        {"kid": "AsnNSC2ubVrgn8NjhuQgItg7nTpgjuieL1G8R3HsG4k", "kty": "RSA", "use": "enc", "alg": "RSA-OAEP", "key_bytes": 256}
+      ]},
+      "rs": {"body_bytes": 3537, "n_entries": 2, "entries": [
+        {"kid": "JqPBnRMTJL8mLvOSmVlX9u9X-he1N803a12wXqOHTG0", "kty": "HYBRID", "use": "sig", "alg": "MLDSA65-RSA2048-PSS-SHA256", "key_bytes": 2208},
+        {"kid": "JqPBnRMTJL8mLvOSmVlX9u9X-he1N803a12wXqOHTG0", "kty": "RSA", "use": "sig", "alg": "PS256", "key_bytes": 256}
+      ]},
+      "_nota": "RS publica 2 entradas em hibrido (nao 1): a combinada HYBRID mais uma entrada RSA/PS256 separada, mesmo kid -- compatibilidade com verificador legado que ignora a extensao pqc (ver comentario em ResponseSigningService.java linhas 70-82)."
+    },
+    "hibrido-and": {
+      "_nota": "Mesmo backend que hibrido-v8 (BACKEND_CRYPTO_PROFILE_ENV['hibrido-and']=='hybrid') -- captura identica, nao refeita.",
+      "as": {"body_bytes": 3540, "n_entries": 2},
+      "rs": {"body_bytes": 3537, "n_entries": 2}
+    }
+  },
+  "definicao_de_N_JWK_para_opinsize_analysis": {
+    "usada_pelo_script": "numero de consultas HTTP ao endpoint /jwks por fluxo completo -- CONSTANTE, 2 (uma ao AS, uma ao RS), confirmado nos 4 perfis via opin_flow.py (linhas 2116 e 2203: 'GET /jwks' do AS e do RS, uma vez cada, por fluxo).",
+    "NAO_usada_mas_observada": "numero de ENTRADAS na(s) resposta(s) JSON do /jwks (campo 'keys') NAO e constante: AS sempre 2 (sig+enc); RS e 1 em Classic/PQC mas 2 em Hibrido (v8 e AND) por causa da entrada RSA extra de compatibilidade legada. Somando AS+RS: 3 (Classic/PQC) vs 4 (Hibrido) -- essa e a origem real do achado '3 vs 4' de uma rodada de verificacao anterior, mas mede algo DIFERENTE de N_JWK (entradas, nao consultas) e nao deve ser usado como o N_JWK do opinsize_analysis.py."
+  }
+}

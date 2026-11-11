@@ -31,6 +31,23 @@ v4/v5, "Secao 7" do ARCHITECTURE.md; a Eq. 3.1 original de Schardong
 tem so 3 termos, SEM PKI) e mantido SEPARADO dos outros tres em toda
 saida, nas DUAS variantes -- nunca somado dentro do termo de token.
 
+Definicao de N_JWK (achado desta rodada, resolvido com captura ao
+vivo -- ver thesis/results/v9/campaign/evidence/jwks_capture_2026-11-11.json):
+N_JWK e o numero de CONSULTAS HTTP ao endpoint /jwks por fluxo
+completo -- CONSTANTE, 2 (uma ao AS, uma ao RS), confirmado nos 4
+perfis via opin_flow.py (as duas chamadas "GET /jwks", uma por
+endpoint, nunca mais que isso). Uma rodada de verificacao anterior
+relatou "N_JWK: 3 (Classic/PQC) vs 4 (Hibrido)" -- a captura ao vivo
+confirma que esse numero e REAL, mas mede outra coisa: o numero de
+ENTRADAS na(s) resposta(s) JSON (campo "keys"), somado entre AS+RS.
+O AS sempre publica 2 entradas (sig+enc); o RS publica 1 em
+Classic/PQC mas 2 em Hibrido (a entrada combinada HYBRID mais uma
+entrada RSA/PS256 separada, de compatibilidade com verificador
+legado -- ver ResponseSigningService.java). Essa variacao de
+ENTRADAS e real e documentada na captura, mas NAO e o que este
+script usa como N_JWK -- quem chamar este script deve passar
+--n-jwk=2 nos 4 perfis, nunca 3 ou 4.
+
 Limitacao real, reportada e nao escondida: o pipeline de coleta hoje
 (`compute_metrics()`, baseline_automation.py) persiste `jwt_sizes_bytes`
 e `jwt_sig_breakdown` (tamanhos apenas) no `baseline_metrics.json`
@@ -171,7 +188,12 @@ def main():
     ap.add_argument("--jwts-file", required=True, help="JSON com os JWTs BRUTOS (lista de strings, ou {'calls':[{'jwts':[...]}]})")
     ap.add_argument("--n-mtls", type=int, required=True)
     ap.add_argument("--handshake-bytes", type=float, required=True)
-    ap.add_argument("--n-jwk", type=int, required=True)
+    ap.add_argument("--n-jwk", type=int, required=True,
+                     help="numero de CONSULTAS HTTP a /jwks por fluxo (1 ao AS + 1 ao RS) -- "
+                          "sempre 2, nos 4 perfis; confirmado por captura ao vivo em "
+                          "thesis/results/v9/campaign/evidence/jwks_capture_2026-11-11.json. "
+                          "NAO e o numero de entradas na resposta JSON (esse varia por perfil "
+                          "e nao e usado aqui).")
     ap.add_argument("--jwk-pk-size-bytes", type=float, required=True)
     ap.add_argument("--n-pki", type=int, required=True)
     ap.add_argument("--pki-bytes", type=float, required=True)
