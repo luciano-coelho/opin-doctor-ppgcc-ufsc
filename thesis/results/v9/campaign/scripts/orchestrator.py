@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import cli  # noqa: E402
 import preflight  # noqa: E402  -- Decisao 53, item 4: pre-requisitos de captura por host
 import deliver_images  # noqa: E402  -- Decisao 83: BACKEND_IMAGE_KEYS, nunca duplicado aqui
+import cost_tracker as ct  # noqa: E402  -- Etapa 1 do piloto v9, item 2: trava local de custo
 
 _INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "integration"
 sys.path.insert(0, str(_INTEGRATION_DIR))
@@ -211,7 +212,19 @@ class LocalExecutor:
         interna (sni=matls-api.local, pra provar que a exclusao do
         avaliador funciona) + a lista insurance/person com as
         contagens HTTP reais esperadas (44/28/4/4) + CurveID/
-        DualAuthenticated do perfil."""
+        DualAuthenticated do perfil.
+
+        `start_utc`/`end_utc` por chamada (pedido do Luciano, Etapa 1 --
+        lacuna real encontrada na rodada de robustez: `build_consolidated_
+        report_v9.py:build_latency` exige esses dois campos em TODA
+        chamada, e esta simulacao nunca os gravava, quebrando a
+        consolidacao sempre que rodada contra `--mode simulate`). Sem
+        chamada HTTP real nenhuma pra cronometrar de verdade -- os dois
+        campos sao o MESMO instante de entrada/saida desta funcao,
+        mesma honestidade ja usada em `opin_flow.py` (hop nao
+        cronometrado independentemente: "start_utc/end_utc sao o MESMO
+        instante, nunca um par real de inicio/fim")."""
+        t0 = datetime.now(timezone.utc).isoformat()
         lines = [_connection_ok_line(sni="mtls", remote=f"203.0.113.{10 + i}:5100{i}") for i in range(6)]
         lines.append(_connection_ok_line(sni="matls-api.local", remote="127.0.0.1:9000"))
         # 44 chamadas totais (10 insurance + 34 person), 4 /jwks (1+3),
@@ -232,11 +245,20 @@ class LocalExecutor:
         jwt_bearing = [c for c in all_calls if c["endpoint"] not in ("/jwks", "/root-ca.pem", "/issuer-ca.pem")]
         for c in jwt_bearing[28:]:
             c["jwts"] = []
+        t1 = datetime.now(timezone.utc).isoformat()
+        for c in all_calls:
+            c["start_utc"] = t0
+            c["end_utc"] = t1
+            # Nunca cronometrado por chamada individual nesta simulacao
+            # (mesma limitacao de start_utc/end_utc acima) -- 0.0 e o
+            # valor honesto, nunca um numero inventado.
+            c["latency_ms"] = 0.0
         dual = True if profile == "hibrido-and" else False
         return {
             "insurance": insurance, "person": person,
             "gateway_log_lines": lines,
             "curveID": ec.EXPECTED_CURVE[profile], "dualAuthenticated": dual,
+            "start_utc": t0, "end_utc": t1,
         }
 
     def dedicated_capture(self, profile, route, capturas_dir=None):
@@ -1157,6 +1179,12 @@ class SSHExecutor:
             "insurance": result.get("calls", []), "person": [],
             "gateway_log_lines": raw_lines,
             "curveID": curve_id, "dualAuthenticated": dual_auth,
+            # Pedido do Luciano (Etapa 1, item 4): carimbo por EXECUCAO
+            # (nao so por chamada individual, que ja vem de
+            # opin_flow.py dentro de result["calls"]) -- t0/t1 ja
+            # calculados acima (delimitam a chamada SSH inteira), so
+            # nunca devolvidos antes desta correcao.
+            "start_utc": t0.isoformat(), "end_utc": t1.isoformat(),
         }
 
     def _primary_iface(self, host):
@@ -1477,9 +1505,49 @@ class SSHExecutor:
                 + "\n".join(gw_lines) + "\n== fim ==")
 
 
+def _assert_profile_negotiated(profile, route, run, result):
+    """Pedido do Luciano (Etapa 1, item 5): rede de seguranca ATIVA
+    contra contaminacao de perfil entre blocos -- achado real da
+    rodada de robustez local (backend ficou com `CRYPTO_PROFILE` de
+    uma rodada anterior enquanto o gateway ja tinha sido recriado pro
+    perfil novo; nunca reproduzido no caminho real `start_block`, que
+    recria os dois juntos, mas o Luciano quer a verificacao ativa
+    mesmo assim, nunca so confiar que o mecanismo de recriacao
+    funcionou).
+
+    Compara o que foi REALMENTE negociado (`curveID`/`dualAuthenticated`,
+    extraidos do log real do gateway em `SSHExecutor`, ou do mock
+    determinístico equivalente em `LocalExecutor`) contra o ESPERADO
+    desta celula -- `evaluate_criteria.EXPECTED_CURVE` e o MESMO
+    baseline que o avaliador real usa pra notar os criterios, nunca
+    um numero reinventado aqui. Levanta com erro claro e contexto
+    completo (perfil/rota/run/observado/esperado) no primeiro desvio.
+
+    Limitacao honesta: cobre as duas dimensoes que ja chegam como
+    dado estruturado neste ponto (grupo de troca de chaves do
+    handshake, dual=true/false) -- NAO verifica algoritmo de
+    assinatura nem a cadeia de certificados byte a byte (isso exigiria
+    parsear o pcap/keylog de cada execucao, que so o criterio 1
+    dedicado captura hoje, numa amostra, nao em toda execucao)."""
+    expected_curve = ec.EXPECTED_CURVE.get(profile)
+    expected_dual = (profile == "hibrido-and")
+    observed_curve = result.get("curveID")
+    observed_dual = result.get("dualAuthenticated")
+    if observed_curve != expected_curve or observed_dual != expected_dual:
+        raise RuntimeError(
+            f"_assert_profile_negotiated: desvio de perfil detectado em profile={profile!r} "
+            f"route={route!r} run={run!r} -- esperado curveID={expected_curve!r} "
+            f"dualAuthenticated={expected_dual!r}, observado curveID={observed_curve!r} "
+            f"dualAuthenticated={observed_dual!r}. Abortando ANTES de aceitar esta execucao -- "
+            f"provavel contaminacao de estado entre blocos (backend/gateway nao recriados juntos). "
+            f"Nunca segue coletando dado sob um perfil diferente do anunciado."
+        )
+
+
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
               routes: list[str] | None = None, profiles: list[str] | None = None,
-              skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0) -> dict:
+              skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0,
+              resume: bool = False, cost_tracker: "ct.CostTracker | None" = None) -> dict:
     """Roda `n_per_profile` execucoes por bloco (perfis x rotas,
     default os 4x3 reais) + as 12 capturas dedicadas, escreve todos
     os artefatos no formato que `evaluate_criteria.py --aws-dir`
@@ -1523,13 +1591,52 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     completo (evidencia intacta, sha256 coberto por construcao, nunca
     um segundo sistema de verificacao paralelo). Default 0 -- piloto
     e qualquer chamador que nunca passe isto continuam byte a byte
-    identicos a antes (nenhum arquivo novo escrito, loop nunca entra)."""
+    identicos a antes (nenhum arquivo novo escrito, loop nunca entra).
+
+    `resume` (pedido do Luciano, Etapa 1 do piloto v9 -- retomada entre
+    janelas completas): cada invocacao deste script cobre UMA janela
+    inteira -- nada e escrito em `out_dir` ate o fim de todos os lacos
+    (achado da rodada de robustez local). Sem checkpoint intra-janela
+    por desenho (interromper no meio de uma janela sempre perde aquela
+    janela -- aceito explicitamente pelo Luciano). `resume=True` so
+    cobre a granularidade que ele PEDIU proteger: se `out_dir/
+    manifest.json` ja existe e `total_execucoes == expected_total`
+    (janela completa, persistida de verdade, nunca so parcial -- um
+    manifesto so e escrito no fim), devolve ele de novo SEM reexecutar
+    nada (nunca duplica, nunca mistura estado). Se o manifesto existir
+    mas DIVERGIR (outra config, `n_per_profile` diferente, etc.),
+    fail-closed -- nunca sobrescreve silenciosamente uma janela
+    anterior que pode nao ser a mesma. Default False -- qualquer
+    chamador que nunca passe isto continua byte a byte identico a
+    antes (sempre reexecuta, como sempre fez)."""
     routes = routes if routes is not None else ROUTES
     profiles = profiles if profiles is not None else PROFILES
+    expected_total = len(profiles) * len(routes) * n_per_profile
+    manifest_path = out_dir / "manifest.json"
+    if resume and manifest_path.is_file():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing.get("smoke"):
+            raise RuntimeError(
+                f"run_pilot(resume=True): {manifest_path} e de uma porta de fumaca (smoke=true), "
+                f"nunca uma janela oficial -- nao pode ser usado como retomada."
+            )
+        if existing.get("total_execucoes") == expected_total and existing.get("expected_total") == expected_total:
+            return existing
+        raise RuntimeError(
+            f"run_pilot(resume=True): {manifest_path} ja existe mas nao bate com esta chamada "
+            f"(total_execucoes={existing.get('total_execucoes')!r}, esperado={expected_total!r}) -- "
+            f"provavelmente uma janela parcial de uma config diferente ou interrompida antes do fim. "
+            f"Nunca sobrescrito automaticamente: mova/renomeie {out_dir} antes de repetir, ou confirme "
+            f"que a config (n_per_profile/profiles/routes) e a mesma pretendida."
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     capturas_dir = out_dir / "criterio1_capturas"
     capturas_dir.mkdir(parents=True, exist_ok=True)
 
+    # Pedido do Luciano (Etapa 1, item 4): carimbo da JANELA inteira
+    # (esta invocacao de run_pilot), distinto do carimbo por execucao
+    # (abaixo) e por chamada (ja dentro de cada "insurance"/"person").
+    window_start_utc = datetime.now(timezone.utc).isoformat()
     rng = random.Random(seed)
     combined_log_lines = []
     execucoes_calls = []
@@ -1537,37 +1644,90 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     route_orders = {}
     aquecimento_log_lines = []
     aquecimento_calls = []
+    # Pedido do Luciano (Etapa 1, item 2 -- trava local de custo):
+    # `cost_stop_info` vira nao-None no primeiro `status()=="stop"`,
+    # e e checado no topo de cada nivel de laco pra abortar JANELA
+    # inteira (nunca so a celula atual) de forma limpa -- a execucao
+    # EM ANDAMENTO sempre termina antes do cheque (o cheque roda
+    # DEPOIS de `executor.run_execution` ja ter retornado), os dados
+    # ja coletados seguem pro mesmo `execucoes_calls`/arquivos de
+    # sempre (escritos mais abaixo, sem mudanca), e `stop_block` do
+    # bloco atual e chamado antes de sair (libera CPU/memoria local).
+    # NUNCA desmonta a frota real (EC2/Terraform) -- isso e
+    # responsabilidade de quem chama (`cleanup.py`), mesmo padrao
+    # ja estabelecido pela porta de fumaca ("nunca destroi por conta
+    # propria, so reporta e sai com erro").
+    cost_stop_info = None
+    _cost_alert_logged = False
 
     for route in routes:
+        if cost_stop_info is not None:
+            break
         order = profile_block_order(route, rng, profiles=profiles)
         route_orders[route] = order
         for profile in order:
+            if cost_stop_info is not None:
+                break
             combined_log_lines.append(f"== Perfil: {profile} ==")
             executor.start_block(profile, route)
             combined_log_lines.append(executor.readiness_probe(profile, route))
             for warmup in range(1, n_warmup_per_profile + 1):
                 aquecimento_log_lines.append(aquecimento_marker_inicio(profile, route, warmup))
                 warmup_result = executor.run_execution(profile, route, run=f"aquecimento{warmup}")
+                _assert_profile_negotiated(profile, route, f"aquecimento{warmup}", warmup_result)
                 aquecimento_log_lines.extend(warmup_result["gateway_log_lines"])
                 aquecimento_log_lines.append(aquecimento_marker_fim(profile, route, warmup))
                 aquecimento_calls.append({
                     "profile": profile, "route": route, "warmup": warmup,
                     "insurance": warmup_result["insurance"], "person": warmup_result["person"],
+                    "start_utc": warmup_result.get("start_utc"), "end_utc": warmup_result.get("end_utc"),
                 })
             for run in range(1, n_per_profile + 1):
                 combined_log_lines.append(execucao_marker_inicio(profile, route, run))
                 result = executor.run_execution(profile, route, run)
+                # Pedido do Luciano (Etapa 1, item 5 -- achado critico da
+                # rodada de robustez: contaminacao de perfil entre blocos,
+                # backend com CRYPTO_PROFILE antigo enquanto o gateway ja
+                # tinha trocado). Verifica o perfil REALMENTE negociado
+                # (grupo de troca de chaves do handshake + dual=true/false)
+                # contra o ESPERADO desta celula -- antes de aceitar a
+                # execucao como valida. Aborta e reporta no primeiro
+                # desvio, nunca segue coletando dado contaminado.
+                _assert_profile_negotiated(profile, route, run, result)
                 combined_log_lines.extend(result["gateway_log_lines"])
                 combined_log_lines.append(execucao_marker_fim(profile, route, run))
                 execucoes_calls.append({
                     "profile": profile, "route": route, "run": run,
                     "insurance": result["insurance"], "person": result["person"],
+                    "start_utc": result.get("start_utc"), "end_utc": result.get("end_utc"),
                 })
                 criterio6_rows.append({
                     "profile": profile, "route": route, "run": run,
                     "curveID": result["curveID"], "dualAuthenticated": result["dualAuthenticated"],
                     "keylog_evidence": True,
                 })
+                if cost_tracker is not None:
+                    breakdown = cost_tracker.breakdown_usd()
+                    ct.write_cost_log_entry(out_dir, "check", breakdown)
+                    cost_status = cost_tracker.status()
+                    if cost_status == "alert" and not _cost_alert_logged:
+                        _cost_alert_logged = True
+                        msg = (f"*** ALERTA DE CUSTO: estimativa US${breakdown['total_usd']:.2f} "
+                               f">= alerta US${cost_tracker.alert_usd:.2f} ***")
+                        combined_log_lines.append(msg)
+                        print(msg, file=sys.stderr)
+                    elif cost_status == "stop":
+                        msg = (f"*** PARADA POR CUSTO: estimativa US${breakdown['total_usd']:.2f} "
+                               f">= limite US${cost_tracker.stop_usd:.2f} -- interrompendo apos esta "
+                               f"execucao (profile={profile} route={route} run={run}) ***")
+                        combined_log_lines.append(msg)
+                        print(msg, file=sys.stderr)
+                        cost_stop_info = {
+                            "triggered_at_utc": datetime.now(timezone.utc).isoformat(),
+                            "profile": profile, "route": route, "run": run, **breakdown,
+                        }
+                        ct.write_cost_log_entry(out_dir, "stop_triggered", breakdown)
+                        break
             executor.stop_block(profile, route)
 
     # Achado real (encontrado agora, pedido do Luciano: desenho do
@@ -1609,6 +1769,11 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     expected_total = len(profiles) * len(routes) * n_per_profile
     manifest = {
         "seed": seed, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        # Pedido do Luciano (Etapa 1, item 4): carimbo da JANELA
+        # inteira -- `window_start_utc` capturado antes do primeiro
+        # bloco, `window_end_utc` aqui, depois do ultimo (e das
+        # capturas dedicadas, se houver).
+        "window_start_utc": window_start_utc, "window_end_utc": datetime.now(timezone.utc).isoformat(),
         "smoke": smoke, "n_per_profile": n_per_profile,
         "route_orders": route_orders,
         "total_execucoes": len(execucoes_calls), "expected_total": expected_total,
@@ -1631,6 +1796,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         # (antes/depois de cada subida do backend) -- comparar com o
         # que a v8 ja mediu. Lista vazia pro LocalExecutor.
         "cpu_mem_samples": getattr(executor, "cpu_mem_samples", []),
+        # Pedido do Luciano (Etapa 1, item 2): None se a trava de custo
+        # nunca disparou (ou nunca esteve ligada) -- dict com o
+        # detalhamento completo (profile/route/run + breakdown_usd) no
+        # momento exato da parada, caso contrario. A janela pode ter
+        # terminado com MENOS execucoes que `expected_total` por causa
+        # disso -- confira este campo antes de assumir falha.
+        "cost_stop": cost_stop_info,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
@@ -1835,6 +2007,32 @@ def main():
     ap.add_argument("--n-warmup-per-profile", type=int, default=0,
                      help="Decisao 108 item 1: N aquecimentos full-flow por celula ANTES das "
                           "execucoes contadas (default 0 -- nenhum aquecimento, comportamento de sempre)")
+    ap.add_argument("--resume", action="store_true",
+                     help="Pedido do Luciano (Etapa 1 do piloto v9): se --out ja tem um manifest.json "
+                          "de uma janela COMPLETA e identica (mesmo total esperado), devolve ele de novo "
+                          "sem reexecutar -- nunca duplica, nunca mistura estado. Fail-closed se o "
+                          "manifesto existir mas nao bater com esta chamada. Default False (reexecuta "
+                          "sempre, comportamento de sempre).")
+    # Pedido do Luciano (Etapa 1, item 2): trava local de custo -- so
+    # tem sentido no modo ssh (custo real de AWS); --mode simulate
+    # nunca liga nada disso (sem --no-cost-tracking nem nada, o modo
+    # simulate so ignora -- ver construcao do CostTracker abaixo).
+    ap.add_argument("--cost-alert-usd", type=float, default=ct.DEFAULT_PILOT_ALERT_USD,
+                     help=f"Limiar de ALERTA em USD (default do piloto: {ct.DEFAULT_PILOT_ALERT_USD}). "
+                          "A campanha oficial deve passar o seu proprio limite.")
+    ap.add_argument("--cost-stop-usd", type=float, default=ct.DEFAULT_PILOT_STOP_USD,
+                     help=f"Limiar de PARADA em USD (default do piloto: {ct.DEFAULT_PILOT_STOP_USD}). "
+                          "A campanha oficial deve passar o seu proprio limite.")
+    ap.add_argument("--cost-control-instance-type", default="t4g.micro",
+                     help="Tipo real da instancia de controle (mesmo default do Terraform, t4g.micro)")
+    ap.add_argument("--cost-server-client-instance-type", default=None,
+                     help="Tipo real das instancias de servidor/cliente -- OBRIGATORIO no modo ssh "
+                          "(sem default de proposito, mesma politica do Terraform: falha alto se "
+                          "ninguem passar o valor explicito, nunca assume).")
+    ap.add_argument("--no-cost-tracking", action="store_true",
+                     help="Desliga a trava de custo mesmo no modo ssh (ex.: ensaio curto ja sob "
+                          "supervisao manual constante). Default False -- a trava fica ligada por "
+                          "padrao em qualquer execucao real contra a AWS.")
     args = ap.parse_args()
 
     campaign_routes = campaign_profiles = route_server = None
@@ -1842,13 +2040,14 @@ def main():
         _scripts_dir = str(Path(__file__).resolve().parent)
         if _scripts_dir not in sys.path:
             sys.path.insert(0, _scripts_dir)
-        import campaign_topology as ct
-        campaign_routes = list(ct.CAMPAIGN_ROUTES)
+        import campaign_topology
+        campaign_routes = list(campaign_topology.CAMPAIGN_ROUTES)
         campaign_profiles = list(PROFILES)
-        route_server = dict(ct.CAMPAIGN_ROUTE_SERVER)
+        route_server = dict(campaign_topology.CAMPAIGN_ROUTE_SERVER)
         if args.n_per_profile is None:
             ap.error("--campaign exige --n-per-profile (depende da escala real, nunca assumido)")
 
+    cost_tracker_instance = None
     if args.mode == "simulate":
         executor = LocalExecutor()
     else:
@@ -1857,6 +2056,23 @@ def main():
         inventory = json.load(open(args.inventory_json, encoding="utf-8"))
         executor = SSHExecutor(inventory, key_path=args.ssh_key, images_staging_dir=args.images_staging_dir,
                                 route_server=route_server)
+        if not args.no_cost_tracking:
+            if not args.cost_server_client_instance_type:
+                ap.error("--mode ssh exige --cost-server-client-instance-type (sem default de "
+                         "proposito, mesma politica do Terraform) -- ou passe --no-cost-tracking "
+                         "explicitamente pra desligar a trava de custo.")
+            instance_types = {"control": args.cost_control_instance_type}
+            if "servers" in inventory:
+                for server_id in inventory["servers"]:
+                    instance_types[f"server:{server_id}"] = args.cost_server_client_instance_type
+            elif "server" in inventory:
+                instance_types["server"] = args.cost_server_client_instance_type
+            for client_id in inventory.get("clients", {}):
+                instance_types[f"client:{client_id}"] = args.cost_server_client_instance_type
+            cost_tracker_instance = ct.CostTracker(
+                instance_types=instance_types, n_public_ips=len(instance_types),
+                alert_usd=args.cost_alert_usd, stop_usd=args.cost_stop_usd,
+            )
 
     if args.exercise_start_stop:
         report = exercise_start_stop(executor, args.exercise_profile, args.exercise_route)
@@ -1872,8 +2088,23 @@ def main():
     else:
         manifest = run_pilot(executor, args.seed, Path(args.out), n_per_profile=n_per_profile,
                               routes=campaign_routes, profiles=campaign_profiles,
-                              n_warmup_per_profile=args.n_warmup_per_profile)
+                              n_warmup_per_profile=args.n_warmup_per_profile, resume=args.resume,
+                              cost_tracker=cost_tracker_instance)
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    if manifest.get("cost_stop"):
+        # Mesmo padrao da porta de fumaca: NUNCA destroi por conta
+        # propria -- a execucao em andamento ja terminou, os dados ja
+        # coletados ja estao salvos (ver run_pilot), o bloco atual ja
+        # foi parado (stop_block) -- falta so a decisao do Luciano
+        # sobre desmontar a frota real (cleanup.py) ou ajustar o
+        # limite e continuar numa nova janela.
+        print("\n*** PARADA POR CUSTO -- PAUSADO. ***", file=sys.stderr)
+        print(f"Estimativa no momento da parada: US${manifest['cost_stop']['total_usd']:.2f} "
+              f"(limite: US${args.cost_stop_usd:.2f}).", file=sys.stderr)
+        print("Dados ja coletados estao salvos nesta janela. Nenhum destroy automatico. Decisao do Luciano:", file=sys.stderr)
+        print("  (a) confirmar o custo real (console/Cost Explorer) e mandar desmontar a frota (cleanup.py), ou", file=sys.stderr)
+        print("  (b) ajustar o limite e continuar numa nova janela, se o custo real ainda permitir.", file=sys.stderr)
+        sys.exit(1)
     if args.smoke and not manifest["smoke_ok"]:
         # Decisao 49 (Emenda 12, revisada): este script NUNCA destroi
         # nada por conta propria -- so reporta e sai com erro. A

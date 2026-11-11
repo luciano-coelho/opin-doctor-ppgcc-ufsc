@@ -2556,3 +2556,103 @@ def test_sampler_de_steal_cobre_servidores_distintos_em_rotas_diferentes(monkeyp
     # a amostragem SSH real tem que ter alcancado os 4 hosts distintos (2 servidores + 2 clientes).
     for ip in ("203.0.113.50", "203.0.113.70", "203.0.113.51", "203.0.113.71"):
         assert any(ip in (h or "") for h in hosts_sampled), (ip, hosts_sampled)
+
+
+# Pedido do Luciano (Etapa 1 do piloto v9, itens 3/4/5 do relatorio de robustez).
+
+
+def test_start_utc_end_utc_presentes_em_toda_chamada_e_execucao(tmp_path):
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
+    calls = json.loads((tmp_path / "piloto_calls.json").read_text(encoding="utf-8"))
+    assert calls, "nenhuma execucao gravada"
+    for execu in calls:
+        assert execu["start_utc"] and execu["end_utc"]
+        for c in execu["insurance"] + execu["person"]:
+            assert c["start_utc"] and c["end_utc"] and "latency_ms" in c
+    assert manifest["window_start_utc"] and manifest["window_end_utc"]
+
+
+def test_resume_devolve_manifesto_existente_sem_reexecutar(tmp_path):
+    m1 = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
+    calls_before = (tmp_path / "piloto_calls.json").read_text(encoding="utf-8")
+    m2 = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1, resume=True)
+    calls_after = (tmp_path / "piloto_calls.json").read_text(encoding="utf-8")
+    assert m2 == m1
+    assert calls_after == calls_before, "resume=True nao pode reexecutar nem reescrever a janela ja completa"
+
+
+def test_resume_fail_closed_se_manifesto_nao_bate(tmp_path):
+    orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
+    with pytest.raises(RuntimeError, match="nao bate com esta chamada"):
+        orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=2, resume=True)
+
+
+def test_resume_fail_closed_contra_manifesto_de_smoke(tmp_path):
+    orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="porta de fumaca"):
+        orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=orch.SMOKE_N_PER_PROFILE, resume=True)
+
+
+def test_assert_profile_negotiated_aceita_perfil_correto():
+    result = {"curveID": orch.ec.EXPECTED_CURVE["classico"], "dualAuthenticated": False}
+    orch._assert_profile_negotiated("classico", "L0", 1, result)  # nao levanta
+
+
+def test_assert_profile_negotiated_rejeita_curva_contaminada():
+    result = {"curveID": "CURVA-ERRADA-DE-OUTRO-PERFIL", "dualAuthenticated": False}
+    with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
+        orch._assert_profile_negotiated("classico", "L0", 1, result)
+
+
+def test_assert_profile_negotiated_rejeita_dual_contaminado():
+    result = {"curveID": orch.ec.EXPECTED_CURVE["hibrido-and"], "dualAuthenticated": False}
+    with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
+        orch._assert_profile_negotiated("hibrido-and", "L0", 1, result)
+
+
+def test_run_pilot_aborta_a_janela_toda_no_primeiro_desvio_de_perfil(tmp_path, monkeypatch):
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def contaminado(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "pqc":
+            result["dualAuthenticated"] = True  # contamina de proposito
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", contaminado)
+    with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
+        orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
+    assert not (tmp_path / "manifest.json").exists(), "janela contaminada nunca deve persistir manifesto"
+
+
+def test_cost_stop_interrompe_apos_execucao_em_andamento_e_salva_dados(tmp_path):
+    from datetime import timedelta
+    tracker = orch.ct.CostTracker(
+        instance_types={"control": "t4g.micro", "server": "m7i-flex.large", "client": "m7i-flex.large"},
+        n_public_ips=3, alert_usd=10.0, stop_usd=13.0,
+    )
+    tracker.window_start_utc = tracker.window_start_utc - timedelta(hours=400)  # forca custo acima do limite
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=5, cost_tracker=tracker)
+    assert manifest["cost_stop"] is not None
+    assert manifest["total_execucoes"] < manifest["expected_total"]
+    assert manifest["total_execucoes"] >= 1  # a execucao em andamento sempre termina, nunca e abortada no meio
+    # dados ja coletados tem que estar salvos de verdade, nao perdidos
+    calls = json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    assert len(calls) == manifest["total_execucoes"]
+    assert (tmp_path / "cost_tracker.jsonl").exists()
+
+
+def test_cost_alert_nao_interrompe_a_janela(tmp_path):
+    tracker = orch.ct.CostTracker(
+        instance_types={"control": "t4g.micro"}, n_public_ips=1,
+        alert_usd=0.0000001, stop_usd=999999.0,
+    )
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1, cost_tracker=tracker)
+    assert manifest["cost_stop"] is None
+    assert manifest["total_execucoes"] == manifest["expected_total"]
+
+
+def test_sem_cost_tracker_comportamento_identico_a_antes(tmp_path):
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
+    assert manifest["cost_stop"] is None
+    assert not (tmp_path / "cost_tracker.jsonl").exists()

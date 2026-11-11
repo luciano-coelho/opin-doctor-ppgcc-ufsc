@@ -4,6 +4,8 @@
   "_reproducibility_note": "O BINARIO (sha256 abaixo, gateway/proxy) e reproduzivel byte a byte entre builds independentes, confirmado 2x nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O `.tar` de `docker save` do mesmo image id LOCAL (nunca reconstruido) tambem e byte a byte reproduzivel entre invocacoes independentes, confirmado (Decisao 68: 2 `docker save` seguidos do mesmo `mockopin-v9-gateway`, mesmo sha256 de arquivo).",
   "_image_identity_note": "Decisao 68 (Emenda -- substitui a verificacao por Image ID que a Decisao 55 pre-registrou). Achado real, ao vivo, na execucao real do piloto (Decisao 67): `docker image inspect .Id` DIVERGE entre versoes diferentes de Docker, mesmo carregando o MESMO `.tar`, com conteudo comprovadamente identico -- confirmado rodando um `docker:25-dind` (Docker 25.0.5, proxy da versao real do AMI, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `.RootFS.Layers` e o subconjunto de `.Config` (Entrypoint/Cmd/Env/ExposedPorts) saem IDENTICOS nas duas versoes; so o `.Id` final diverge. O fail-closed de entrega NAO verifica mais Image ID -- passa a exigir, nesta ordem: (1) sha256 do `.tar` igual ao `tar_sha256` pinado aqui, conferido nos dois saltos (operador->controle, ja existia; controle->host, novo); (2) `RootFS.Layers` do host, pos `docker load`, identicas a `rootfs_layers` aqui; (3) o subconjunto de `.Config` do host identico a `config_subset` aqui; (4) pra `gateway`/`proxy` (tem binario Go proprio), o sha256 do binario DENTRO do container carregado no host identico a `binary_sha256`. `image_id` continua gravado, so como campo INFORMATIVO -- nunca comparado, nunca um motivo de aborto. Nenhum criterio pre-registrado do piloto (os 7 criterios/limiares da avaliacao) muda -- isso e so o MECANISMO de verificar que a imagem entregue e a esperada, nunca o que e medido.",
   "generated_at_utc": "2026-11-08T03:30:00Z",
+  "last_amended_utc": "2026-11-11T14:33:58Z",
+  "last_amendment_note": "Decisao 116 (Emenda, Etapa 1 do piloto v9): so a entrada 'auth' foi re-pinada (rebuild real, Decisoes 112/115 agora refletidas). 'mockapi' permanece com o pin anterior, de 2026-09-24 -- ver o campo 'note' dela: o processo de build real (Gradle, modulo insurance-swagger) continua quebrado (confirmado de novo nesta rodada: 'Could not find com.raidiam.trustframework.mockinsurance:insurance-swagger:1.2.0.2', dependencia interna nao publicada em nenhum repositorio Maven acessivel) -- a mudanca da Decisao 112 em ResponseSigningService.java (RS256->PS256) NAO esta refletida na imagem mockapi pinada, exatamente a mesma excecao honesta ja registrada nas Decisoes 83/101, agora com mais uma mudanca de codigo nao refletida em cima. Luciano decide se isso precisa ser desencravado antes da campanha oficial.",
   "go_toolchain": {
     "go_tag": "go1.27.3",
     "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
@@ -139,7 +141,7 @@
     "auth": {
       "docker_image": "insurance-server-lambdas-auth:latest",
       "platform": "linux/amd64",
-      "tar_sha256": "5ce75b03d195f69c7ab9ce42868933b7f877b471d9aa93c1b8c90955d080e34c",
+      "tar_sha256": "430e713cda8c999aa74c972138e6b51ed4defc138e7a2482921632a072d36220",
       "rootfs_layers": [
         "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
         "sha256:097adc8e8de750358e0bc505a53d7f3055534238d0d4a0b9e3092b720de39b51",
@@ -149,7 +151,7 @@
         "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
         "sha256:acb5bb05a10f04dd31a7f79d0cc604965f7818e2ceab16ed7f35b6217afe558f",
         "sha256:b419462557f8e2f0ae3706a80a47b7425f22d80b747c41bf3b4ebbb8b7859e61",
-        "sha256:f46a0fa230bd4c01149fdaae855c9285459ebabe0d132fd821303cff1fb4bf1d"
+        "sha256:9a1f7aefa85d4dc1bfa3a595af7724d080b3d9d6715936384e8f936880213da4"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -174,9 +176,9 @@
       "binary_sha256_reproducible": null,
       "go_version_m_sha256": null,
       "go_version_m_text": null,
-      "image_id": "sha256:4a1f5a891f7141bd585c3f5dbfe72965bed37af79604720cab8e9c3966a2b813",
+      "image_id": "sha256:4af4725e5b17c8e43be0a648c2b4f53644e3e0202cfd95f90a101d71c9b53b1d",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): RECONSTRUIDA nesta rodada a partir do source ATUAL (`mock-service-os/mock_as`, `docker compose --profile main build auth`, 2026-11-08) -- confirmado por `git log` que nao havia nenhum commit pendente sobre esse diretorio na hora da construcao (working tree limpo). Esta e a imagem AUTH do backend de negocio da v8 (serve JWKS/token), portada pro piloto v9."
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA): RECONSTRUIDA a partir do source ATUAL (`mock-service-os/mock_as`, `docker compose --profile main build auth`, 2026-11-08). Decisao 116 (Emenda, 2026-11-11, Etapa 1 do piloto): RE-PINADA de novo -- `generated_at_utc` deste pin ficou desatualizado em relacao as Decisoes 112 (PS256, `payloadExtensionVerification.js`/`configuration.js`) e 115 (AND-gate rejeita pqc ausente, `clientHybridAuth.js`), todas dentro de `mock-service-os/mock_as`. Rebuild real (`docker compose build auth`, working tree limpo confirmado por `git status`) -- as 8 primeiras camadas (`rootfs_layers[0..7]`) saem IDENTICAS ao pin anterior (base Node + npm install, nenhuma dependencia mudou); so a ultima camada (`COPY . .`, o codigo fonte) difere, exatamente como esperado para uma mudanca so de codigo. `config_subset` inalterado."
     },
     "mongo_seed": {
       "docker_image": "insurance-server-lambdas-mongo_seed:latest",
