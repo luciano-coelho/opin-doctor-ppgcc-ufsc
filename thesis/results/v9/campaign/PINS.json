@@ -4,8 +4,8 @@
   "_reproducibility_note": "O BINARIO (sha256 abaixo, gateway/proxy) e reproduzivel byte a byte entre builds independentes, confirmado 2x nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O `.tar` de `docker save` do mesmo image id LOCAL (nunca reconstruido) tambem e byte a byte reproduzivel entre invocacoes independentes, confirmado (Decisao 68: 2 `docker save` seguidos do mesmo `mockopin-v9-gateway`, mesmo sha256 de arquivo).",
   "_image_identity_note": "Decisao 68 (Emenda -- substitui a verificacao por Image ID que a Decisao 55 pre-registrou). Achado real, ao vivo, na execucao real do piloto (Decisao 67): `docker image inspect .Id` DIVERGE entre versoes diferentes de Docker, mesmo carregando o MESMO `.tar`, com conteudo comprovadamente identico -- confirmado rodando um `docker:25-dind` (Docker 25.0.5, proxy da versao real do AMI, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `.RootFS.Layers` e o subconjunto de `.Config` (Entrypoint/Cmd/Env/ExposedPorts) saem IDENTICOS nas duas versoes; so o `.Id` final diverge. O fail-closed de entrega NAO verifica mais Image ID -- passa a exigir, nesta ordem: (1) sha256 do `.tar` igual ao `tar_sha256` pinado aqui, conferido nos dois saltos (operador->controle, ja existia; controle->host, novo); (2) `RootFS.Layers` do host, pos `docker load`, identicas a `rootfs_layers` aqui; (3) o subconjunto de `.Config` do host identico a `config_subset` aqui; (4) pra `gateway`/`proxy` (tem binario Go proprio), o sha256 do binario DENTRO do container carregado no host identico a `binary_sha256`. `image_id` continua gravado, so como campo INFORMATIVO -- nunca comparado, nunca um motivo de aborto. Nenhum criterio pre-registrado do piloto (os 7 criterios/limiares da avaliacao) muda -- isso e so o MECANISMO de verificar que a imagem entregue e a esperada, nunca o que e medido.",
   "generated_at_utc": "2026-11-08T03:30:00Z",
-  "last_amended_utc": "2026-11-11T18:16:43Z",
-  "last_amendment_note": "Decisao 123 (Emenda, Etapa 1 do piloto v9): 'gateway' e 'proxy' re-pinados -- rebuild real a partir do working tree atual (commit 836ff11a, Decisoes 118/119: TLS 1.3 fixo nos 4 perfis + enforcement ativo), working tree limpo confirmado por git status antes do build. Binario reproduzivel confirmado de novo (2 builds independentes, um deles --no-cache, mesmo sha256 nos dois binarios). 'mockapi' permanece INTOCADA, com o pin anterior de 2026-09-24 -- decisao explicita do Luciano (ver Decisao 124): o build ponta a ponta desse modulo (vendorizado na Decisao 122, mas nunca provado em isolamento total sem cache do host) fica como limitacao de reprodutibilidade conhecida, a fechar DEPOIS da campanha oficial como teste dedicado, nunca bloqueando o piloto. Historico anterior preservado: Decisao 116 (so 'auth' re-pinada, Decisoes 112/115 refletidas).",
+  "last_amended_utc": "2026-11-11T20:40:00Z",
+  "last_amendment_note": "Decisao 127 (Emenda, Etapa 2 do piloto v9 -- EXECUCAO REAL NA AWS): 'gateway' e 'proxy' re-pinados de novo. Achado real: entre a Decisao 123 e o inicio da Etapa 2, pelo menos um fork de verificacao independente desta sessao reconstruiu gateway/proxy dentro de um GIT WORKTREE ISOLADO para testes -- mas a tag Docker (`mockopin-v9-gateway:latest`/`:proxy:latest`) e um recurso GLOBAL do daemon, nao isolado por worktree, e foi sobrescrita, invalidando o pin da Decisao 123 antes mesmo do piloto rodar. deliver_images.py abortou corretamente (fail-closed, Decisao 68) ao detectar o tar_sha256 divergente, ANTES de qualquer scp -- nenhuma imagem errada foi entregue. Investigacao confirmou: o BINARIO Go dentro da imagem fresca e BYTE A BYTE IDENTICO ao binary_sha256 pinado na Decisao 123 (33f3871b...gateway, 07c9fb03...proxy) -- reprodutibilidade intacta, nenhuma regressao de codigo. Só o tar_sha256/rootfs_layers[2]/image_id mudaram, pela camada `COPY certs` efemera/aleatoria (mesmo padrao ja documentado na Decisao 123) -- um `make certs` rodou entre as duas pinagens. Risco de processo a corrigir antes da campanha oficial: forks/sessoes de verificacao que reconstroem imagens Docker com a MESMA tag de producao, mesmo em worktree isolado, mutam o daemon compartilhado -- usar uma tag distinta (ex. :verify) pra qualquer rebuild de teste, nunca sobrescrever :latest. Historico anterior preservado: Decisao 123 (TLS 1.3, Decisoes 118/119), Decisao 116 (auth, Decisoes 112/115).",
   "go_toolchain": {
     "go_tag": "go1.27.3",
     "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
@@ -15,11 +15,11 @@
     "gateway": {
       "docker_image": "mockopin-v9-gateway",
       "platform": "linux/amd64",
-      "tar_sha256": "06d27692ec4ba2a323b54e3ab8db53db945991e56bd123002c999b9798b0b1df",
+      "tar_sha256": "be8820920c48636bcf4cf7b7cc97c7e64dd79375a66278cbf0e3b58eecfe9571",
       "rootfs_layers": [
         "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
-        "sha256:7b56fe4a8abed49eb64c5aff23247b3932ddb8a8f0c7c20c4f0c44d7affba14f",
-        "sha256:062d3f510f63b343f350052f360edece2cc440af492da011df793f0b5c26281a"
+        "sha256:658e2b22fb53568fa76d0b78c2e74dbedd4af239e796c99b96b9828c6c667e43",
+        "sha256:181d2a856c7ab35fe05518cc3da993c2e08c358636d9c91231427d59b3e2de92"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -38,18 +38,18 @@
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "91ac1bc841d0fb68b22d24701715e9aceb22084e962919528024c4143cf1fefb",
       "go_version_m_text": "/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:3fe27666dd2b6cf3a1d6f9d3ae3a6df73b29bee27b86dc2469e520f4849c8e33",
+      "image_id": "sha256:cdd5c6aadf6e96bcf31fddd3ee694f87c9af5850f84dc09cb09dafb616db359c",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 123 (Emenda): re-pinado por causa do fix de TLS 1.3 (Decisoes 118/119) em gateway/main.go -- MinVersion do perfil classico TLS12->TLS13, mais o enforcement ativo (fecha a conexao se a versao negociada nao for TLS 1.3) e o campo version= no log. Rebuild real a partir do working tree limpo (git status confirmado antes do build); binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256 nos dois. Camada base continua byte-a-byte igual ao mesmo digest pinado de alpine:3.24 (nenhuma mudanca de imagem base); as 2 camadas adicionais sao COPY /gateway (binario novo, hash mudou por causa do fix) e COPY certs (sempre efemero/randomico a cada `make certs`, mudanca esperada e sem significado de seguranca). Historico anterior preservado: Decisao 61 (re-pin por Image ID ausente localmente)."
+      "note": "Decisao 127 (Emenda, Etapa 2): re-pinado de novo so pela camada COPY certs efemera (binary_sha256 confirmado identico, ver last_amendment_note). Decisao 123 (Emenda): re-pinado por causa do fix de TLS 1.3 (Decisoes 118/119) em gateway/main.go -- MinVersion do perfil classico TLS12->TLS13, mais o enforcement ativo (fecha a conexao se a versao negociada nao for TLS 1.3) e o campo version= no log. Rebuild real a partir do working tree limpo (git status confirmado antes do build); binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256 nos dois. Camada base continua byte-a-byte igual ao mesmo digest pinado de alpine:3.24 (nenhuma mudanca de imagem base); as 2 camadas adicionais sao COPY /gateway (binario novo, hash mudou por causa do fix) e COPY certs (sempre efemero/randomico a cada `make certs`, mudanca esperada e sem significado de seguranca). Historico anterior preservado: Decisao 61 (re-pin por Image ID ausente localmente)."
     },
     "proxy": {
       "docker_image": "mockopin-v9-proxy",
       "platform": "linux/amd64",
-      "tar_sha256": "94636a4dd5a3686e5747a08b7ce49b1e4f1742e867dfd880dff8275552b98ea0",
+      "tar_sha256": "dee65534721fc9253b9ce4a23f7019edfe1308ccadd46527d4f48d757e2ca919",
       "rootfs_layers": [
         "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
-        "sha256:1b98bef992d601dd5822d4a9e7a8957ad2f977da33285359d133cfac36acd521",
-        "sha256:83fcce437cfa11591fdf644b3f8a4e35fccef53b4c98564cd31ed8f037f9354d"
+        "sha256:e0499f1f7616ca2662ce71a7c528c45a3989c59adcfb866159ef2e3209fc5537",
+        "sha256:e5ace08eb8094b9ea0ec980ce69e3d444de3b0b36995cb44f2c3c94832efa391"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -66,9 +66,9 @@
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "8688e262cdca2f0253121e8e292af560f5d25dfe11b9c33aed0ea9130c355af5",
       "go_version_m_text": "/proxy: go1.27.3\n\tpath\tmockopin-v9-proxy\n\tmod\tmockopin-v9-proxy\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:2e838b939cd9d9001aaeae14377d3c5fee97dddddd70394a6046fbb43e713346",
+      "image_id": "sha256:0cc51851355f874201d4221be01445c7747c3dcde29ce3189c039c978a1d9348",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 123 (Emenda): re-pinado pelo mesmo motivo do gateway -- fix de TLS 1.3 (Decisoes 118/119) em proxy/main.go, MinVersion do perfil classico TLS12->TLS13. Rebuild real a partir do working tree limpo; binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256. Camada base inalterada (mesmo digest alpine:3.24 pinado); as 2 camadas adicionais sao COPY /proxy (binario novo) e COPY certs (efemero/randomico por design)."
+      "note": "Decisao 127 (Emenda, Etapa 2): re-pinado de novo so pela camada COPY certs efemera (binary_sha256 confirmado identico, ver last_amendment_note). Decisao 123 (Emenda): re-pinado pelo mesmo motivo do gateway -- fix de TLS 1.3 (Decisoes 118/119) em proxy/main.go, MinVersion do perfil classico TLS12->TLS13. Rebuild real a partir do working tree limpo; binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256. Camada base inalterada (mesmo digest alpine:3.24 pinado); as 2 camadas adicionais sao COPY /proxy (binario novo) e COPY certs (efemero/randomico por design)."
     },
     "measure": {
       "docker_image": "mockopin-v9-measure",
@@ -104,7 +104,7 @@
     "pqc-signer": {
       "docker_image": "mockopin-pqc-signer",
       "platform": "linux/amd64",
-      "tar_sha256": "4f1931361b8f024af080c82e69c13033549942c013a8dd435b53ab09332fc803",
+      "tar_sha256": "359fddef3cb038e29ebe35136a0047ba37930ac88fb46cf47021d9f17e8969a0",
       "rootfs_layers": [
         "sha256:34884abbe92863fce933ed7c39c0e045631af0ed86d5cc0dfbdf9fdca426ce3c",
         "sha256:e1f5bc212f66ae7d84a2a7fe70a658e80ec21226c1fec757b86a5691cfd97683",
@@ -113,7 +113,7 @@
         "sha256:0f9f1c3a75a86780839b4ad37622a5f58096e8962dd515b56dfce4026e751051",
         "sha256:85e58620c03643150883c40dfa9ece08ee02c8fd58028da84d29e6384f82db23",
         "sha256:befcbe42d3b952d4e8aec43d707d19209e6a664e4a637f56a949a236d83b970f",
-        "sha256:1e92ca3bf125f78de1ae7f2e334ca0a8a2853d2845154bb93e08bc7d21cd96b6"
+        "sha256:206078d8cd5c2a13cfc7f104aa26ebe3e9df464ddb43d2f8ce8de6786df94bf2"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -135,9 +135,9 @@
       "binary_sha256_reproducible": null,
       "go_version_m_sha256": null,
       "go_version_m_text": null,
-      "image_id": "sha256:b141cc7831aacdc1369d6a3efefbad55e0c839dac83e25fed1728a6614923b01",
+      "image_id": "sha256:5c77134d8f6008be3cf96c980e0fac40771294e101e8106abe734ebeddca685d",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- identidade conferida so por tar_sha256+rootfs_layers+config_subset (Decisao 68)."
+      "note": "Decisao 127 (Emenda, Etapa 2): re-pinado -- so a ultima camada (COPY signer_core.mjs/sign.mjs/server.mjs) mudou de hash; conteudo confirmado BYTE A BYTE IDENTICO por diff direto dos 3 arquivos extraidos de dentro da imagem fresca contra o source real -- mesmo fenomeno de timestamp de COPY ja documentado na imagem measure, nao e mudanca de conteudo. Decisao 58 (Emenda): achado real -- start_block chamava of.start_pqc_signer_service() no cliente remoto, pra TODOS os 4 perfis, sem que nenhum codigo deste pacote jamais entregasse mockopin-pqc-signer pra la (mesma classe de bug que a v8 encontrou e corrigiu em deliver_images.sh pro tls_kem_proxy/pqc-signer, so que pro lado da v9). Sem binario Go proprio pra hashear (server.mjs, Node) -- identidade conferida so por tar_sha256+rootfs_layers+config_subset (Decisao 68)."
     },
     "auth": {
       "docker_image": "insurance-server-lambdas-auth:latest",

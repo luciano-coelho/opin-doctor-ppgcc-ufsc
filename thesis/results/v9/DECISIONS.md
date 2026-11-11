@@ -11631,3 +11631,16 @@ Nenhum codigo tinha "3 vs 4" hardcoded (n_jwk e um argumento de CLI obrigatorio,
 **Prova de nao-regressao (exigencia explicita do Luciano):** hash SHA-256 do `PINS.json` e da saida do `pre_campaign_manifest.py` tirados ANTES e DEPOIS das mudancas do item 3 -- identicos nos dois casos (`PINS.json`: `3b025aa3...`; manifesto: `775c0948...`). As mudancas de higiene (Dockerfile, gitattributes, preflight, teardown) nunca tocaram certificado ou imagem pinada. Suite completa: 386/386 (383 antes + 3 novos).
 
 Nenhuma chave privada em nenhum arquivo. Nenhum push (regra permanente: nunca `git push --all`/`--mirror`), nenhuma tag, nenhuma campanha real. Etapa 2 nao iniciada.
+
+## Decisao 127 (Emenda, 2026-11-11, Etapa 2 do piloto v9 -- execucao real na AWS)
+
+**Achado real durante a Etapa 2:** ao rodar `deliver_images.py` contra a infraestrutura real recem-criada, o fail-closed da Decisao 68 abortou corretamente: o tar_sha256 local do gateway/proxy (`mockopin-v9-gateway:latest`/`mockopin-v9-proxy:latest`) nao batia mais com o pinado na Decisao 123. Causa raiz: pelo menos um fork de verificacao independente desta sessao (entre a Decisao 123 e o inicio da Etapa 2) reconstruiu gateway/proxy dentro de um git worktree ISOLADO para teste -- mas a tag Docker e um recurso GLOBAL do daemon, nunca isolado por worktree, e foi sobrescrita, invalidando o pin antes mesmo do piloto rodar.
+
+**Nenhuma imagem errada foi entregue** -- o fail-closed funcionou exatamente como desenhado (Decisao 68), abortando antes de qualquer scp.
+
+**Investigacao (extracao e hash do binario de dentro da imagem fresca, nao so do .tar):** o BINARIO Go dentro da imagem reconstruida e BYTE A BYTE IDENTICO ao `binary_sha256` pinado na Decisao 123 (gateway `33f3871b...`, proxy `07c9fb03...`) -- reprodutibilidade confirmada de novo, nenhuma regressao de codigo desde o fix de TLS 1.3. So o `tar_sha256`/`rootfs_layers[2]`/`image_id` mudaram, pela camada `COPY certs` efemera/aleatoria (mesmo padrao ja documentado na Decisao 123) -- um `make certs` rodou entre as duas pinagens.
+
+**Re-pinado** com os valores frescos (tar_sha256/rootfs_layers/image_id novos, binary_sha256 inalterado) para gateway e proxy em `PINS.json`.
+
+**Risco de processo a corrigir antes da campanha oficial:** forks/sessoes de verificacao que reconstroem imagens Docker com a MESMA tag usada pela entrega real, mesmo trabalhando num worktree git isolado, mutam o daemon Docker compartilhado do host -- isolamento de worktree NUNCA isola o daemon Docker. Recomendacao: qualquer rebuild de verificacao/teste deve usar uma tag distinta (ex. `:verify`, `:test`), nunca sobrescrever a tag usada pela entrega real (`:latest`).
+
