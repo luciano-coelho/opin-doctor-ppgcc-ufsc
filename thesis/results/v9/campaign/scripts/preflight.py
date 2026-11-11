@@ -475,9 +475,82 @@ def run_capture_preflight(hosts, key_path=None, pins_path=_PINS_PATH_DEFAULT) ->
     return {"go": go, "checks": checks}
 
 
+def check_local_images_match_pins(pins_path=_PINS_PATH_DEFAULT) -> dict:
+    """Decisao 128 (achado real da Etapa 2 do piloto v9): `gateway`/
+    `proxy`/`pqc-signer`/`mockapi` foram sobrescritos LOCALMENTE
+    (mesma tag `:latest`, daemon Docker compartilhado -- isolamento
+    de git worktree nunca isola o daemon) por rebuilds de verificacao
+    desta mesma sessao, ANTES de qualquer apply real. `deliver_images.
+    py` ja pega isso (Decisao 68, fail-closed por `tar_sha256`, ANTES
+    de qualquer scp) -- mas so DEPOIS que a infraestrutura inteira (78
+    recursos, 7 regioes) ja subiu, gastando tempo/dinheiro real pra
+    nada. Esta checagem roda ANTES do apply (parte de `run_preflight`,
+    nunca precisa de nenhuma instancia): confere `RootFS.Layers` +
+    subconjunto de `.Config` de CADA imagem pinada que existir
+    localmente, contra `PINS.json` -- mesmo criterio ja estabelecido
+    (Decisao 68: Image ID diverge entre versoes de Docker mesmo com
+    conteudo identico, NUNCA usado como criterio). Imagem pinada
+    ausente localmente nao reprova aqui (sera pega por
+    `save_image_tarball`/`deliver_images` na hora certa) -- isto so
+    detecta DIVERGENCIA de uma imagem que EXISTE mas mudou."""
+    if not pins_path.is_file():
+        return {"check": "imagens locais vs PINS.json", "ok": False,
+                "note": f"PINS.json nao encontrado em {pins_path}"}
+    try:
+        pins = json.loads(pins_path.read_text(encoding="utf-8"))["images"]
+    except (json.JSONDecodeError, KeyError) as e:
+        return {"check": "imagens locais vs PINS.json", "ok": False,
+                "note": f"PINS.json ilegivel: {type(e).__name__}: {e}"}
+
+    mismatched = []
+    checked = []
+    for key, pin in pins.items():
+        docker_image = pin.get("docker_image")
+        expected_layers = pin.get("rootfs_layers")
+        expected_config = pin.get("config_subset")
+        if not docker_image or not expected_layers:
+            continue  # entrada sem pin de conteudo (ex. so Created/image_id informativo) -- nada a conferir
+        proc = cli._run(["docker", "image", "inspect", docker_image,
+                          "--format", "{{json .RootFS.Layers}}||{{json .Config}}"], timeout=15)
+        if proc.returncode != 0:
+            continue  # imagem ausente localmente -- nao e divergencia, e so nao ter sido construida/carregada ainda
+        layers_raw, _, config_raw = proc.stdout.strip().partition("||")
+        try:
+            local_layers = json.loads(layers_raw)
+            local_config_full = json.loads(config_raw)
+        except json.JSONDecodeError:
+            mismatched.append({"image": key, "docker_image": docker_image,
+                                "reason": "saida de docker inspect ilegivel"})
+            continue
+        local_config_subset = {k: local_config_full.get(k) for k in ("Entrypoint", "Cmd", "Env", "ExposedPorts")}
+        checked.append(key)
+        if local_layers != expected_layers:
+            mismatched.append({
+                "image": key, "docker_image": docker_image, "reason": "RootFS.Layers diverge",
+                "expected_layers": expected_layers, "found_layers": local_layers,
+            })
+        elif expected_config is not None and local_config_subset != expected_config:
+            mismatched.append({
+                "image": key, "docker_image": docker_image, "reason": "Config (Entrypoint/Cmd/Env/ExposedPorts) diverge",
+                "expected_config": expected_config, "found_config": local_config_subset,
+            })
+
+    return {
+        "check": "imagens locais vs PINS.json", "ok": not mismatched,
+        "checked": checked, "mismatched": mismatched,
+        "note": (
+            "todas as imagens pinadas presentes localmente batem com PINS.json" if not mismatched else
+            "ABORTAR: imagem local divergiu do pin -- provavel rebuild/retag acidental desta sessao "
+            "(ex. fork de verificacao em worktree isolado, que ainda compartilha o daemon Docker). "
+            "NAO reconstruir nem re-pinar sem decisao explicita -- ver Decisoes 68/123/124/127."
+        ),
+    }
+
+
 def run_preflight(profile, regions, instance_types_by_region, ami_pattern_by_region,
                    client_python_exe=_VENV_PYTHON_DEFAULT) -> dict:
-    checks = [check_identity(profile), check_client_python_environment(client_python_exe)]
+    checks = [check_identity(profile), check_client_python_environment(client_python_exe),
+              check_local_images_match_pins()]
     for region in regions:
         checks.append(check_vcpu_quota(region, profile))
         checks.append(check_instance_type_availability(region, profile, instance_types_by_region[region]))

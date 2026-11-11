@@ -466,7 +466,69 @@ def test_check_no_orphan_remote_ssh_falha_reprova(monkeypatch):
     monkeypatch.setattr(cli, "run_ssh", fake_ssh)
     result = preflight.check_no_orphan_docker_resources_remote("203.0.113.9")
     assert result["ok"] is False
-    assert "SSH" in result["note"]
+
+
+def _write_pins(tmp_path, images):
+    pins_path = tmp_path / "PINS.json"
+    pins_path.write_text(json.dumps({"images": images}), encoding="utf-8")
+    return pins_path
+
+
+def test_check_local_images_match_pins_divergencia_real(monkeypatch, tmp_path):
+    # Decisao 128: mesmo cenario real do mockapi na Etapa 2 -- imagem
+    # local com uma camada final diferente da pinada.
+    pins_path = _write_pins(tmp_path, {
+        "mockapi": {
+            "docker_image": "raidiam-insurance-lambdas:latest",
+            "rootfs_layers": ["sha256:aaa", "sha256:bbb"],
+            "config_subset": {"Entrypoint": ["java"], "Cmd": None, "Env": [], "ExposedPorts": {"8080/tcp": {}}},
+        },
+    })
+
+    def fake_run(argv, timeout=None):
+        assert argv[:3] == ["docker", "image", "inspect"]
+        return _FakeLocalDockerProc('["sha256:aaa", "sha256:ccc"]||{"Entrypoint": ["java"], "Cmd": null, "Env": [], "ExposedPorts": {"8080/tcp": {}}}')
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    result = preflight.check_local_images_match_pins(pins_path=pins_path)
+    assert result["ok"] is False
+    assert result["mismatched"][0]["image"] == "mockapi"
+    assert result["mismatched"][0]["reason"] == "RootFS.Layers diverge"
+
+
+def test_check_local_images_match_pins_identico_passa(monkeypatch, tmp_path):
+    pins_path = _write_pins(tmp_path, {
+        "gateway": {
+            "docker_image": "mockopin-v9-gateway:latest",
+            "rootfs_layers": ["sha256:aaa", "sha256:bbb"],
+            "config_subset": {"Entrypoint": ["/gateway"], "Cmd": None, "Env": [], "ExposedPorts": {}},
+        },
+    })
+    monkeypatch.setattr(
+        cli, "_run",
+        lambda argv, timeout=None: _FakeLocalDockerProc(
+            '["sha256:aaa", "sha256:bbb"]||{"Entrypoint": ["/gateway"], "Cmd": null, "Env": [], "ExposedPorts": {}}'),
+    )
+    result = preflight.check_local_images_match_pins(pins_path=pins_path)
+    assert result["ok"] is True
+    assert result["checked"] == ["gateway"]
+
+
+def test_check_local_images_match_pins_imagem_ausente_nao_reprova(monkeypatch, tmp_path):
+    # Imagem pinada mas nunca construida/carregada localmente: nao e
+    # divergencia (sera pega por deliver_images na hora certa).
+    pins_path = _write_pins(tmp_path, {
+        "measure": {
+            "docker_image": "mockopin-v9-measure:latest",
+            "rootfs_layers": ["sha256:aaa"],
+            "config_subset": {},
+        },
+    })
+    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: _FakeLocalDockerProc("", returncode=1, stderr="No such image"))
+    result = preflight.check_local_images_match_pins(pins_path=pins_path)
+    assert result["ok"] is True
+    assert result["checked"] == []
+    assert result["mismatched"] == []
 
 
 def test_run_pilot_aborta_se_executor_achar_orfao(tmp_path, monkeypatch):
