@@ -184,6 +184,98 @@ def check_budget_alert_exists(profile) -> dict:
     return {"check": "alerta de orcamento", "ok": len(budgets) > 0, "count": len(budgets)}
 
 
+# Item 3 do adendo "piloto v9" (achado real, nao hipotetico): durante a
+# validacao da Decisao 122, um container `v9-mtls` de uma rodada LOCAL
+# anterior (Decisao 121, soak) ficou rodando e registrado no MESMO
+# alias de rede `mtls` que o gateway da validacao -- dois containers
+# com o mesmo alias na mesma rede Docker faz a resolucao de nome ficar
+# NAO-DETERMINISTICA, causando falhas intermitentes de TLS cuja causa
+# so foi achada ao vivo, por root-cause manual, nao por uma checagem
+# automatica. `v9-mtls` e exatamente o nome real que `SSHExecutor`
+# usa pro gateway na campanha de verdade (`gateway_container="v9-mtls"`,
+# default do construtor); `mtls` e o nome usado por `run_t5.sh` (teste
+# local T5). Os dois precisam aparecer aqui, nunca so um.
+_ORPHAN_CONTAINER_NAME_PATTERNS = (
+    "v9-mtls", "mtls", "auth", "mongo_seed", "mongo1", "mongo2", "mongo3",
+    "mockapi", "tls_kem_proxy_run", "pqc_signer_service_run",
+)
+_ORPHAN_NETWORK_NAME_PATTERNS = ("mockopin-v9-net",)
+
+
+def _docker_orphan_report(container_lines, network_lines,
+                           container_patterns=_ORPHAN_CONTAINER_NAME_PATTERNS,
+                           network_patterns=_ORPHAN_NETWORK_NAME_PATTERNS) -> dict:
+    """Funcao pura (sem subprocess) -- separada so pra ser testavel com
+    listas fabricadas, sem precisar de um Docker real. Casamento por
+    NOME EXATO (nunca substring) -- `auth` nao deveria casar com um
+    container de outro projeto chamado `auth-gateway-v2`, por exemplo;
+    precisao aqui evita falso-positivo bloqueando um pre-voo bom."""
+    containers_found = sorted({line.strip() for line in container_lines
+                                if line.strip() in container_patterns})
+    networks_found = sorted({line.strip() for line in network_lines
+                              if line.strip() in network_patterns})
+    ok = not containers_found and not networks_found
+    return {
+        "check": "containers/redes orfaos do projeto", "ok": ok,
+        "containers_found": containers_found, "networks_found": networks_found,
+        "note": (
+            "nenhum resquicio -- ambiente limpo pra nova janela" if ok else
+            "ABORTAR: resquicio de rodada anterior encontrado -- limpe manualmente "
+            "('docker rm -f <nome>'/'docker network rm <nome>') antes de abrir uma nova "
+            "janela; nunca prosseguir com isso presente (causa raiz real, Decisao 125: "
+            "resolucao de nome de rede fica nao-deterministica com alias duplicado)."
+        ),
+    }
+
+
+def check_no_orphan_docker_resources(container_patterns=_ORPHAN_CONTAINER_NAME_PATTERNS,
+                                      network_patterns=_ORPHAN_NETWORK_NAME_PATTERNS) -> dict:
+    """Pre-voo LOCAL (Decisao 125): lista containers (`docker ps -a`,
+    inclusive parados -- um container PARADO ainda ocupa o nome e pode
+    confundir um `docker run --name` novo) e redes (`docker network ls`)
+    do Docker LOCAL do operador, por nome exato. Comando que nunca
+    muda nada (`-a` e so leitura); se o Docker nao estiver acessivel
+    (daemon parado, etc.), reprova com nota clara em vez de estourar."""
+    try:
+        containers_proc = cli._run(["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=15)
+        networks_proc = cli._run(["docker", "network", "ls", "--format", "{{.Name}}"], timeout=15)
+    except Exception as e:  # noqa: BLE001 -- Docker indisponivel nunca estoura, so reprova
+        return {"check": "containers/redes orfaos do projeto", "ok": False,
+                "note": f"docker indisponivel: {type(e).__name__}: {e}"}
+    if containers_proc.returncode != 0 or networks_proc.returncode != 0:
+        return {"check": "containers/redes orfaos do projeto", "ok": False,
+                "note": f"docker ps/network ls falhou: {containers_proc.stderr or networks_proc.stderr}"}
+    return _docker_orphan_report(containers_proc.stdout.splitlines(), networks_proc.stdout.splitlines(),
+                                  container_patterns=container_patterns, network_patterns=network_patterns)
+
+
+_ORPHAN_PROBE_SCRIPT = (
+    "docker ps -a --format '{{.Names}}'; echo '---NETWORKS---'; docker network ls --format '{{.Name}}'"
+)
+
+
+def check_no_orphan_docker_resources_remote(host, key_path=None, connect_timeout=20,
+                                             container_patterns=_ORPHAN_CONTAINER_NAME_PATTERNS,
+                                             network_patterns=_ORPHAN_NETWORK_NAME_PATTERNS) -> dict:
+    """Pre-voo DA CAMPANHA (Decisao 125): mesma checagem, mas via SSH
+    numa instancia real -- pro caso de uma janela anterior ter deixado
+    container/rede pra tras na MESMA instancia (reuso de instancia
+    entre janelas, Decisao 43/45 -- stop/start preserva disco, entao
+    qualquer residuo Docker tambem sobreviveria). Chamado pelo
+    orquestrador ANTES de start_block de cada janela, nunca so uma vez
+    no apply."""
+    try:
+        proc = cli.run_ssh(host, _ORPHAN_PROBE_SCRIPT, key_path=key_path, connect_timeout=connect_timeout)
+    except Exception as e:  # noqa: BLE001 -- SSH indisponivel nunca estoura, so reprova
+        return {"check": "containers/redes orfaos do projeto", "ok": False,
+                "host": host, "note": f"SSH para {host} falhou: {type(e).__name__}: {e}"}
+    container_lines, _, network_block = proc.stdout.partition("---NETWORKS---")
+    report = _docker_orphan_report(container_lines.splitlines(), network_block.splitlines(),
+                                    container_patterns=container_patterns, network_patterns=network_patterns)
+    report["host"] = host
+    return report
+
+
 # Decisao 53 (pedido independente, item 4a): pre-requisitos da
 # CAPTURA dedicada (criterio 1) em CADA instancia do piloto -- so
 # podem ser checados DEPOIS que a instancia existe (via SSH), nunca

@@ -13,6 +13,21 @@ NETWORK=mockopin-v9-net
 IMAGE_GATEWAY=mockopin-v9-gateway
 IMAGE_PROXY=mockopin-v9-proxy
 PROFILES=(classico pqc hibrido-v8 hibrido-and)
+# Decisao 125 (pre-voo local, achado real -- Decisao 122): um container
+# "mtls"/"v9-mtls" ou a rede "mockopin-v9-net" de uma rodada ANTERIOR
+# (deste script ou de outro driver local) deixados de pe fazem a
+# resolucao de nome ficar nao-deterministica e corrompem silenciosamente
+# esta rodada -- aborta ANTES de buildar qualquer coisa, nunca limpa
+# sozinho. Mesmos padroes de nome que preflight.check_no_orphan_docker_
+# resources() usa pro lado Python.
+ORPHAN_CONTAINERS=$(docker ps -a --format '{{.Names}}' | grep -xE 'v9-mtls|mtls|auth|mongo_seed|mongo[123]|mockapi|tls_kem_proxy_run|pqc_signer_service_run' || true)
+ORPHAN_NETWORKS=$(docker network ls --format '{{.Name}}' | grep -xF "$NETWORK" || true)
+if [ -n "$ORPHAN_CONTAINERS" ] || [ -n "$ORPHAN_NETWORKS" ]; then
+  echo "FATAL (pre-voo, Decisao 125): residuo de rodada anterior encontrado -- limpe antes de repetir:" >&2
+  [ -n "$ORPHAN_CONTAINERS" ] && echo "  containers: $ORPHAN_CONTAINERS" >&2
+  [ -n "$ORPHAN_NETWORKS" ] && echo "  redes: $ORPHAN_NETWORKS" >&2
+  exit 1
+fi
 
 echo "== T5: gerando certificados efemeros (make certs em ../certs) =="
 ( cd ../certs && make certs )

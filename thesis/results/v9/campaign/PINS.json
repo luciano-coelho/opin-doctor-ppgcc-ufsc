@@ -4,8 +4,8 @@
   "_reproducibility_note": "O BINARIO (sha256 abaixo, gateway/proxy) e reproduzivel byte a byte entre builds independentes, confirmado 2x nesta rodada (CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath). O `.tar` de `docker save` do mesmo image id LOCAL (nunca reconstruido) tambem e byte a byte reproduzivel entre invocacoes independentes, confirmado (Decisao 68: 2 `docker save` seguidos do mesmo `mockopin-v9-gateway`, mesmo sha256 de arquivo).",
   "_image_identity_note": "Decisao 68 (Emenda -- substitui a verificacao por Image ID que a Decisao 55 pre-registrou). Achado real, ao vivo, na execucao real do piloto (Decisao 67): `docker image inspect .Id` DIVERGE entre versoes diferentes de Docker, mesmo carregando o MESMO `.tar`, com conteudo comprovadamente identico -- confirmado rodando um `docker:25-dind` (Docker 25.0.5, proxy da versao real do AMI, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `.RootFS.Layers` e o subconjunto de `.Config` (Entrypoint/Cmd/Env/ExposedPorts) saem IDENTICOS nas duas versoes; so o `.Id` final diverge. O fail-closed de entrega NAO verifica mais Image ID -- passa a exigir, nesta ordem: (1) sha256 do `.tar` igual ao `tar_sha256` pinado aqui, conferido nos dois saltos (operador->controle, ja existia; controle->host, novo); (2) `RootFS.Layers` do host, pos `docker load`, identicas a `rootfs_layers` aqui; (3) o subconjunto de `.Config` do host identico a `config_subset` aqui; (4) pra `gateway`/`proxy` (tem binario Go proprio), o sha256 do binario DENTRO do container carregado no host identico a `binary_sha256`. `image_id` continua gravado, so como campo INFORMATIVO -- nunca comparado, nunca um motivo de aborto. Nenhum criterio pre-registrado do piloto (os 7 criterios/limiares da avaliacao) muda -- isso e so o MECANISMO de verificar que a imagem entregue e a esperada, nunca o que e medido.",
   "generated_at_utc": "2026-11-08T03:30:00Z",
-  "last_amended_utc": "2026-11-11T14:33:58Z",
-  "last_amendment_note": "Decisao 116 (Emenda, Etapa 1 do piloto v9): so a entrada 'auth' foi re-pinada (rebuild real, Decisoes 112/115 agora refletidas). 'mockapi' permanece com o pin anterior, de 2026-09-24 -- ver o campo 'note' dela: o processo de build real (Gradle, modulo insurance-swagger) continua quebrado (confirmado de novo nesta rodada: 'Could not find com.raidiam.trustframework.mockinsurance:insurance-swagger:1.2.0.2', dependencia interna nao publicada em nenhum repositorio Maven acessivel) -- a mudanca da Decisao 112 em ResponseSigningService.java (RS256->PS256) NAO esta refletida na imagem mockapi pinada, exatamente a mesma excecao honesta ja registrada nas Decisoes 83/101, agora com mais uma mudanca de codigo nao refletida em cima. Luciano decide se isso precisa ser desencravado antes da campanha oficial.",
+  "last_amended_utc": "2026-11-11T18:16:43Z",
+  "last_amendment_note": "Decisao 123 (Emenda, Etapa 1 do piloto v9): 'gateway' e 'proxy' re-pinados -- rebuild real a partir do working tree atual (commit 836ff11a, Decisoes 118/119: TLS 1.3 fixo nos 4 perfis + enforcement ativo), working tree limpo confirmado por git status antes do build. Binario reproduzivel confirmado de novo (2 builds independentes, um deles --no-cache, mesmo sha256 nos dois binarios). 'mockapi' permanece INTOCADA, com o pin anterior de 2026-09-24 -- decisao explicita do Luciano (ver Decisao 124): o build ponta a ponta desse modulo (vendorizado na Decisao 122, mas nunca provado em isolamento total sem cache do host) fica como limitacao de reprodutibilidade conhecida, a fechar DEPOIS da campanha oficial como teste dedicado, nunca bloqueando o piloto. Historico anterior preservado: Decisao 116 (so 'auth' re-pinada, Decisoes 112/115 refletidas).",
   "go_toolchain": {
     "go_tag": "go1.27.3",
     "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
@@ -15,11 +15,11 @@
     "gateway": {
       "docker_image": "mockopin-v9-gateway",
       "platform": "linux/amd64",
-      "tar_sha256": "7720c54743cc3e03dcb60ae63f7713d05edde9ebb977920d1ecdba82d9721782",
+      "tar_sha256": "06d27692ec4ba2a323b54e3ab8db53db945991e56bd123002c999b9798b0b1df",
       "rootfs_layers": [
         "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
-        "sha256:f8d29cd508d9504cc971d5ebd88dbd9918caa94aa763eca4337a4ac71fb4b6a7",
-        "sha256:616039b2db75287d97aa13fb080f2eaa74229ca8a0aed770a0341265a19cdcf1"
+        "sha256:7b56fe4a8abed49eb64c5aff23247b3932ddb8a8f0c7c20c4f0c44d7affba14f",
+        "sha256:062d3f510f63b343f350052f360edece2cc440af492da011df793f0b5c26281a"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -34,22 +34,22 @@
         }
       },
       "binary_path_in_image": "/gateway",
-      "binary_sha256": "a08ba8e31c4e6bdc865cd32164413169390eca6766359105d10ed0e7557ff47f",
+      "binary_sha256": "33f3871b31c33b6b9ec3cfa32948fe37228def1eaefd8aa299d06d5dc716fe18",
       "binary_sha256_reproducible": true,
-      "go_version_m_sha256": "ba8f857b5d868f2c9b0596e72b3089b9e6c678ceb6a911a90035596e2ceb9493",
+      "go_version_m_sha256": "91ac1bc841d0fb68b22d24701715e9aceb22084e962919528024c4143cf1fefb",
       "go_version_m_text": "/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:fadd40fc9bf98d018a0cda2c364e1d546ac8b51db80613bac96dee5690bc9d28",
+      "image_id": "sha256:3fe27666dd2b6cf3a1d6f9d3ae3a6df73b29bee27b86dc2469e520f4849c8e33",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 61 (Emenda): Image ID re-pinado -- a imagem original (625acc6b8838...) nao existe mais localmente (nem tagueada, nem dangling; confirmado via docker image inspect/docker images -a --no-trunc). Binario/go_version_m IDENTICOS ao pin anterior (sha256 conferido de novo); camada base e byte-a-byte igual a um pull fresco de alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a (mesmo digest de layer); as 2 camadas adicionais sao so COPY /gateway e COPY certs, nada mais, nenhuma configuracao de runtime diferente (ENTRYPOINT/EXPOSE inalterados). Imagem tagueada imutavelmente como mockopin-v9-gateway:pinned. Ver DECISIONS.md, Decisao 61, pro diff completo e a prova de conteudo dos certificados."
+      "note": "Decisao 123 (Emenda): re-pinado por causa do fix de TLS 1.3 (Decisoes 118/119) em gateway/main.go -- MinVersion do perfil classico TLS12->TLS13, mais o enforcement ativo (fecha a conexao se a versao negociada nao for TLS 1.3) e o campo version= no log. Rebuild real a partir do working tree limpo (git status confirmado antes do build); binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256 nos dois. Camada base continua byte-a-byte igual ao mesmo digest pinado de alpine:3.24 (nenhuma mudanca de imagem base); as 2 camadas adicionais sao COPY /gateway (binario novo, hash mudou por causa do fix) e COPY certs (sempre efemero/randomico a cada `make certs`, mudanca esperada e sem significado de seguranca). Historico anterior preservado: Decisao 61 (re-pin por Image ID ausente localmente)."
     },
     "proxy": {
       "docker_image": "mockopin-v9-proxy",
       "platform": "linux/amd64",
-      "tar_sha256": "a982d3e6110435bdc7fa204dd517b6361fe4a93db26aa9a561d8eb0dd2e8df52",
+      "tar_sha256": "94636a4dd5a3686e5747a08b7ce49b1e4f1742e867dfd880dff8275552b98ea0",
       "rootfs_layers": [
         "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
-        "sha256:66972ef54bf96f56ecac0371d60dcd519ad5a6ad1e98f25636e56f9bac909a6a",
-        "sha256:5ecd8660a0cdff27531cca13e57dbc0e0434b7021794b0295d310d0f2fcab2f1"
+        "sha256:1b98bef992d601dd5822d4a9e7a8957ad2f977da33285359d133cfac36acd521",
+        "sha256:83fcce437cfa11591fdf644b3f8a4e35fccef53b4c98564cd31ed8f037f9354d"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -62,12 +62,13 @@
         "ExposedPorts": null
       },
       "binary_path_in_image": "/proxy",
-      "binary_sha256": "86f1ef6087aa213b494deab74610fd80f3994e4e0900b54e65d6cb8e67bb0e71",
+      "binary_sha256": "07c9fb03b938186bf5c514b736c0931f93ea7b1388cd06c3b7ca4520b00edb85",
       "binary_sha256_reproducible": true,
-      "go_version_m_sha256": "28e69c5dd6fd12b2685b02c22e18b6f3a0944a34f193913bff9ef5c75629c9f5",
+      "go_version_m_sha256": "8688e262cdca2f0253121e8e292af560f5d25dfe11b9c33aed0ea9130c355af5",
       "go_version_m_text": "/proxy: go1.27.3\n\tpath\tmockopin-v9-proxy\n\tmod\tmockopin-v9-proxy\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:d106ee299605d38f073bd24829cef0f5a3d8778879240d369b9ba1c3a9edc163",
-      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note)."
+      "image_id": "sha256:2e838b939cd9d9001aaeae14377d3c5fee97dddddd70394a6046fbb43e713346",
+      "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
+      "note": "Decisao 123 (Emenda): re-pinado pelo mesmo motivo do gateway -- fix de TLS 1.3 (Decisoes 118/119) em proxy/main.go, MinVersion do perfil classico TLS12->TLS13. Rebuild real a partir do working tree limpo; binario reproduzivel confirmado por 2 builds independentes (um --no-cache), mesmo sha256. Camada base inalterada (mesmo digest alpine:3.24 pinado); as 2 camadas adicionais sao COPY /proxy (binario novo) e COPY certs (efemero/randomico por design)."
     },
     "measure": {
       "docker_image": "mockopin-v9-measure",
@@ -276,7 +277,7 @@
       "go_version_m_text": null,
       "image_id": "sha256:1c83ab8648288d5ecbc6430e5c9af64e8297d3d8108a1809c527f6874a9f900a",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA; Env corrigido na Decisao 88, estava truncado): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Luciano decide se isso e aceitavel ou se o build precisa ser desencravado numa rodada futura."
+      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA; Env corrigido na Decisao 88, estava truncado): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Decisao 122 (Etapa 1 do piloto v9): o jar da dependencia interna (insurance-swagger:1.2.0.2) foi vendorizado no repositorio (autorizacao informada pelo autor, Raidiam), com resolucao offline confirmada (./gradlew --offline dependencies, BUILD SUCCESSFUL) -- mas a prova de build limpo de ponta a ponta (sem nenhum cache do host, container isolado) ficou inconclusiva por complexidade de infraestrutura (exigiria Docker-in-Docker). Decisao 124 (Emenda): Luciano decidiu explicitamente NAO perseguir isso agora -- esta imagem permanece INTOCADA (mesmo pin de 2026-09-24) para o piloto e para a campanha oficial; o build ponta a ponta fica registrado como limitacao de reprodutibilidade CONHECIDA, a ser fechada DEPOIS da campanha, como um teste de reprodutibilidade dedicado (reconstruir do zero numa maquina limpa e comparar tamanhos/hashes com esta imagem). Quem fizer esse teste depois: o Dockerfile deste modulo esta DESCONECTADO do mecanismo real de build (o Entrypoint real e java -jar, nunca o binario GraalVM que o Dockerfile produziria); o processo real e `./gradlew optimizedDockerBuild` (plugin Micronaut), que ja estava quebrado antes desta rodada -- nao comece pelo Dockerfile."
     }
   }
 }

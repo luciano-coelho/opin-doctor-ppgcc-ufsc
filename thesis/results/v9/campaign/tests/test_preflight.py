@@ -349,3 +349,119 @@ def test_mutante_ignora_mismatch_de_versao_e_pego(monkeypatch, tmp_path):
     assert mldsa_ok_mutante is True  # mutante aprovaria indevidamente
     with pytest.raises(AssertionError):
         assert mldsa_ok_mutante is False
+
+
+# Decisao 125 (item 3 do adendo "piloto v9" -- achado real, Decisao
+# 122: um container/alias de rede orfao de uma rodada local anterior
+# corrompeu silenciosamente uma validacao). `_docker_orphan_report` e
+# testada pura (sem Docker real); `cli._run`/`cli.run_ssh`
+# monkeypatchados pras versoes local/remota, mesmo padrao do resto
+# deste arquivo.
+
+def test_orphan_report_casamento_exato_nunca_substring():
+    """'auth' nao deveria casar com 'auth-gateway-v2' de outro
+    projeto no mesmo host -- falso positivo bloquearia um pre-voo
+    bom."""
+    result = preflight._docker_orphan_report(
+        container_lines=["auth-gateway-v2", "unrelated-app"],
+        network_lines=["bridge", "host"],
+    )
+    assert result["ok"] is True
+    assert result["containers_found"] == []
+    assert result["networks_found"] == []
+
+
+def test_orphan_report_detecta_container_e_rede_exatos():
+    result = preflight._docker_orphan_report(
+        container_lines=["v9-mtls", "unrelated-app"],
+        network_lines=["mockopin-v9-net", "bridge"],
+    )
+    assert result["ok"] is False
+    assert result["containers_found"] == ["v9-mtls"]
+    assert result["networks_found"] == ["mockopin-v9-net"]
+
+
+def test_orphan_report_ambiente_limpo_passa():
+    result = preflight._docker_orphan_report(container_lines=["unrelated-app"], network_lines=["bridge"])
+    assert result["ok"] is True
+
+
+class _FakeLocalDockerProc:
+    def __init__(self, stdout, returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+def test_check_no_orphan_local_detecta_residuo(monkeypatch):
+    def fake_run(argv, timeout=None):
+        if argv[:2] == ["docker", "ps"]:
+            return _FakeLocalDockerProc("v9-mtls\n")
+        return _FakeLocalDockerProc("mockopin-v9-net\n")
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    result = preflight.check_no_orphan_docker_resources()
+    assert result["ok"] is False
+    assert result["containers_found"] == ["v9-mtls"]
+    assert result["networks_found"] == ["mockopin-v9-net"]
+
+
+def test_check_no_orphan_local_ambiente_limpo_passa(monkeypatch):
+    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: _FakeLocalDockerProc(""))
+    result = preflight.check_no_orphan_docker_resources()
+    assert result["ok"] is True
+
+
+def test_check_no_orphan_local_docker_indisponivel_reprova(monkeypatch):
+    def fake_run(argv, timeout=None):
+        raise FileNotFoundError("docker nao encontrado")
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    result = preflight.check_no_orphan_docker_resources()
+    assert result["ok"] is False
+    assert "docker indisponivel" in result["note"]
+
+
+def test_check_no_orphan_remote_detecta_residuo_via_ssh(monkeypatch):
+    stdout = "v9-mtls\nauth\n---NETWORKS---\nbridge\n"
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(stdout))
+    result = preflight.check_no_orphan_docker_resources_remote("203.0.113.9")
+    assert result["ok"] is False
+    assert sorted(result["containers_found"]) == ["auth", "v9-mtls"]
+    assert result["host"] == "203.0.113.9"
+
+
+def test_check_no_orphan_remote_ssh_falha_reprova(monkeypatch):
+    def fake_ssh(host, cmd, **kw):
+        raise RuntimeError("conexao recusada")
+
+    monkeypatch.setattr(cli, "run_ssh", fake_ssh)
+    result = preflight.check_no_orphan_docker_resources_remote("203.0.113.9")
+    assert result["ok"] is False
+    assert "SSH" in result["note"]
+
+
+def test_run_pilot_aborta_se_executor_achar_orfao(tmp_path, monkeypatch):
+    """Integracao real com `orchestrator.run_pilot` (sem Docker real):
+    um executor fake cujo `check_no_orphans` reprova deve abortar
+    ANTES de escrever qualquer arquivo em `out_dir` -- nunca so um
+    aviso."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import orchestrator as orch  # noqa: E402
+
+    class _FakeExecutorComResiduo(orch.LocalExecutor):
+        def check_no_orphans(self):
+            return {"go": False, "checks": [{"check": "containers/redes orfaos do projeto", "ok": False,
+                                              "containers_found": ["v9-mtls"], "networks_found": []}]}
+
+    with pytest.raises(RuntimeError, match="orfaos"):
+        orch.run_pilot(_FakeExecutorComResiduo(), seed=1, out_dir=tmp_path / "janela",
+                       n_per_profile=1, profiles=["classico"], routes=["L0"], skip_dedicated_captures=True)
+    assert not (tmp_path / "janela").exists()
+
+
+def test_local_executor_check_no_orphans_sempre_passa():
+    """`LocalExecutor` e simulacao pura -- nunca depende do Docker
+    real do host que roda a suite de testes (374 testes usam
+    `LocalExecutor()` real; nenhum deve ficar fragil ao estado do
+    Docker da maquina)."""
+    import orchestrator as orch
+    assert orch.LocalExecutor().check_no_orphans() == {"go": True, "checks": []}

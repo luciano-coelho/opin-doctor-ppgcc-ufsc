@@ -275,6 +275,20 @@ class LocalExecutor:
         sem nenhum host. So o SSHExecutor de fato roda os 5 probes."""
         return {"go": True, "checks": []}
 
+    def check_no_orphans(self):
+        """Mesmo padrao de `capture_ready_check` acima: `LocalExecutor`
+        e simulacao pura, nunca sobe nenhum container de verdade
+        (`start_block`/`run_execution` desta classe nao tocam Docker)
+        -- sempre `go=True`, sem nenhuma chamada real. Importante pra
+        manter os testes de `run_pilot` hermeticos (374 testes reais
+        usam `LocalExecutor()`, nenhum deve depender do estado do
+        Docker do host que roda a suite). O pre-voo LOCAL de verdade
+        (Decisao 125) e responsabilidade de quem de fato sobe Docker
+        localmente -- `run_t5.sh` (checagem bash equivalente, mesmos
+        nomes) e qualquer script novo que chame `preflight.check_no_
+        orphan_docker_resources()` diretamente, nunca via LocalExecutor."""
+        return {"go": True, "checks": []}
+
 
 import re as _re
 
@@ -1258,6 +1272,18 @@ class SSHExecutor:
             self._deliver_image("measure", host)
         return preflight.run_capture_preflight(hosts, key_path=self.key_path)
 
+    def check_no_orphans(self):
+        """Decisao 125 (pre-voo DA CAMPANHA): checa TODOS os servidores
+        reais da janela (generalizacao pra N servidores, mesmo padrao
+        de `_all_server_ips()` ja usado por `capture_ready_check`) por
+        container/rede orfao ANTES de qualquer execucao -- reuso de
+        instancia entre janelas (stop/start preserva disco, Decisao
+        43/45) significa que residuo Docker de uma janela anterior
+        sobreviveria igual ao disco."""
+        hosts = self._all_server_ips()
+        checks = [preflight.check_no_orphan_docker_resources_remote(h, key_path=self.key_path) for h in hosts]
+        return {"go": all(c["ok"] for c in checks), "checks": checks}
+
     def _preserve_capture_attempt(self, server_ip, remote_pcap_path, remote_keylog_path, profile, route, attempt, capturas_dir: Path):
         """Pedido do Luciano (item 0, regra fail-closed nova + item 3,
         robustez de captura): traz o pcap+keylog BRUTOS desta
@@ -1659,6 +1685,19 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
             f"provavelmente uma janela parcial de uma config diferente ou interrompida antes do fim. "
             f"Nunca sobrescrito automaticamente: mova/renomeie {out_dir} antes de repetir, ou confirme "
             f"que a config (n_per_profile/profiles/routes) e a mesma pretendida."
+        )
+    # Pedido do Luciano (Etapa 1, continuacao -- Decisao 125): ANTES de
+    # qualquer execucao desta janela, nunca so uma vez no apply/inicio
+    # da campanha -- achado real (Decisao 122): um container/alias de
+    # rede orfao de uma janela/rodada ANTERIOR faz a resolucao de nome
+    # ficar nao-deterministica e corrompe silenciosamente a janela
+    # nova. Fail-closed: aborta com RuntimeError e a lista exata do
+    # que foi encontrado, nunca segue em frente nem limpa sozinho.
+    orphan_check = executor.check_no_orphans()
+    if not orphan_check["go"]:
+        raise RuntimeError(
+            f"run_pilot: containers/redes orfaos encontrados antes da janela -- "
+            f"abortando sem rodar nenhuma execucao (Decisao 125): {orphan_check['checks']}"
         )
     out_dir.mkdir(parents=True, exist_ok=True)
     capturas_dir = out_dir / "criterio1_capturas"
