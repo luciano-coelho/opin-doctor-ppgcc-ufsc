@@ -201,6 +201,65 @@ _ORPHAN_CONTAINER_NAME_PATTERNS = (
 )
 _ORPHAN_NETWORK_NAME_PATTERNS = ("mockopin-v9-net",)
 
+# Higiene de reprodutibilidade (Etapa 1, adendo, item 3c -- achado real da
+# verificacao independente EQD): `insurance-server-lambdas/docker-compose.yml`
+# (servico `localstack`) e `mock-service-os/docker-compose.yml` (idem) montam
+# estes arquivos como bind-mount de ARQUIVO UNICO. Se o arquivo ainda nao
+# existir no host (clone fresco, antes de `make certs`/do gerador legado
+# rodar), o Docker cria um DIRETORIO vazio no lugar -- travando qualquer
+# geracao de certificado POSTERIOR nesse caminho, ate alguem notar e remover
+# a mao. Bloqueou a geracao de chaves legadas varias vezes durante aquela
+# verificacao (op.key, depois mongo.pem do mesmo jeito, por outro servico).
+# Deteccao, nunca correcao automatica -- mesmo padrao de todo pre-voo deste
+# projeto: reporta e aborta, nunca apaga/recria nada sem o operador decidir.
+_LEGACY_CERTS_DIR_DEFAULT = Path(__file__).resolve().parents[5] / "mock-service-os" / "certs"
+_LEGACY_BIND_MOUNT_FILES = (
+    "op.key", "op.crt", "op_pqc.key", "op_pqc.crt", "op_hybrid.key", "op_hybrid.crt",
+)
+
+
+def _legacy_bind_mount_report(file_states: dict) -> dict:
+    """Funcao pura -- `file_states` e {nome: "file"|"dir"|"missing"},
+    testavel sem filesystem real."""
+    missing = sorted(name for name, state in file_states.items() if state == "missing")
+    is_directory = sorted(name for name, state in file_states.items() if state == "dir")
+    ok = not missing and not is_directory
+    return {
+        "check": "arquivos de bind-mount unico (localstack) existem como arquivo real",
+        "ok": ok, "missing": missing, "is_directory": is_directory,
+        "note": (
+            "todos presentes como arquivo -- seguro rodar 'docker compose --profile main up'" if ok else
+            "ABORTAR: " + (
+                f"faltam {missing} -- rode 'make certs' (ou o gerador legado, mock-service-os/certs/) "
+                f"antes de subir o compose. " if missing else ""
+            ) + (
+                f"{is_directory} existe(m) como DIRETORIO (nao arquivo) -- o Docker criou isso sozinho "
+                f"numa tentativa anterior de bind-mount contra um arquivo ausente; remova o(s) diretorio(s) "
+                f"manualmente e gere as chaves de novo antes de repetir." if is_directory else ""
+            )
+        ),
+    }
+
+
+def check_legacy_bind_mount_files(certs_dir=_LEGACY_CERTS_DIR_DEFAULT,
+                                   filenames=_LEGACY_BIND_MOUNT_FILES) -> dict:
+    """Pre-voo LOCAL, somente leitura (`Path.is_file()`/`is_dir()`, nunca
+    escreve nada) -- chame ANTES de qualquer 'docker compose --profile
+    main up' que monte `mock-service-os/certs/{op,op_pqc,op_hybrid}.{key,crt}`
+    (insurance-server-lambdas e mock-service-os, servico `localstack` nos
+    dois)."""
+    certs_dir = Path(certs_dir)
+    file_states = {}
+    for name in filenames:
+        p = certs_dir / name
+        if p.is_dir():
+            file_states[name] = "dir"
+        elif p.is_file():
+            file_states[name] = "file"
+        else:
+            file_states[name] = "missing"
+    return _legacy_bind_mount_report(file_states)
+
 
 def _docker_orphan_report(container_lines, network_lines,
                            container_patterns=_ORPHAN_CONTAINER_NAME_PATTERNS,

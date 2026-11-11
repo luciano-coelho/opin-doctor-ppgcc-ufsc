@@ -386,6 +386,36 @@ def test_orphan_report_ambiente_limpo_passa():
     assert result["ok"] is True
 
 
+def test_legacy_bind_mount_todos_presentes_passa(tmp_path):
+    for name in preflight._LEGACY_BIND_MOUNT_FILES:
+        (tmp_path / name).write_text("conteudo fake")
+    result = preflight.check_legacy_bind_mount_files(certs_dir=tmp_path)
+    assert result["ok"] is True
+    assert result["missing"] == [] and result["is_directory"] == []
+
+
+def test_legacy_bind_mount_arquivo_ausente_reprova(tmp_path):
+    for name in preflight._LEGACY_BIND_MOUNT_FILES[1:]:
+        (tmp_path / name).write_text("conteudo fake")
+    # op.key nunca criado -- clone fresco, antes de 'make certs'.
+    result = preflight.check_legacy_bind_mount_files(certs_dir=tmp_path)
+    assert result["ok"] is False
+    assert result["missing"] == ["op.key"]
+    assert "rode 'make certs'" in result["note"]
+
+
+def test_legacy_bind_mount_diretorio_no_lugar_do_arquivo_reprova(tmp_path):
+    for name in preflight._LEGACY_BIND_MOUNT_FILES[1:]:
+        (tmp_path / name).write_text("conteudo fake")
+    # Reproduz o bug real: o Docker cria um DIRETORIO quando o bind-mount
+    # roda contra um arquivo-fonte ausente.
+    (tmp_path / "op.key").mkdir()
+    result = preflight.check_legacy_bind_mount_files(certs_dir=tmp_path)
+    assert result["ok"] is False
+    assert result["is_directory"] == ["op.key"]
+    assert "DIRETORIO" in result["note"]
+
+
 class _FakeLocalDockerProc:
     def __init__(self, stdout, returncode=0, stderr=""):
         self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
