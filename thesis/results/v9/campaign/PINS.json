@@ -238,7 +238,7 @@
     "mockapi": {
       "docker_image": "raidiam-insurance-lambdas:latest",
       "platform": "linux/amd64",
-      "tar_sha256": "eae5da2f0ba5eba493391a15e8f7634d8c61aa006e20dd5178a95325695b86f1",
+      "tar_sha256": "d624374bdd722220030ef1eca7acf87686997489e1c30ac72a89b7b9ac13f6e9",
       "rootfs_layers": [
         "sha256:d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245",
         "sha256:d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5",
@@ -246,10 +246,9 @@
         "sha256:32c0ccbd895551d580429f55759ea6f1f10e3a0b3053c55ef3738860520c0f72",
         "sha256:85c8d6ef0f93810fd512e6c9564bdbf80f3015370c459fba586740544f97b2ed",
         "sha256:301aed5e5c67f2f150c475697fb725021e964c983eb2fd9b102daa95a031fc60",
-        "sha256:e05607f8cc3d49c12b899c0a04fbd112039a9b2161b3e52607fe5a4bd21ac5a4",
-        "sha256:aee7a1cd7242f1e1ca636e5a963cb7274eaa8ab2a3196065436fe42d387df861",
-        "sha256:db1e575b74c0c12bf038c06c7867e6953f68038d2cb7ae4d308dab3ce38ef606",
-        "sha256:abdb15096161afc78d7d99e7048e9d76bcdd7200c262203c76fa3761946e3488"
+        "sha256:0bed230c92310b4e9870982c52f6499d026fae74365e736d741819163089940a",
+        "sha256:b42e8af92c5c4a836e2bf10c390fd914f9e0e4df4b0cfb94f028e4b99b711305",
+        "sha256:031a94bb7ec7c036e717decbc462b5826561feeee26c3a98873e6e61147c2eb2"
       ],
       "config_subset": {
         "Entrypoint": [
@@ -270,14 +269,14 @@
           "8080/tcp": {}
         }
       },
-      "binary_path_in_image": null,
-      "binary_sha256": null,
-      "binary_sha256_reproducible": null,
+      "binary_path_in_image": "/home/app/application.jar",
+      "binary_sha256": "956e860d109aa0412d6f3781436da1b1f81543f54b1cd8f85eaf9bc0a44b65ba",
+      "binary_sha256_reproducible": false,
       "go_version_m_sha256": null,
       "go_version_m_text": null,
-      "image_id": "sha256:1c83ab8648288d5ecbc6430e5c9af64e8297d3d8108a1809c527f6874a9f900a",
+      "image_id": "sha256:2fb10bb60895c6e9537edb9e62470d24a1119fe112d6f21a66e5f5103d52f3df",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Decisao 83 (Emenda -- ENTRADA NOVA, EXCECAO HONESTA; Env corrigido na Decisao 88, estava truncado): imagem EXISTENTE (criada 2026-09-24), NUNCA reconstruida nesta rodada. `insurance-server-lambdas/Dockerfile` (multi-stage Gradle+GraalVM native-image, ENTRYPOINT esperado `/home/application/server`) mudou em 2026-10-21 (so pinagem de digest das MESMAS imagens-base, gradle:5.3.1-jdk11-slim/amazonlinux:2 -- confirmado por `git log`, zero mudanca em src/build.gradle desde 2026-09-24) -- mas o `Entrypoint` REAL desta imagem e `java -jar /home/app/application.jar`, prova de que ela nunca foi construida por ESSE Dockerfile (seria um binario GraalVM nativo, nunca um jar+JRE). Confirmado tambem que o `./gradlew optimizedDockerBuild` real (o processo documentado de build) esta quebrado hoje (plugin Shadow exige Gradle 8+, wrapper do projeto pinado numa versao incompativel -- ver thesis/results/v4/DECISIONS.md). NUNCA reconstruida por isso -- mantida como estava, com esta divergencia registrada explicitamente, nunca escondida. Decisao 122 (Etapa 1 do piloto v9): o jar da dependencia interna (insurance-swagger:1.2.0.2) foi vendorizado no repositorio (autorizacao informada pelo autor, Raidiam), com resolucao offline confirmada (./gradlew --offline dependencies, BUILD SUCCESSFUL) -- mas a prova de build limpo de ponta a ponta (sem nenhum cache do host, container isolado) ficou inconclusiva por complexidade de infraestrutura (exigiria Docker-in-Docker). Decisao 124 (Emenda): Luciano decidiu explicitamente NAO perseguir isso agora -- esta imagem permanece INTOCADA (mesmo pin de 2026-09-24) para o piloto e para a campanha oficial; o build ponta a ponta fica registrado como limitacao de reprodutibilidade CONHECIDA, a ser fechada DEPOIS da campanha, como um teste de reprodutibilidade dedicado (reconstruir do zero numa maquina limpa e comparar tamanhos/hashes com esta imagem). Quem fizer esse teste depois: o Dockerfile deste modulo esta DESCONECTADO do mecanismo real de build (o Entrypoint real e java -jar, nunca o binario GraalVM que o Dockerfile produziria); o processo real e `./gradlew optimizedDockerBuild` (plugin Micronaut), que ja estava quebrado antes desta rodada -- nao comece pelo Dockerfile."
+      "note": "Decisao 129 (Emenda, 2026-11-11): RE-PINADA apos a Decisao 128 ter encontrado que esta imagem (antes pinada com image_id 1c83ab86..., criada 2026-09-24, jar NAO-otimizado) tinha sido sobrescrita localmente em 2026-11-10 por um `./gradlew optimizedDockerBuild` real que rodou sem comando capturado durante a rodada de vendorizacao do jar (Decisao 122) -- a Decisao 124 tinha fechado a limitacao so FUNCIONALMENTE (build reproduzido 2x nesta sessao, conteudo do jar IDENTICO entre as duas rodadas, binary_sha256_reproducible=false porque o ARQUIVO .jar difere por timestamp de entrada do zip entre builds, nunca por bytecode). Validacao completa antes deste re-pin, autorizada explicitamente pelo Luciano ('aceitar a imagem nova SE provada'): (1) imagem antiga (1c83ab86...) nao existe mais localmente, nem dangling -- comparacao direta nao foi possivel; (2) build reproduzido 2x a partir do jar vendorizado, conteudo identico (2145 arquivos, diff vazio); (3) teste diferencial real (/jwks e /health nos 3 perfis principais) bateu exatamente com a captura persistida da Decisao 126; (4) soak completo de 200 fluxos OAuth reais (50 por perfil, Classic+PQC+Hibrido dual=true+Hibrido dual=false/controle), 200/200 ok, zero erro, n_calls=20 constante em todos -- identico em estrutura ao soak de 1200 fluxos da Decisao (commit 93e57b2f) com a imagem antiga; platos de memoria do mockapi (Classic ~584MiB, PQC ~705MiB, Hibrido dual=true ~582MiB, Hibrido dual=false ~679MiB) todos iguais ou MENORES que a referencia antiga (~637-678MiB/~782MiB PQC), nenhum com crescimento continuo -- plausivel efeito do Micronaut AOT reduzir overhead de reflexao/contexto de beans, nao um problema. A unica classe que diverge entre builds (`EnvironmentPropertiesOptimizationLoader.class`, achado da Decisao 128) foi explicada por javap -c: a diferenca e uma entrada de mapeamento de nome de propriedade de ambiente gerada pelo Micronaut AOT para UMA variavel de ambiente incidental presente no HOST de build no momento em que o Gradle rodou (confirmado: o padrao `EFC_<pid>_<sufixo aleatorio>` bate exatamente com uma variavel de sandbox da propria sessao de execucao, nao e config real da aplicacao, nunca referenciada em nenhum lugar do codigo-fonte) -- artefato deterministico-mas-dependente-do-ambiente-de-build da ferramenta AOT, SEM EFEITO no comportamento em runtime do mockapi (a tabela de mapeamento so acelera lookup de variantes de nome; uma entrada ausente so faz o Micronaut cair no caminho normal de resolucao de propriedade, que sempre funciona). Build otimizado aceito como o pin oficial a partir de agora. `insurance-server-lambdas/Dockerfile` continua DESCONECTADO do mecanismo real (`./gradlew optimizedDockerBuild`, plugin Micronaut) -- isso nao mudou."
     }
   }
 }
