@@ -2594,20 +2594,43 @@ def test_resume_fail_closed_contra_manifesto_de_smoke(tmp_path):
 
 
 def test_assert_profile_negotiated_aceita_perfil_correto():
-    result = {"curveID": orch.ec.EXPECTED_CURVE["classico"], "dualAuthenticated": False}
+    result = {"curveID": orch.ec.EXPECTED_CURVE["classico"], "dualAuthenticated": False,
+              "tlsVersion": orch.EXPECTED_TLS_VERSION}
     orch._assert_profile_negotiated("classico", "L0", 1, result)  # nao levanta
 
 
 def test_assert_profile_negotiated_rejeita_curva_contaminada():
-    result = {"curveID": "CURVA-ERRADA-DE-OUTRO-PERFIL", "dualAuthenticated": False}
+    result = {"curveID": "CURVA-ERRADA-DE-OUTRO-PERFIL", "dualAuthenticated": False,
+              "tlsVersion": orch.EXPECTED_TLS_VERSION}
     with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
         orch._assert_profile_negotiated("classico", "L0", 1, result)
 
 
 def test_assert_profile_negotiated_rejeita_dual_contaminado():
-    result = {"curveID": orch.ec.EXPECTED_CURVE["hibrido-and"], "dualAuthenticated": False}
+    result = {"curveID": orch.ec.EXPECTED_CURVE["hibrido-and"], "dualAuthenticated": False,
+              "tlsVersion": orch.EXPECTED_TLS_VERSION}
     with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
         orch._assert_profile_negotiated("hibrido-and", "L0", 1, result)
+
+
+def test_assert_profile_negotiated_rejeita_versao_tls_contaminada():
+    # Adendo a Etapa 1 (achado da verificacao independente EQD): curve/dual
+    # corretos, so a versao TLS divergente (ex.: downgrade pra TLS 1.2) --
+    # tem que rejeitar sozinho, sem depender de curve/dual tambem estarem
+    # errados.
+    result = {"curveID": orch.ec.EXPECTED_CURVE["classico"], "dualAuthenticated": False,
+              "tlsVersion": "TLS 1.2"}
+    with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
+        orch._assert_profile_negotiated("classico", "L0", 1, result)
+
+
+def test_assert_profile_negotiated_rejeita_versao_tls_ausente():
+    # Gateway anterior a este adendo (sem o campo version= no log) --
+    # tratado como divergencia, nunca aceito silenciosamente so porque
+    # curve/dual bateram.
+    result = {"curveID": orch.ec.EXPECTED_CURVE["classico"], "dualAuthenticated": False}
+    with pytest.raises(RuntimeError, match="desvio de perfil detectado"):
+        orch._assert_profile_negotiated("classico", "L0", 1, result)
 
 
 def test_run_pilot_aborta_a_janela_toda_no_primeiro_desvio_de_perfil(tmp_path, monkeypatch):

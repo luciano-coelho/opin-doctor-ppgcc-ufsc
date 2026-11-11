@@ -222,7 +222,9 @@ func buildClientTLSConfig(profile, certDir string, ticketsDisabled bool, keylog 
 	var err error
 	switch profile {
 	case "classico":
-		cfg, err = singleChainClientConfig(p("classico_client.crt"), p("classico_client.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS12)
+		// Adendo a Etapa 1 do piloto v9 (mesmo achado do gateway):
+		// fixado em TLS13..TLS13, igual aos outros 3 perfis.
+		cfg, err = singleChainClientConfig(p("classico_client.crt"), p("classico_client.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS13)
 	case "pqc":
 		cfg, err = singleChainClientConfig(p("pqc_client.crt"), p("pqc_client.key"), p("pqc_ca.crt"), tls.MLKEM1024, tls.VersionTLS13)
 	case "hibrido-v8":

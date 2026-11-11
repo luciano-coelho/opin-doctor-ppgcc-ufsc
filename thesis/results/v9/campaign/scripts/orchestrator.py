@@ -258,6 +258,11 @@ class LocalExecutor:
             "insurance": insurance, "person": person,
             "gateway_log_lines": lines,
             "curveID": ec.EXPECTED_CURVE[profile], "dualAuthenticated": dual,
+            # Adendo a Etapa 1 (achado da verificacao independente EQD):
+            # simulador honesto -- os 4 perfis reais pinam TLS 1.3 desde
+            # este mesmo adendo, entao o mock reflete o MESMO valor
+            # esperado, nunca um numero a parte so pra passar o assert.
+            "tlsVersion": EXPECTED_TLS_VERSION,
             "start_utc": t0, "end_utc": t1,
         }
 
@@ -307,8 +312,15 @@ _INTERNAL_CALLER_SNI = "matls-api.local"  # mesma convencao de evaluate_criteria
 
 _CONNECTION_OK_LOG_RE = _re.compile(
     r'gateway: \S+ connection OK remoteAddr=(?P<addr>\S+) sni="(?P<sni>[^"]*)"'
-    r'(?: curve=(?P<curve>\S+) dualAuthenticated=(?P<dual>\S+))?'
+    r'(?: curve=(?P<curve>\S+) dualAuthenticated=(?P<dual>\S+)'
+    r'(?: version="(?P<version>[^"]*)")?)?'
 )
+
+# Adendo a Etapa 1 do piloto v9 (achado da verificacao independente EQD):
+# os 4 perfis agora pinam TLS 1.3 exatamente (ver integration/gateway/
+# main.go, buildServerTLSConfig) -- este e o unico valor esperado,
+# identico nos 4, nunca um por-perfil feito a mao.
+EXPECTED_TLS_VERSION = "TLS 1.3"
 
 
 class SSHExecutor:
@@ -1174,11 +1186,17 @@ class SSHExecutor:
         client_facing = [p for p in parsed if p["sni"] != _INTERNAL_CALLER_SNI]
         curve_id = client_facing[0]["curve"] if client_facing and client_facing[0]["curve"] else ec.EXPECTED_CURVE.get(profile)
         dual_auth = (client_facing[0]["dual"] == "true") if client_facing and client_facing[0]["dual"] else (profile == "hibrido-and")
+        # Adendo a Etapa 1 (achado da verificacao independente EQD): versao
+        # TLS negociada, do MESMO jeito que curve/dual -- extraida do log
+        # real do gateway, nunca inventada. `None` se a linha nao tiver o
+        # campo (gateway antigo, antes deste adendo) -- o assert trata isso
+        # como divergencia, nunca aceita silenciosamente.
+        tls_version = client_facing[0]["version"] if client_facing and client_facing[0].get("version") else None
 
         return {
             "insurance": result.get("calls", []), "person": [],
             "gateway_log_lines": raw_lines,
-            "curveID": curve_id, "dualAuthenticated": dual_auth,
+            "curveID": curve_id, "dualAuthenticated": dual_auth, "tlsVersion": tls_version,
             # Pedido do Luciano (Etapa 1, item 4): carimbo por EXECUCAO
             # (nao so por chamada individual, que ja vem de
             # opin_flow.py dentro de result["calls"]) -- t0/t1 ja
@@ -1523,24 +1541,37 @@ def _assert_profile_negotiated(profile, route, run, result):
     um numero reinventado aqui. Levanta com erro claro e contexto
     completo (perfil/rota/run/observado/esperado) no primeiro desvio.
 
-    Limitacao honesta: cobre as duas dimensoes que ja chegam como
+    Limitacao honesta: cobre as tres dimensoes que ja chegam como
     dado estruturado neste ponto (grupo de troca de chaves do
-    handshake, dual=true/false) -- NAO verifica algoritmo de
-    assinatura nem a cadeia de certificados byte a byte (isso exigiria
-    parsear o pcap/keylog de cada execucao, que so o criterio 1
-    dedicado captura hoje, numa amostra, nao em toda execucao)."""
+    handshake, dual=true/false, versao TLS negociada) -- NAO verifica
+    algoritmo de assinatura nem a cadeia de certificados byte a byte
+    (isso exigiria parsear o pcap/keylog de cada execucao, que so o
+    criterio 1 dedicado captura hoje, numa amostra, nao em toda
+    execucao).
+
+    Adendo a Etapa 1 (achado da verificacao independente EQD, 2026-11-
+    11): o perfil Classico era o unico com MinVersion<MaxVersion
+    (TLS12..TLS13) -- o canal genuinamente ADMITIA negociar TLS 1.2.
+    Corrigido em `buildServerTLSConfig`/`buildClientTLSConfig` (os 4
+    perfis agora TLS13..TLS13, enforcement ATIVO tambem no gateway,
+    `business_server.go`) -- este assert e a camada extra, do mesmo
+    jeito que curve/dual, nunca so confiar no pin estatico."""
     expected_curve = ec.EXPECTED_CURVE.get(profile)
     expected_dual = (profile == "hibrido-and")
     observed_curve = result.get("curveID")
     observed_dual = result.get("dualAuthenticated")
-    if observed_curve != expected_curve or observed_dual != expected_dual:
+    observed_version = result.get("tlsVersion")
+    if (observed_curve != expected_curve or observed_dual != expected_dual
+            or observed_version != EXPECTED_TLS_VERSION):
         raise RuntimeError(
             f"_assert_profile_negotiated: desvio de perfil detectado em profile={profile!r} "
             f"route={route!r} run={run!r} -- esperado curveID={expected_curve!r} "
-            f"dualAuthenticated={expected_dual!r}, observado curveID={observed_curve!r} "
-            f"dualAuthenticated={observed_dual!r}. Abortando ANTES de aceitar esta execucao -- "
-            f"provavel contaminacao de estado entre blocos (backend/gateway nao recriados juntos). "
-            f"Nunca segue coletando dado sob um perfil diferente do anunciado."
+            f"dualAuthenticated={expected_dual!r} tlsVersion={EXPECTED_TLS_VERSION!r}, "
+            f"observado curveID={observed_curve!r} dualAuthenticated={observed_dual!r} "
+            f"tlsVersion={observed_version!r}. Abortando ANTES de aceitar esta execucao -- "
+            f"provavel contaminacao de estado entre blocos (backend/gateway nao recriados juntos) "
+            f"ou downgrade de versao TLS. Nunca segue coletando dado sob um perfil diferente do "
+            f"anunciado."
         )
 
 

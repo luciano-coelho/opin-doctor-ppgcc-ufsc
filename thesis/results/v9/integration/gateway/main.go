@@ -257,7 +257,12 @@ func buildServerTLSConfig(profile, certDir string, ticketsDisabled bool, keylog 
 	var err error
 	switch profile {
 	case "classico":
-		cfg, err = singleChainServerConfig(p("classico_server.crt"), p("classico_server.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS12, nil)
+		// Adendo a Etapa 1 do piloto v9 (achado real da verificacao
+		// independente EQD): este era o unico dos 4 perfis com MinVersion
+		// < MaxVersion (TLS12..TLS13) -- o canal genuinamente ADMITIA
+		// negociar TLS 1.2, mesmo que dois stacks Go modernos normalmente
+		// assentem em 1.3. Fixado em TLS13..TLS13, igual aos outros 3.
+		cfg, err = singleChainServerConfig(p("classico_server.crt"), p("classico_server.key"), p("classico_ca.crt"), tls.CurveP384, tls.VersionTLS13, nil)
 	case "pqc":
 		cfg, err = singleChainServerConfig(p("pqc_server.crt"), p("pqc_server.key"), p("pqc_ca.crt"), tls.MLKEM1024, tls.VersionTLS13, nil)
 	case "hibrido-v8":

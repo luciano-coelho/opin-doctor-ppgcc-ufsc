@@ -109,6 +109,16 @@ func acceptBusinessConn(raw net.Conn, cfg *tls.Config, profile string, want tls.
 		_ = tlsConn.Close()
 		return
 	}
+	// Adendo a Etapa 1 do piloto v9 (achado da verificacao independente
+	// EQD): os 4 perfis agora pinam MinVersion=MaxVersion=TLS13 na config
+	// (ver buildServerTLSConfig), entao isto nunca deveria disparar -- mas
+	// "nunca deveria" nao e "nao pode": mesmo padrao de enforcement ativo
+	// ja usado acima pra curve/dual, nunca so confiar no pin estatico.
+	if cs.ServerName != internalCallerSNI && cs.Version != tls.VersionTLS13 {
+		log.Printf("gateway: FATAL: %s negotiated %s, expected exactly TLS 1.3 -- closing connection", profile, tls.VersionName(cs.Version))
+		_ = tlsConn.Close()
+		return
+	}
 	// handshakeBytesIn/Out: measured the same way T6 does (Decisao 14),
 	// via the countingConn wrapped around raw above -- added here so
 	// Decisao 18's per-connection table has a real number, not just
@@ -118,8 +128,8 @@ func acceptBusinessConn(raw net.Conn, cfg *tls.Config, profile string, want tls.
 	if len(cs.PeerCertificates) > 0 {
 		clientCertCN = cs.PeerCertificates[0].Subject.CommonName
 	}
-	log.Printf("gateway: %s connection OK remoteAddr=%s sni=%q curve=%s dualAuthenticated=%v clientCert=%q handshakeBytesIn=%d handshakeBytesOut=%d",
-		profile, raw.RemoteAddr(), cs.ServerName, cs.CurveID, cs.DualAuthenticated, clientCertCN, hsIn, hsOut)
+	log.Printf("gateway: %s connection OK remoteAddr=%s sni=%q curve=%s dualAuthenticated=%v version=%q clientCert=%q handshakeBytesIn=%d handshakeBytesOut=%d",
+		profile, raw.RemoteAddr(), cs.ServerName, cs.CurveID, cs.DualAuthenticated, tls.VersionName(cs.Version), clientCertCN, hsIn, hsOut)
 	pl.ch <- tlsConn
 }
 
