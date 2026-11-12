@@ -49,6 +49,7 @@ import random
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,6 +129,61 @@ def _renew_local_safety_timer():
         )
     except Exception:
         pass
+
+
+# Decisao 138 (incidente real -- queda da primeira tentativa da
+# campanha oficial): `renew_all_safety_timers()` (uma vez, no inicio
+# de `run_pilot`) so da `SAFETY_TIMER_RENEW_HOURS` (3h) de margem a
+# TODOS os hosts de uma vez; a renovacao per-rota, dentro do laco
+# principal, so toca um host quando o laco CHEGA naquela rota. Numa
+# janela real que passa de 3h (a oficial leva ~5,2h), uma rota perto
+# do FIM da ordem de execucao pode ter o prazo inicial vencido antes
+# do laco chegar nela -- a causa raiz exata do RuntimeError real que
+# matou o processo no meio da rota L14 (ver DECISIONS.md). Correcao
+# estrutural: uma thread PROPRIA, independente do progresso do laco
+# principal, que bate em TODOS os hosts a cada `interval_seconds`
+# (default 5min) -- nunca depende de qual rota/perfil esta sendo
+# processado agora. `HEARTBEAT_THREAD_MAX_HOURS` (default 12h) e so
+# um teto de seguranca MUITO maior que qualquer duracao real estimada
+# de janela (a oficial projeta ~5,2h) -- a thread nunca precisa parar
+# sozinha numa execucao real, so existe pra nao rodar pra sempre se
+# algo vazar; e sempre `daemon=True`, nunca impede o processo principal
+# de terminar nem precisa de join explicito. Falhas de UM host dentro
+# de um ciclo nunca derrubam a thread nem os ciclos seguintes (mesma
+# tolerancia a falha individual de `renew_all_safety_timers`/
+# `renew_safety_timers`, nunca uma segunda politica de erro aqui).
+HEARTBEAT_THREAD_INTERVAL_SECONDS = 300
+HEARTBEAT_THREAD_MAX_HOURS = 12
+
+
+def _start_heartbeat_thread(executor, interval_seconds: float = HEARTBEAT_THREAD_INTERVAL_SECONDS,
+                             max_hours: float = HEARTBEAT_THREAD_MAX_HOURS) -> threading.Event:
+    """Decisao 138: dispara a thread de heartbeat PROPRIA (ver
+    docstring acima) e devolve o `threading.Event` que, se marcado
+    (`.set()`), faz a thread sair no proximo ciclo (sem usar isto,
+    nao ha diferenca pratica -- a thread e `daemon=True`, morre com o
+    processo; o Event existe so pra testes locais quererem um fim
+    deterministico, sem precisar matar o processo)."""
+    stop_event = threading.Event()
+    deadline = time.monotonic() + max_hours * 3600
+
+    def _loop():
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            try:
+                if hasattr(executor, "renew_all_safety_timers"):
+                    executor.renew_all_safety_timers()
+                _renew_local_safety_timer()
+            except Exception:
+                # Decisao 138: um ciclo que falhar (rede transitoria,
+                # host fora do ar momentaneamente) nunca mata a
+                # thread -- o PROXIMO ciclo, poucos minutos depois,
+                # tenta de novo. Mesma politica de tolerancia a falha
+                # individual ja usada em `renew_all_safety_timers`.
+                pass
+            stop_event.wait(interval_seconds)
+
+    threading.Thread(target=_loop, name="heartbeat-renewal", daemon=True).start()
+    return stop_event
 
 PINS_PATH = Path(__file__).resolve().parents[1] / "PINS.json"
 _PINS_CACHE = None
@@ -1870,6 +1926,18 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     # cobrindo a renovacao CONTINUA host-a-host durante a execucao.
     if hasattr(executor, "renew_all_safety_timers"):
         executor.renew_all_safety_timers()
+    # Decisao 138 (incidente real -- queda da primeira tentativa da
+    # campanha oficial no meio da rota L14, prazo inicial de 3h
+    # vencido antes do laco chegar la, numa janela real de ~5,2h):
+    # alem da renovacao em lote (acima, uma vez) e da renovacao
+    # per-rota (dentro do laco, ja existente), uma thread PROPRIA
+    # renova TODOS os hosts a cada `HEARTBEAT_THREAD_INTERVAL_SECONDS`
+    # independente de qual rota/perfil o laco esta processando agora
+    # -- nunca mais depende do progresso do laco pra nenhum host
+    # ficar coberto. `daemon=True` por construcao (ver
+    # `_start_heartbeat_thread`): morre com o processo, sem join
+    # explicito necessario aqui.
+    _start_heartbeat_thread(executor)
     out_dir.mkdir(parents=True, exist_ok=True)
     capturas_dir = out_dir / "criterio1_capturas"
     capturas_dir.mkdir(parents=True, exist_ok=True)
