@@ -92,6 +92,20 @@ SAFETY_TIMER_RENEW_HOURS = 3
 # forma.
 CPU_STEAL_AUDIT_THRESHOLD_PCT = 5.0
 
+# Decisao 139 (incidente real -- segunda queda da campanha oficial): um
+# blip de SSH transitorio (rc=255, a convencao do OpenSSH pra "nao
+# completei a conexao/comando", nunca o rc do comando remoto) matava o
+# processo inteiro mesmo com os hosts saudaveis -- `run_execution` nunca
+# tinha retry de nenhum tipo. 3 tentativas (a que funcionar conta, as
+# anteriores sao descartadas por completo), espera crescente entre elas
+# (2s, 5s -- cada nova tentativa ja e uma conexao SSH nova por
+# construcao, nunca reaproveita um socket velho). So pra rc=255 -- erro
+# de aplicacao/criterio (rc do proprio comando remoto, JSON mal
+# formado) nunca entra aqui, levanta na hora, igual a antes.
+EXECUTION_TRANSPORT_FAILURE_RC = 255
+EXECUTION_TRANSPORT_MAX_ATTEMPTS = 3
+EXECUTION_TRANSPORT_BACKOFF_SECONDS = [2, 5]
+
 
 def _atomic_write_json(path: Path, obj) -> None:
     """Decisao 133 (incidente real -- o orquestrador crashou numa fase
@@ -1350,21 +1364,53 @@ class SSHExecutor:
         qualquer forma, `_http_counts_for_calls`, nunca separa de
         volta; ver Decisao 49)."""
         client_ip, server_ip = self._client_ip(route), self._server_ip(route)
-        stat_client_before = self._sample_proc_stat(client_ip)
-        stat_server_before = self._sample_proc_stat(server_ip)
-        t0 = datetime.now(timezone.utc)
         gw_ip = self._server_gateway_ip(route)
         env = self._client_env(profile, gw_ip)
         label = f"{profile}_{route}_{run}"
         remote_cmd = f"cd ~/thesis/scripts && {self._env_prefix(env)} python3 campaign_client_runner.py --label {label}"
-        proc = cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
-        if proc.returncode != 0:
-            raise RuntimeError(f"execucao {label}: falhou (rc={proc.returncode}): {proc.stderr}")
-        try:
-            result = json.loads(proc.stdout.strip().splitlines()[-1])
-        except (json.JSONDecodeError, IndexError) as e:
-            raise RuntimeError(f"execucao {label}: saida remota nao-JSON: {e}\nstdout={proc.stdout!r}") from None
-        t1 = datetime.now(timezone.utc)
+        # Decisao 139 (incidente real -- segunda queda da campanha oficial,
+        # blip de SSH transitorio pro cliente de L123 matou o processo
+        # inteiro com os hosts saudaveis): retry SO pra falha de
+        # TRANSPORTE (`ssh` em si falhou -- rc=255 e a convencao do
+        # OpenSSH pra "nao completei a conexao/comando", nunca o rc do
+        # comando REMOTO, que e repassado 0-254). Erro de aplicacao/
+        # criterio (rc do PROPRIO campaign_client_runner.py, ou JSON mal
+        # formado de uma resposta que chegou de verdade) nunca entra
+        # aqui -- nunca mascarado por retry, sempre levanta na hora,
+        # igual a antes desta Decisao. A tentativa descartada (rc=255)
+        # nunca contribui com stat_before/t0/t1 pros dados finais -- cada
+        # retry comeca do zero (nova amostra de /proc/stat, novo t0),
+        # mesmo principio ja usado em `wasted_seconds` (opin_flow.py):
+        # uma tentativa descartada e ruido do ambiente, nunca medida.
+        attempt_failures = []
+        for attempt in range(1, EXECUTION_TRANSPORT_MAX_ATTEMPTS + 1):
+            stat_client_before = self._sample_proc_stat(client_ip)
+            stat_server_before = self._sample_proc_stat(server_ip)
+            t0 = datetime.now(timezone.utc)
+            proc = cli.run_ssh(self._client_ip(route), remote_cmd, key_path=self.key_path)
+            if proc.returncode == EXECUTION_TRANSPORT_FAILURE_RC:
+                attempt_failures.append({
+                    "attempt": attempt, "rc": proc.returncode,
+                    "stderr": proc.stderr, "at_utc": datetime.now(timezone.utc).isoformat(),
+                })
+                if attempt < EXECUTION_TRANSPORT_MAX_ATTEMPTS:
+                    time.sleep(EXECUTION_TRANSPORT_BACKOFF_SECONDS[attempt - 1])
+                    continue
+                raise RuntimeError(
+                    f"execucao {label}: esgotadas {EXECUTION_TRANSPORT_MAX_ATTEMPTS} tentativas, "
+                    f"todas falha de transporte (rc={EXECUTION_TRANSPORT_FAILURE_RC}) -- parando o "
+                    f"processo (Decisao 139, nunca continua silenciosamente): {attempt_failures}"
+                )
+            if proc.returncode != 0:
+                # Erro de APLICACAO (rc do proprio campaign_client_runner.py,
+                # nunca 255) -- levanta na hora, igual a antes, nunca retry.
+                raise RuntimeError(f"execucao {label}: falhou (rc={proc.returncode}): {proc.stderr}")
+            try:
+                result = json.loads(proc.stdout.strip().splitlines()[-1])
+            except (json.JSONDecodeError, IndexError) as e:
+                raise RuntimeError(f"execucao {label}: saida remota nao-JSON: {e}\nstdout={proc.stdout!r}") from None
+            t1 = datetime.now(timezone.utc)
+            break
         # Decisao 130 (pedido do Luciano apos o incidente real -- achado
         # novo que m7i-flex.large roda em CpuCredits=standard, nao
         # unlimited, um vetor de throttling real que nunca tinha sido
@@ -1397,6 +1443,13 @@ class SSHExecutor:
             # nunca devolvidos antes desta correcao.
             "start_utc": t0.isoformat(), "end_utc": t1.isoformat(),
             "cpu_client": cpu_client, "cpu_server": cpu_server,
+            # Decisao 139: numero da tentativa que teve sucesso (1 no
+            # caso comum, sem retry -- igual ao comportamento de sempre)
+            # e o motivo de CADA tentativa descartada antes dela (lista
+            # vazia no caso comum). So a tentativa bem-sucedida alimenta
+            # o resto deste dict (stat/t0/t1/log acima); as descartadas
+            # nunca contribuem com nenhum outro campo.
+            "retry_attempts": attempt, "retry_failures": attempt_failures,
         }
 
     @staticmethod
@@ -2022,6 +2075,10 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "profile": profile, "route": route, "warmup": warmup,
                     "insurance": warmup_result["insurance"], "person": warmup_result["person"],
                     "start_utc": warmup_result.get("start_utc"), "end_utc": warmup_result.get("end_utc"),
+                    # Decisao 139: mesmo campo de retry que as execucoes
+                    # medidas -- aquecimentos tambem rodam `run_execution`.
+                    "retry_attempts": warmup_result.get("retry_attempts", 1),
+                    "retry_failures": warmup_result.get("retry_failures", []),
                 }
                 aquecimento_calls.append(aquecimento_entry)
                 # Decisao 133, item 3: persistido no disco AGORA, nunca
@@ -2056,6 +2113,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "insurance": result["insurance"], "person": result["person"],
                     "start_utc": result.get("start_utc"), "end_utc": result.get("end_utc"),
                     "cpu_client": cpu_client, "cpu_server": cpu_server,
+                    # Decisao 139: numero de tentativas e motivo de cada
+                    # uma descartada (vazio/1 no caso comum, sem
+                    # retry -- `.get` com default pra nunca quebrar um
+                    # `executor` antigo/local que nao devolva estes
+                    # campos, ex. LocalExecutor).
+                    "retry_attempts": result.get("retry_attempts", 1),
+                    "retry_failures": result.get("retry_failures", []),
                 }
                 execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({
