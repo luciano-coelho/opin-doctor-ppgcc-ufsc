@@ -2679,3 +2679,84 @@ def test_sem_cost_tracker_comportamento_identico_a_antes(tmp_path):
     manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path, n_per_profile=1)
     assert manifest["cost_stop"] is None
     assert not (tmp_path / "cost_tracker.jsonl").exists()
+
+
+def test_read_proc_stat_cpu_parseia_campo_steal_corretamente():
+    # Decisao 130: campo 8 (steal), nao qualquer outro -- ordem real
+    # de /proc/stat: user nice system idle iowait irq softirq steal.
+    linha = "cpu  100 0 50 1000 10 0 5 2 0 0\n"
+    assert orch.SSHExecutor._read_proc_stat_cpu(linha) == (100, 0, 50, 1000, 10, 0, 5, 2)
+
+
+def test_read_proc_stat_cpu_sem_linha_cpu_devolve_none():
+    assert orch.SSHExecutor._read_proc_stat_cpu("cpu0 1 2 3\nintr 123\n") is None
+
+
+def test_cpu_steal_util_delta_calcula_percentuais_da_janela():
+    class _Fake(orch.SSHExecutor):
+        def __init__(self):
+            pass
+    before = (100, 0, 50, 1000, 10, 0, 5, 2)
+    after = (110, 0, 55, 1050, 10, 0, 5, 3)
+    r = _Fake()._cpu_steal_util_delta("host", before, after)
+    # delta total = 66 jiffies, delta steal = 1 -> 1.515%
+    assert r["steal_pct"] == 1.515
+    assert r["util_pct"] == 22.727
+
+
+def test_cpu_steal_util_delta_sem_amostra_devolve_none():
+    class _Fake(orch.SSHExecutor):
+        def __init__(self):
+            pass
+    assert _Fake()._cpu_steal_util_delta("host", None, (1, 1, 1, 1, 1, 1, 1, 1)) is None
+
+
+def test_persistencia_incremental_sobrevive_a_queda_no_meio_da_janela(tmp_path, monkeypatch):
+    # Decisao 133: simula o orquestrador morrendo no meio de uma celula --
+    # confirma que as execucoes JA terminadas antes da queda sobrevivem
+    # em disco (runs_raw/ + agregados), mesmo sem o manifest.json final.
+    executor = orch.LocalExecutor()
+    original = executor.run_execution
+    calls_done = {"n": 0}
+
+    def _flaky(profile, route, run):
+        calls_done["n"] += 1
+        if calls_done["n"] == 3:
+            raise RuntimeError("queda simulada no meio da janela")
+        return original(profile, route, run)
+
+    monkeypatch.setattr(executor, "run_execution", _flaky)
+    with pytest.raises(RuntimeError, match="queda simulada"):
+        orch.run_pilot(executor, seed=1, out_dir=tmp_path, n_per_profile=2, skip_dedicated_captures=True)
+
+    # O manifest.json FINAL nunca foi escrito (a janela nao terminou) --
+    # mas as 2 primeiras execucoes reais ja estao em disco, individualmente.
+    assert not (tmp_path / "manifest.json").exists()
+    runs_raw = list((tmp_path / "runs_raw").glob("*.json"))
+    assert len(runs_raw) == 2
+    calls_on_disk = json.loads((tmp_path / "piloto_calls.json").read_text(encoding="utf-8"))
+    assert len(calls_on_disk) == 2
+
+
+def test_captura_dedicada_falha_isolada_nunca_derruba_o_processo(tmp_path, monkeypatch):
+    # Decisao 133, item 4: uma captura dedicada que falha (ex.: host
+    # inalcancavel) e registrada, e as demais seguem -- o processo
+    # inteiro nunca morre por causa de UMA captura.
+    executor = orch.LocalExecutor()
+    original = executor.dedicated_capture
+    route_que_falha = orch.ROUTES[0]
+
+    def _flaky_capture(profile, route, capturas_dir=None):
+        if route == route_que_falha and profile == "pqc":
+            raise RuntimeError("host inalcancavel (simulado)")
+        return original(profile, route, capturas_dir=capturas_dir)
+
+    monkeypatch.setattr(executor, "dedicated_capture", _flaky_capture)
+    manifest = orch.run_pilot(executor, seed=1, out_dir=tmp_path, n_per_profile=1, skip_dedicated_captures=False)
+
+    assert manifest["total_execucoes"] == manifest["expected_total"]
+    assert len(manifest["capturas_dedicadas_falhas"]) == 1
+    assert manifest["capturas_dedicadas_falhas"][0]["route"] == route_que_falha
+    assert manifest["capturas_dedicadas_falhas"][0]["profile"] == "pqc"
+    # 12 capturas esperadas (4 perfis x 3 rotas do piloto) - 1 que falhou = 11 ok
+    assert manifest["capturas_dedicadas_feitas"] == manifest["total_capturas"] - 1

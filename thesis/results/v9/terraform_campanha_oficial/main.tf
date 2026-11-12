@@ -233,7 +233,7 @@ module "control" {
   # anterior do piloto o controle tinha prazo MENOR que os hosts,
   # invertido do que a coleta final exige).
   self_terminate_hours                 = var.self_terminate_hours
-  instance_initiated_shutdown_behavior = "terminate"
+  instance_initiated_shutdown_behavior = "stop"
 }
 
 # ============================================================
@@ -261,7 +261,7 @@ module "server_sa_east_1" {
     "L325" = "${module.client_ap_southeast_1.public_ip}/32"
   }
   self_terminate_hours                 = var.self_terminate_hours
-  instance_initiated_shutdown_behavior = "terminate"
+  instance_initiated_shutdown_behavior = "stop"
 }
 
 module "server_us_east_1" {
@@ -281,7 +281,7 @@ module "server_us_east_1" {
     "L14" = "${module.client_ca_central_1_b.public_ip}/32"
   }
   self_terminate_hours                 = var.self_terminate_hours
-  instance_initiated_shutdown_behavior = "terminate"
+  instance_initiated_shutdown_behavior = "stop"
 }
 
 module "server_ap_northeast_1" {
@@ -301,7 +301,7 @@ module "server_ap_northeast_1" {
     "L30" = "${module.client_ap_northeast_2.public_ip}/32"
   }
   self_terminate_hours                 = var.self_terminate_hours
-  instance_initiated_shutdown_behavior = "terminate"
+  instance_initiated_shutdown_behavior = "stop"
 }
 
 # ============================================================
@@ -325,7 +325,7 @@ module "client_l0_sa_east_1" {
   key_name                              = aws_key_pair.campaign_sa_east_1.key_name
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_l0_us_east_1" {
@@ -341,7 +341,7 @@ module "client_l0_us_east_1" {
   key_name                              = aws_key_pair.campaign_us_east_1.key_name
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_l0_ap_northeast_1" {
@@ -357,7 +357,7 @@ module "client_l0_ap_northeast_1" {
   key_name                              = aws_key_pair.campaign_ap_northeast_1.key_name
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_ca_central_1_a" {
@@ -377,7 +377,7 @@ module "client_ca_central_1_a" {
   # atende (sa-east-1) precisa alcancar a porta 9876 deste cliente.
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_sa_east_1.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 # Instancia SEPARADA da anterior -- mesma regiao (ca-central-1), mas
@@ -398,7 +398,7 @@ module "client_ca_central_1_b" {
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_us_east_1.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_eu_north_1" {
@@ -415,7 +415,7 @@ module "client_eu_north_1" {
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_sa_east_1.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_ap_southeast_1" {
@@ -432,7 +432,7 @@ module "client_ap_southeast_1" {
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_sa_east_1.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }
 
 module "client_ap_northeast_2" {
@@ -449,5 +449,5 @@ module "client_ap_northeast_2" {
   ssh_ingress_cidrs                     = { "control" = "${module.control.public_ip}/32" }
   criterio2_reverse_ingress_cidrs       = { "server" = "${module.server_ap_northeast_1.public_ip}/32" }
   self_terminate_hours                  = var.self_terminate_hours
-  instance_initiated_shutdown_behavior  = "terminate"
+  instance_initiated_shutdown_behavior  = "stop"
 }

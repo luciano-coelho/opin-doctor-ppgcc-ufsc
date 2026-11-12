@@ -181,7 +181,12 @@ def stage_on_control(control_ip, operator_key_path, tarball_path, staged_name):
     """Passo 1 -- operador copia o tarball pro controle (chave do
     operador), mesmo padrao de `pki_relay.stage_on_control`."""
     staged_path = f"{REMOTE_STAGING_DIR}/{staged_name}"
-    cli.run_ssh(control_ip, f"mkdir -p {REMOTE_STAGING_DIR}", key_path=operator_key_path)
+    # Achado real (piloto, Etapa 2): staged_name pode conter "/" (chaves
+    # de rota tipo "regiao/rota" na campanha oficial com N servidores) --
+    # mkdir -p so na raiz nunca criava o subdiretorio, scp falhava com
+    # "No such file or directory". Cria o diretorio exato do destino.
+    remote_dir = staged_path.rsplit("/", 1)[0]
+    cli.run_ssh(control_ip, f"mkdir -p {remote_dir}", key_path=operator_key_path)
     proc = cli.run_scp(str(tarball_path), f"ec2-user@{control_ip}:{staged_path}", key_path=operator_key_path)
     if proc.returncode != 0:
         raise RuntimeError(f"stage_on_control: scp do tarball pro controle falhou: {cli.redact(proc.stderr)}")

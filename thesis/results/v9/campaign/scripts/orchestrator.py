@@ -44,8 +44,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +68,67 @@ import evaluate_criteria as ec  # noqa: E402  -- reaproveita os baselines/consta
 # nenhum codigo deste modulo (so lido). Alterar o arquivo exige
 # Emenda numerada explicita em DECISIONS.md (ver o proprio campo
 # "_policy" dentro dele) -- nunca uma gravacao automatica.
+# Decisao 130 (incidente real, piloto Etapa 2): dead man's switch
+# renovavel do interruptor de seguranca em `campaign_instance` --
+# NUNCA um prazo fixo curto independente de atividade (causa raiz do
+# controle ter se auto-terminado no meio de uma janela real). Janela
+# generosa: a entrega de imagem por servidor, medida ao vivo, ja
+# consome ~1h sozinha -- 3h cobre isso com margem antes do primeiro
+# batimento real chegar.
+SAFETY_TIMER_DEADLINE_FILE = "/etc/mockopin-campaign/deadline"
+SAFETY_TIMER_RENEW_HOURS = 3
+
+# Decisao 130 (pedido do Luciano apos o incidente real -- achado novo
+# que m7i-flex.large roda em CpuCredits=standard, nao unlimited, um
+# vetor de throttling real nunca mapeado antes): limite de auditoria
+# pro steal% acumulado NA JANELA de uma execucao especifica. 5%:
+# instancias EC2 saudaveis em condicao normal (sem contencao real do
+# host fisico) ficam bem abaixo disso -- confirmado ao vivo nesta
+# sessao (steal acumulado desprezivel, <0.01% do uptime total, nos 3
+# servidores reais, horas depois da preparacao mais pesada). Um valor
+# bem acima disso numa janela curta e justamente o sinal de throttling
+# transitorio que o CloudWatch bloqueado nao deixa confirmar de outra
+# forma.
+CPU_STEAL_AUDIT_THRESHOLD_PCT = 5.0
+
+
+def _atomic_write_json(path: Path, obj) -> None:
+    """Decisao 133 (incidente real -- o orquestrador crashou numa fase
+    tardia e a matriz principal inteira, ja completa e so em memoria,
+    foi perdida porque nada e persistido ate `run_pilot` retornar).
+    Escrita atomica real (arquivo temporario no MESMO diretorio +
+    `os.replace`, atomico no mesmo filesystem em Linux) -- nunca deixa
+    o arquivo de destino parcialmente escrito/corrompido, mesmo se o
+    processo morrer no meio da escrita."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _renew_local_safety_timer():
+    """Mesmo dead man's switch de `SSHExecutor.renew_safety_timers`,
+    mas pro CONTROLE -- o orquestrador roda local nele, nunca via SSH
+    de si pra si mesmo. Nao levanta se o arquivo/servico nao existir
+    (ex.: execucao local fora da AWS, `--mode simulate`) -- esta
+    chamada e so uma rede de seguranca extra, nunca um requisito."""
+    try:
+        subprocess.run(
+            ["sudo", "bash", "-c",
+             f"date -d \"+{SAFETY_TIMER_RENEW_HOURS} hours\" +%s > {SAFETY_TIMER_DEADLINE_FILE}"],
+            check=False, timeout=10, capture_output=True,
+        )
+    except Exception:
+        pass
+
 PINS_PATH = Path(__file__).resolve().parents[1] / "PINS.json"
 _PINS_CACHE = None
 
@@ -456,6 +520,54 @@ class SSHExecutor:
 
     def _client_ip(self, route):
         return self.inventory["clients"][route]["public_ip"]
+
+    def renew_safety_timers(self, route):
+        """Incidente real (piloto, Etapa 2): o controle se auto-
+        terminou no meio de uma janela real porque self_terminate_hours
+        virava um prazo FIXO curto e nao-renovavel (a entrega de imagem
+        por servidor sozinha ja consome ~1h). Decisao do Luciano apos o
+        incidente: o interruptor de seguranca passa a ser um dead man's
+        switch -- bate "estou vivo" nos hosts ativos desta rota,
+        empurrando o deadline pra frente; so dispara STOP (nunca
+        terminate, ver instance_initiated_shutdown_behavior) se o
+        batimento parar de chegar por SAFETY_TIMER_RENEW_HOURS inteiras.
+        Nunca levanta se um host individual falhar (rede transitoria) --
+        o proximo batimento (poucos segundos/minutos depois) cobre."""
+        for host in (self._server_ip(route), self._client_ip(route)):
+            cli.run_ssh(
+                host,
+                f"sudo bash -c 'date -d \"+{SAFETY_TIMER_RENEW_HOURS} hours\" +%s "
+                f"> {SAFETY_TIMER_DEADLINE_FILE}'",
+                key_path=self.key_path,
+            )
+
+    def renew_all_safety_timers(self):
+        """Decisao 133 (achado real, piloto refeito): `renew_safety_
+        timers(route)` so bate nos hosts da rota ATUAL -- um host cujo
+        ultimo batimento veio de uma rodada ANTERIOR (ex.: apos um
+        crash e relancamento) pode ter um deadline antigo que vence
+        ANTES da rodada nova chegar na rota dele de novo (confirmado ao
+        vivo: 3 hosts pararam sozinhos ~40min depois de um relancamento,
+        porque o ultimo toque deles foi na janela anterior, ja crashada).
+        Correcao estrutural: bate em TODOS os hosts do inventario UMA
+        VEZ, no inicio de `run_pilot`, antes do laco principal --
+        garante que nenhum host comeca a janela com um deadline
+        herdado de uma rodada anterior. Mesma tolerancia a falha
+        individual de `renew_safety_timers` (nunca derruba por um host
+        fora do ar -- esse e exatamente o caso que o pre-voo de
+        resíduos/orfaos ja cobre separadamente)."""
+        hosts = set(self._all_server_ips())
+        hosts.update(c["public_ip"] for c in self.inventory.get("clients", {}).values())
+        for host in hosts:
+            try:
+                cli.run_ssh(
+                    host,
+                    f"sudo bash -c 'date -d \"+{SAFETY_TIMER_RENEW_HOURS} hours\" +%s "
+                    f"> {SAFETY_TIMER_DEADLINE_FILE}'",
+                    key_path=self.key_path, connect_timeout=10,
+                )
+            except Exception:
+                pass
 
     def _server_gateway_ip(self, route):
         """Decisao 27 item 1/outputs.tf `colocated`: so o trafego de
@@ -1181,6 +1293,9 @@ class SSHExecutor:
         `"insurance"` com `"person": []` (o avaliador soma as duas de
         qualquer forma, `_http_counts_for_calls`, nunca separa de
         volta; ver Decisao 49)."""
+        client_ip, server_ip = self._client_ip(route), self._server_ip(route)
+        stat_client_before = self._sample_proc_stat(client_ip)
+        stat_server_before = self._sample_proc_stat(server_ip)
         t0 = datetime.now(timezone.utc)
         gw_ip = self._server_gateway_ip(route)
         env = self._client_env(profile, gw_ip)
@@ -1194,6 +1309,14 @@ class SSHExecutor:
         except (json.JSONDecodeError, IndexError) as e:
             raise RuntimeError(f"execucao {label}: saida remota nao-JSON: {e}\nstdout={proc.stdout!r}") from None
         t1 = datetime.now(timezone.utc)
+        # Decisao 130 (pedido do Luciano apos o incidente real -- achado
+        # novo que m7i-flex.large roda em CpuCredits=standard, nao
+        # unlimited, um vetor de throttling real que nunca tinha sido
+        # mapeado): amostra DEPOIS da chamada, pra nao atrasar a execucao
+        # medida em si -- cobre a MESMA janela t0..t1 que start_utc/
+        # end_utc ja delimitam.
+        cpu_client = self._cpu_steal_util_delta(client_ip, stat_client_before, self._sample_proc_stat(client_ip))
+        cpu_server = self._cpu_steal_util_delta(server_ip, stat_server_before, self._sample_proc_stat(server_ip))
 
         log_text = self._gateway_logs(t0.isoformat(), t1.isoformat(), route)
         raw_lines, parsed = self._connection_ok_lines(log_text)
@@ -1217,7 +1340,46 @@ class SSHExecutor:
             # calculados acima (delimitam a chamada SSH inteira), so
             # nunca devolvidos antes desta correcao.
             "start_utc": t0.isoformat(), "end_utc": t1.isoformat(),
+            "cpu_client": cpu_client, "cpu_server": cpu_server,
         }
+
+    @staticmethod
+    def _read_proc_stat_cpu(proc_stat_text: str) -> tuple[int, ...] | None:
+        """Decisao 130 (pedido do Luciano apos o incidente real do
+        m7i-flex.large estar em modo `CpuCredits=standard`, nao
+        `unlimited`): parseia a linha agregada `cpu ...` de /proc/stat
+        -- user, nice, system, idle, iowait, irq, softirq, STEAL (8o
+        campo), guest, guest_nice, todos em jiffies desde o boot.
+        `None` se a linha nao existir/nao bater o formato esperado."""
+        for line in proc_stat_text.splitlines():
+            if line.startswith("cpu "):
+                parts = line.split()[1:]
+                if len(parts) >= 8:
+                    return tuple(int(p) for p in parts[:8])
+        return None
+
+    def _cpu_steal_util_delta(self, host, before: tuple[int, ...] | None, after: tuple[int, ...] | None) -> dict | None:
+        """Steal% e utilizacao% na JANELA entre duas leituras de
+        /proc/stat do MESMO host -- nunca um valor absoluto desde o
+        boot (que dilui qualquer pico real numa janela de poucos
+        segundos). `None` se qualquer leitura faltar (ex.: SSH
+        transitorio) -- nunca finge um numero."""
+        if before is None or after is None:
+            return None
+        user, nice, system, idle, iowait, irq, softirq, steal = (a - b for a, b in zip(after, before))
+        total = user + nice + system + idle + iowait + irq + softirq + steal
+        if total <= 0:
+            return None
+        return {
+            "steal_pct": round(100.0 * steal / total, 3),
+            "util_pct": round(100.0 * (total - idle - steal) / total, 3),
+        }
+
+    def _sample_proc_stat(self, host) -> tuple[int, ...] | None:
+        proc = cli.run_ssh(host, "cat /proc/stat", key_path=self.key_path)
+        if proc.returncode != 0:
+            return None
+        return self._read_proc_stat_cpu(proc.stdout)
 
     def _primary_iface(self, host):
         """Decisao 52 (pedido independente, item 4): a interface
@@ -1699,9 +1861,25 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
             f"run_pilot: containers/redes orfaos encontrados antes da janela -- "
             f"abortando sem rodar nenhuma execucao (Decisao 125): {orphan_check['checks']}"
         )
+    # Decisao 133, item correcao adicional (achado real: 3 hosts
+    # pararam sozinhos ~40min depois de um relancamento, porque o
+    # ultimo batimento deles era de uma janela ANTERIOR ja crashada) --
+    # bate em TODOS os hosts do inventario UMA vez aqui, antes do laco
+    # principal, pra nenhum comecar a janela nova com um deadline
+    # herdado. `renew_safety_timers(route)` (dentro do laco) continua
+    # cobrindo a renovacao CONTINUA host-a-host durante a execucao.
+    if hasattr(executor, "renew_all_safety_timers"):
+        executor.renew_all_safety_timers()
     out_dir.mkdir(parents=True, exist_ok=True)
     capturas_dir = out_dir / "criterio1_capturas"
     capturas_dir.mkdir(parents=True, exist_ok=True)
+    # Decisao 133: cada execucao/aquecimento, gravado no disco assim
+    # que termina -- a evidencia bruta que sobrevive a uma queda do
+    # orquestrador em QUALQUER fase posterior (nunca mais depende de
+    # chegar ao fim de `run_pilot` pra existir em disco).
+    runs_raw_dir = out_dir / "runs_raw"
+    capturas_dedicadas_falhas = []
+    capturas_dedicadas_feitas = []
 
     # Pedido do Luciano (Etapa 1, item 4): carimbo da JANELA inteira
     # (esta invocacao de run_pilot), distinto do carimbo por execucao
@@ -1730,6 +1908,28 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     cost_stop_info = None
     _cost_alert_logged = False
 
+    def _persist_incremental():
+        """Decisao 133, item 3: reescreve os agregados (atomico) apos
+        CADA celula -- nunca so no final de `run_pilot`. Os arquivos
+        individuais em `runs_raw/` (acima) ja sao a evidencia primaria
+        e sobrevivem por conta propria; isto aqui so mantem os
+        agregados (`piloto_calls.json`/`criterio6_execucoes.json`/
+        aquecimento) utilizaveis a qualquer momento, inclusive por um
+        `--resume` futuro que precise ler o progresso parcial."""
+        _atomic_write_json(out_dir / "piloto_calls.json", execucoes_calls)
+        _atomic_write_json(out_dir / "criterio6_execucoes.json", criterio6_rows)
+        if n_warmup_per_profile > 0:
+            _atomic_write_json(out_dir / "aquecimento_execucoes.json", aquecimento_calls)
+        _atomic_write_json(out_dir / "manifest_partial.json", {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "complete": False, "window_start_utc": window_start_utc,
+            "total_execucoes_ate_agora": len(execucoes_calls),
+            "total_aquecimentos_ate_agora": len(aquecimento_calls),
+            "total_capturas_dedicadas_ate_agora": len(capturas_dedicadas_feitas),
+            "capturas_dedicadas_falhas": capturas_dedicadas_falhas,
+            "cost_stop": cost_stop_info,
+        })
+
     for route in routes:
         if cost_stop_info is not None:
             break
@@ -1740,6 +1940,9 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 break
             combined_log_lines.append(f"== Perfil: {profile} ==")
             executor.start_block(profile, route)
+            _renew_local_safety_timer()
+            if hasattr(executor, "renew_safety_timers"):
+                executor.renew_safety_timers(route)
             combined_log_lines.append(executor.readiness_probe(profile, route))
             for warmup in range(1, n_warmup_per_profile + 1):
                 aquecimento_log_lines.append(aquecimento_marker_inicio(profile, route, warmup))
@@ -1747,11 +1950,16 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 _assert_profile_negotiated(profile, route, f"aquecimento{warmup}", warmup_result)
                 aquecimento_log_lines.extend(warmup_result["gateway_log_lines"])
                 aquecimento_log_lines.append(aquecimento_marker_fim(profile, route, warmup))
-                aquecimento_calls.append({
+                aquecimento_entry = {
                     "profile": profile, "route": route, "warmup": warmup,
                     "insurance": warmup_result["insurance"], "person": warmup_result["person"],
                     "start_utc": warmup_result.get("start_utc"), "end_utc": warmup_result.get("end_utc"),
-                })
+                }
+                aquecimento_calls.append(aquecimento_entry)
+                # Decisao 133, item 3: persistido no disco AGORA, nunca
+                # so depois que a janela inteira terminar.
+                _atomic_write_json(
+                    runs_raw_dir / f"{profile}__{route}__run00_warmup{warmup}.json", aquecimento_entry)
             for run in range(1, n_per_profile + 1):
                 combined_log_lines.append(execucao_marker_inicio(profile, route, run))
                 result = executor.run_execution(profile, route, run)
@@ -1766,16 +1974,36 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 _assert_profile_negotiated(profile, route, run, result)
                 combined_log_lines.extend(result["gateway_log_lines"])
                 combined_log_lines.append(execucao_marker_fim(profile, route, run))
-                execucoes_calls.append({
+                cpu_client = result.get("cpu_client")
+                cpu_server = result.get("cpu_server")
+                for _label, _cpu in (("cliente", cpu_client), ("servidor", cpu_server)):
+                    if _cpu is not None and _cpu["steal_pct"] > CPU_STEAL_AUDIT_THRESHOLD_PCT:
+                        msg = (f"*** AUDITORIA DE STEAL: {profile}/{route}/{run} {_label} "
+                               f"steal={_cpu['steal_pct']:.2f}% (limite {CPU_STEAL_AUDIT_THRESHOLD_PCT}%) "
+                               f"-- possivel throttling de CPU durante a medicao ***")
+                        combined_log_lines.append(msg)
+                        print(msg, file=sys.stderr)
+                execucao_entry = {
                     "profile": profile, "route": route, "run": run,
                     "insurance": result["insurance"], "person": result["person"],
                     "start_utc": result.get("start_utc"), "end_utc": result.get("end_utc"),
-                })
+                    "cpu_client": cpu_client, "cpu_server": cpu_server,
+                }
+                execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({
                     "profile": profile, "route": route, "run": run,
                     "curveID": result["curveID"], "dualAuthenticated": result["dualAuthenticated"],
                     "keylog_evidence": True,
                 })
+                # Decisao 133, item 3: persistido no disco AGORA -- esta
+                # e a execucao MEDIDA (runNN.json, numeracao 1-based,
+                # igual ao layout final da campanha), nunca so em
+                # memoria ate o fim da janela inteira.
+                _atomic_write_json(
+                    runs_raw_dir / f"{profile}__{route}__run{run:02d}.json", execucao_entry)
+                if hasattr(executor, "renew_safety_timers"):
+                    executor.renew_safety_timers(route)
+                _renew_local_safety_timer()
                 if cost_tracker is not None:
                     breakdown = cost_tracker.breakdown_usd()
                     ct.write_cost_log_entry(out_dir, "check", breakdown)
@@ -1799,23 +2027,54 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                         ct.write_cost_log_entry(out_dir, "stop_triggered", breakdown)
                         break
             executor.stop_block(profile, route)
+            _persist_incremental()
 
-    # Achado real (encontrado agora, pedido do Luciano: desenho do
-    # ensaio multi-regiao reduzido): este laco usava PROFILES/ROUTES
-    # (os globais do piloto, 4x3) HARDCODED, nunca `profiles`/`routes`
-    # (os parametros da propria funcao, 1 linha acima) -- inofensivo
-    # ate agora porque `routes`/`profiles` so eram usados (Decisao 49)
-    # pra REDUZIR a grade de validacao manual, sempre JUNTO com
-    # `skip_dedicated_captures=True` (nunca exercitava este laco). A
-    # campanha/ensaio oficial e o PRIMEIRO caso que passa uma grade
-    # customizada (8 rotas) E quer capturas dedicadas ao mesmo tempo
-    # -- sem este fix, as capturas do criterio 1 ficariam presas as 3
-    # rotas do piloto, nunca cobrindo as 5 rotas novas da campanha.
-    if not skip_dedicated_captures:
-        for profile in profiles:
-            for route in routes:
-                block = executor.dedicated_capture(profile, route, capturas_dir=capturas_dir)
-                (capturas_dir / f"{profile}_{route}.log").write_text(block, encoding="utf-8")
+        # Decisao 133, item 4 -- incidente real: a fase de capturas
+        # dedicadas rodava SEPARADA, DEPOIS de toda a matriz principal
+        # (perfil por fora, rota por dentro), revisitando rotas ja
+        # processadas horas antes -- o cliente dessa rota ja tinha sido
+        # parado pelo dead man's switch por ociosidade real (Decisao
+        # 130), e a tentativa de entrega-de-imagem contra um host
+        # inalcancavel matou o processo inteiro sem tratamento. Correcao:
+        # as capturas dedicadas desta ROTA rodam AGORA, dentro do MESMO
+        # laco de rota, imediatamente depois da matriz principal dela --
+        # o cliente nunca fica ocioso entre o uso principal e o uso de
+        # captura (o heartbeat acabou de ser renovado linhas acima).
+        # Nenhuma rota e revisitada depois disso pro resto da janela.
+        if not skip_dedicated_captures and cost_stop_info is None:
+            for profile in order:
+                try:
+                    if hasattr(executor, "renew_safety_timers"):
+                        executor.renew_safety_timers(route)
+                    _renew_local_safety_timer()
+                    block = executor.dedicated_capture(profile, route, capturas_dir=capturas_dir)
+                    (capturas_dir / f"{profile}_{route}.log").write_text(block, encoding="utf-8")
+                    capturas_dedicadas_feitas.append({"profile": profile, "route": route})
+                except Exception as e:
+                    # Decisao 133, item 4(c): uma captura dedicada que
+                    # falhar NUNCA derruba o processo inteiro -- registra
+                    # a falha (com a excecao real, nunca mascarada) e
+                    # segue pras proximas. A matriz principal (ja
+                    # persistida acima) e inteiramente preservada.
+                    msg = (f"*** CAPTURA DEDICADA FALHOU: profile={profile} route={route} -- "
+                           f"{type(e).__name__}: {e} -- registrando e seguindo ***")
+                    combined_log_lines.append(msg)
+                    print(msg, file=sys.stderr)
+                    capturas_dedicadas_falhas.append({
+                        "profile": profile, "route": route,
+                        "erro": f"{type(e).__name__}: {e}",
+                        "at_utc": datetime.now(timezone.utc).isoformat(),
+                    })
+            _persist_incremental()
+
+    # Decisao 133, item 4: as capturas dedicadas agora rodam FUNDIDAS
+    # no laco de rota acima (imediatamente apos a matriz principal de
+    # cada rota, nunca como uma segunda passada separada que revisita
+    # rotas antigas) -- ver o bloco dentro de `for route in routes:`.
+    # `profiles`/`routes` (os parametros da funcao, cobrindo tanto o
+    # piloto quanto a grade customizada da campanha oficial, Decisao
+    # 49) continuam honrados por construcao, ja que o laco fundido usa
+    # a mesma variavel `route`/`order` do laco principal.
 
     combined_log_path = out_dir / "piloto_combined.log"
     combined_log_path.write_text("\n".join(combined_log_lines) + "\n", encoding="utf-8")
@@ -1848,8 +2107,15 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         "route_orders": route_orders,
         "total_execucoes": len(execucoes_calls), "expected_total": expected_total,
         "total_capturas": len(profiles) * len(routes),
+        # Decisao 133, item 4: quantas capturas dedicadas realmente
+        # saíram OK vs. falharam-e-foram-registradas (nunca derrubando
+        # o processo) -- some os dois pra bater com `total_capturas`
+        # quando `skip_dedicated_captures=False`.
+        "capturas_dedicadas_feitas": len(capturas_dedicadas_feitas),
+        "capturas_dedicadas_falhas": capturas_dedicadas_falhas,
         "combined_log": str(combined_log_path), "calls_json": str(calls_path),
         "criterio6_json": str(criterio6_path), "capturas_dir": str(capturas_dir),
+        "runs_raw_dir": str(runs_raw_dir),
         # Informativo SO -- nunca somado a total_execucoes/expected_total
         # acima (Decisao do Luciano: aquecimento nunca conta pro total
         # oficial, so preservado como evidencia).
@@ -1874,7 +2140,14 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         # disso -- confira este campo antes de assumir falha.
         "cost_stop": cost_stop_info,
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_json(out_dir / "manifest.json", manifest)
+    # manifest_partial.json so existe enquanto a janela esta em
+    # andamento (Decisao 133) -- o manifest.json final (linha acima)
+    # e a fonte de verdade a partir daqui; remove o parcial pra nunca
+    # confundir uma leitura futura sobre qual e o "real".
+    partial_path = out_dir / "manifest_partial.json"
+    if partial_path.exists():
+        partial_path.unlink()
     return manifest
 
 
@@ -2103,6 +2376,13 @@ def main():
                      help="Desliga a trava de custo mesmo no modo ssh (ex.: ensaio curto ja sob "
                           "supervisao manual constante). Default False -- a trava fica ligada por "
                           "padrao em qualquer execucao real contra a AWS.")
+    ap.add_argument("--cost-window-start-utc", default=None,
+                     help="Decisao 130 (incidente real): reconstroi o relogio de custo a partir de "
+                          "um horario de lancamento REAL anterior (ISO 8601), em vez de 'agora' -- "
+                          "usado quando parte da frota foi recriada no meio de uma janela e o custo "
+                          "ja incorrido pelos sobreviventes nao pode ser perdido da contabilidade. "
+                          "Conservador por desenho: conta o intervalo inteiro, inclusive qualquer "
+                          "gap real em que uma instancia esteve terminada, nunca subestima.")
     args = ap.parse_args()
 
     campaign_routes = campaign_profiles = route_server = None
@@ -2139,10 +2419,13 @@ def main():
                 instance_types["server"] = args.cost_server_client_instance_type
             for client_id in inventory.get("clients", {}):
                 instance_types[f"client:{client_id}"] = args.cost_server_client_instance_type
-            cost_tracker_instance = ct.CostTracker(
+            cost_tracker_kwargs = dict(
                 instance_types=instance_types, n_public_ips=len(instance_types),
                 alert_usd=args.cost_alert_usd, stop_usd=args.cost_stop_usd,
             )
+            if args.cost_window_start_utc:
+                cost_tracker_kwargs["window_start_utc"] = datetime.fromisoformat(args.cost_window_start_utc)
+            cost_tracker_instance = ct.CostTracker(**cost_tracker_kwargs)
 
     if args.exercise_start_stop:
         report = exercise_start_stop(executor, args.exercise_profile, args.exercise_route)
