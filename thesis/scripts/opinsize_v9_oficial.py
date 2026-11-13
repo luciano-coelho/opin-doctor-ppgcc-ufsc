@@ -50,6 +50,7 @@ Uso:
 """
 import argparse
 import json
+import re
 import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -62,7 +63,10 @@ def _handshake_bytes_from_capture(capturas_dir: Path, profile: str) -> tuple[int
     """Soma real dos tamanhos de mensagem de handshake (coluna 6,
     NUNCA tcp.len/coluna 4) de UM stream mTLS (stream 0) -- pega a
     PRIMEIRA captura real encontrada pra este perfil (qualquer rota
-    serve, confirmado identico em todas: Decisao 140)."""
+    serve, confirmado identico em todas: Decisao 140). Mantida so
+    pra COMPARACAO/transparencia (campo `handshake_bytes_capture_
+    derived_informativo`) -- Decisao 141: NUNCA mais a fonte usada
+    pro termo do OPINsize, ver `_handshake_bytes_from_gateway_log`."""
     for fp in sorted(capturas_dir.glob(f"{profile}_*.log")):
         lines = fp.read_text(encoding="utf-8").splitlines()[2:]
         total = 0
@@ -81,6 +85,36 @@ def _handshake_bytes_from_capture(capturas_dir: Path, profile: str) -> tuple[int
     raise RuntimeError(f"nenhuma captura com stream 0 encontrada pro perfil {profile} em {capturas_dir}")
 
 
+def _handshake_bytes_from_gateway_log(combined_log_path: Path, profile: str) -> tuple[int, int]:
+    """Decisao 141 (pedido do Luciano apos o relatorio): FONTE
+    AUTORITATIVA do termo de handshake do OPINsize -- a media real de
+    `handshakeBytesIn`+`handshakeBytesOut` que o PROPRIO gateway Go
+    loga por conexao mTLS real (`sni="mtls"`), medido na fronteira do
+    `crypto/tls.Handshake()` dentro do processo que de fato faz o
+    handshake -- nunca inferido de uma captura de pacotes externa.
+    Escolhida sobre a captura dedicada porque: (1) e instrumentacao de
+    PRIMEIRA PARTE (o proprio participante que handshake, nunca uma
+    inferencia de terceiros); (2) nao depende do dissector TLS 1.3 do
+    tshark marcar corretamente TODA mensagem pos-handshake (ex.:
+    NewSessionTicket, enviada pelo servidor dentro do mesmo registro
+    'Application Data' generico do TLS 1.3 -- um candidato plausivel
+    pro gap de ~238B, constante nos 4 perfis, que a comparacao achou:
+    um NewSessionTicket de tamanho fixo nunca marcado com um tipo de
+    handshake pelo filtro usado na captura, cujos bytes IR0 contam no
+    lado Go mas NAO entram na soma da coluna de tamanhos do tshark).
+    N=488 conexoes reais por perfil (as 320 execucoes oficiais, mais
+    aquecimentos) -- devolve (media_total_bytes, n_conexoes)."""
+    log_text = combined_log_path.read_text(encoding="utf-8", errors="replace")
+    pattern = re.compile(
+        rf'{re.escape(profile)} connection OK.*?sni="mtls".*?'
+        rf"handshakeBytesIn=(\d+) handshakeBytesOut=(\d+)"
+    )
+    totals = [int(a) + int(b) for a, b in pattern.findall(log_text)]
+    if not totals:
+        raise RuntimeError(f"nenhuma linha 'connection OK' sni=mtls encontrada pro perfil {profile} em {combined_log_path}")
+    return round(statistics.mean(totals)), len(totals)
+
+
 def _jwt_sig_bytes(entry: dict) -> int:
     """Bytes de assinatura de UM JWT (classical+pq somados, 0 se for
     `jwe` -- encriptado, sem assinatura propria). Nunca usa o token
@@ -92,7 +126,7 @@ def _jwt_sig_bytes(entry: dict) -> int:
     return c + p
 
 
-def analyze(calls_json: Path, capturas_dir: Path) -> dict:
+def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
     executions = json.loads(calls_json.read_text(encoding="utf-8"))
 
     by_profile = defaultdict(list)
@@ -110,6 +144,7 @@ def analyze(calls_json: Path, capturas_dir: Path) -> dict:
         n_jwk_per_exec = []
         n_pki_per_exec = []
         jwt_sig_sizes_all = []
+        jwt_full_sizes_all = []
         jwk_response_sizes_all = []
         pki_response_sizes_all = []
         construction_counts = Counter()
@@ -121,10 +156,24 @@ def analyze(calls_json: Path, capturas_dir: Path) -> dict:
             pki_count = 0
             for c in calls:
                 breakdown = c.get("jwt_sig_breakdown", [])
+                full_sizes = c.get("jwt_sizes", [])
                 jwt_count += len(breakdown)
-                for b in breakdown:
+                # Pedido do Luciano (apos o relatorio): "jwt_sizes" e
+                # "jwt_sig_breakdown" sao listas PARALELAS (mesmo
+                # indice = mesmo token, alinhamento verificado nas 320
+                # execucoes reais, 0 desalinhamentos) -- "jwt_sizes" e
+                # o TOKEN COMPLETO como transmitido (header.payload.
+                # assinatura em base64url, JWE cifrado incluido onde
+                # aplicavel), NUNCA so a assinatura. As duas variantes
+                # sao calculadas aqui lado a lado, nunca uma no lugar
+                # da outra -- "jwt_sig_bytes_avg" (so assinatura,
+                # comparavel a Schardong Eq. 3.1) nunca e confundida
+                # com "jwt_full_token_bytes_avg" (token inteiro, a
+                # convencao propria desta tese, "Variante A").
+                for i, b in enumerate(breakdown):
                     construction_counts[b["construction"]] += 1
                     jwt_sig_sizes_all.append(_jwt_sig_bytes(b))
+                    jwt_full_sizes_all.append(full_sizes[i])
                 if c["endpoint"] == "/jwks":
                     jwk_count += 1
                     jwk_response_sizes_all.append(c["response_bytes"])
@@ -147,13 +196,21 @@ def analyze(calls_json: Path, capturas_dir: Path) -> dict:
         n_jwt, n_jwk, n_pki = n_jwt_distinct[0], n_jwk_distinct[0], n_pki_distinct[0]
         n_mtls = 6  # Decisao 140: confirmado real nas 32 capturas dedicadas, constante nos 4 perfis
 
-        handshake_bytes, capture_source = _handshake_bytes_from_capture(capturas_dir, profile)
+        # Decisao 141: handshake_bytes autoritativo vem do log do
+        # gateway (primeira parte, medido no proprio handshake), NUNCA
+        # mais da captura dedicada -- o valor da captura e preservado
+        # so como campo informativo/de comparacao, nunca usado no
+        # calculo dos termos abaixo.
+        handshake_bytes, n_connections_gateway_log = _handshake_bytes_from_gateway_log(combined_log, profile)
+        handshake_bytes_capture_informativo, capture_source = _handshake_bytes_from_capture(capturas_dir, profile)
         jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)
+        jwt_full_avg = round(statistics.mean(jwt_full_sizes_all), 2)
         jwk_avg = round(statistics.mean(jwk_response_sizes_all), 2)
         pki_avg = round(statistics.mean(pki_response_sizes_all), 2)
 
         term_mtls = n_mtls * handshake_bytes
         term_jwt = round(n_jwt * jwt_sig_avg, 2)
+        term_jwt_full = round(n_jwt * jwt_full_avg, 2)
         term_jwk = round(n_jwk * jwk_avg, 2)
         term_pki = round(n_pki * pki_avg, 2)
 
@@ -162,17 +219,28 @@ def analyze(calls_json: Path, capturas_dir: Path) -> dict:
             "n_mtls": n_mtls,
             "n_jwt": n_jwt, "n_jwk": n_jwk, "n_pki": n_pki,
             "handshake_bytes_per_connection": handshake_bytes,
-            "handshake_bytes_source_capture": capture_source,
+            "handshake_bytes_source": "gateway_log (handshakeBytesIn+Out, Decisao 141)",
+            "handshake_bytes_n_connections_sampled": n_connections_gateway_log,
+            "handshake_bytes_capture_derived_informativo": handshake_bytes_capture_informativo,
+            "handshake_bytes_capture_source_informativo": capture_source,
             "jwt_sig_bytes_avg": jwt_sig_avg,
+            "jwt_full_token_bytes_avg": jwt_full_avg,
             "jwt_construction_counts_per_execution": dict(construction_counts),
             "jwk_response_bytes_avg": jwk_avg,
             "pki_response_bytes_avg": pki_avg,
             "term_mtls_handshake": term_mtls,
             "term_jwt": term_jwt,
+            "term_jwt_full_token": term_jwt_full,
             "term_jwk": term_jwk,
             "term_pki_crl": term_pki,
             "opinsize_3_termos_sem_pki_comparavel_schardong_eq3_1": round(term_mtls + term_jwt + term_jwk, 2),
             "opinsize_4_termos_com_pki_extensao_desta_tese": round(term_mtls + term_jwt + term_jwk + term_pki, 2),
+            # Pedido do Luciano: a mesma formula, so com o termo de JWT
+            # trocado pro TOKEN COMPLETO (nunca somado ao termo de so
+            # assinatura -- sao duas variantes PARALELAS, nunca uma
+            # terceira formula hibrida).
+            "opinsize_3_termos_token_completo": round(term_mtls + term_jwt_full + term_jwk, 2),
+            "opinsize_4_termos_token_completo": round(term_mtls + term_jwt_full + term_jwk + term_pki, 2),
         }
 
     return report
@@ -182,10 +250,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--calls-json", required=True, type=Path)
     ap.add_argument("--capturas-dir", required=True, type=Path)
+    ap.add_argument("--combined-log", required=True, type=Path,
+                     help="piloto_combined.log -- fonte autoritativa de handshake_bytes (Decisao 141)")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
-    report = analyze(args.calls_json, args.capturas_dir)
+    report = analyze(args.calls_json, args.capturas_dir, args.combined_log)
     args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(report, indent=2, ensure_ascii=False))
 

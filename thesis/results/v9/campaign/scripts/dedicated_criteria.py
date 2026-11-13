@@ -16,6 +16,8 @@ host (so dentro de `mockopin-v9-measure`, a mesma imagem pinada que
 `dedicated_capture` ja usa). Os dois produtores foram corrigidos pra
 rodar `tshark` via `docker run --entrypoint tshark mockopin-v9-
 measure` -- nunca reconstroem nem mudam a imagem."""
+from __future__ import annotations
+
 import argparse
 import json
 import subprocess

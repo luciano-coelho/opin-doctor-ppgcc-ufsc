@@ -11851,3 +11851,41 @@ Decisao do autor (continuacao da Decisao 136, sem tocar no processo em execucao)
 **OPINsize calculado (variante de 3 termos, comparavel a Schardong Eq. 3.1, sem PKI):** Classico=28.817,88B; PQC=228.157,92B; Hibrido-v8=209.114,08B; Hibrido-AND=251.894,08B. **Variante de 4 termos (com PKI/CRL, extensao desta tese):** Classico=37.669,88B; PQC=260.597,92B; Hibrido-v8=246.882,08B; Hibrido-AND=260.746,08B. Resultado completo em `thesis/results/v9/opinsize_v9_oficial.json`.
 
 **(b) Esclarecimento pedido pelo autor sobre "n_calls=20" -- REGISTRADO COMO ASSERCAO DO AUTOR, com uma ressalva honesta de verificacao:** o autor afirma que a antiga contagem "n_calls=20" era so o subfluxo Insurance, e que o fluxo total de 44 chamadas = 20 Insurance + 24 Person, e que "28" e a contagem de JWTs (nunca de chamadas). Esta ultima parte (28=JWTs, nunca chamadas) **esta confirmada** pelos dados reais desta campanha (Decisao 135/140: 44 chamadas, 28 JWTs, numeros DIFERENTES, nunca confundidos). A primeira parte (20 Insurance + 24 Person) **nao pode ser re-verificada de forma independente nos dados persistidos desta campanha**: por desenho (`run_execution`, Decisao 49, docstring original), o resultado real de cada execucao JA CHEGA FUNDIDO (insurance+person combinados numa UNICA lista, sob a chave `"insurance"`) antes de ser persistido -- `"person"` fica SEMPRE `[]` nos dados reais (confirmado nas 320 execucoes desta campanha), a distincao original entre as duas sub-chamadas e perdida por construcao. Uma contagem alternativa feita aqui (chamadas cujo endpoint contem literalmente `insurance-person`) deu 8, nao 24 -- NUNCA tratado como contradicao do que o autor afirma (pode ser uma convencao de contagem antiga e diferente, de antes da fusao existir), so registrado com honestidade que esta subdivisao especifica nao foi confirmada pelos dados atuais.
+
+## 141. Fonte autoritativa de `handshake_bytes` do OPINsize -- log do gateway, nunca a captura dedicada; JWT token completo vs so assinatura, lado a lado
+
+**Pedido do autor apos revisar o relatorio:** (1) mostrar se `jwt_sig_bytes_avg` e assinatura ou token inteiro, e recalcular com o token inteiro em paralelo; (2) explicar e decidir a divergencia de ~238B entre a captura dedicada e o log do gateway pro termo de handshake.
+
+**(1) JWT -- confirmado: o calculo original era SO ASSINATURA, nunca token completo.** Codigo real: `thesis/scripts/opinsize_v9_oficial.py:84` (`_jwt_sig_bytes`, soma `classical_sig_bytes`+`pq_sig_bytes` de `jwt_sig_breakdown`) e o laco de chamada em `:123-127` (agora `:126-137` apos o acrescimo abaixo). Esse numero e deliberadamente a Variante B (comparavel a Schardong Eq. 3.1, so a assinatura crua) -- nunca foi a Variante A (token completo, convencao propria desta tese) por omissao, so por nunca ter sido pedida ate agora nesta ferramenta nova.
+
+Corrigido: o script agora calcula as DUAS variantes lado a lado, nunca uma no lugar da outra, usando o campo real `jwt_sizes` (tamanho do TOKEN COMPLETO como transmitido -- header.payload.assinatura em base64url, JWE cifrado incluido onde aplicavel) que ja vem PARALELO a `jwt_sig_breakdown` em cada chamada persistida (alinhamento verificado nas 320 execucoes reais: 0 desalinhamentos). Medias reais (N=28 JWTs/execucao, 320 execucoes):
+
+| Perfil | JWT so-assinatura (media) | JWT token-completo (media) |
+|---|---|---|
+| Classico | 237,71B | 1.209,04B |
+| PQC | 3.072,64B | 5.377,39B |
+| Hibrido-v8 | 3.310,36B | 7.041,32B |
+| Hibrido-AND | 3.310,36B | 7.041,32B |
+
+(A cifra de 1.385B que o autor citou da v7 e da mesma ordem de grandeza do 1.209,04B medido aqui pra Classico-token-completo -- consistente com v7 ja usar a convencao de token completo, nunca so assinatura; a pequena diferenca e esperada, fluxo/claims diferentes entre v7 e v9, nunca investigada byte a byte.)
+
+**(2) handshake_bytes -- decisao: o log do gateway (`handshakeBytesIn`+`handshakeBytesOut`) passa a ser a fonte AUTORITATIVA, a captura dedicada fica so informativa.** Motivo: e instrumentacao de PRIMEIRA PARTE -- medida pelo PROPRIO processo que faz o handshake, na fronteira real de `crypto/tls.Handshake()`, nunca inferida de uma captura de pacotes externa que depende do dissector TLS 1.3 do tshark marcar CORRETAMENTE todo tipo de mensagem pos-handshake. Hipotese mais provavel pro gap de ~238B (constante, medido nos 4 perfis -- nunca proporcional ao tamanho do handshake, o que aponta pra um elemento de tamanho FIXO, nunca uma fracao percentual): uma mensagem `NewSessionTicket` do servidor, que o TLS 1.3 envia dentro do MESMO tipo de registro generico "Application Data" que carrega dados de aplicacao -- o filtro usado na captura dedicada (coluna de tipo de handshake do tshark) nao a marca, entao ela nunca entra na soma por mensagem; o contador do PROPRIO Go, que soma bytes brutos na fronteira do handshake sem depender de reclassificacao externa, provavelmente a inclui. **Esta hipotese NAO foi confirmada por inspecao byte a byte do pcap/keylog** -- registrada como a explicacao mais provavel dado a evidencia (gap fixo, nunca proporcional), nao como certeza.
+
+Valores reais (media de handshakeBytesIn+Out, N=488 conexoes mTLS reais por perfil -- as 320 execucoes oficiais + aquecimentos):
+
+| Perfil | handshake_bytes (gateway, autoritativo) | handshake_bytes (captura, informativo) | gap |
+|---|---|---|---|
+| Classico | 3.125B | 2.887B | 238B |
+| PQC | 21.606B | 21.368B | 238B |
+| Hibrido-v8 | 16.949B | 16.711B | 238B |
+| Hibrido-AND | 24.080B | 23.841B | 238B |
+
+`thesis/scripts/opinsize_v9_oficial.py` (sha256 `dab168dc5ab4842f60b1e736756af8d2321a6f68247b5bdfb3aa94567fa7e1da`) atualizado: `_handshake_bytes_from_gateway_log()` (nova, le `piloto_combined.log`) e a fonte usada nos termos; `_handshake_bytes_from_capture()` preservada so como campo informativo (`handshake_bytes_capture_derived_informativo`), nunca mais usada no calculo. Resultado completo recalculado em `thesis/results/v9/opinsize_v9_oficial.json`.
+
+## 142. ClientHello do Classico: 308B medido (AWS real) vs 336B de baseline (teste local) -- desvio formal, causa provavel
+
+**Achado do autor, verificado:** o Classico mediu ClientHello=308B, reproduzivel nas 8 rotas da campanha oficial (`criterio1_capturas/classico_*.log`, stream 0, todas as 8 capturas), contra `CLIENTHELLO_BASELINE["classico"]=336` (`thesis/results/v9/integration/evaluate_criteria.py:175`), tolerancia 0 -- FAIL no criterio 1. Os outros 3 perfis batem EXATAMENTE com os respectivos baselines (PQC 1.779B, Hibrido-v8 1.876B, Hibrido-AND 1.858B, 0 desvio) -- o problema e EXCLUSIVO do Classico.
+
+**Causa real da baseline 336B:** nunca medida contra a campanha real -- vem de um teste LOCAL de loopback (`measure.sh`/T6, Decisao 15, "tickets desligados"), registrado em `thesis/results/v9/DECISIONS.md` por volta da linha 1730: "Classico 332+4=336, frame real 341 (336 + 5B de cabecalho de registro TLS)". E uma calibracao de bancada, local, de uma rodada anterior -- nunca re-validada contra um deployment AWS real de verdade antes desta campanha.
+
+**Veredito:** a MEDICAO real (308B, reproduzida em 8 rotas independentes, nunca uma unica amostra) e confiavel; a BASELINE (336B) e que provavelmente esta desatualizada pro Classico especificamente -- alguma diferenca de 28B entre as condicoes do teste local T6 e o deployment real (candidatos plausiveis, NUNCA confirmados por inspecao de extensao a extensao: uma extensao TLS presente/ausente, ou um tamanho de SNI/session_id diferente -- os outros 3 perfis tem ClientHello dominado pelo key_share de ML-KEM, na ordem de milhares de bytes, onde um desvio de 28B fica invisivel/dentro do ruido; so o Classico, com ClientHello pequeno e so grupos classicos, tem margem zero pra qualquer diferenca). **Nao investigado byte a byte nesta rodada** -- registrado como desvio formal, pendente de decisao do autor sobre recalibrar `CLIENTHELLO_BASELINE["classico"]` pra 308 (ou investigar a extensao exata antes).
