@@ -25,9 +25,21 @@ _REF_DIR = Path(__file__).resolve().parents[2] / "campaign" / "local_validation_
 # --- Decisao 91, item (e): regressao byte a byte contra o caminho
 # legado, usando capturas REAIS de referencia (nao so sinteticas).
 
+# Numeros originalmente extraidos (Decisao 84/90) de classico.pcap/
+# classico.keylog/classico_gateway_log.txt (thesis/results/v9/
+# campaign/local_validation_criterio1_v2/) -- NUNCA inventados. O
+# ClientHello (313/304, era 341/332) e o handshakeBytesIn do gateway
+# (1485, era 1513) foram atualizados nesta rodada (Decisao 149/150):
+# aquela captura de referencia predata o commit 836ff11a
+# (MinVersion=TLS13 fixado so no Classico, do lado do cliente) --
+# reconfirmados agora contra o binario `proxy` ATUAL, recompilado e
+# capturado de novo nesta mesma sessao (idem ao que a campanha real
+# mede hoje). O resto do bloco (ServerHello/Certificate/etc., 1640 de
+# saida) e inalterado -- so o lado do CLIENTE, que 836ff11a tocou,
+# muda; raw_in/raw_out abaixo fecham com eles byte a byte.
 _LEGACY_CLASSICO_BLOCK = """== Perfil: classico ==
 tamanho POR MENSAGEM (frame, tipos, tamanhos)
-4\t1\t332
+4\t1\t304
 6\t2,8,13,11,15,20\t183,6,105,909,260,32
 8\t11,15,20\t796,260,32
 == fim ==
@@ -35,20 +47,15 @@ tamanho POR MENSAGEM (frame, tipos, tamanhos)
 
 _STREAM_AWARE_CLASSICO_BLOCK = """== Perfil: classico ==
 tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos)
-4\t0\t52342\t341\t1\t332
+4\t0\t52342\t313\t1\t304
 6\t0\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32
 8\t0\t52342\t1172\t11,15,20\t796,260,32
 11\t0\t443\t24\t\t
 == secao seguinte ==
 handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)
-1513\t1640
+1485\t1640
 == fim ==
 """
-# Numeros reais, extraidos (Decisao 84/90) de classico.pcap/classico.
-# keylog/classico_gateway_log.txt (thesis/results/v9/campaign/
-# local_validation_criterio1_v2/) -- NUNCA inventados: handshakeBytesIn=
-# 1513/handshakeBytesOut=1640 e o que o gateway REAL logou pra essa
-# conexao; raw_in/raw_out abaixo fecham com eles byte a byte.
 
 
 def test_regressao_legado_vs_stream_aware_batem_byte_a_byte_em_captura_real():
@@ -64,7 +71,7 @@ def test_regressao_legado_vs_stream_aware_batem_byte_a_byte_em_captura_real():
 def test_consistencia_do_item_d_fecha_com_handshake_bytes_reais_do_gateway():
     row = ec._message_sizes_for_profile(_STREAM_AWARE_CLASSICO_BLOCK, "classico")
     assert row["consistency"] == [
-        {"stream": "0", "raw_in": 1513, "raw_out": 1640, "gateway_in": 1513, "gateway_out": 1640, "ok": True}
+        {"stream": "0", "raw_in": 1485, "raw_out": 1640, "gateway_in": 1485, "gateway_out": 1640, "ok": True}
     ]
 
 
@@ -74,7 +81,7 @@ def test_mutante_gateway_bytes_divergentes_e_reprovado():
     (Decisao 91, item d: "se nao fechar, o resultado e REPROVADO,
     nunca passa"), nunca passar so porque os limiares de criterio 1
     continuam batendo."""
-    mutant_block = _STREAM_AWARE_CLASSICO_BLOCK.replace("1513\t1640", "1500\t1640")
+    mutant_block = _STREAM_AWARE_CLASSICO_BLOCK.replace("1485\t1640", "1500\t1640")
     row = ec._message_sizes_for_profile(mutant_block, "classico")
     assert row["consistency"][0]["ok"] is False
     assert row["ok"] is False
@@ -103,13 +110,13 @@ def test_consistencia_ausente_e_fail_closed():
 
 _FRAGMENTED_BLOCK = """== Perfil: classico ==
 tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos)
-4\t7\t52342\t341\t1\t332
+4\t7\t52342\t313\t1\t304
 6\t7\t443\t950\t2,8,13,11\t183,6,105,909
 7\t7\t443\t690\t15,20\t260,32
 9\t7\t52342\t1172\t11,15,20\t796,260,32
 == secao seguinte ==
 handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)
-1513\t1640
+1485\t1640
 == fim ==
 """
 
@@ -156,7 +163,7 @@ def test_mutante_formato_legado_contra_a_mesma_fragmentacao_e_cego():
 
 def _six_identical_streams_block(profile="classico"):
     one = (
-        "{frame0}\t{s}\t52342\t341\t1\t332\n"
+        "{frame0}\t{s}\t52342\t313\t1\t304\n"
         "{frame1}\t{s}\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\n"
         "{frame2}\t{s}\t52342\t1172\t11,15,20\t796,260,32"
     )
@@ -165,7 +172,7 @@ def _six_identical_streams_block(profile="classico"):
     base = 0
     for s in range(6):
         lines.append(one.format(frame0=base + 4, frame1=base + 6, frame2=base + 8, s=s))
-        gw_lines.append("1513\t1640")
+        gw_lines.append("1485\t1640")
         base += 20
     return (f"== Perfil: {profile} ==\n" + "\n".join(lines) + "\n== secao seguinte ==\n"
             + "\n".join(gw_lines) + "\n== fim ==\n")
@@ -207,13 +214,13 @@ def test_stream_sem_clienthello_e_relatado_e_reprova():
     block = (
         "== Perfil: classico ==\n"
         "tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos)\n"
-        "4\t0\t52342\t341\t1\t332\n"
+        "4\t0\t52342\t313\t1\t304\n"
         "6\t0\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\n"
         "8\t0\t52342\t1172\t11,15,20\t796,260,32\n"
         "104\t1\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\n"  # stream 1: sem ClientHello
         "== secao seguinte ==\n"
         "handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)\n"
-        "1513\t1640\n"
+        "1485\t1640\n"
         "== fim ==\n"
     )
     row = ec._message_sizes_for_profile(block, "classico")
@@ -240,14 +247,14 @@ def test_stream_sem_clienthello_e_relatado_e_reprova():
 
 _SIX_MTLS_PLUS_CARVEOUT_BLOCK = """== Perfil: classico ==
 tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos, sni)
-4\t0\t52342\t341\t1\t332\tmtls
+4\t0\t52342\t313\t1\t304\tmtls
 6\t0\t443\t1640\t2,8,13,11,15,20\t183,6,105,909,260,32\t
 8\t0\t52342\t1172\t11,15,20\t796,260,32\t
 82\t3\t60942\t500\t1\t400\tmatls-api.local
 88\t3\t443\t2000\t2,8,13,11,15,20\t183,6,105,4000,260,32\t
 == secao seguinte ==
 handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)
-1513\t1640
+1485\t1640
 == fim ==
 """
 
@@ -301,12 +308,12 @@ def test_item_f_totais_fecham_mas_mensagem_individual_diverge_continua_fail():
     block = (
         "== Perfil: classico ==\n"
         "tamanho POR MENSAGEM (frame, stream, srcport, tcp.len, tipos, tamanhos)\n"
-        "4\t0\t52342\t341\t1\t332\n"
+        "4\t0\t52342\t313\t1\t304\n"
         "6\t0\t443\t1641\t2,8,13,11,15,20\t184,6,105,909,260,32\n"
         "8\t0\t52342\t1172\t11,15,20\t796,260,32\n"
         "== secao seguinte ==\n"
         "handshakeBytesIn/Out do gateway, por conexao client-facing (ordem cronologica)\n"
-        "1513\t1641\n"
+        "1485\t1641\n"
         "== fim ==\n"
     )
     row = ec._message_sizes_for_profile(block, "classico")

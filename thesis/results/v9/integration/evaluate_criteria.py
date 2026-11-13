@@ -251,8 +251,17 @@ def _ensure_campaign_topology_on_path():
 # DECISIONS.md linhas 1511-1519/1750-1751). "in" = bytes que o
 # SERVIDOR recebe (cadeia do CLIENTE); "out" = bytes que o servidor
 # manda (cadeia do SERVIDOR).
+#
+# "classico"."in": 1513 -> 1485 (Decisao 149/150): mesma causa do
+# CLIENTHELLO_BASELINE["classico"] (336->308) -- este total tambem
+# somava o ClientHello de ANTES do commit 836ff11a (MinVersion=TLS13
+# fixado so no Classico, -28B no lado do cliente). Reconfirmado contra
+# o binario proxy atual, recompilado e capturado nesta mesma rodada
+# (handshakeBytesOut do proxy = handshakeBytesIn do gateway = 1485).
+# Os outros 3 perfis batem exatamente com o binario atual, sem
+# alteracao.
 BASELINE_HANDSHAKE_BYTES = {
-    "classico": {"in": 1513, "out": 1640},
+    "classico": {"in": 1485, "out": 1640},
     "pqc": {"in": 10728, "out": 10878},
     "hibrido-v8": {"in": 8397, "out": 8552},
     "hibrido-and": {"in": 11902, "out": 12177},
