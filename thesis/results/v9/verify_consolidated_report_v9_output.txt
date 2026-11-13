@@ -1,0 +1,62 @@
+
+=== Contagens do fluxo (44/28/6/4/4) ===
+n_calls distintos: {44}
+n_jwt distintos: {28}
+OK: 44 chamadas e 28 JWTs, constantes nas 320 execucoes
+
+=== T_fluxo por celula (mediana/min/max/desvio) ===
+classico     L0-ap-northeast-1  N=10 mediana=5.893s min=5.792s max=6.007s dp=0.065s
+classico     L0-sa-east-1       N=10 mediana=2.388s min=2.293s max=2.555s dp=0.075s
+classico     L0-us-east-1       N=10 mediana=3.862s min=3.742s max=3.929s dp=0.050s
+classico     L123               N=10 mediana=10.992s min=10.899s max=11.037s dp=0.043s
+classico     L14                N=10 mediana=4.838s min=4.797s max=4.991s dp=0.067s
+classico     L219               N=10 mediana=17.083s min=16.975s max=17.302s dp=0.103s
+classico     L30                N=10 mediana=8.163s min=8.001s max=8.290s dp=0.086s
+classico     L325               N=10 mediana=25.438s min=25.078s max=25.692s dp=0.210s
+hibrido-and  L0-ap-northeast-1  N=10 mediana=6.684s min=6.483s max=6.903s dp=0.148s
+hibrido-and  L0-sa-east-1       N=10 mediana=2.508s min=2.426s max=2.687s dp=0.072s
+hibrido-and  L0-us-east-1       N=10 mediana=4.200s min=4.049s max=4.303s dp=0.065s
+hibrido-and  L123               N=10 mediana=11.362s min=11.226s max=11.500s dp=0.093s
+hibrido-and  L14                N=10 mediana=5.311s min=5.117s max=5.347s dp=0.082s
+hibrido-and  L219               N=10 mediana=17.721s min=17.597s max=17.912s dp=0.123s
+hibrido-and  L30                N=10 mediana=8.960s min=8.740s max=9.195s dp=0.160s
+hibrido-and  L325               N=10 mediana=26.335s min=25.957s max=26.943s dp=0.342s
+hibrido-v8   L0-ap-northeast-1  N=10 mediana=6.660s min=6.483s max=6.944s dp=0.151s
+hibrido-v8   L0-sa-east-1       N=10 mediana=2.494s min=2.418s max=2.542s dp=0.051s
+hibrido-v8   L0-us-east-1       N=10 mediana=4.243s min=4.062s max=4.388s dp=0.106s
+hibrido-v8   L123               N=10 mediana=11.389s min=11.224s max=11.453s dp=0.071s
+hibrido-v8   L14                N=10 mediana=5.276s min=5.074s max=5.396s dp=0.110s
+hibrido-v8   L219               N=10 mediana=17.763s min=17.504s max=17.903s dp=0.133s
+hibrido-v8   L30                N=10 mediana=9.055s min=8.717s max=9.187s dp=0.159s
+hibrido-v8   L325               N=10 mediana=26.294s min=25.715s max=26.974s dp=0.364s
+pqc          L0-ap-northeast-1  N=10 mediana=6.474s min=6.306s max=6.508s dp=0.067s
+pqc          L0-sa-east-1       N=10 mediana=2.354s min=2.280s max=2.560s dp=0.097s
+pqc          L0-us-east-1       N=10 mediana=3.996s min=3.945s max=4.306s dp=0.114s
+pqc          L123               N=10 mediana=11.200s min=11.107s max=11.260s dp=0.063s
+pqc          L14                N=10 mediana=5.093s min=4.997s max=5.195s dp=0.064s
+pqc          L219               N=10 mediana=17.459s min=17.389s max=17.580s dp=0.052s
+pqc          L30                N=10 mediana=8.727s min=8.651s max=8.850s dp=0.064s
+pqc          L325               N=10 mediana=26.114s min=25.718s max=26.412s dp=0.218s
+
+=== Retries ===
+execucoes com retry: 0/320 | aquecimentos com retry: 0/160
+
+=== OPINsize (recomputado) ===
+classico     handshake=3125 jwt_sig=237.71 jwt_full=1209.04 jwk=1210 pki=2213 3termos(sig)=30245.88 3termos(full)=57443.12 4termos(sig)=39097.88 4termos(full)=66295.12
+pqc          handshake=21606 jwt_sig=3072.64 jwt_full=5377.39 jwk=3479 pki=8110 3termos(sig)=229585.92 3termos(full)=294118.92 4termos(sig)=262025.92 4termos(full)=326558.92
+hibrido-and  handshake=24080 jwt_sig=3310.36 jwt_full=7041.32 jwk=4039.5 pki=2213 3termos(sig)=253328.08 3termos(full)=357794.96 4termos(sig)=262180.08 4termos(full)=366646.96
+hibrido-v8   handshake=16949 jwt_sig=3310.36 jwt_full=7041.32 jwk=4039.5 pki=9442 3termos(sig)=210542.08 3termos(full)=315008.96 4termos(sig)=248310.08 4termos(full)=352776.96
+
+=== Composicao do handshake por mensagem (stream 0, L0-ap-northeast-1) ===
+classico [('1', '304'), ('2,8,13,11', '183,6,105,909'), ('15,20', '260,32'), ('11,15,20', '796,260,32')]
+pqc [('1', '1775'), ('2,8,13', '1654,6,100'), ('11', '5628'), ('15,20', '3313,32'), ('11', '5515'), ('15,20', '3313,32')]
+hibrido-and [('1', '1854'), ('2,8,13', '1751,6,94'), ('11', '6578'), ('15,20', '3571,32'), ('11', '6352'), ('15,20', '3571,32')]
+hibrido-v8 [('1', '1872'), ('2,8,13', '1751,6,107'), ('11,15,20', '6251,260,32'), ('11,15,20', '6140,260,32')]
+
+=== Manifesto / hash do congelamento ===
+total_execucoes: 320 expected_total: 320
+total_capturas: 32 feitas: 32 falhas: 0
+sha256 esperado do gateway (todas as verificacoes, deve ser 1 valor so): {'33f3871b31c33b6b9ec3cfa32948fe37228def1eaefd8aa299d06d5dc716fe18'}
+pin_matched (deve ser {True}): {True}
+
+=== FIM -- tudo recomputado direto dos dados brutos, 0 valor de memoria/sessao anterior ===
