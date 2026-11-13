@@ -71,11 +71,12 @@ def opinsize():
         v = report["profiles"][p]
         print(f"{p:12s} handshake={v['handshake_bytes_per_connection']} "
               f"jwt_sig={v['jwt_sig_bytes_avg']} jwt_full={v['jwt_full_token_bytes_avg']} "
-              f"jwk={v['jwk_response_bytes_avg']} pki={v['pki_response_bytes_avg']} "
-              f"3termos(sig)={v['opinsize_3_termos_sem_pki_comparavel_schardong_eq3_1']} "
-              f"3termos(full)={v['opinsize_3_termos_token_completo']} "
-              f"4termos(sig)={v['opinsize_4_termos_com_pki_extensao_desta_tese']} "
-              f"4termos(full)={v['opinsize_4_termos_token_completo']}")
+              f"jwk_raw={v['jwk_raw_key_bytes_avg']} jwk_envelope={v['jwk_response_bytes_avg']} "
+              f"pki={v['pki_response_bytes_avg']} "
+              f"3termos(sig+chave_crua,PRINCIPAL)={v['opinsize_3_termos_assinatura_chave_crua_comparavel_schardong_eq3_1']} "
+              f"4termos(sig+chave_crua,PRINCIPAL)={v['opinsize_4_termos_assinatura_chave_crua']} "
+              f"3termos(full+envelope,complementar)={v['opinsize_3_termos_token_completo']} "
+              f"4termos(full+envelope,complementar)={v['opinsize_4_termos_token_completo']}")
     return report
 
 

@@ -7,7 +7,7 @@ Todo numero deste documento vem dos dados brutos da campanha oficial em `thesis/
 
 ## Resumo executivo
 
-A campanha oficial mediu 320 execucoes reais (4 perfis x 8 rotas x 10 execucoes), em multiplas regioes AWS reais, com zero falhas e zero necessidade de repeticao. Os 4 perfis sao Classic, PQC puro, **Hybrid** (perfil `hibrido-and`, duas cadeias de certificado independentes -- RSA-2048 e ML-DSA-65 -- com `CertificateVerify` carregando as duas assinaturas, modo strict com dual obrigatorio, o desenho da secao 3.3 desta tese) e **Controle** (uma unica cadeia com a assinatura ML-DSA-65 embutida como extensao X.509, verificada offline, nunca assinada ao vivo). OPINsize na variante de TOKEN COMPLETO (3 termos, sem PKI): Classic 57.443,12B; PQC 294.118,92B (5,12x Classic); Hybrid 357.794,96B (6,23x); Controle 315.008,96B (5,48x). Na variante complementar de so-assinatura: Classic 30.245,88B; PQC 229.585,92B; Hybrid 253.328,08B; Controle 210.542,08B. T_fluxo (mediana) na rota mais distante (L325, RTT nominal 325ms): Classic 25,438s; PQC 26,114s; Hybrid 26,335s; Controle 26,294s. RTT real medido (critério 2, canal servidor-cliente, `ss -ti`, coleta complementar posterior, 5 rotas) bate com o nominal dentro de ~16ms. Auditoria de recomputo: 0 divergencias. Esta campanha rodou uma UNICA janela, N=10 por celula -- onde uma secao nao tem dado equivalente medido, este documento diz "nao medido nesta campanha" e o motivo, nunca preenche com um numero estimado.
+A campanha oficial mediu 320 execucoes reais (4 perfis x 8 rotas x 10 execucoes), em multiplas regioes AWS reais, com zero falhas e zero necessidade de repeticao. Os 4 perfis sao Classic, PQC puro, **Hybrid** (perfil `hibrido-and`, duas cadeias de certificado independentes -- RSA-2048 e ML-DSA-65 -- com `CertificateVerify` carregando as duas assinaturas, modo strict com dual obrigatorio, o desenho da secao 3.3 desta tese) e **Controle** (uma unica cadeia com a assinatura ML-DSA-65 embutida como extensao X.509, verificada offline, nunca assinada ao vivo). OPINsize na variante de SO-ASSINATURA (3 termos, sem PKI -- corresponde a JWT_Sig da Equacao 3.1 de Schardong, p.60, definicao principal deste documento): Classic 26.941,88B; PQC 223.989,92B (8,31x Classic); Hybrid 247.026,08B (9,17x); Controle 204.240,08B (7,58x). Na variante complementar de token completo: Classic 57.443,12B; PQC 294.118,92B; Hybrid 357.794,96B; Controle 315.008,96B. T_fluxo (mediana) na rota mais distante (L325, RTT nominal 325ms): Classic 25,438s; PQC 26,114s; Hybrid 26,335s; Controle 26,294s. RTT real medido (critério 2, canal servidor-cliente, `ss -ti`, coleta complementar posterior, 5 rotas) bate com o nominal dentro de ~16ms. Auditoria de recomputo: 0 divergencias. Esta campanha rodou uma UNICA janela, N=10 por celula -- onde uma secao nao tem dado equivalente medido, este documento diz "nao medido nesta campanha" e o motivo, nunca preenche com um numero estimado.
 
 ## 1. Escopo desta campanha
 
@@ -75,50 +75,63 @@ Contagens reais, recomputadas (constantes nos 4 perfis e nas 320 execucoes -- `v
 
 As quatro consultas a `/jwks` se dao em 2 sessoes de cliente distintas (`pool_label`, confirmado nos dados reais) x 2 destinos de servidor cada -- o servidor de autorizacao (`host_header=AUTH_HOST`) e o servidor de recursos (`host_header=API_HOST`), confirmado no codigo real em `thesis/scripts/opin_flow.py:2117` (chamada com `AUTH_HOST`) e `thesis/scripts/opin_flow.py:2204` (chamada com `API_HOST`).
 
-`handshake_bytes` vem do log do proprio gateway (`handshakeBytesIn`+`handshakeBytesOut`), fonte autoritativa por decisao explicita (Secao 10). `JWT_size` e reportado em duas variantes: **o token completo transmitido (definicao principal desta tese)** e, como complemento, so a assinatura crua.
+`handshake_bytes` vem do log do proprio gateway (`handshakeBytesIn`+`handshakeBytesOut`), fonte autoritativa por decisao explicita (Secao 10). `JWT_size` e reportado em duas variantes: **so a assinatura crua (definicao principal deste documento)** -- corresponde a `JWT_Sig` da Equacao 3.1 de Schardong (p.60) -- e, como complemento, o token completo transmitido (convencao propria desta tese). `JWK_size` tambem e reportado em duas variantes pareadas com as anteriores: **material de chave publica decodificado, sem envelope JSON (pareia com a assinatura crua)** e a resposta `/jwks` completa (pareia com o token completo).
 
 | Termo | Classic | PQC | **Hybrid** | **Controle** |
 |---|---:|---:|---:|---:|
 | handshake_bytes (por conexao, N_mTLS=6) | 3.125 | 21.606 | **24.080** | **16.949** |
-| JWT_size token-completo (media, N_JWT=28) | 1.209,04 | 5.377,39 | 7.041,32 | 7.041,32 |
 | JWT_size so-assinatura (media, N_JWT=28) | 237,71 | 3.072,64 | 3.310,36 | 3.310,36 |
-| JWK_size (media de resposta, N_JWK=4) | 1.210 | 3.479 | 4.039,5 | 4.039,5 |
+| JWK_size material de chave crua (media, N_JWK=4) | 384 | 2.080 | 2.464 | 2.464 |
+| JWT_size token-completo (media, N_JWT=28) | 1.209,04 | 5.377,39 | 7.041,32 | 7.041,32 |
+| JWK_size resposta completa (media, N_JWK=4) | 1.210 | 3.479 | 4.039,5 | 4.039,5 |
 | PKI_bytes (media, N_PKI=4) | 2.213 | 8.110 | **2.213** | **9.442** |
 
-**OPINsize, 3 termos, TOKEN COMPLETO (sem PKI, definicao principal desta tese):**
+**OPINsize, 3 termos, SO-ASSINATURA + chave crua (sem PKI, definicao principal deste documento -- comparavel a JWT_Sig da Eq. 3.1 de Schardong, p.60):**
 
 | Perfil | OPINsize |
 |---|---:|
-| Classic | 57.443,12 |
-| PQC | 294.118,92 |
-| **Hybrid** | **357.794,96** |
-| **Controle** | **315.008,96** |
+| Classic | 26.941,88 |
+| PQC | 223.989,92 |
+| **Hybrid** | **247.026,08** |
+| **Controle** | **204.240,08** |
 
-**OPINsize, 4 termos, TOKEN COMPLETO (com PKI):**
+**OPINsize, 4 termos, SO-ASSINATURA + chave crua (com PKI):**
 
 | Perfil | OPINsize |
 |---|---:|
-| Classic | 66.295,12 |
-| PQC | 326.558,92 |
-| **Hybrid** | **366.646,96** |
-| **Controle** | **352.776,96** |
+| Classic | 35.793,88 |
+| PQC | 256.429,92 |
+| **Hybrid** | **255.878,08** |
+| **Controle** | **242.008,08** |
 
-**OPINsize, variante complementar so-assinatura, 3 e 4 termos:**
+A assinatura crua soma `classical_sig_bytes`+`pq_sig_bytes` por token (`thesis/scripts/opinsize_v9_oficial.py:118-126`, `_jwt_sig_bytes`), direto dos campos que `baseline_automation.jwt_sig_breakdown` calcula na hora da execucao real -- nunca do token bruto. O material de chave `JWK_size` crua e o campo `size_bytes` de `baseline_automation.extract_jwk_sizes` (`thesis/scripts/baseline_automation.py:385-425`): o modulo decodificado (`n`, RSA), a chave publica crua decodificada (`pub`, ML-DSA-65/AKP) ou a concatenacao classica+PQ decodificada (`pk_hybrid`, HYBRID) -- em nenhum caso o JSON do envelope (`kid`, `kty`, `use`, overhead de base64url). Esta e a definicao registrada por Luciano como equivalente a `JWT_Sig` da Equacao 3.1 de Schardong (p.60); este documento nao verificou essa equivalencia contra a fonte primaria (a tese de Schardong nao esta neste repositorio), registrando-a por indicacao direta do autor desta tese.
+
+**Variante complementar, token completo + resposta `/jwks` completa (convencao propria desta tese, 3 e 4 termos):**
 
 | Perfil | 3 termos | 4 termos |
 |---|---:|---:|
-| Classic | 30.245,88 | 39.097,88 |
-| PQC | 229.585,92 | 262.025,92 |
-| **Hybrid** | **253.328,08** | **262.180,08** |
-| **Controle** | **210.542,08** | **248.310,08** |
+| Classic | 54.139,12 | 62.991,12 |
+| PQC | 288.522,92 | 320.962,92 |
+| **Hybrid** | **308.706,96** | **346.474,96** |
+| **Controle** | **351.492,96** | **360.344,96** |
 
-A variante so-assinatura usa o tamanho cru da assinatura (classica+PQ somadas quando aplicavel), sem o restante do token. Este documento nao afirma que essa variante e equivalente a nenhuma formula publicada especifica de outro trabalho -- essa comparacao exigiria citar e confirmar a secao exata da fonte original, o que nao foi feito aqui.
+*(Nota: nesta variante complementar a ordem Hybrid/Controle se inverte -- com token completo e resposta `/jwks` inteira, Controle supera Hybrid, porque o Controle paga mais bytes de token/extensao a cada chamada; com assinatura crua, Hybrid supera Controle, porque o Hybrid paga a assinatura PQ ao vivo duas vezes por handshake. Os dois efeitos sao reais e nao se cancelam; nenhuma das duas variantes "corrige" a outra.)*
 
 **PKI do Hybrid identico ao Classic -- investigado, nao e bug.** Codigo real, `thesis/results/v9/integration/gateway/business_server.go:241-250` (`realCAFilesForProfile`): o perfil `hibrido-and` cai no mesmo `default` que `classico` (serve o MESMO par `root_ca.crt`/`issuer_ca.crt`); so `pqc` e o perfil Controle tem pares proprios. Comentario real no codigo: `opin_flow.py's verify_ca_chain() only branches on "pqc" vs everything else... hibrido-and falls into that same "everything else" branch`. A cadeia ML-DSA-65 do Hybrid NUNCA e baixada por este endpoint de aplicacao -- so existe dentro do proprio handshake mTLS (mensagem Certificate, 6.578B, Secao 2), onde seu custo real ja esta 100% capturado no termo `handshake_bytes`, nunca subestimado.
 
 ### Tamanhos de JWKS e certificados (recomputado)
 
-`/jwks`: 4 chamadas/execucao (2 sessoes x 2 destinos de servidor, acima). Classic: 2x1.814B+2x606B. PQC: 2x4.071B+2x2.887B. Hybrid e Controle: 2x4.366B+2x3.713B (identicos entre si -- Hybrid reusa integralmente a config de aplicacao/JWKS do Controle, so o mecanismo TLS muda). Assinatura ML-DSA-65 crua medida: 3.309B em TODAS as ocorrencias (bate exatamente com o esperado).
+`/jwks`: 4 chamadas/execucao (2 sessoes x 2 destinos de servidor, acima). Resposta completa -- Classic: 2x1.814B+2x606B. PQC: 2x4.071B+2x2.887B. Hybrid e Controle: 2x4.366B+2x3.713B (identicos entre si -- Hybrid reusa integralmente a config de aplicacao/JWKS do Controle, so o mecanismo TLS muda). Assinatura ML-DSA-65 crua medida: 3.309B em TODAS as ocorrencias (bate exatamente com o esperado).
+
+**Material de chave publica decodificado, por chamada `/jwks` (`size_bytes` de `extract_jwk_sizes`, sem envelope JSON), constante nas 320 execucoes:**
+
+| Perfil | 1a chamada/sessao (servidor de autorizacao) | 2a chamada/sessao (servidor de recursos) | Total das 2 chamadas |
+|---|---|---|---:|
+| Classic | RSA sig 256B + RSA enc 256B = 512B | RSA sig 256B = 256B | 768 |
+| PQC | AKP(ML-DSA-65) sig 1.952B + RSA enc 256B = 2.208B | AKP(ML-DSA-65) sig 1.952B = 1.952B | 4.160 |
+| **Hybrid** / **Controle** | HYBRID sig 2.208B + RSA enc 256B = 2.464B | HYBRID sig 2.208B + RSA sig 256B = 2.464B | 4.928 |
+
+A chave `HYBRID` (2.208B) e a concatenacao decodificada `pk_hybrid = classicPk \|\| pqcPk` (`baseline_automation.py:390-391`): RSA-2048 (256B) + ML-DSA-65 (1.952B) = 2.208B, identica para Hybrid e Controle (mesma config de aplicacao/JWKS -- Secao 1.1). Cada sessao de cliente faz exatamente essas 2 chamadas (servidor de autorizacao, depois servidor de recursos); as 2 sessoes por execucao repetem o mesmo par, por isso a media por chamada dos 4 totais acima e simplesmente a metade do "Total das 2 chamadas": Classic 384B, PQC 2.080B, Hybrid/Controle 2.464B -- os valores usados no termo `JWK_size material de chave crua` da tabela de termos acima.
 
 ## 4. Resultados de latencia
 

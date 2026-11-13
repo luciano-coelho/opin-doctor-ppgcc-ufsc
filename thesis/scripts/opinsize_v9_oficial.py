@@ -126,6 +126,19 @@ def _jwt_sig_bytes(entry: dict) -> int:
     return c + p
 
 
+def _jwk_raw_key_bytes(call: dict) -> int:
+    """Decisao 147 (pedido do Luciano): soma do material de chave
+    publica DECODIFICADO de UMA resposta `/jwks` -- `size_bytes` de
+    cada entrada em `jwk_sizes`, que `baseline_automation.
+    extract_jwk_sizes` ja calcula como o modulo/chave crua decodificada
+    (`n` RSA, `pub` AKP/ML-DSA-65, `pk_hybrid` HYBRID), nunca o JSON do
+    envelope (`kid`/`kty`/`use`/overhead base64url). Distinto de
+    `jwk_response_bytes_avg` (bytes da resposta HTTP inteira, com
+    envelope) -- as duas variantes sao mantidas em paralelo, nunca uma
+    no lugar da outra."""
+    return sum(k["size_bytes"] for k in call.get("jwk_sizes", []))
+
+
 def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
     executions = json.loads(calls_json.read_text(encoding="utf-8"))
 
@@ -146,6 +159,7 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
         jwt_sig_sizes_all = []
         jwt_full_sizes_all = []
         jwk_response_sizes_all = []
+        jwk_raw_sizes_all = []
         pki_response_sizes_all = []
         construction_counts = Counter()
 
@@ -177,6 +191,7 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
                 if c["endpoint"] == "/jwks":
                     jwk_count += 1
                     jwk_response_sizes_all.append(c["response_bytes"])
+                    jwk_raw_sizes_all.append(_jwk_raw_key_bytes(c))
                 if c["endpoint"] in PKI_ENDPOINTS:
                     pki_count += 1
                     pki_response_sizes_all.append(c["response_bytes"])
@@ -206,12 +221,14 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
         jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)
         jwt_full_avg = round(statistics.mean(jwt_full_sizes_all), 2)
         jwk_avg = round(statistics.mean(jwk_response_sizes_all), 2)
+        jwk_raw_avg = round(statistics.mean(jwk_raw_sizes_all), 2)
         pki_avg = round(statistics.mean(pki_response_sizes_all), 2)
 
         term_mtls = n_mtls * handshake_bytes
         term_jwt = round(n_jwt * jwt_sig_avg, 2)
         term_jwt_full = round(n_jwt * jwt_full_avg, 2)
         term_jwk = round(n_jwk * jwk_avg, 2)
+        term_jwk_raw = round(n_jwk * jwk_raw_avg, 2)
         term_pki = round(n_pki * pki_avg, 2)
 
         report["profiles"][profile] = {
@@ -227,18 +244,26 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
             "jwt_full_token_bytes_avg": jwt_full_avg,
             "jwt_construction_counts_per_execution": dict(construction_counts),
             "jwk_response_bytes_avg": jwk_avg,
+            "jwk_raw_key_bytes_avg": jwk_raw_avg,
             "pki_response_bytes_avg": pki_avg,
             "term_mtls_handshake": term_mtls,
             "term_jwt": term_jwt,
             "term_jwt_full_token": term_jwt_full,
             "term_jwk": term_jwk,
+            "term_jwk_raw": term_jwk_raw,
             "term_pki_crl": term_pki,
+            # Decisao 147 (pedido do Luciano): variante PRINCIPAL --
+            # assinatura crua (JWT_Sig, comparavel a Eq. 3.1 de
+            # Schardong p.60, por indicacao do autor) + material de
+            # chave publica crua (sem envelope JSON).
+            "opinsize_3_termos_assinatura_chave_crua_comparavel_schardong_eq3_1": round(term_mtls + term_jwt + term_jwk_raw, 2),
+            "opinsize_4_termos_assinatura_chave_crua": round(term_mtls + term_jwt + term_jwk_raw + term_pki, 2),
+            # Variantes legadas desta mesma ferramenta (Decisao
+            # 141/143), preservadas sem alteracao numerica -- nunca
+            # mais apresentadas como principal no relatorio consolidado
+            # (Decisao 147), so como complementares.
             "opinsize_3_termos_sem_pki_comparavel_schardong_eq3_1": round(term_mtls + term_jwt + term_jwk, 2),
             "opinsize_4_termos_com_pki_extensao_desta_tese": round(term_mtls + term_jwt + term_jwk + term_pki, 2),
-            # Pedido do Luciano: a mesma formula, so com o termo de JWT
-            # trocado pro TOKEN COMPLETO (nunca somado ao termo de so
-            # assinatura -- sao duas variantes PARALELAS, nunca uma
-            # terceira formula hibrida).
             "opinsize_3_termos_token_completo": round(term_mtls + term_jwt_full + term_jwk, 2),
             "opinsize_4_termos_token_completo": round(term_mtls + term_jwt_full + term_jwk + term_pki, 2),
         }
