@@ -1,0 +1,56 @@
+Auditoria independente (recomputo dos dados brutos) -- thesis\results\v9\campaign\oficial_raw\audit_manifest
+Execucoes no piloto_calls.json: 320
+Linhas no criterio6_execucoes.json: 320
+
+== Chamadas por participante, por perfil (recomputado dos dados brutos) ==
+  classico: total=3520 jwks=320 participantes={'Other': 3200, 'PKI/CRL': 320}
+  hibrido-and: total=3520 jwks=320 participantes={'Other': 3200, 'PKI/CRL': 320}
+  hibrido-v8: total=3520 jwks=320 participantes={'Other': 3200, 'PKI/CRL': 320}
+  pqc: total=3520 jwks=320 participantes={'Other': 3200, 'PKI/CRL': 320}
+
+Criterio 3 (contagens iguais entre perfis): OK -- todos os perfis batem com (3520, 320, {'Other': 3200, 'PKI/CRL': 320})
+
+== Tamanhos de assinatura (recomputado dos dados brutos, contra esperado) ==
+  0 divergencias -- todos os tamanhos de assinatura batem com o esperado (RSA-2048=256B, ML-DSA-65=3309B crus)
+
+== TLS version/dual asserido, recomputado de criterio6_execucoes.json ==
+  0 divergencia(s) de dual/perfil em 320 execucoes
+
+== T_fluxo (mediana, N) por perfil x rota, recomputado de start_utc/end_utc ==
+  classico/L0-ap-northeast-1: N=10 mediana=5.893s
+  classico/L0-sa-east-1: N=10 mediana=2.388s
+  classico/L0-us-east-1: N=10 mediana=3.862s
+  classico/L123: N=10 mediana=10.992s
+  classico/L14: N=10 mediana=4.838s
+  classico/L219: N=10 mediana=17.083s
+  classico/L30: N=10 mediana=8.163s
+  classico/L325: N=10 mediana=25.438s
+  hibrido-and/L0-ap-northeast-1: N=10 mediana=6.684s
+  hibrido-and/L0-sa-east-1: N=10 mediana=2.508s
+  hibrido-and/L0-us-east-1: N=10 mediana=4.200s
+  hibrido-and/L123: N=10 mediana=11.362s
+  hibrido-and/L14: N=10 mediana=5.311s
+  hibrido-and/L219: N=10 mediana=17.721s
+  hibrido-and/L30: N=10 mediana=8.960s
+  hibrido-and/L325: N=10 mediana=26.335s
+  hibrido-v8/L0-ap-northeast-1: N=10 mediana=6.660s
+  hibrido-v8/L0-sa-east-1: N=10 mediana=2.494s
+  hibrido-v8/L0-us-east-1: N=10 mediana=4.243s
+  hibrido-v8/L123: N=10 mediana=11.389s
+  hibrido-v8/L14: N=10 mediana=5.276s
+  hibrido-v8/L219: N=10 mediana=17.763s
+  hibrido-v8/L30: N=10 mediana=9.055s
+  hibrido-v8/L325: N=10 mediana=26.294s
+  pqc/L0-ap-northeast-1: N=10 mediana=6.474s
+  pqc/L0-sa-east-1: N=10 mediana=2.354s
+  pqc/L0-us-east-1: N=10 mediana=3.996s
+  pqc/L123: N=10 mediana=11.200s
+  pqc/L14: N=10 mediana=5.093s
+  pqc/L219: N=10 mediana=17.459s
+  pqc/L30: N=10 mediana=8.727s
+  pqc/L325: N=10 mediana=26.114s
+
+== Sanidade final contra manifest.json (consultado so agora) ==
+  total_execucoes bate: 320
+
+=== RESULTADO: 0 divergencia(s) ===
