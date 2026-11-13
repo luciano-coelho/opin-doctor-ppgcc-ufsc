@@ -172,7 +172,20 @@ CERTIFICATE_TOLERANCE_B = 4
 # mandar qualquer coisa, nunca depende do certificado do servidor.
 # Tolerancia corrigida de +-15B pra **0B** -- nao ha NENHUMA fonte de
 # variabilidade entre loopback e piloto nesta mensagem especifica.
-CLIENTHELLO_BASELINE = {"classico": 336, "pqc": 1779, "hibrido-v8": 1876, "hibrido-and": 1858}
+#
+# "classico": 336 -> 308 (Decisao 149, DECISIONS.md): o valor 336
+# estava DEFASADO -- medido via measure.sh antes do commit 836ff11a
+# ("Decisoes 118/119"), que fixou MinVersion=TLS13 no cliente Classico
+# (proxy/main.go) e reduziu o ClientHello em 28B (cipher suites,
+# signature_algorithms, supported_versions). 308 e o valor real medido
+# pela campanha oficial (`criterio1_capturas/classico_*.log`, campo
+# "tamanhos"=304 + 4B de cabecalho de mensagem) E o valor reproduzido
+# agora a partir do binario `proxy` atual -- os dois batem, byte a
+# byte. Correcao de referencia defasada, nao ajuste pra passar: os
+# outros 3 perfis (pqc/hibrido-v8/hibrido-and) foram revisados contra
+# o mesmo binario atual na mesma rodada e já batem exatamente com seus
+# valores existentes -- nenhuma mudanca neles.
+CLIENTHELLO_BASELINE = {"classico": 308, "pqc": 1779, "hibrido-v8": 1876, "hibrido-and": 1858}
 CLIENTHELLO_TOLERANCE_B = 0
 
 # Decisao 31 (Emenda 4 ao criterio 1) -- auditoria pedida pelo Luciano

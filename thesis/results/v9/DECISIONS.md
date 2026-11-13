@@ -11980,3 +11980,61 @@ d) **Uma nova campanha, com o codigo atual (sem tocar no proxy/gateway TLS), vai
 e) **Reavaliacao do "nenhum dos 7 criterios precisa ser reavaliado" (resposta anterior):** essa frase permanece verdadeira EM RELACAO A CORRECAO DO PKI (item 1/2 desta decisao) -- confirmado que o handshake_bytes e o ClientHello sao inteiramente alheios ao endpoint de distribuicao de CA, nenhum teste mudou. Mas o criterio 1 tem um problema REAL e INDEPENDENTE (item d acima), que ja existia antes desta rodada e que uma nova campanha vai reexpor sem nenhuma mudanca de codigo adicional -- a frase anterior nao cobria esse achado porque ele ainda nao tinha sido investigado. Decisao do autor necessaria: corrigir a baseline antes de relancar (criterio 1 passaria), ou relancar como esta e aceitar outro FAIL pre-registrado (mesma causa, agora exaustivamente documentada).
 
 **Containers/imagens usados, todos locais, nenhum destruido do registro de dados oficiais:** `mockopin-v9-toolchain`, `mockopin-v9-gateway`/`-proxy` (tags `-localtest`, descartadas apos uso), `mockopin-v9-measure` (cache existente, usado so leitura), `mockopin-pqc-signer`. Nenhuma acao contra AWS, nenhuma conta tocada, nenhum arquivo de `thesis/results/v9/campaign/oficial_raw/` ou do relatorio/opinsize ja publicados foi alterado nesta rodada.
+
+## 149. Correcao da referencia defasada do ClientHello (Classico), classificacao real dos criterios 2/3/7, e levantamento (sem execucao) do que quebraria num renomeio de v9
+
+**1. `CLIENTHELLO_BASELINE["classico"]`: 336 -> 308, correcao de referencia defasada, nao ajuste pra passar.**
+
+Confirmada a unidade primeiro: `evaluate_criteria.py` nunca compara `tls.handshake.length` bruto -- `_message_sizes_legacy` (linha 427) e o caminho por-stream (linha 557) computam `clienthello_bytes = tls.handshake.length + 4` (4B do cabecalho da mensagem de handshake: 1B tipo + 3B tamanho) ANTES de comparar contra `CLIENTHELLO_BASELINE` (linha 386). Pra Classico, codigo atual: `tls.handshake.length=304` -> `clienthello_bytes=308` -- bate exatamente com o campo "tamanhos"=304 de `criterio1_capturas/classico_*.log` (dado real da campanha, +4=308) E com a nova captura local feita nesta mesma rodada (mesma conta). `evaluate_criteria.py:175` editado: `"classico": 336` -> `"classico": 308`, tolerancia mantida em 0.
+
+**Causa (commit `836ff11a`, "Decisoes 118/119"):** fixou `MinVersion=TLS13` so no Classico do lado do cliente (`proxy/main.go`), ANTES disso o Classico ainda admitia TLS 1.2, oferecendo mais cipher suites/signature_algorithms/supported_versions do que TLS13-only exige. O baseline de 336B foi medido (Decisao 29/30) ANTES desse commit e nunca atualizado depois.
+
+**As tres diferencas, reconstruidas duas vezes (imagem `mockopin-v9-measure` cacheada, defasada, vs binario `proxy` recompilado do codigo-fonte atual, as duas rodando localmente contra o MESMO gateway, Docker, loopback):**
+
+| Extensao/campo | Imagem cacheada (defasada) | Codigo atual (= real da campanha) | Delta |
+|---|---:|---:|---:|
+| Cipher suites | 13 suites / 26B | 3 suites / 6B | -20B |
+| `signature_algorithms` | 28B | 22B | -6B |
+| `supported_versions` | 5B | 3B | -2B |
+| **Total (`tls.handshake.length`)** | **332B** | **304B** | **-28B** |
+
+**Revisao dos outros 3 perfis contra o binario `proxy` atual (rebuildado do codigo-fonte desta sessao, nao a imagem cacheada):**
+
+| Perfil | `tls.handshake.length` medido agora (codigo atual) | `clienthello_bytes` (+4) | Baseline atual | Defasado? |
+|---|---:|---:|---:|---|
+| PQC | 1.775 | 1.779 | 1.779 | **Nao** -- identico |
+| Hibrido-v8 (Controle) | 1.872 | 1.876 | 1.876 | **Nao** -- identico |
+| Hibrido-AND (Hybrid) | 1.854 | 1.858 | 1.858 | **Nao** -- identico |
+
+Nenhum dos tres precisou de correcao -- nenhum foi alterado. Os tres batem exatamente com o que a campanha real ja havia medido (`criterio1_capturas/{pqc,hibrido-v8,hibrido-and}_*.log`), e o commit `836ff11a` alterou explicitamente so o Classico (confirmado lendo o diff: as 3 outras branches de `singleChainClientConfig`/`dualClientConfig` ja chamavam com `tls.VersionTLS13` antes e depois desse commit).
+
+**2. Classificacao real dos criterios 2, 3 e 7.**
+
+Causa raiz COMUM aos tres: `dedicated_criteria.py` (`run_criterio2`/`run_criterio2_campaign`/`run_criterio7`, e o agregador `producers/criterio3_collector.py` que ele chama) e um script SEPARADO, nunca importado nem chamado por `orchestrator.py` (confirmado: `grep "import dedicated_criteria"` em `orchestrator.py` so acha o comentario da linha 1782, nenhuma chamada real). O runbook (`PILOT_RUNBOOK.md:258`) documenta sua invocacao como um comando manual DISTINTO, "chamado DEPOIS que `run_pilot` ja terminou" (docstring do proprio `dedicated_criteria.py`, linha 6-10) -- ou seja, por desenho, e um passo humano separado do pipeline automatico da campanha, nao algo que `orchestrator.py` dispara sozinho ao final das 320 execucoes.
+
+| Criterio | Causa raiz | Classificacao | Correcao proposta (nao aplicada) |
+|---|---|---|---|
+| **2** (initcwnd real) | O passo manual `dedicated_criteria.run_criterio2_campaign` nunca rodou durante a janela viva da campanha oficial (so depois, como "coleta complementar", quando a direcao client-to-server ja nao tinha listener ativo -- frota real ja parada/sem o probe de pe) | **(b) defeito de execucao** -- nenhum bug de medicao: o mecanismo (`criterio2_probe.py`) funciona (5/8 rotas server->client mediram com sucesso na coleta complementar) | Chamar `run_criterio2_campaign` como ultimo passo AUTOMATICO de `orchestrator.py`, ANTES de qualquer `stop`/`terminate` da frota -- nao deixar como comando manual separado, facil de esquecer |
+| **3** (zero erros, rota mais distante) | O agregador (`criterio3_collector.py`, puramente local, sem rede/infra) simplesmente nunca foi invocado -- os dados brutos (`piloto_calls.json`) sempre tiveram tudo que ele precisa | **(b) defeito de execucao, o mais trivial dos tres** -- recomputado direto dos dados brutos JA DEU PASS (40/40 em L325, 0 erros); o arquivo dedicado e so um formato de saida que faltou gerar | Rodar `criterio3_collector.py` contra `piloto_calls.json` -- nao precisa de nova campanha, pode ser feito AGORA sobre os dados ja coletados (nao feito aqui, e seria criar um arquivo de resultado novo, fora do que foi pedido nesta rodada) |
+| **7** (sanidade de latencia por rota) | Mesma causa do criterio 2 (mesmo script, `run_criterio7`, mesma janela perdida) -- "produtor dedicado tambem falhou na coleta complementar (gateway/listener nao ativo fora de uma janela viva)" | **(b) defeito de execucao** -- RTT real foi obtido por outra via (criterio 2, Secao 4), confirmando que a medicao em si e viavel, so a invocacao dedicada que faltou na janela certa | Mesma correcao do criterio 2: automatizar a chamada de `run_criterio7` dentro da janela viva de `orchestrator.py`, nao como comando manual posterior |
+
+**Nenhum dos tres e (a) defeito de definicao nem (c) limitacao inerente** -- os tres sao a MESMA classe de gap (um passo de pos-processamento/sondagem que deveria rodar durante a janela viva da campanha, documentado como manual, nunca automatizado nem lembrado). Uma nova campanha, SEM essa correcao de processo, repetiria os tres FAILs exatamente como estao -- a causa nao e nova nem foi tocada por nenhuma mudanca de codigo desta rodada.
+
+**3. Renomeio de `v9` -> `v9_pre_pki_fix`: levantamento, nada executado.**
+
+**Achado estrutural, antes de qualquer lista de arquivo:** `thesis/results/v9/` NAO e so dados -- mistura dados de campanha (`campaign/oficial_raw/`, relatorio, `opinsize_v9_oficial.json`, `DECISIONS.md`) com o CODIGO de infraestrutura que QUALQUER campanha futura precisa (`integration/{gateway,proxy,measure,bench,...}/`, `campaign/scripts/*.py`, `certs/`, `toolchain/`). Um renomeio ingenuo da pasta INTEIRA levaria embora, pra dentro de "nao oficial", exatamente o codigo que acabei de corrigir nesta mesma sessao (Decisao 148) -- o oposto do que se quer. Qualquer renomeio real precisa separar dados de codigo, nao mover a arvore inteira.
+
+**Caminhos locais (nesta maquina) que quebrariam ou apontariam pro lugar errado, com arquivo e linha:**
+
+| Arquivo:linha | Caminho hardcoded | Efeito se so `v9` virar `v9_pre_pki_fix` |
+|---|---|---|
+| `thesis/scripts/opin_flow.py:264` | `V9_CERTS_DIR = BASE_DIR/"thesis"/"results"/"v9"/"certs"/"generated"` | `start_tls_kem_proxy()` (V9_HARNESS=1) monta um diretorio de certs inexistente -- gateway/proxy locais nunca sobem |
+| `thesis/scripts/verify_consolidated_report_v9.py:16` | `BASE = .../"results"/"v9"/"campaign"/"oficial_raw"/"oficial_out"` | Aponta pro relatorio ANTIGO movido -- precisa apontar pro novo diretorio da campanha nova, ou ser duplicado/parametrizado |
+| `thesis/results/v9/campaign/scripts/dedicated_criteria.py:42` | `_REMOTE_PRODUCERS_DIR = "~/thesis/results/v9/integration/producers"` | Caminho REMOTO (controle/servidor) -- so quebra se o lado LOCAL que entrega esse arquivo (linha abaixo) tambem quebrar primeiro |
+| `thesis/results/v9/campaign/scripts/deliver_source.py:83,86,97,108-117,125,139` | 13 entradas, todas `"thesis/results/v9/..."` (local, fonte da copia pro controle/servidor/cliente real) | **O mais critico: toda entrega de codigo pra AWS pra uma nova campanha lerebrance desses caminhos LOCAIS** -- se a pasta sumir do lugar, `deliver_source.py` falha com arquivo-nao-encontrado pra TODO o codigo de campanha (orchestrator.py, cli.py, evaluate_criteria.py, certs/generated, os 2 produtores, etc.) |
+| `thesis/results/v9/campaign/scripts/pre_campaign_manifest.py:74` | mensagem de erro cita `thesis/results/v9/certs/` | So a mensagem de erro fica desatualizada -- `certs/generated` em si e lido por caminho relativo ao script, nao pelo literal "v9" |
+| `thesis/results/v9/campaign/scripts/build_consolidated_report_v9.py:882` | `f"--run-dir thesis/results/v9/piloto/dados_oficiais/{run_label}"` | Aponta pro piloto antigo, nao a campanha oficial -- script ja parece desatualizado independente do renomeio |
+
+**Referencias so em comentario/docstring (nunca executam, so ficam com prosa desatualizada se renomeado) -- nao quebram nada, listadas por completude:** `opin_flow.py:238,245,247,253,620`; `organize_v9_results.py:4`; `verify_consolidated_report_v9.py:3-4`; `orchestrator.py:24,478`; `iam_dryrun_check.py:3,44`; `opinsize_analysis.py:35,194`; `pki_relay.py:4`; `deliver_source.py:6,16,37`; `pre_campaign_manifest.py:3`.
+
+**Conclusao:** nenhum renomeio foi executado. Se/quando decidido, a forma mais segura (nao aplicada aqui) e mover so os artefatos de DADOS (`campaign/oficial_raw/`, `Consolidated_Metrics_Report_FINAL.md`, `opinsize_v9_oficial.json`, talvez uma copia carimbada de `DECISIONS.md` ate este ponto) pra um diretorio separado (ex. `thesis/results/v9_pre_pki_fix_dados/`), deixando TODO o codigo (`integration/`, `campaign/scripts/`, `certs/`, `toolchain/`) onde esta -- a nova campanha reusa o mesmo codigo no lugar, so grava dados novos.
