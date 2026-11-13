@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """v9, campanha oficial (Decisao 143): recomputa, direto dos dados
-brutos em thesis/results/v9/campaign/oficial_raw/oficial_out/, TODO
-numero que thesis/results/v9/Consolidated_Metrics_Report_FINAL.md usa
--- nunca le o relatorio, nunca confia em memoria de sessao anterior.
-Imprime cada numero com um rotulo identico ao do relatorio, pra
-conferencia visual linha a linha. Sem argumentos: caminhos fixos,
-sempre os mesmos dados oficiais da janela v3."""
+brutos em thesis/results/v9_pre_pki_fix/campaign/oficial_raw/
+oficial_out/, TODO numero que thesis/results/v9_pre_pki_fix/
+Consolidated_Metrics_Report_FINAL.md usa -- nunca le o relatorio,
+nunca confia em memoria de sessao anterior. Imprime cada numero com
+um rotulo identico ao do relatorio, pra conferencia visual linha a
+linha. Sem argumentos: caminhos fixos, sempre os mesmos dados oficiais
+da janela v3.
+
+BASE apontava pra thesis/results/v9/... antes da Decisao 150 (achado
+real: a correcao do PKI_bytes do Hybrid, Decisao 148, tornou os dados
+da janela v3 nao-oficiais) -- os dados e o relatorio que este script
+verifica foram movidos pra thesis/results/v9_pre_pki_fix/ (so os
+dados, nunca o codigo de infraestrutura, que continua em thesis/
+results/v9/), e este caminho foi atualizado junto, senao o script
+apontaria pra um diretorio que nao existe mais."""
 import json
 import re
 import statistics
@@ -13,7 +22,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parents[1] / "results" / "v9" / "campaign" / "oficial_raw" / "oficial_out"
+BASE = Path(__file__).resolve().parents[1] / "results" / "v9_pre_pki_fix" / "campaign" / "oficial_raw" / "oficial_out"
 CALLS_JSON = BASE / "piloto_calls.json"
 COMBINED_LOG = BASE / "piloto_combined.log"
 CAPTURAS_DIR = BASE / "criterio1_capturas"
