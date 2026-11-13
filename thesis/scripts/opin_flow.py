@@ -954,14 +954,37 @@ def _verify_cert_signed_by_mldsa65(cert, issuer_cert) -> bool:
     return _run_verifier(verify_payload).strip() == "true"
 
 
+def _split_pem_certificates(bundle: bytes) -> list[bytes]:
+    """Splits a PEM blob into its individual CERTIFICATE blocks, in
+    order, each returned as its own loadable single-certificate PEM
+    (begin/end markers included). x509.load_pem_x509_certificate() only
+    ever reads the FIRST block of a multi-block blob and silently
+    ignores the rest -- required before verifying more than one
+    certificate out of the same HTTP response body (hibrido-and's
+    root-ca.pem/issuer-ca.pem bundle below)."""
+    marker_begin, marker_end = b"-----BEGIN CERTIFICATE-----", b"-----END CERTIFICATE-----"
+    certs, pos = [], 0
+    while True:
+        start = bundle.find(marker_begin, pos)
+        if start == -1:
+            break
+        end = bundle.find(marker_end, start)
+        if end == -1:
+            raise SignatureVerificationError("PEM bundle has an unterminated CERTIFICATE block")
+        end += len(marker_end)
+        certs.append(bundle[start:end] + b"\n")
+        pos = end
+    return certs
+
+
 def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: str) -> None:
-    """Verifies the two PKI/CRL stand-ins this flow's own fetch_server_
+    """Verifies the PKI/CRL stand-ins this flow's own fetch_server_
     keys_and_ca() downloads (root-ca.pem/issuer-ca.pem) are validly
     signed -- the one cert-chain link checkable here without touching the
     live mTLS connection's own peer certificate (out of scope: that's the
     gateway's own mock_mtls/main.go, not touched this turn).
 
-    The two profile families use a GENUINELY DIFFERENT real relationship,
+    The profile families use a GENUINELY DIFFERENT real relationship,
     confirmed live by reading each cert's own subject/issuer, not assumed
     from the file names:
       - pqc: a real 2-level chain -- root_ca_pqc is self-signed,
@@ -970,17 +993,53 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
         _verify_cert_signed_by_mldsa65() against each cert's own real
         issuer (root_ca_pqc against itself, then issuer_ca_pqc against
         root_ca_pqc).
-      - classic/hybrid: NOT a root->issuer chain at all -- root-ca.pem
+      - classic: NOT a root->issuer chain at all -- root-ca.pem
         and issuer-ca.pem are SIBLINGS, both signed directly by this
         project's own real mTLS trust anchor (`ca.crt`, CN=ca, a static
         local file, not fetched over the wire), confirmed live: both
         certs' own issuer field names "ca", neither names the other.
-        hybrid's own live mTLS identity chains to this SAME classical
-        ca.crt per mock_mtls/main.go's caCertPool() (read, not touched).
         Verified via `cryptography`'s own verify_directly_issued_by(),
         each cert against ca.crt independently.
+      - hibrido-and (real finding, fixed here): this profile's own live
+        mTLS identity requires trusting an RSA chain AND an ML-DSA-65
+        chain independently (main.go's dualServerConfig/
+        dualClientConfig) -- but root_ca_pem/issuer_ca_pem used to be
+        single-certificate bodies carrying ONLY the RSA half (gateway's
+        business_server.go defaulted hibrido-and into the same branch as
+        classic). The gateway now concatenates two CERTIFICATE blocks
+        per endpoint for this profile -- RSA half first (same
+        relationship as classic, against ca.crt), ML-DSA-65 half second
+        (same relationship as pqc, self-signed root + root-signed
+        issuer) -- so both halves are split out and verified here,
+        instead of only the first one silently winning.
 
     Raises SignatureVerificationError if any link doesn't verify."""
+    if crypto_profile == "hibrido-and":
+        root_parts = _split_pem_certificates(root_ca_pem)
+        issuer_parts = _split_pem_certificates(issuer_ca_pem)
+        if len(root_parts) != 2 or len(issuer_parts) != 2:
+            raise SignatureVerificationError(
+                "hibrido-and expects a 2-certificate bundle (RSA + ML-DSA-65) per endpoint, got "
+                f"{len(root_parts)} in root-ca.pem and {len(issuer_parts)} in issuer-ca.pem"
+            )
+        root_rsa, root_pqc = (x509.load_pem_x509_certificate(p) for p in root_parts)
+        issuer_rsa, issuer_pqc = (x509.load_pem_x509_certificate(p) for p in issuer_parts)
+
+        anchor = x509.load_pem_x509_certificate((CERTS_DIR / "ca.crt").read_bytes())
+        for cert, name in ((root_rsa, "root-ca.pem[rsa half]"), (issuer_rsa, "issuer-ca.pem[rsa half]")):
+            try:
+                cert.verify_directly_issued_by(anchor)
+            except Exception as e:
+                raise SignatureVerificationError(f"{name} not validly signed by ca.crt: {e}") from None
+
+        if not _verify_cert_signed_by_mldsa65(root_pqc, root_pqc):
+            raise SignatureVerificationError("root-ca.pem[ml-dsa-65 half] is not validly self-signed (ML-DSA-65)")
+        if not _verify_cert_signed_by_mldsa65(issuer_pqc, root_pqc):
+            raise SignatureVerificationError(
+                "issuer-ca.pem[ml-dsa-65 half] not validly signed by root-ca.pem[ml-dsa-65 half] (ML-DSA-65)"
+            )
+        return
+
     root_ca = x509.load_pem_x509_certificate(root_ca_pem)
     issuer_ca = x509.load_pem_x509_certificate(issuer_ca_pem)
 

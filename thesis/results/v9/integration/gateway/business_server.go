@@ -53,14 +53,14 @@ func runBusinessMode(profile, certDir, listen string) {
 	}
 
 	realCertsDir := envOr("REAL_CERTS_DIR", "/real-certs")
-	rootName, issuerName := realCAFilesForProfile(profile)
-	rootCAPEM, err := os.ReadFile(filepath.Join(realCertsDir, rootName))
+	rootNames, issuerNames := realCAFilesForProfile(profile)
+	rootCAPEM, err := readAndConcatCAFiles(realCertsDir, rootNames)
 	if err != nil {
-		log.Fatalf("gateway: reading real root CA (%s) for directory handler: %v", rootName, err)
+		log.Fatalf("gateway: reading real root CA (%v) for directory handler: %v", rootNames, err)
 	}
-	issuerCAPEM, err := os.ReadFile(filepath.Join(realCertsDir, issuerName))
+	issuerCAPEM, err := readAndConcatCAFiles(realCertsDir, issuerNames)
 	if err != nil {
-		log.Fatalf("gateway: reading real issuer CA (%s) for directory handler: %v", issuerName, err)
+		log.Fatalf("gateway: reading real issuer CA (%v) for directory handler: %v", issuerNames, err)
 	}
 	mux := businessMux(rootCAPEM, issuerCAPEM)
 
@@ -231,22 +231,54 @@ func attachInternalCallerCarveOut(cfg *tls.Config, profile string) error {
 }
 
 // realCAFilesForProfile picks which of mock-service-os/certs' real
-// root/issuer CA pairs to serve at /root-ca.pem and /issuer-ca.pem --
+// root/issuer CA files to serve at /root-ca.pem and /issuer-ca.pem --
 // see directoryHandler's own comment for why these must be the REAL
-// files, not v9's own. opin_flow.py's verify_ca_chain() only branches
-// on "pqc" vs everything else (treating classic/hybrid identically,
-// verified against the real ca.crt); hibrido-and falls into that same
-// "everything else" branch, so classic's own pair satisfies it exactly
-// as well as hybrid's would -- picked per-profile below anyway, for
-// the closest available match rather than defaulting all three to the
-// same pair.
-func realCAFilesForProfile(profile string) (root, issuer string) {
+// files, not v9's own.
+//
+// hibrido-and gets TWO files per slot, not one (fixed after a real
+// finding: this previously fell into the same "everything else"
+// branch as classico, defaulting to the shared RSA-only pair --
+// serving only the RSA half of a profile whose own live mTLS identity
+// requires trusting an RSA chain AND an ML-DSA-65 chain independently
+// (main.go's dualServerConfig/dualClientConfig). The ML-DSA-65 half
+// added here is pqc's own root_ca_pqc.crt/issuer_ca_pqc.crt -- the
+// closest available REAL 2-level chain for that algorithm, same
+// "closest available match" convention classico's own pair already
+// used as a stand-in for the RSA half, not hibrido-and's own live
+// single-level hibrido_and_mldsa_ca.crt (that file never leaves the
+// gateway/proxy containers -- see main.go). Concatenating two PEM
+// blocks into one HTTP response body changes ONLY what each of the
+// existing /root-ca.pem and /issuer-ca.pem calls returns -- the
+// request count (2 GETs/subfluxo, 4/execucao) is unchanged.
+func realCAFilesForProfile(profile string) (root, issuer []string) {
 	switch profile {
 	case "pqc":
-		return "root_ca_pqc.crt", "issuer_ca_pqc.crt"
+		return []string{"root_ca_pqc.crt"}, []string{"issuer_ca_pqc.crt"}
 	case "hibrido-v8":
-		return "root_ca_hybrid.crt", "issuer_ca_hybrid.crt"
-	default: // classico, hibrido-and
-		return "root_ca.crt", "issuer_ca.crt"
+		return []string{"root_ca_hybrid.crt"}, []string{"issuer_ca_hybrid.crt"}
+	case "hibrido-and":
+		return []string{"root_ca.crt", "root_ca_pqc.crt"}, []string{"issuer_ca.crt", "issuer_ca_pqc.crt"}
+	default: // classico
+		return []string{"root_ca.crt"}, []string{"issuer_ca.crt"}
 	}
+}
+
+// readAndConcatCAFiles reads each named file from dir, in order, and
+// concatenates their raw bytes -- for a single-element slice this is
+// byte-for-byte identical to the single os.ReadFile() call it
+// replaces; for hibrido-and's two-element slices, it produces one PEM
+// blob with two CERTIFICATE blocks back to back (ordinary multi-cert
+// PEM, parseable by any PEM reader that loops/decodes blocks in
+// sequence -- see opin_flow.py's verify_ca_chain() for the client side
+// of that split).
+func readAndConcatCAFiles(dir string, names []string) ([]byte, error) {
+	var buf []byte
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		buf = append(buf, b...)
+	}
+	return buf, nil
 }
