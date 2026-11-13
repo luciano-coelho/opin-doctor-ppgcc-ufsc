@@ -2576,6 +2576,45 @@ def main():
                               n_warmup_per_profile=args.n_warmup_per_profile, resume=args.resume,
                               cost_tracker=cost_tracker_instance)
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
+
+    # Achado real/pedido do Luciano: criterios 2 (initcwnd) e 7 (RTT
+    # por rota) dependiam de um script SEPARADO (dedicated_criteria.py),
+    # nunca chamado por este modulo -- so documentado como passo
+    # manual posterior, rodado (quando rodado) depois da frota ja
+    # parada, sem listener ativo do lado certo. Corrigido chamando-o
+    # AQUI, dentro da mesma janela viva que `run_pilot` acabou de usar
+    # (a frota NUNCA e parada por este script -- ver comentario do
+    # bloco cost_stop abaixo -- entao ela ainda esta de pe neste
+    # ponto exato). So em modo `--campaign` real (--mode ssh); nunca
+    # no piloto nem em --mode simulate (sem frota real pra sondar);
+    # nunca apos smoke/cost_stop (esses dois casos ja pausam e devolvem
+    # a decisao ao Luciano antes de chegar aqui -- ver os dois blocos
+    # abaixo, inalterados). Qualquer falha na coleta e registrada
+    # EXPLICITAMENTE (nunca propagada) -- a campanha continua normal,
+    # os dados das 320 execucoes (ja escritos por `run_pilot`, acima)
+    # nunca sao perdidos por causa disto, e a frota continua de pe
+    # exatamente como sempre (decisao de para-la continua so do
+    # Luciano, via cleanup.py).
+    if args.campaign and args.mode == "ssh" and not args.smoke and not manifest.get("cost_stop"):
+        _scripts_dir = str(Path(__file__).resolve().parent)
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import dedicated_criteria as dc
+        try:
+            dedicated_report = dc.run_all_campaign(executor, Path(args.out), Path(args.out))
+            manifest["dedicated_criteria"] = {"ok": True, "report": dedicated_report}
+            print(json.dumps({"dedicated_criteria": dedicated_report}, indent=2, ensure_ascii=False))
+        except Exception as e:  # noqa: BLE001 -- nunca propaga: 320 execucoes reais ja estao salvas, a frota continua de pe
+            manifest["dedicated_criteria"] = {"ok": False, "error": str(e)}
+            print(f"\n*** AVISO: coleta dos criterios 2/3/7 (dedicated_criteria.py) falhou: {e} ***", file=sys.stderr)
+            print("Os dados das execucoes medidas (ja salvos por run_pilot) NAO foram afetados. "
+                  "A frota continua de pe -- decisao do Luciano sobre tentar de novo ou desmontar.", file=sys.stderr)
+        # Reescreve manifest.json com o campo novo (run_pilot ja tinha
+        # escrito a versao sem ele, _atomic_write_json acima) -- mesmo
+        # arquivo, mesma escrita atomica, nunca um segundo sistema de
+        # manifesto paralelo.
+        _atomic_write_json(Path(args.out) / "manifest.json", manifest)
+
     if manifest.get("cost_stop"):
         # Mesmo padrao da porta de fumaca: NUNCA destroi por conta
         # propria -- a execucao em andamento ja terminou, os dados ja

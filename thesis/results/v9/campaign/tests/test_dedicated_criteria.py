@@ -463,7 +463,12 @@ def test_mutante_run_criterio7_sem_route_quebra_em_modo_campanha(tmp_path):
         executor._server_ip()  # mutante: o jeito antigo, sem route, quebra em modo campanha
 
 
-def test_run_criterio7_falha_alto_se_nenhum_pcap_dedicado_existe(tmp_path, monkeypatch):
+def test_run_criterio7_registra_falha_e_nao_levanta_se_nenhum_pcap_dedicado_existe(tmp_path, monkeypatch):
+    """Pedido real (nunca se perder nem abortar a janela viva por uma
+    rota com defeito): o erro -- antes levantado direto por
+    run_criterio7, abortando TODAS as rotas -- agora e capturado por
+    rota e registrado como {"ok": False, "error": ...} no resultado,
+    com a funcao retornando normalmente (nunca propagando)."""
     def fake_run(argv, timeout=None):
         remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
         if "criterio7_rtt.py probe" in remote_cmd:
@@ -474,8 +479,49 @@ def test_run_criterio7_falha_alto_se_nenhum_pcap_dedicado_existe(tmp_path, monke
 
     monkeypatch.setattr(cli, "_run", fake_run)
     executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
-    with pytest.raises(RuntimeError, match="nenhum pcap dedicado"):
-        dc.run_criterio7(executor, tmp_path / "out", routes=("L219",))
+    result = dc.run_criterio7(executor, tmp_path / "out", routes=("L219",))
+    assert result["L219"]["ok"] is False
+    assert "nenhum pcap dedicado" in result["L219"]["error"]
+    # Nenhuma das chaves que um sucesso teria -- evaluate_criteria.py
+    # (linhas ~1525/1588) trata essa forma como FAIL explicito por
+    # campo ausente, nunca crasha lendo o arquivo.
+    assert "rtt_ms_probe" not in result["L219"]
+    assert "rtt_ms_pcap" not in result["L219"]
+    # O arquivo de saida tambem foi escrito, com o mesmo conteudo --
+    # a frota/janela viva nunca perde o que ja foi coletado.
+    out_path = tmp_path / "out" / "criterio7_rtt_por_rota.json"
+    assert json.loads(out_path.read_text(encoding="utf-8")) == result
+
+
+def test_run_criterio7_uma_rota_com_defeito_nao_impede_as_outras(tmp_path, monkeypatch):
+    """Duas rotas, uma falha (sem pcap) e a outra sucede -- confirma
+    isolamento real entre rotas, nao so a ausencia de excecao."""
+    def fake_run(argv, timeout=None):
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        host = argv[-2] if argv and argv[0] == "ssh" else ""  # "ec2-user@<ip>" (cli.run_ssh)
+        if "criterio7_rtt.py probe" in remote_cmd:
+            return FakeProc(stdout=json.dumps({"rtt_ms_probe": 1.0, "n_samples_probe": 20}))
+        if "test -f" in remote_cmd:
+            # So a rota servida por sa-east-1 (L219) tem pcap; a
+            # servida por us-east-1 (L14) nunca tem, nesta simulacao.
+            if "203.0.113.50" in host:
+                return FakeProc(stdout="FOUND")
+            return FakeProc(stdout="")
+        if "criterio7_rtt.py pcap" in remote_cmd:
+            return FakeProc(stdout=json.dumps({"rtt_ms_pcap": 2.0}))
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {
+        "servers": {"sa-east-1": {"public_ip": "203.0.113.50"}, "us-east-1": {"public_ip": "203.0.113.51"}},
+        "clients": {"L219": {"public_ip": "203.0.113.70"}, "L14": {"public_ip": "203.0.113.71"}},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/fake/key",
+                                 route_server={"L219": "sa-east-1", "L14": "us-east-1"})
+    result = dc.run_criterio7(executor, tmp_path / "out", routes=("L219", "L14"))
+    assert result["L219"]["rtt_ms_pcap"] == 2.0
+    assert result["L14"]["ok"] is False
+    assert "nenhum pcap dedicado" in result["L14"]["error"]
 
 
 # --- collect_full_logs (pedido do Luciano, item 0, regra fail-closed
@@ -588,3 +634,58 @@ def test_mutante_collect_full_logs_so_1_servidor_em_modo_campanha_perderia_logs(
     executor = orch.SSHExecutor(inventory, key_path="/fake/key", route_server={"L219": "sa-east-1"})
     with pytest.raises(KeyError):
         executor._server_ip()  # mutante: o jeito antigo de pegar "o" servidor quebra em modo campanha
+
+
+# --- run_all_campaign: as 3 variantes de campanha, na ordem, isoladas
+# entre si (pedido real: uma falhar nunca pode impedir as outras de
+# rodar, nem perder o que a frota viva ainda pode oferecer).
+
+def test_run_all_campaign_cobre_as_8_rotas_incluindo_as_3_l0(monkeypatch, tmp_path):
+    """Gap fechado (pedido do Luciano): antes, run_all_campaign so
+    passava as rotas NAO-L0 pra run_criterio7 -- as 3 rotas L0-*
+    nunca eram sondadas por este probe. Confirma que as 8 rotas reais
+    de campaign_topology.CAMPAIGN_ROUTES chegam ate run_criterio7,
+    L0-* inclusas."""
+    captured_routes = {}
+
+    def fake_run_criterio7(executor, out_dir, routes=()):
+        captured_routes["routes"] = tuple(routes)
+        return {r: {"ok": True} for r in routes}
+
+    monkeypatch.setattr(dc, "build_criterio3_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio2_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio7", fake_run_criterio7)
+    monkeypatch.setattr(dc, "collect_full_logs", lambda *a, **k: {"ok": True})
+
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    dc.run_all_campaign(executor, tmp_path / "coletado", tmp_path / "out")
+
+    import campaign_topology as ct
+    assert set(captured_routes["routes"]) == set(ct.CAMPAIGN_ROUTES)
+    assert sum(1 for r in captured_routes["routes"] if r.startswith("L0-")) == 3, \
+        "as 3 rotas L0-* tem que estar entre as rotas passadas pra run_criterio7"
+
+
+def test_run_all_campaign_isola_falha_de_um_passo_nunca_impede_os_outros(monkeypatch, tmp_path):
+    """Pedido real: uma excecao em QUALQUER um dos 4 passos
+    (criterio3/2/7/full_logs) nunca pode impedir os demais de rodar
+    -- antes desta correcao, uma excecao no PRIMEIRO passo
+    (build_criterio3_campaign) abortava a funcao inteira antes mesmo
+    de run_criterio2_campaign/run_criterio7 serem tentados."""
+    def falha(*a, **k):
+        raise RuntimeError("falha simulada no criterio3")
+
+    monkeypatch.setattr(dc, "build_criterio3_campaign", falha)
+    monkeypatch.setattr(dc, "run_criterio2_campaign", lambda *a, **k: {"L219_server-to-client": {"ok": True}})
+    monkeypatch.setattr(dc, "run_criterio7", lambda *a, **k: {"L219": {"ok": True}})
+    monkeypatch.setattr(dc, "collect_full_logs", lambda *a, **k: {"containers": {}, "instances": []})
+
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    report = dc.run_all_campaign(executor, tmp_path / "coletado", tmp_path / "out")
+
+    assert report["criterio3"] == {"ok": False, "error": "falha simulada no criterio3"}
+    assert report["criterio2"] == {"L219_server-to-client": {"ok": True}}, \
+        "run_criterio2_campaign tem que rodar mesmo com criterio3 tendo falhado"
+    assert report["criterio7"] == {"L219": {"ok": True}}, \
+        "run_criterio7 tem que rodar mesmo com criterio3 tendo falhado"
+    assert report["full_logs"] == {"containers": {}, "instances": []}

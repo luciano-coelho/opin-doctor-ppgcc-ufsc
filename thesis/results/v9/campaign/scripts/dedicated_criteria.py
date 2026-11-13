@@ -193,65 +193,89 @@ def run_criterio2_campaign(executor, out_dir: Path, routes=None) -> dict:
     return results
 
 
+def _run_criterio7_one_route(executor, route: str) -> dict:
+    """Uma rota, os dois canais -- fatorado de `run_criterio7` pra
+    que uma falha numa rota (achado real, pedido do Luciano: as 3
+    rotas L0-* nunca tinham sido exercitadas por este probe antes)
+    nunca aborte as demais. Levanta (nunca engole) -- quem decide o
+    que fazer com a excecao e o chamador, ver `run_criterio7`."""
+    client_ip = executor._client_ip(route)
+    # Achado real (pedido do Luciano, revisao de codigo com grep
+    # literal): esta chamada ficou sem `route` desde a Decisao 107
+    # -- `run_criterio7` nunca foi tocada na generalizacao
+    # N-servidores. Em modo campanha (`route_server` setado),
+    # `_server_ip()` sem `route` levanta KeyError de proposito
+    # (fail-closed, ver `_server_key`) -- a funcao quebraria na
+    # PRIMEIRA rota, sempre. Corrigido antes de qualquer uso real.
+    server_ip = executor._server_ip(route)
+    gw_ip = executor._server_gateway_ip(route)
+
+    probe_proc = cli.run_ssh(
+        client_ip,
+        f"cd {_REMOTE_PRODUCERS_DIR} && python3 criterio7_rtt.py probe --host {gw_ip} --port 443 --n 20",
+        key_path=executor.key_path,
+    )
+    if probe_proc.returncode != 0:
+        raise RuntimeError(f"run_criterio7({route}): canal probe falhou: {cli.redact(probe_proc.stderr)}")
+    probe = json.loads(probe_proc.stdout)
+
+    # Qualquer perfil prova o canal (SYN/SYN-ACK nunca depende de
+    # perfil criptografico) -- usa o primeiro que `run_pilot`
+    # escreveu de verdade (ordem de PROFILES, nunca suposto).
+    pcap_path = None
+    for profile in ("classico", "pqc", "hibrido-v8", "hibrido-and"):
+        candidate = f"/tmp/criterio1_{profile}_{route}.pcap"
+        check = cli.run_ssh(server_ip, f"test -f {candidate} && echo FOUND", key_path=executor.key_path)
+        if "FOUND" in (check.stdout or ""):
+            pcap_path = candidate
+            break
+    if pcap_path is None:
+        raise RuntimeError(f"run_criterio7({route}): nenhum pcap dedicado encontrado em /tmp no servidor")
+
+    pcap_proc = cli.run_ssh(
+        server_ip,
+        f"cd {_REMOTE_PRODUCERS_DIR} && python3 criterio7_rtt.py pcap --pcap {pcap_path} --port 443",
+        key_path=executor.key_path,
+    )
+    if pcap_proc.returncode != 0:
+        raise RuntimeError(f"run_criterio7({route}): canal pcap falhou: {cli.redact(pcap_proc.stderr)}")
+    pcap = json.loads(pcap_proc.stdout)
+
+    return {
+        "rtt_ms_probe": probe["rtt_ms_probe"], "n_samples_probe": probe["n_samples_probe"],
+        "rtt_ms_pcap": pcap["rtt_ms_pcap"],
+    }
+
+
 def run_criterio7(executor, out_dir: Path, routes=("L0", "L219", "L325")) -> dict:
     """Por rota: canal 1 (`probe`, do CLIENTE contra a porta 443 ja
     aberta do servidor) + canal 2 (`pcap`, reaproveita o pcap
     dedicado que `_launch_gateway`/`dedicated_capture` JA escreve em
     `/tmp/criterio1_<perfil>_<rota>.pcap` no servidor -- nenhuma
     captura nova) -- `combine` acumula os dois num unico
-    `criterio7_rtt_por_rota.json`."""
+    `criterio7_rtt_por_rota.json`.
+
+    Achado real (pedido do Luciano): antes desta correcao, uma falha
+    em QUALQUER rota abortava a funcao inteira (`raise` direto no
+    laco) -- as rotas seguintes nunca chegavam a ser tentadas, e a
+    rota com defeito tambem nao deixava NENHUM registro no JSON de
+    saida. Agora cada rota roda isolada (`_run_criterio7_one_route`);
+    uma falha e capturada, registrada como `{"ok": False, "error":
+    ...}` (sem `rtt_ms_probe`/`rtt_ms_pcap`/`n_samples_probe` --
+    `evaluate_criteria.py` (linhas ~1525/1588) ja trata essa forma
+    como FAIL explicito por campo ausente, nunca crasha lendo o
+    arquivo), e o laco continua pras demais rotas -- nunca se perde,
+    nunca aborta o resto."""
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "criterio7_rtt_por_rota.json"
     if out_path.exists():
         out_path.unlink()
     result = {}
     for route in routes:
-        client_ip = executor._client_ip(route)
-        # Achado real (pedido do Luciano, revisao de codigo com grep
-        # literal): esta chamada ficou sem `route` desde a Decisao 107
-        # -- `run_criterio7` nunca foi tocada na generalizacao
-        # N-servidores. Em modo campanha (`route_server` setado),
-        # `_server_ip()` sem `route` levanta KeyError de proposito
-        # (fail-closed, ver `_server_key`) -- a funcao quebraria na
-        # PRIMEIRA rota, sempre. Corrigido antes de qualquer uso real.
-        server_ip = executor._server_ip(route)
-        gw_ip = executor._server_gateway_ip(route)
-
-        probe_proc = cli.run_ssh(
-            client_ip,
-            f"cd {_REMOTE_PRODUCERS_DIR} && python3 criterio7_rtt.py probe --host {gw_ip} --port 443 --n 20",
-            key_path=executor.key_path,
-        )
-        if probe_proc.returncode != 0:
-            raise RuntimeError(f"run_criterio7({route}): canal probe falhou: {cli.redact(probe_proc.stderr)}")
-        probe = json.loads(probe_proc.stdout)
-
-        # Qualquer perfil prova o canal (SYN/SYN-ACK nunca depende de
-        # perfil criptografico) -- usa o primeiro que `run_pilot`
-        # escreveu de verdade (ordem de PROFILES, nunca suposto).
-        pcap_path = None
-        for profile in ("classico", "pqc", "hibrido-v8", "hibrido-and"):
-            candidate = f"/tmp/criterio1_{profile}_{route}.pcap"
-            check = cli.run_ssh(server_ip, f"test -f {candidate} && echo FOUND", key_path=executor.key_path)
-            if "FOUND" in (check.stdout or ""):
-                pcap_path = candidate
-                break
-        if pcap_path is None:
-            raise RuntimeError(f"run_criterio7({route}): nenhum pcap dedicado encontrado em /tmp no servidor")
-
-        pcap_proc = cli.run_ssh(
-            server_ip,
-            f"cd {_REMOTE_PRODUCERS_DIR} && python3 criterio7_rtt.py pcap --pcap {pcap_path} --port 443",
-            key_path=executor.key_path,
-        )
-        if pcap_proc.returncode != 0:
-            raise RuntimeError(f"run_criterio7({route}): canal pcap falhou: {cli.redact(pcap_proc.stderr)}")
-        pcap = json.loads(pcap_proc.stdout)
-
-        result[route] = {
-            "rtt_ms_probe": probe["rtt_ms_probe"], "n_samples_probe": probe["n_samples_probe"],
-            "rtt_ms_pcap": pcap["rtt_ms_pcap"],
-        }
+        try:
+            result[route] = _run_criterio7_one_route(executor, route)
+        except Exception as e:  # noqa: BLE001 -- registra QUALQUER falha individual, nunca aborta as outras rotas
+            result[route] = {"ok": False, "error": str(e)}
     out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     return result
 
@@ -389,21 +413,39 @@ def run_all_campaign(executor, collected_dir: Path, out_dir: Path) -> dict:
     so com as variantes de campanha: `build_criterio3_campaign`
     (rota default = maior RTT nominal), `run_criterio2_campaign`
     (rotas default = so RTT>0, Decisao 108/B.5), `run_criterio7` com
-    `routes` = as rotas nao-L0 de `campaign_topology.CAMPAIGN_ROUTES`
-    (mesma convencao do ensaio offline -- as 3 rotas L0-* tem RTT
-    nominal 0, usam o mesmo piso absoluto que a logica generalizada
-    de `_rtt_ok_for_nominal` ja cobre, testado em `test_criteria_
-    corruption_matrix.py`; nunca medidas por este probe especifico
-    nesta rodada)."""
+    `routes` = `campaign_topology.CAMPAIGN_ROUTES` -- as 8 rotas
+    reais, inclusive as 3 L0-* (achado/pedido real: a rodada anterior
+    excluia as 3 L0-* daqui, "nunca medidas por este probe
+    especifico" -- o mecanismo (SSH pro cliente + SSH pro servidor)
+    nao tem nenhuma dependencia de RTT>0, so precisa de duas
+    instancias distintas alcancaveis, o que toda rota (L0-* inclusive
+    -- co-localizada, nao a MESMA instancia) ja satisfaz).
+
+    Cada um dos 4 passos (criterio3/2/7/full_logs) roda isolado --
+    uma excecao num passo e registrada em `report` como `{"ok":
+    False, "error": ...}` e os PROXIMOS passos ainda rodam (achado
+    real: antes desta correcao, uma excecao em `build_criterio3_
+    campaign`, por exemplo, abortava a funcao inteira ANTES mesmo de
+    `run_criterio2_campaign`/`run_criterio7` serem tentados -- a
+    frota real ja viva ficava sem NENHUM dos 3 criterios, nao so o
+    que falhou). Nunca deixa de escrever o que deu certo, nunca perde
+    a janela viva por causa de uma falha isolada."""
     _scripts_dir = str(Path(__file__).resolve().parent)
     if _scripts_dir not in sys.path:
         sys.path.insert(0, _scripts_dir)
     import campaign_topology as ct
-    non_l0_routes = tuple(r for r in ct.CAMPAIGN_ROUTES if not r.startswith("L0-"))
-    report = {"criterio3": build_criterio3_campaign(collected_dir, out_dir)}
-    report["criterio2"] = run_criterio2_campaign(executor, out_dir)
-    report["criterio7"] = run_criterio7(executor, out_dir, routes=non_l0_routes)
-    report["full_logs"] = collect_full_logs(executor, out_dir)
+
+    report = {}
+    for key, call in (
+        ("criterio3", lambda: build_criterio3_campaign(collected_dir, out_dir)),
+        ("criterio2", lambda: run_criterio2_campaign(executor, out_dir)),
+        ("criterio7", lambda: run_criterio7(executor, out_dir, routes=ct.CAMPAIGN_ROUTES)),
+        ("full_logs", lambda: collect_full_logs(executor, out_dir)),
+    ):
+        try:
+            report[key] = call()
+        except Exception as e:  # noqa: BLE001 -- um passo falhar nunca pode impedir os demais de rodar
+            report[key] = {"ok": False, "error": str(e)}
     return report
 
 
