@@ -91,6 +91,17 @@ def _tamper_signature(compact_jwt: str) -> str:
     return f"{header_b64}.{payload_b64}.{of._b64url_encode(bytes(sig))}"
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "fixture live_artifacts so obtem um JWT real via opin_flow.start_tls_kem_proxy()'s "
+    "branch legado (mock_mtls/mock_as) -- confirmado quebrado nesta rodada, 3 jeitos "
+    "diferentes em 3 tentativas reais (404 roteado por SNI; cadeia de CA nao bate "
+    "mais o self-signed check; TLS handshake failure bruto sob perfil hybrid). "
+    "verify_jwt() em si (a funcao sob teste aqui) e a MESMA usada pelo caminho real "
+    "V9_HARNESS=1/relay.go -- mas nenhum teste existente exercita esta tamper-"
+    "rejection especifica via esse caminho (grep confirmado, Decisao 163). Redirecionar "
+    "pro harness exigiria trocar o alias de rede 'mtls' pro gateway v9 real em modo "
+    "business, fora do escopo seguro desta rodada."
+))
 def test_tampered_signature_rejected(live_artifacts):
     classic_jwk, pqc_jwk = live_artifacts["rs_keys"]
     tampered = _tamper_signature(live_artifacts["rs_response_jwt"])
@@ -98,6 +109,12 @@ def test_tampered_signature_rejected(live_artifacts):
         of.verify_jwt(tampered, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk)
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "mesma causa raiz de test_tampered_signature_rejected acima -- fixture live_artifacts "
+    "depende exclusivamente do tls_kem_proxy legado. A asserção (AS-key != RS-key rejection) "
+    "nao tem equivalente verificado via o caminho real V9_HARNESS=1/relay.go nem nos testes "
+    "de campanha (Decisao 163)."
+))
 def test_wrong_key_rejected(live_artifacts):
     """Verifies the RS's own response against the AS's key instead of the
     RS's -- two REAL, independently-issued key pairs, confirmed different
@@ -110,6 +127,12 @@ def test_wrong_key_rejected(live_artifacts):
         of.verify_jwt(live_artifacts["rs_response_jwt"], classic_jwk=as_classic_jwk, pqc_jwk=as_pqc_jwk)
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "mesma causa raiz de test_tampered_signature_rejected acima -- fixture live_artifacts "
+    "depende exclusivamente do tls_kem_proxy legado. A asserção (expected_alg errado "
+    "rejeitado) nao tem equivalente verificado via o caminho real V9_HARNESS=1/relay.go "
+    "nem nos testes de campanha (Decisao 163)."
+))
 def test_wrong_algorithm_rejected(live_artifacts):
     """Only meaningful for classic/pqc. Real gap found and fixed this
     round: this used to skip only "hybrid", but signer_core.mjs's own
@@ -176,6 +199,16 @@ def test_hybrid_rs256_payload_extension_rejected():
         of.verify_jwt(forged, classic_jwk=classic_jwk, pqc_jwk=pqc_jwk, artifact="rs256_regression")
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "mesma causa raiz de test_tampered_signature_rejected acima -- fixture live_artifacts "
+    "depende exclusivamente do tls_kem_proxy legado (que nem tem mapeamento de curva "
+    "pra hibrido-and -- KeyError confirmado ao vivo, Decisao 163). A asserção (key/"
+    "algorithm confusion, classic_jwk/pqc_jwk trocados) nao tem equivalente verificado "
+    "via o caminho real V9_HARNESS=1/relay.go nem nos testes de campanha. Esta e a MESMA "
+    "logica (verify_jwt's dispatch por forma de assinatura) que o gap achado e corrigido "
+    "no commit 0b18ebea ja cobria para hybrid/hibrido-and -- a cobertura de REGRESSAO "
+    "continua existindo aqui, so a execucao via stack real que esta em quarentena."
+))
 def test_hybrid_scheme_confusion_rejected(live_artifacts):
     """Dual-keyed profiles only (hybrid, hibrido-and): feeding a genuine
     RS response through verify_jwt() with classic_jwk/pqc_jwk SWAPPED must

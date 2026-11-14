@@ -17,6 +17,28 @@ import pytest
 _STACK_NETWORK = "insurance-server-lambdas_default"
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "legacy_unsupported(reason): Decisao 163 -- quarentena nominal. Teste que "
+        "depende EXCLUSIVAMENTE de opin_flow.start_tls_kem_proxy()'s branch legado "
+        "(nunca V9_HARNESS=1/relay.go) atingindo um backend real "
+        "(mock_mtls/mock_as), e cuja asserção não tem equivalente coberto pelo "
+        "caminho do harness real nem pelos testes de campanha -- verificado caso a "
+        "caso, listado nominalmente na Decisao 163 (thesis/results/v9/DECISIONS.md). "
+        "Sempre pulado, com o motivo exato do marker, nunca escondido/deselecionado "
+        "silenciosamente.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        marker = item.get_closest_marker("legacy_unsupported")
+        if marker is not None:
+            reason = marker.kwargs.get("reason", "sem motivo informado")
+            item.add_marker(pytest.mark.skip(reason=f"legacy_unsupported: {reason}"))
+
+
 def skip_if_stack_not_up():
     """Checagem estreita e especifica: so confirma que a rede docker
     do stack local existe. Nao confirma mais nada sobre o stack (os

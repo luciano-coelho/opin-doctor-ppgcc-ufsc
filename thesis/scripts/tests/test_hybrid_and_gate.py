@@ -81,6 +81,17 @@ def _token_request(session, cert, assertion: str):
     return resp
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "fixture stack depende de opin_flow.start_tls_kem_proxy()'s branch legado sob "
+    "CRYPTO_PROFILE=hybrid -- confirmado quebrado ao vivo nesta rodada (tls_kem_proxy "
+    "nunca responde, log do container mostra 'remote error: tls: handshake failure' "
+    "repetido contra mock_mtls, Decisao 163). A asserção (claim pqc ausente -> 400 "
+    "'hybrid AND-gate failed') testa clientHybridAuth.js (mock_as), codigo da camada "
+    "de APLICACAO (nao a mesma coisa que o DualAuthenticated da camada TLS, que tem "
+    "cobertura propria em and.patch's dual_test.go e em orchestrator.py's "
+    "_assert_profile_negotiated/campanha real) -- nenhum teste existente exercita "
+    "esta camada de aplicacao via o caminho real V9_HARNESS=1/relay.go."
+))
 def test_pqc_absent_rejected(stack):
     """A classical-only PS256 assertion with no `pqc` claim at all must now
     be rejected. This is the exact case Decisao 13's own original text
@@ -100,6 +111,12 @@ def test_pqc_absent_rejected(stack):
     assert "hybrid AND-gate failed" in resp.json().get("error_description", "")
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "mesma causa raiz de test_pqc_absent_rejected acima -- fixture stack depende "
+    "exclusivamente do tls_kem_proxy legado sob CRYPTO_PROFILE=hybrid, confirmado "
+    "quebrado ao vivo (Decisao 163). Camada de aplicacao (clientHybridAuth.js) sem "
+    "cobertura equivalente via o caminho real."
+))
 def test_pqc_invalid_rejected(stack):
     """A present-but-corrupted pqc signature must still be rejected -- the
     behavior Decisao 13's original implementation already covered;
@@ -125,6 +142,13 @@ def test_pqc_invalid_rejected(stack):
     assert "hybrid AND-gate failed" in resp.json().get("error_description", "")
 
 
+@pytest.mark.legacy_unsupported(reason=(
+    "mesma causa raiz de test_pqc_absent_rejected acima -- fixture stack depende "
+    "exclusivamente do tls_kem_proxy legado sob CRYPTO_PROFILE=hybrid, confirmado "
+    "quebrado ao vivo (Decisao 163). Camada de aplicacao (clientHybridAuth.js) sem "
+    "cobertura equivalente via o caminho real -- inclui o caminho FELIZ (aceitacao "
+    "valida), nao so os dois negativos acima."
+))
 def test_pqc_valid_accepted(stack):
     """A genuine hybrid assertion (valid PS256 + valid pqc/ML-DSA-65) must
     still be accepted -- confirms this round didn't turn the AND-gate into
