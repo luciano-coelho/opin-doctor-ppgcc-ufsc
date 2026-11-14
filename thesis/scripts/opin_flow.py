@@ -961,8 +961,20 @@ def _verify_cert_signed_by_mldsa65(cert, issuer_cert) -> bool:
     message_b64/signature_b64 branch, unchanged, reused here rather than
     reimplemented). issuer_cert.public_key() (an MLDSA65PublicKey object,
     NOT the certificate) exposes public_bytes_raw() directly -- confirmed
-    live, returns exactly the 1952 raw bytes ML-DSA-65's public key is."""
-    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_encode(issuer_cert.public_key().public_bytes_raw())}
+    live, returns exactly the 1952 raw bytes ML-DSA-65's public key is.
+
+    Achado real (Decisao 153): um chamador pode passar um issuer_cert
+    cuja chave publica NAO e ML-DSA-65 (ex.: RSA, no teste negativo que
+    troca a metade ML-DSA-65 do hibrido-and pelo catalyst RSA do
+    Controle) -- `cryptography` entao devolve um RSAPublicKey comum,
+    sem `public_bytes_raw()`, e a chamada direta levantava AttributeError
+    (um crash, nunca capturado por quem espera SignatureVerificationError/
+    bool). Checado explicitamente agora: tipo errado e uma REJEICAO
+    limpa (False), nunca um crash."""
+    issuer_pubkey = issuer_cert.public_key()
+    if not hasattr(issuer_pubkey, "public_bytes_raw"):
+        return False
+    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "pub": _b64url_encode(issuer_pubkey.public_bytes_raw())}
     verify_payload = json.dumps({
         "jwk": pqc_jwk,
         "message_b64": base64.b64encode(cert.tbs_certificate_bytes).decode("ascii"),
@@ -1010,15 +1022,34 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
         _verify_cert_signed_by_mldsa65() against each cert's own real
         issuer (root_ca_pqc against itself, then issuer_ca_pqc against
         root_ca_pqc).
-      - classic (changed this round): root_ca_rsa2048/issuer_ca_rsa2048
-        (new, RSA-2048, generated to match M1/M3's own key size -- the
-        files served here used to be root_ca.crt/issuer_ca.crt, RSA-4096
+      - classic (changed in a prior round): root_ca_rsa2048/issuer_ca_rsa2048
+        (RSA-2048, generated to match M1/M3's own key size -- the files
+        served here used to be root_ca.crt/issuer_ca.crt, RSA-4096
         SIBLINGS both signed by a separate `ca.crt` anchor; the new pair
         is a real 2-level chain instead, root_ca_rsa2048 self-signed,
         issuer_ca_rsa2048 signed BY it -- same shape as pqc's own pair,
         confirmed live via `openssl verify`). Verified the same way as
         pqc's RSA case: root against itself, issuer against root, both
         via `cryptography`'s own verify_directly_issued_by().
+      - hybrid (Controle/hibrido-v8 -- NEVER migrated to the self-signed
+        pair above): root_ca_hybrid/issuer_ca_hybrid are STILL the OLD
+        shape -- SIBLINGS, both signed directly by this project's own
+        real mTLS trust anchor (`ca.crt`, CN=ca, a static local file,
+        not fetched over the wire), confirmed live: both certs' own
+        issuer field names "ca", neither names the other. Verified via
+        `cryptography`'s own verify_directly_issued_by(), each cert
+        against ca.crt independently.
+
+        Achado real (Decisao 153): esse ramo tinha um `if` dedicado ANTES
+        de o classico virar autoassinado -- a troca do classico substituiu
+        o `default` que os dois perfis compartilhavam por uma logica so
+        valida pro classico, e "hybrid" passou a cair nela por acidente
+        (sem nenhum `if crypto_profile == "hybrid"` proprio), rejeitando
+        root_ca_hybrid (nao autoassinado) com erro enganoso. Nunca pego
+        antes porque os 5 testes deste arquivo que precisam do pqc-signer
+        ficaram SKIP a sessao inteira (Docker indisponivel) e nunca foram
+        reexecutados quando ele voltou. Corrigido com um ramo proprio,
+        restaurando a logica antiga (sibling, assinado por ca.crt).
       - hibrido-and: this profile's own live mTLS identity requires
         trusting an RSA chain AND an ML-DSA-65 chain independently
         (main.go's dualServerConfig/dualClientConfig) -- the gateway
@@ -1028,7 +1059,18 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
         (same relationship as pqc) -- both halves split out and
         verified here.
 
-    Raises SignatureVerificationError if any link doesn't verify."""
+    `crypto_profile` aceita tanto o nome de ROTEAMENTO real que esta
+    funcao sempre recebe em produção (via CRYPTO_PROFILE/
+    fetch_server_keys_and_ca(): "classic"/"pqc"/"hybrid"/"hibrido-and")
+    quanto o alias de EXIBICAO da v9 pros dois que diferem
+    ("classico"->classic, "hibrido-v8"->hybrid) -- os testes deste
+    modulo usam o alias de exibicao pros dois, nunca confundido aqui com
+    um 5o perfil.  Qualquer OUTRO valor (perfil desconhecido/erro de
+    digitacao) e um erro explicito, NUNCA cai silenciosamente em
+    nenhum dos 4 ramos acima.
+
+    Raises SignatureVerificationError if any link doesn't verify, or if
+    crypto_profile is not one of the 4 known profiles."""
     if crypto_profile == "hibrido-and":
         root_parts = _split_pem_certificates(root_ca_pem)
         issuer_parts = _split_pem_certificates(issuer_ca_pem)
@@ -1055,6 +1097,13 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
             )
         return
 
+    if crypto_profile not in ("pqc", "classic", "classico", "hybrid", "hibrido-v8"):
+        raise SignatureVerificationError(
+            f"verify_ca_chain: crypto_profile desconhecido {crypto_profile!r} -- nenhum dos 4 perfis "
+            "reconhecidos (classic/classico, pqc, hybrid/hibrido-v8, hibrido-and); recusando "
+            "verificar em vez de cair num ramo default que poderia estar errado pra este perfil"
+        )
+
     root_ca = x509.load_pem_x509_certificate(root_ca_pem)
     issuer_ca = x509.load_pem_x509_certificate(issuer_ca_pem)
 
@@ -1065,7 +1114,19 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
             raise SignatureVerificationError("issuer-ca.pem not validly signed by root-ca.pem (ML-DSA-65)")
         return
 
-    # classic (default): root_ca_rsa2048 self-signed, issuer_ca_rsa2048
+    if crypto_profile in ("hybrid", "hibrido-v8"):
+        # Controle -- NUNCA migrado pro par autoassinado (Decisao 151/153):
+        # root_ca_hybrid/issuer_ca_hybrid continuam SIBLINGS, assinados
+        # diretamente por ca.crt, nunca um pelo outro.
+        anchor = x509.load_pem_x509_certificate((CERTS_DIR / "ca.crt").read_bytes())
+        for cert, name in ((root_ca, "root-ca.pem"), (issuer_ca, "issuer-ca.pem")):
+            try:
+                cert.verify_directly_issued_by(anchor)
+            except Exception as e:
+                raise SignatureVerificationError(f"{name} (root_ca_hybrid/issuer_ca_hybrid) not validly signed by ca.crt: {e}") from None
+        return
+
+    # classic/classico: root_ca_rsa2048 self-signed, issuer_ca_rsa2048
     # signed by it -- same shape as pqc's own RSA-equivalent check above.
     try:
         root_ca.verify_directly_issued_by(root_ca)

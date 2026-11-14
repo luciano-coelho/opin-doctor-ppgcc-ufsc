@@ -58,6 +58,43 @@ def test_hibrido_v8_bundle_passa(certs, pqc_signer):
     of.verify_ca_chain(certs["root_hybrid"], certs["issuer_hybrid"], "hybrid")
 
 
+def test_hibrido_v8_bundle_passa_com_alias_de_exibicao(certs):
+    """Mesmo bundle do teste acima, mas com o alias de exibicao da v9
+    ("hibrido-v8") em vez do nome de roteamento real ("hybrid") -- os
+    dois precisam cair no MESMO ramo. Nunca precisa do pqc-signer (so
+    RSA, verify_directly_issued_by contra ca.crt)."""
+    of.verify_ca_chain(certs["root_hybrid"], certs["issuer_hybrid"], "hibrido-v8")
+
+
+def test_classico_bundle_passa_com_nome_de_roteamento_real(certs):
+    """Mesmo bundle de test_classico_bundle_passa, mas com o nome que
+    producao de verdade usa (CRYPTO_PROFILE="classic", nunca
+    "classico") -- os dois precisam cair no MESMO ramo."""
+    of.verify_ca_chain(certs["root_rsa2048"], certs["issuer_rsa2048"], "classic")
+
+
+def test_negativo_perfil_desconhecido_nunca_cai_em_default(certs):
+    """Decisao 153: antes desta correcao, QUALQUER crypto_profile que
+    nao fosse "hibrido-and"/"pqc" caia silenciosamente no bloco final
+    (sem checagem de valor) -- foi exatamente assim que "hybrid" foi
+    verificado com a logica errada do classico, sem nenhum erro de
+    'perfil desconhecido'. Um perfil que nao exista de verdade (erro
+    de digitacao, por exemplo) tem que ser rejeitado explicitamente,
+    nunca tratado como classico por acidente."""
+    with pytest.raises(of.SignatureVerificationError, match="desconhecido"):
+        of.verify_ca_chain(certs["root_rsa2048"], certs["issuer_rsa2048"], "hibrido-v9-que-nao-existe")
+
+
+def test_negativo_hibrido_v8_bundle_trocado_pelo_classico(certs):
+    """root_ca_rsa2048 (autoassinado) na posicao de root_ca_hybrid tem
+    que falhar a checagem "assinado por ca.crt" -- prova que o ramo do
+    Controle usa de verdade a logica de sibling/ca.crt, nao a de
+    autoassinatura do classico (a troca acidental que a Decisao 153
+    corrigiu teria deixado isso passar)."""
+    with pytest.raises(of.SignatureVerificationError, match="ca.crt"):
+        of.verify_ca_chain(certs["root_rsa2048"], certs["issuer_rsa2048"], "hybrid")
+
+
 def test_hibrido_and_bundle_passa(certs, pqc_signer):
     root_bundle = certs["root_rsa2048"] + certs["root_pqc"]
     issuer_bundle = certs["issuer_rsa2048"] + certs["issuer_pqc"]
@@ -95,6 +132,20 @@ def test_negativo_hibrido_and_bundle_com_so_1_certificado(certs, pqc_signer):
     metade presente."""
     with pytest.raises(of.SignatureVerificationError, match="2-certificate bundle"):
         of.verify_ca_chain(certs["root_rsa2048"], certs["issuer_rsa2048"], "hibrido-and")
+
+
+def test_mldsa65_helper_rejeita_chave_rsa_sem_crash(certs):
+    """Unitario, direto no helper, nunca precisa do pqc-signer (nunca
+    chega a chamar o servico -- rejeita antes, so olhando o tipo da
+    chave). Antes da Decisao 153, issuer_cert.public_key() devolvendo
+    um RSAPublicKey (sem public_bytes_raw()) levantava AttributeError
+    -- um crash, nunca um False/SignatureVerificationError que os
+    chamadores sabem tratar."""
+    from cryptography import x509
+
+    cert = x509.load_pem_x509_certificate(certs["root_pqc"])
+    rsa_issuer = x509.load_pem_x509_certificate(certs["root_rsa2048"])
+    assert of._verify_cert_signed_by_mldsa65(cert, rsa_issuer) is False
 
 
 def test_negativo_hibrido_and_metade_pqc_trocada_pela_do_controle(certs, pqc_signer):
