@@ -35,6 +35,18 @@ def main():
     args = parser.parse_args()
 
     crypto_profile = os.environ.get("CRYPTO_PROFILE", "classic")
+    # Decisao 159, item 3 (pedido do autor): o caminho legado de
+    # opin_flow.py's start_tls_kem_proxy() (sem V9_HARNESS=1) ainda
+    # completa um handshake sem erro visivel -- ja causou um achado
+    # falso-positivo nesta mesma linha de pesquisa (contagem de 29
+    # chamadas em vez de 44, por ter rodado sem notar). Fail-closed
+    # aqui, no UNICO processo que toda execucao real de campanha/
+    # piloto invoca (orchestrator.py's `_client_env` ja seta
+    # V9_HARNESS=1 por construcao -- esta e a camada extra, nunca so
+    # confiar que quem invocou lembrou de exportar a variavel).
+    if not of.V9_HARNESS:
+        sys.exit('V9_HARNESS deve estar "1" -- este script e so pra execucao real de campanha/piloto, '
+                  "nunca o caminho legado pre-v9 de opin_flow.py.")
     if not of.REMOTE_GATEWAY_HOST:
         sys.exit("REMOTE_GATEWAY_HOST must be set -- this script is for remote/campaign execution only.")
 

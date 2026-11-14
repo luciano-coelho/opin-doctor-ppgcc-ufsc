@@ -2633,6 +2633,59 @@ def test_assert_profile_negotiated_rejeita_versao_tls_ausente():
         orch._assert_profile_negotiated("classico", "L0", 1, result)
 
 
+def _result_with_counts(n_insurance, n_person, n_client_facing_handshakes, n_internal_handshakes=1):
+    gateway_log_lines = (
+        [orch._connection_ok_line(sni="mtls", remote=f"203.0.113.{10 + i}:5100{i}")
+         for i in range(n_client_facing_handshakes)]
+        + [orch._connection_ok_line(sni="matls-api.local", remote="127.0.0.1:9000")
+           for _ in range(n_internal_handshakes)]
+    )
+    return {
+        "insurance": [{"endpoint": "/insurance"} for _ in range(n_insurance)],
+        "person": [{"endpoint": "/person"} for _ in range(n_person)],
+        "gateway_log_lines": gateway_log_lines,
+    }
+
+
+def test_count_client_facing_handshakes_exclui_conexao_interna():
+    result = _result_with_counts(n_insurance=20, n_person=24, n_client_facing_handshakes=6, n_internal_handshakes=3)
+    assert orch._count_client_facing_handshakes(result["gateway_log_lines"]) == 6
+
+
+def test_assert_call_and_handshake_counts_aceita_44_e_6():
+    result = _result_with_counts(n_insurance=20, n_person=24, n_client_facing_handshakes=6)
+    orch._assert_call_and_handshake_counts("classico", "L0", 1, result)  # nao levanta
+
+
+def test_assert_call_and_handshake_counts_rejeita_total_de_chamadas_errado():
+    # 20+23=43, nao 44 -- provavel caminho legado de opin_flow.py
+    # (V9_HARNESS != "1"), exatamente o achado real desta rodada.
+    result = _result_with_counts(n_insurance=20, n_person=23, n_client_facing_handshakes=6)
+    with pytest.raises(RuntimeError, match="contagem estrutural errada"):
+        orch._assert_call_and_handshake_counts("classico", "L0", 1, result)
+
+
+def test_assert_call_and_handshake_counts_rejeita_numero_de_handshakes_errado():
+    result = _result_with_counts(n_insurance=20, n_person=24, n_client_facing_handshakes=5)
+    with pytest.raises(RuntimeError, match="contagem estrutural errada"):
+        orch._assert_call_and_handshake_counts("classico", "L0", 1, result)
+
+
+def test_assert_call_and_handshake_counts_rejeita_ambas_errada():
+    result = _result_with_counts(n_insurance=10, n_person=10, n_client_facing_handshakes=1)
+    with pytest.raises(RuntimeError, match="contagem estrutural errada"):
+        orch._assert_call_and_handshake_counts("classico", "L0", 1, result)
+
+
+def test_assert_call_and_handshake_counts_smoke_true_nunca_aborta():
+    # Decisao 159: a porta de fumaca (smoke=True) tem seu PROPRIO
+    # mecanismo de deteccao (run_smoke_gate, pos-execucao, coleta as
+    # 12 celulas) -- essa funcao precisa ser um no-op em smoke=True,
+    # nunca abortar a sondagem na primeira celula ruim.
+    result = _result_with_counts(n_insurance=1, n_person=1, n_client_facing_handshakes=1)
+    orch._assert_call_and_handshake_counts("classico", "L0", 1, result, smoke=True)  # nao levanta
+
+
 def test_run_pilot_aborta_a_janela_toda_no_primeiro_desvio_de_perfil(tmp_path, monkeypatch):
     real_run_execution = orch.LocalExecutor.run_execution
 

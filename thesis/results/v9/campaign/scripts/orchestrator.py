@@ -1891,6 +1891,66 @@ def _assert_profile_negotiated(profile, route, run, result):
         )
 
 
+# Decisao 159, item 3 (pedido do autor): invariantes estruturais de UMA
+# execucao real -- 44 chamadas HTTP (confirmado ao vivo, V9_HARNESS=1,
+# classico/20 insurance + 24 person, Decisao 158) e 6 handshakes mTLS
+# cliente-gateway (Decisao 140, confirmado nas 32 capturas dedicadas,
+# constante nos 4 perfis). Nunca por-perfil -- os dois numeros sao
+# estruturais do fluxo, nao dependem de qual criptografia esta em uso.
+EXPECTED_HTTP_CALLS_PER_EXECUCAO = 44
+EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO = 6
+
+
+def _count_client_facing_handshakes(gateway_log_lines: list[str]) -> int:
+    """Reaplica o MESMO regex/exclusao que `_connection_ok_lines`/
+    `client_facing` ja usam (`_CONNECTION_OK_LOG_RE`, excluindo
+    `_INTERNAL_CALLER_SNI`) sobre as linhas CRUAS que `run_execution`
+    ja devolveu -- funcao de modulo, nao metodo de `SSHExecutor`, pra
+    funcionar igual com `LocalExecutor` (que fabrica linhas no mesmo
+    formato, nunca um formato a parte)."""
+    count = 0
+    for line in gateway_log_lines:
+        m = _CONNECTION_OK_LOG_RE.search(line)
+        if m and m.group("sni") != _INTERNAL_CALLER_SNI:
+            count += 1
+    return count
+
+
+def _assert_call_and_handshake_counts(profile, route, run, result, smoke: bool = False):
+    """Decisao 159, item 3: fail-closed, mesmo estilo/lugar de
+    `_assert_profile_negotiated` (chamada logo depois dela, nas duas
+    celulas de aquecimento e medida) -- 44 chamadas HTTP e 6 handshakes
+    mTLS cliente-gateway sao invariantes estruturais do fluxo real
+    (V9_HARNESS=1); um desvio aqui significa que esta execucao passou
+    pelo caminho LEGADO de `opin_flow.py` (sem V9_HARNESS=1) ou por
+    algum outro desvio do fluxo real -- nunca aceito silenciosamente,
+    aborta a campanha/piloto na hora, com contexto completo.
+
+    `smoke=True` (a porta de fumaca, Decisao 48, 12 execucoes antes de
+    confiar na infraestrutura) e a UNICA excecao deliberada: essa
+    porta ja tem seu proprio mecanismo, testado e intencional
+    (`run_smoke_gate`, via `ec._http_counts_for_calls` pos-execucao),
+    que PRECISA deixar as 12 execucoes completarem pra coletar e
+    reportar TODAS as celulas com problema juntas (`smoke_failures`),
+    nunca abortar na primeira -- abortar aqui durante a sondagem
+    destruiria exatamente o que ela existe pra fazer. Fora da
+    sondagem (`smoke=False`, campanha e piloto reais, que e o que o
+    pedido do autor cobre), o abort imediato se aplica sempre."""
+    if smoke:
+        return
+    n_calls = len(result.get("insurance", [])) + len(result.get("person", []))
+    n_handshakes = _count_client_facing_handshakes(result.get("gateway_log_lines", []))
+    if n_calls != EXPECTED_HTTP_CALLS_PER_EXECUCAO or n_handshakes != EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO:
+        raise RuntimeError(
+            f"_assert_call_and_handshake_counts: contagem estrutural errada em profile={profile!r} "
+            f"route={route!r} run={run!r} -- esperado {EXPECTED_HTTP_CALLS_PER_EXECUCAO} chamadas HTTP "
+            f"e {EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO} handshakes mTLS cliente-gateway, observado "
+            f"{n_calls} chamadas e {n_handshakes} handshakes. Abortando ANTES de aceitar esta execucao -- "
+            f"provavel caminho LEGADO de opin_flow.py (V9_HARNESS != \"1\") ou outro desvio do fluxo "
+            f"real. Nunca segue coletando dado fora da forma estrutural esperada."
+        )
+
+
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
               routes: list[str] | None = None, profiles: list[str] | None = None,
               skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0,
@@ -2088,6 +2148,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 aquecimento_log_lines.append(aquecimento_marker_inicio(profile, route, warmup))
                 warmup_result = executor.run_execution(profile, route, run=f"aquecimento{warmup}")
                 _assert_profile_negotiated(profile, route, f"aquecimento{warmup}", warmup_result)
+                _assert_call_and_handshake_counts(profile, route, f"aquecimento{warmup}", warmup_result, smoke=smoke)
                 aquecimento_log_lines.extend(warmup_result["gateway_log_lines"])
                 aquecimento_log_lines.append(aquecimento_marker_fim(profile, route, warmup))
                 aquecimento_entry = {
@@ -2117,6 +2178,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                 # execucao como valida. Aborta e reporta no primeiro
                 # desvio, nunca segue coletando dado contaminado.
                 _assert_profile_negotiated(profile, route, run, result)
+                _assert_call_and_handshake_counts(profile, route, run, result, smoke=smoke)
                 combined_log_lines.extend(result["gateway_log_lines"])
                 combined_log_lines.append(execucao_marker_fim(profile, route, run))
                 cpu_client = result.get("cpu_client")
