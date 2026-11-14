@@ -12244,3 +12244,28 @@ Nota lateral: o cliente patched anuncia `mldsa44/65/87` em `signature_algorithms
 **4. Item 6b: aceito provisoriamente pelo autor.** Registrado aqui o pedido: o piloto deve capturar uma conexao interna (AS->RS, `matls-api.local`) por perfil e relatar o grupo de troca de chaves negociado -- ainda nao executado (pendente de piloto).
 
 **Nenhuma acao contra AWS, nenhum push, nenhuma tag nova.**
+
+## 159. Contador de handshake corrigido (limitador ciente de record TLS no countingConn), gateway repinado, verificacao decisiva (4 perfis, 2 modos de cliente, 240 conexoes): diferenca ZERO em 100%
+
+**1. Correcao implementada, sem tocar crypto/tls, and.patch nem o pin do toolchain.** `countingConn` (`gateway/main.go`) ganhou um campo `framingActive` (true do `Accept()` ate `Handshake()` retornar) e um metodo `readFramed()`: enquanto ativo, `Read()` nunca pede ao `net.Conn` raw mais bytes do que falta do record TLS atual -- le o cabecalho de 5B (tipo+versao+tamanho, sempre em claro, RFC 8446 Sec 5.1) e depois exatamente o corpo declarado, nunca mais, usando a garantia do proprio `net.Conn.Read` de nunca devolver mais bytes que o buffer passado. `disableRecordFraming()` chamado em `gateway/main.go:handleConn` e `gateway/business_server.go:acceptBusinessConn` (o caminho REAL da campanha) logo depois que `Handshake()` retorna -- dali em diante, passthrough irrestrito, igual a antes. Commit `879661e0`.
+
+**2. Testes (itens 1a/1b), ambos passando:**
+- `counting_conn_test.go`: fluxos sinteticos de records TLS (2 records de "handshake" + 1 de "dados de aplicacao", simulando a escrita pos-handshake do cliente), alimentados por um `net.Conn` falso com 8 fragmentacoes diferentes (byte a byte, tudo de uma vez, fronteira de cada record, fronteira +-1) -- todas produzem a MESMA contagem de `in`, zero bytes do record seguinte contados enquanto o enquadramento esta ativo.
+- `counting_conn_handshake_test.go`: handshake TLS 1.3 REAL sobre TCP loopback (nao `net.Pipe`, que nunca reproduziria a corrida de buffer do SO), cliente escreve imediatamente apos seu proprio `Handshake()` retornar (a corrida exata que causava o leak), **100 iteracoes, as 100 com a mesma contagem** (1531B, identico -- config sintetica propria do teste, nao comparavel a nenhum perfil real).
+
+**3. Verificacao decisiva (item 1c), agente sem historico, 4 perfis x 2 modos de cliente (escrita imediata e com atraso de 150ms) x 30 conexoes = 240 conexoes, contra captura decifrada real:**
+
+| Perfil | Captura decifrada IN/OUT | Log do gateway IN/OUT | Diferenca (60 conexoes) |
+|---|---|---|---|
+| classico | 1485 / 1640 | 1485 / 1640 | **0 em 60/60** |
+| pqc | 10728 / 10878 | 10728 / 10878 | **0 em 60/60** |
+| hibrido-v8 | 8397 / 8552 | 8397 / 8552 | **0 em 60/60** |
+| hibrido-and | 11902 / 12177 | 11902 / 12177 | **0 em 60/60** |
+
+**240/240 conexoes, diferenca ZERO, nos 2 modos de cliente, nos 4 perfis.** Satisfaz a pre-condicao (a) da continuacao condicional.
+
+**4. Repin do gateway em PINS.json.** Rebuild `--no-cache` a partir do working tree limpo no commit `879661e0`, 2 builds independentes sob tags dedicadas (`:repro1`/`:repro2`, nunca direto em `:latest`): binario extraido IDENTICO nos dois (`sha256:9d21b901...906618`) -- `binary_sha256_reproducible` reconfirmado `true`. `tar_sha256` e `rootfs_layers[1]` (a camada do binario) mudaram, como esperado; `rootfs_layers[0]` (base) e `rootfs_layers[2]` (certs) identicos ao pin anterior. `go_version_m_sha256`/`go_version_m_text` identicos (toolchain/flags de build inalterados). `image_id` atualizado (informativo, nunca verificado, Decisao 68). `proxy`/`auth` NAO tocados -- `git diff --stat` confirma so `PINS.json` mudou (5 linhas: tar_sha256, 1 rootfs_layer, binary_sha256, image_id, note), so no bloco `gateway`.
+
+**5. Pendente, itens finais de 1: checagem fail-closed nas capturas dedicadas (contador do gateway == soma decifrada, tolerancia zero) e alerta (sem descartar) de conexao fora do valor do perfil -- em andamento, registrado numa Decisao seguinte quando implementado.**
+
+**Nenhuma acao contra AWS, nenhum push, nenhuma tag nova ainda (aguardando os itens 3 e 4 do pedido antes da decisao condicional sobre a v6).**

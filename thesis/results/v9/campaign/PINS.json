@@ -15,10 +15,10 @@
     "gateway": {
       "docker_image": "mockopin-v9-gateway",
       "platform": "linux/amd64",
-      "tar_sha256": "4be927966cb57897756062137a8398e1e770f9bc0df6423a9e04160f3dae703c",
+      "tar_sha256": "d6cca09c4ed2477a98396d15aa8a3062ed08e2702edd44cdf8a7531857da8b63",
       "rootfs_layers": [
         "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
-        "sha256:b71862ce0bf0c9895d6cdffc4c649eba50f56402062dbc4207c8c2b9d8e2edf6",
+        "sha256:3adf1217073eb522b0ec5449ef70bc52caef9169ab220672f61726b35c2995cc",
         "sha256:7d1a1c095b0111d2ca36e6b377c351210d4b7272be66624640e5df64b208b3d2"
       ],
       "config_subset": {
@@ -34,13 +34,13 @@
         }
       },
       "binary_path_in_image": "/gateway",
-      "binary_sha256": "0e4ba19fbe27a53ae43b90dc82041a76cc50cd223b85d236e65e04c1685d57d0",
+      "binary_sha256": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
       "binary_sha256_reproducible": true,
       "go_version_m_sha256": "ba8f857b5d868f2c9b0596e72b3089b9e6c678ceb6a911a90035596e2ceb9493",
       "go_version_m_text": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
-      "image_id": "sha256:c929ebac4f7d519d5cd2be892249a6784e0362743fe57a7412be1935da1adc78",
+      "image_id": "sha256:f6dfe1c32cb989ea9126476f87b8308ea24368c89edad36d74e7a9923abbb1c0",
       "image_id_note": "Informativo apenas -- NUNCA verificado (Decisao 68, ver _image_identity_note).",
-      "note": "Rebuild real a partir do working tree limpo no commit bfd2b489 (fix do carve-out interno: mtls_internal_server.crt com ExtKeyUsage=ServerAuth, em vez de mtls.crt). docker build --no-cache. Camada base (layer[0]) IDENTICA ao pin anterior; as 2 camadas seguintes mudam (binario novo pelo fix de codigo + COPY certs efemero via make certs). Decisao 155 (Emenda): binary_sha256_reproducible confirmado true -- 2 builds independentes deste mesmo commit, sob tags dedicadas (mockopin-v9-gateway:repro1/:repro2, nunca :latest, por causa do risco real ja documentado na Decisao 127), produziram o MESMO binario extraido (sha256 0e4ba19f...57d0 nos dois), identico ao pin acima."
+      "note": "Rebuild real a partir do working tree limpo no commit 879661e0 (Decisao 159: countingConn ganha limitador de leitura ciente de record TLS, fecha o leak de +71B no handshakeBytesIn). docker build --no-cache. Camada base (layer[0]) e a camada de certs (layer[2]) IDENTICAS ao pin anterior; so a camada do binario (layer[1]) muda, como esperado (main.go/business_server.go mudaram). binary_sha256_reproducible confirmado true -- 2 builds independentes deste mesmo commit, sob tags dedicadas (mockopin-v9-gateway:repro1/:repro2, nunca so :latest direto, mesmo risco documentado na Decisao 127), produziram o MESMO binario extraido (sha256 9d21b901...906618 nos dois). go_version_m_sha256/text IDENTICOS ao pin anterior (toolchain/flags de build inalterados -- so o codigo-fonte mudou)."
     },
     "proxy": {
       "docker_image": "mockopin-v9-proxy",
