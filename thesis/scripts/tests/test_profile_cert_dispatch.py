@@ -13,6 +13,7 @@ chamam incondicionalmente (sem guarda de V9_HARNESS nenhuma). So
 alcancavel pelo ramo NAO-V9_HARNESS de `start_tls_kem_proxy`). Os
 testes abaixo (pedidos explicitamente pelo Luciano) provam as duas
 alegacoes -- a correta E a corrigida -- com evidencia, nao suposicao."""
+import json
 import sys
 from pathlib import Path
 
@@ -20,6 +21,37 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import opin_flow as of  # noqa: E402
+
+
+@pytest.fixture
+def synthetic_certs_dir(tmp_path):
+    """Item 4 (gate em worktree limpa): client_one.jwks/
+    client_one_pqc.jwks sao material PRIVADO de proposito
+    (mock-service-os/certs/.gitignore: "material privado nunca
+    versionado", mesma politica de *.key/*.pem em thesis/results/v9/)
+    -- nunca uma fixture versionavel. Gera uma chave RSA real (classic)
+    e um JWK "AKP"/ML-DSA-65 sintetico (nunca usado pra assinar nada
+    aqui -- o teste que usa isto para antes de qualquer assinatura, na
+    primeira chamada de rede mockada) num diretorio temporario. So
+    CRIA os arquivos -- quem usa este fixture decide QUANDO apontar
+    of.CERTS_DIR pra ele (depois de qualquer importlib.reload(of), que
+    resetaria o patch se aplicado antes)."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    alg = of.pyjwt.algorithms.RSAAlgorithm(of.pyjwt.algorithms.RSAAlgorithm.SHA256)
+    classic_jwk = alg.to_jwk(key, as_dict=True)
+    classic_jwk["use"] = "sig"
+    classic_jwk["kid"] = "synthetic-client-one"
+    (tmp_path / "client_one.jwks").write_text(
+        json.dumps({"keys": [classic_jwk]}), encoding="utf-8")
+
+    pqc_jwk = {"kty": "AKP", "alg": "ML-DSA-65", "use": "sig",
+               "kid": "synthetic-client-one-pqc", "pub": "AA==", "priv": "AA=="}
+    (tmp_path / "client_one_pqc.jwks").write_text(
+        json.dumps({"keys": [pqc_jwk]}), encoding="utf-8")
+
+    return tmp_path
 
 
 def test_hibrido_and_usa_o_mesmo_cert_que_hybrid_get_client_cert_paths():
@@ -121,7 +153,7 @@ def test_experimento_descartavel_get_client_cert_paths_E_chamada_sem_v9_harness(
         importlib.reload(of)
 
 
-def test_get_local_leg_cert_paths_e_live_sob_v9_harness_correcao_da_decisao_52(monkeypatch):
+def test_get_local_leg_cert_paths_e_live_sob_v9_harness_correcao_da_decisao_52(monkeypatch, synthetic_certs_dir):
     """Correcao da Decisao 52: aquela rodada alegou que as DUAS
     funcoes (get_client_cert_paths/get_local_leg_cert_paths) eram
     "mortas no piloto" sob V9_HARNESS=1. Falso para esta segunda --
@@ -135,6 +167,7 @@ def test_get_local_leg_cert_paths_e_live_sob_v9_harness_correcao_da_decisao_52(m
     try:
         _reload_with_v9_harness(monkeypatch, True)
         assert of.V9_HARNESS is True
+        monkeypatch.setattr(of, "CERTS_DIR", synthetic_certs_dir)  # depois do reload, nunca antes
 
         calls = []
         real = of.get_local_leg_cert_paths
