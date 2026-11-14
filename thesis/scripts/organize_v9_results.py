@@ -135,6 +135,28 @@ def _refuse_if_populated_without_flag(out_dir: Path, allow_overwrite_populated: 
             )
 
 
+def _write_retries_report(out_dir: Path, calls: list, aquecimentos: list) -> dict:
+    """Decisao 158 (item 6a): "arquivo de repetições", somado por
+    célula (profile, route) -- deriva de `network_transport_retries`
+    (ja presente em cada execucao/aquecimento real, gravado por
+    orchestrator.py a partir do que latency_automation.py classificou
+    como "network_transport"). Nunca inclui falha_closed (essa aborta
+    a execucao, nunca chega a um `run*.json` persistido) nem retries de
+    transporte SSH (Decisao 139, campo separado `retry_failures`)."""
+    by_cell = defaultdict(list)
+    for e in list(calls) + list(aquecimentos):
+        for r in e.get("network_transport_retries", []):
+            by_cell[(e["profile"], e["route"])].append(r)
+    por_celula = {
+        f"{profile}/{route}": {"n_retries": len(entries), "entries": entries}
+        for (profile, route), entries in sorted(by_cell.items())
+    }
+    report = {"total_retries": sum(v["n_retries"] for v in por_celula.values()), "por_celula": por_celula}
+    (out_dir / "retries_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--calls-json", required=True)
@@ -234,6 +256,7 @@ def main():
     }
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    retries_report = _write_retries_report(out_dir, calls, aquecimentos)
     report_data = {
         "gerado_em_utc": manifest.get("window_end_utc"),
         "piloto": args.label_piloto,
@@ -244,6 +267,7 @@ def main():
         "divergencias_encontradas": divergences,
         "provenance": provenance,
         "overwrite_populated_dest_authorized": args.allow_overwrite_populated,
+        "network_transport_retries_total": retries_report["total_retries"],
     }
     (out_dir / "report_data_v9.json").write_text(
         json.dumps(report_data, indent=2, ensure_ascii=False), encoding="utf-8")

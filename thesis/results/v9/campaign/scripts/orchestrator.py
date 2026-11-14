@@ -1459,6 +1459,16 @@ class SSHExecutor:
             # o resto deste dict (stat/t0/t1/log acima); as descartadas
             # nunca contribuem com nenhum outro campo.
             "retry_attempts": attempt, "retry_failures": attempt_failures,
+            # Decisao 158 (item 6a): retries DENTRO do processo remoto
+            # (campaign_client_runner.py/latency_automation.py), classe
+            # "network_transport" -- distintos dos `retry_failures`
+            # acima (falha de TRANSPORTE SSH, rc=255, Decisao 139).
+            # `result["whole_run_retries"]` ja vem com profile/run/
+            # motivo/horario de latency_automation.py; so falta `route`,
+            # que so este metodo conhece.
+            "network_transport_retries": [
+                {**r, "route": route} for r in result.get("whole_run_retries", [])
+            ],
         }
 
     @staticmethod
@@ -2088,6 +2098,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     # medidas -- aquecimentos tambem rodam `run_execution`.
                     "retry_attempts": warmup_result.get("retry_attempts", 1),
                     "retry_failures": warmup_result.get("retry_failures", []),
+                    "network_transport_retries": warmup_result.get("network_transport_retries", []),
                 }
                 aquecimento_calls.append(aquecimento_entry)
                 # Decisao 133, item 3: persistido no disco AGORA, nunca
@@ -2129,6 +2140,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     # campos, ex. LocalExecutor).
                     "retry_attempts": result.get("retry_attempts", 1),
                     "retry_failures": result.get("retry_failures", []),
+                    "network_transport_retries": result.get("network_transport_retries", []),
                 }
                 execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({

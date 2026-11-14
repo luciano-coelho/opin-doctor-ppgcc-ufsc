@@ -55,40 +55,101 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 import opin_flow as of
 
 BASE_DIR = of.BASE_DIR
 
 
-# Whole-run retry, mirroring median_automation.py's RUN_RETRY_LIMIT
-# (Decision 5, thesis/results/v5/DECISIONS.md): the rare reentrant
-# auth<->mock_mtls introspection race recurred in the latency batch
-# (Decision 9, thesis/results/v5/latency/DECISIONS.md) at a different call
-# site (InsurerAdapter.getConsent() during interaction/login rendering,
-# not just the /token exchange) -- same underlying mechanism, confirmed by
-# the identical stack trace/error. Unlike the PAR-TTL/login-race/
-# interaction-session-lost retries (which exclude only the wasted sub-
-# interval from an otherwise-successful run), a whole-run failure here
-# happens before anything worth keeping exists, so the entire attempt
-# (time and data) is discarded and retried from scratch -- there is no
-# partial T_fluxo to salvage.
-RUN_RETRY_LIMIT = 2
+# Decisao 158 (item 6a, autorizado pelo autor apos a auditoria
+# independente achar que o `except Exception` generico abaixo tratava
+# falha de rede, falha criptografica e resposta HTTP de negocio da
+# MESMA forma -- nunca distinguindo "vale repetir" de "fail-closed").
+# Substituiu o antigo RUN_RETRY_LIMIT=2 (mirroring median_automation.py,
+# Decision 5/thesis/results/v5/DECISIONS.md) por uma classificacao
+# explicita em exatamente 2 classes:
+#
+#   "network_transport" -- reset/recusa de conexao/timeout, ou um
+#   502/504 que um proxy local viesse a gerar numa falha de dial
+#   upstream (hoje `proxy/relay.go`'s `handleRelayConn` so fecha a
+#   conexao do lado local numa falha de dial -- NUNCA escreve uma
+#   resposta HTTP 502/504 de verdade -- entao isso hoje chega aqui como
+#   `requests.exceptions.ConnectionError`, ja coberta pela classe de
+#   excecao abaixo; o check explicito de status 502/504 fica mantido
+#   so por robustez/documentacao, caso esse ou outro proxy local passe
+#   a responder com um status em vez de so fechar o socket).
+#   Descarta a tentativa e repete a EXECUCAO INTEIRA, no maximo
+#   NETWORK_TRANSPORT_MAX_ATTEMPTS vezes, cada tentativa descartada
+#   registrada (perfil, label/execucao, motivo, horario).
+#
+#   "fail_closed" -- tudo o mais, por EXCLUSAO, nunca por uma lista
+#   positiva de "excecoes conhecidas que abortam": falha criptografica/
+#   de verificacao de assinatura (SignatureVerificationError), resposta
+#   HTTP de negocio inesperada (qualquer HTTPError que nao seja
+#   502/504) e qualquer excecao NAO classificada -- aborta na hora, sem
+#   retry. `PqcSignerServiceNotStarted` (opin_flow.py) tambem cai aqui
+#   por exclusao -- e um RuntimeError distinto, nunca um
+#   ConnectionError/HTTPError diretamente, porque e um erro de
+#   orquestracao (servico nao foi iniciado), nao algo que repetir a
+#   execucao resolveria.
+#
+# A janela usada pro T_fluxo/handshake_bytes/OPINsize e sempre so a da
+# tentativa BEM-SUCEDIDA -- run_once_timed() ja limpa os acumuladores
+# de timing no seu proprio inicio (clear_verification_timings() etc.,
+# abaixo), entao uma tentativa descartada nunca contamina a que
+# sucede; o retorno de uma tentativa descartada e descartado por
+# inteiro aqui, nunca mesclado.
+NETWORK_TRANSPORT_MAX_ATTEMPTS = 3
+
+_NETWORK_TRANSPORT_EXCEPTION_TYPES = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    ConnectionError,  # builtin -- cobre ConnectionResetError/ConnectionRefusedError
+)
+
+
+def _is_network_transport_failure(exc: Exception) -> bool:
+    if isinstance(exc, _NETWORK_TRANSPORT_EXCEPTION_TYPES):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) in (502, 504):
+            return True
+    return False
+
+
+def classify_failure(exc: Exception) -> str:
+    """Decisao 158: devolve exatamente "network_transport" ou
+    "fail_closed" -- nunca uma terceira classe. Ver o comentario acima
+    de NETWORK_TRANSPORT_MAX_ATTEMPTS pro raciocinio completo."""
+    return "network_transport" if _is_network_transport_failure(exc) else "fail_closed"
 
 
 def run_once_timed_with_retry(crypto_profile: str, label: str, whole_run_retries: list, return_calls: bool = False) -> dict:
     last_error = None
-    for attempt in range(1, RUN_RETRY_LIMIT + 1):
+    for attempt in range(1, NETWORK_TRANSPORT_MAX_ATTEMPTS + 1):
         try:
             return run_once_timed(crypto_profile, return_calls=return_calls)
         except Exception as e:
+            failure_class = classify_failure(e)
+            entry = {
+                "run": label, "attempt": attempt, "profile": crypto_profile,
+                "error": f"{type(e).__name__}: {e}", "failure_class": failure_class,
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            whole_run_retries.append(entry)
+            if failure_class == "fail_closed":
+                print(f"  [{label}] attempt {attempt} failed (fail_closed: {type(e).__name__}: {e}) -- "
+                      "aborting immediately, no retry (Decisao 158)")
+                raise
             last_error = e
-            if attempt < RUN_RETRY_LIMIT:
-                print(f"  [{label}] attempt {attempt} failed ({type(e).__name__}: {e}) -- discarding whole "
-                      "attempt and retrying from scratch (see thesis/results/v5/latency/DECISIONS.md, Decision 9)")
-                whole_run_retries.append({"run": label, "attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+            if attempt < NETWORK_TRANSPORT_MAX_ATTEMPTS:
+                print(f"  [{label}] attempt {attempt} failed (network_transport: {type(e).__name__}: {e}) -- "
+                      "discarding whole attempt and retrying from scratch (Decisao 158)")
     raise SystemExit(
-        f"{label} failed on both attempts -- stopping (not retrying further; this is no longer the "
-        f"known rare race, treat as a new failure). Last error: {last_error}"
+        f"{label} failed on all {NETWORK_TRANSPORT_MAX_ATTEMPTS} network-transport attempts -- stopping "
+        f"(Decisao 158, no mais retry alem deste limite). Last error: {last_error}"
     )
 
 

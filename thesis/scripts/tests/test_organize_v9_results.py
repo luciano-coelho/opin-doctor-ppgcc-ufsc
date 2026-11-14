@@ -11,11 +11,12 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "organize_v9_results.py"
 
 
-def _write_fixtures(tmp_path: Path):
+def _write_fixtures(tmp_path: Path, network_transport_retries=None):
     calls = [{
         "profile": "classico", "route": "L0", "run": 1,
         "start_utc": "2026-11-14T00:00:00+00:00", "end_utc": "2026-11-14T00:00:01+00:00",
         "insurance": [{"total_bytes": 100}], "person": [{"total_bytes": 50}],
+        "network_transport_retries": network_transport_retries or [],
     }]
     criterio6 = [{"profile": "classico", "dualAuthenticated": False}]
     manifest = {
@@ -31,8 +32,8 @@ def _write_fixtures(tmp_path: Path):
     return calls_json, criterio6_json, manifest_json
 
 
-def _run(tmp_path, out_dir, extra_args=()):
-    calls_json, criterio6_json, manifest_json = _write_fixtures(tmp_path)
+def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None):
+    calls_json, criterio6_json, manifest_json = _write_fixtures(tmp_path, network_transport_retries)
     args = [
         sys.executable, "-I", str(SCRIPT),
         "--calls-json", str(calls_json),
@@ -77,6 +78,37 @@ def test_refuses_populated_dest_without_flag(tmp_path):
     # nada novo foi escrito, o sentinel da campanha anterior continua intocado
     assert sentinel.read_text(encoding="utf-8") == '{"de":"outra campanha"}'
     assert not (out_dir / "report_data_v9.json").exists()
+
+
+def test_retries_report_summed_per_cell(tmp_path):
+    """Decisao 158 (item 6a): network_transport_retries de cada
+    execucao real tem que virar retries_report.json, somado por celula
+    (profile/route) -- nunca perdido, nunca misturado com outra
+    celula."""
+    out_dir = tmp_path / "out"
+    retries = [
+        {"run": "run01", "attempt": 1, "profile": "classico", "error": "ConnectionError: reset",
+         "failure_class": "network_transport", "at_utc": "2026-11-14T00:00:00+00:00"},
+    ]
+    result = _run(tmp_path, out_dir, network_transport_retries=retries)
+    assert result.returncode == 0, result.stderr
+
+    report = json.loads((out_dir / "retries_report.json").read_text(encoding="utf-8"))
+    assert report["total_retries"] == 1
+    assert "classico/L0" in report["por_celula"]
+    assert report["por_celula"]["classico/L0"]["n_retries"] == 1
+    assert report["por_celula"]["classico/L0"]["entries"][0]["failure_class"] == "network_transport"
+
+    report_data = json.loads((out_dir / "report_data_v9.json").read_text(encoding="utf-8"))
+    assert report_data["network_transport_retries_total"] == 1
+
+
+def test_retries_report_empty_when_no_retries(tmp_path):
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir)
+    assert result.returncode == 0, result.stderr
+    report = json.loads((out_dir / "retries_report.json").read_text(encoding="utf-8"))
+    assert report == {"total_retries": 0, "por_celula": {}}
 
 
 def test_allows_populated_dest_with_explicit_flag_and_records_it(tmp_path):
