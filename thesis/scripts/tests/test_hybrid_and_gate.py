@@ -175,31 +175,106 @@ def stack():
         _recreate_auth_backend(original_auth_profile)
 
 
+_MOCK_SERVICE_OS_CERTS_DIR = Path(__file__).resolve().parents[3] / "mock-service-os" / "certs"
+_CERTMAKER_ORG_ID = "12345678000195"
+
+
+def _ensure_client_one_material_exists() -> bool:
+    """Decisao 164 (item 3, correcao real -- a tentativa anterior foi
+    revertida por ter corrigido o sintoma errado). client_one.key/
+    .jwks sao material PRIVADO gitignorado (mock-service-os/certs/
+    .gitignore) -- ausente numa worktree genuinamente limpa. A
+    tentativa anterior gerava uma CA NOVA do zero num diretorio
+    isolado -- isso E a causa real do sintoma "handshake upstream
+    completa mas a leitura nunca responde" (confirmado ao vivo nesta
+    correcao): o `ca.crt`/`ca.key` novo nao e o mesmo que mock_mtls ja
+    confia.
+
+    Correcao real: o proprio `mock-service-os/certs/main.go` ja tem um
+    modo pra isso -- flag `-client-one-rsa2048`, que reemite SO
+    client_one (crt/key/jwks/hybrid/pqc-enc), assinado pela ca.crt/
+    ca.key JA EXISTENTE em disco, nunca uma CA nova. O unico obstaculo
+    real: o binario tem seu `sourceDir` (onde ele espera achar ca.crt)
+    gravado em tempo de BUILD via runtime.Caller(0) -- `/app` no stage
+    builder do Dockerfile -- enquanto o servico `certmaker` do
+    docker-compose do mock-service-os monta os certs reais em
+    `/app/certs` (um nivel abaixo), nunca em `/app` -- por isso
+    `docker-compose run certmaker ./main -client-one-rsa2048` sempre
+    daria "no such file or directory" pra ca.crt. Contornado rodando o
+    stage BUILDER do Dockerfile direto, com o diretorio REAL de certs
+    montado em `/app` (nao `/app/certs`) -- confirmado ao vivo, rodada
+    real: client_one.crt/.key/.jwks reemitidos, assinados pela ca.crt
+    existente, sem tocar em mais nada.
+
+    So gera se client_one.crt AINDA NAO EXISTE -- nunca sobrescreve
+    material real ja presente (confirmado ao vivo que sobrescrever
+    client_one ja em uso deixa auth/mockapi com a chave PUBLICA antiga
+    em cache -- 401 "client authentication failed" -- ate um
+    --force-recreate; numa worktree de verdade recem-clonada isso
+    nunca se aplica, porque nao ha nada "ja existente" pra entrar em
+    conflito). Devolve True se gerou (quem chamar precisa recriar
+    auth/mongo_seed/mockapi antes de usar -- `_recreate_auth_backend`),
+    False se o material ja existia (caminho comum, sem restart).
+
+    PRE-CONDICAO que esta funcao NAO tenta resolver por conta propria:
+    `ca.crt`/`ca.key` ja existirem em disco -- `-client-one-rsa2048` e
+    uma ferramenta de ROTACAO (reemite um cliente usando uma CA JA
+    EXISTENTE), nunca de bootstrap de uma PKI inteira do zero;
+    confirmado ao vivo que faltando `client_one_pub.jwks` (ou qualquer
+    outro arquivo que o fluxo de reemissao espera encontrar) o
+    processo falha no meio. `ca.crt` e publico (rastreado no git,
+    sempre presente); `ca.key` e privado (gitignorado) -- numa
+    worktree git limpa, FALTA, porque um `git worktree add` nunca traz
+    arquivos nao-rastreados do checkout original. Isso e
+    responsabilidade de QUEM prepara o ambiente da worktree (o mesmo
+    processo que ja precisa prover REAL_CERTS_DIR pros testes Go/v9),
+    nao desta fixture -- copiar `mock-service-os/certs/ca.key` (e
+    `issuer_ca*.key` se outros testes vierem a precisar) do checkout
+    principal pra dentro da worktree, UMA vez, antes do gate rodar.
+    Falha aqui com uma mensagem explicita, nunca tenta gerar uma CA
+    nova (que quebraria a confianca com o mock_mtls/auth/mockapi JA
+    rodando, que so confiam na CA que ja tinham)."""
+    import subprocess
+    if (_MOCK_SERVICE_OS_CERTS_DIR / "client_one.crt").exists():
+        return False
+    if not (_MOCK_SERVICE_OS_CERTS_DIR / "ca.crt").exists() or not (_MOCK_SERVICE_OS_CERTS_DIR / "ca.key").exists():
+        pytest.fail(
+            f"{_MOCK_SERVICE_OS_CERTS_DIR}/ca.crt e/ou ca.key ausentes -- esta fixture so sabe REEMITIR "
+            "client_one usando uma CA ja existente, nunca criar uma CA nova (isso quebraria a confianca "
+            "com o mock_mtls/auth/mockapi ja rodando). Provisione ca.key (gitignorado, copie do checkout "
+            "principal) antes de rodar este teste nesta worktree."
+        )
+    builder_tag = "mock-certmaker-builder-item3-fixture"
+    build = subprocess.run(
+        ["docker", "build", "--target", "builder", "-t", builder_tag,
+         "-f", str(_MOCK_SERVICE_OS_CERTS_DIR / "Dockerfile"), str(_MOCK_SERVICE_OS_CERTS_DIR)],
+        capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        pytest.fail(f"build do certmaker (stage builder) falhou: {build.stderr[-2000:]}")
+    run = subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{_MOCK_SERVICE_OS_CERTS_DIR}:/app", builder_tag,
+         "sh", "-c", f"cd /app && go build -o main . && ./main --org_id={_CERTMAKER_ORG_ID} "
+                     "-client-one-rsa2048 && rm -f main"],
+        capture_output=True, text=True,
+    )
+    if run.returncode != 0 or not (_MOCK_SERVICE_OS_CERTS_DIR / "client_one.crt").exists():
+        pytest.fail(f"certmaker -client-one-rsa2048 falhou: stdout={run.stdout[-1500:]!r} stderr={run.stderr[-1500:]!r}")
+    return True
+
+
 @pytest.fixture(scope="module")
 def any_profile_stack():
     """Same as `stack`, minus the hybrid-only skip -- used only by
     test_classic_and_pqc_unaffected, which needs to run precisely for the
-    two profiles `stack` skips.
-
-    Decisao 164 (item 3) -- TENTADO E REVERTIDO: ver
-    self_generated_client_one_material acima, que gera client_one.crt/
-    .key/.jwks funcionais num diretorio temporario e funciona por si
-    so (confirmado: client_one.jwks aparece, o certmaker roda limpo).
-    Mas aponta-lo aqui (of.CERTS_DIR -> o temp dir) faz
-    start_tls_kem_proxy("classic") QUEBRAR -- o proxy legado completa o
-    handshake upstream contra mock_mtls repetidamente (confirmado no
-    log do container), mas a checagem de pronto (`_wait_for_tls_kem_
-    proxy_ready`, um GET HTTPS local) nunca recebe resposta, 30s de
-    timeout. Causa raiz NAO isolada no tempo disponivel -- hipotese mais
-    provavel: o `ca.crt`/`ca.key` FRESCOS que o certmaker gera no mesmo
-    diretorio (par de CA novo, nao o mesmo de mock-service-os/certs/)
-    quebra algo na cadeia de confianca entre o proxy e mock_mtls/mockapi
-    de um jeito que nao impede o HANDSHAKE TLS em si mas impede alguma
-    chamada HTTP subsequente de responder -- nunca confirmado com
-    certeza. Revertido pra nao quebrar um teste que ja passava; o gap
-    do material gitignorado pra ESTE teste especifico fica SEM
-    correcao, registrado para investigacao futura."""
+    two profiles `stack` skips. Decisao 164 (item 3): auto-gera o
+    material privado de client_one se ainda nao existir (worktree
+    limpa) -- ver _ensure_client_one_material_exists() pra correcao
+    completa; nunca sobrescreve material real ja presente."""
     conftest.skip_if_stack_not_up()
+    generated = _ensure_client_one_material_exists()
+    if generated:
+        _recreate_auth_backend(PROFILE)
     proc = of.start_tls_kem_proxy(PROFILE)
     signer_started = of.start_pqc_signer_service(PROFILE)
     try:
