@@ -87,9 +87,11 @@ func runBusinessMode(profile, certDir, listen string) {
 }
 
 func acceptBusinessConn(raw net.Conn, cfg *tls.Config, profile string, want tls.CurveID, pl *preHandshakenListener) {
-	cc := &countingConn{Conn: raw}
+	cc := newCountingConn(raw)
 	tlsConn := tls.Server(cc, cfg)
-	if err := tlsConn.Handshake(); err != nil {
+	err := tlsConn.Handshake()
+	cc.disableRecordFraming() // Decisao 159: so a leitura DURANTE o handshake precisa ser record-aware
+	if err != nil {
 		log.Printf("gateway: %s: handshake failed: %v", profile, err)
 		_ = raw.Close()
 		return

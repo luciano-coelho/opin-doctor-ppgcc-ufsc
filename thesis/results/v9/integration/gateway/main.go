@@ -113,12 +113,13 @@ func main() {
 
 func handleConn(raw net.Conn, cfg *tls.Config, profile string, want tls.CurveID, ticketsDisabled bool) {
 	defer raw.Close()
-	cc := &countingConn{Conn: raw}
+	cc := newCountingConn(raw)
 	tlsConn := tls.Server(cc, cfg)
 
 	t0 := time.Now()
 	in0, out0 := cc.snapshot()
 	err := tlsConn.Handshake()
+	cc.disableRecordFraming() // Decisao 159: so a leitura DURANTE o handshake precisa ser record-aware
 	t1 := time.Now()
 	in1, out1 := cc.snapshot()
 
@@ -218,19 +219,109 @@ func envOr(key, fallback string) string {
 
 // countingConn tallies bytes crossing the wire in each direction, below
 // crypto/tls -- every byte the TLS handshake (or anything after it)
-// reads or writes is counted, with no awareness of TLS record
-// boundaries needed. atomic counters: handleConn's goroutine is the only
-// reader/writer per connection, but snapshot() may be called concurrently
-// with ongoing I/O (right at the Handshake() boundary).
+// reads or writes is counted. atomic counters: handleConn's goroutine is
+// the only reader/writer per connection, but snapshot() may be called
+// concurrently with ongoing I/O (right at the Handshake() boundary).
+//
+// Decisao 159 (achado da rodada anterior, prova decisiva: contador do
+// gateway leu 1556B pro Classico onde a captura decifrada -- fonte de
+// verdade, 40/40 conexoes/4 perfis -- leu exatamente 1485B, sempre
+// +71B, sempre o tamanho da primeira escrita pos-handshake do
+// cliente). Causa raiz, achada no PROPRIO crypto/tls vendorizado
+// (nunca no and.patch): readFromUntil (conn.go) cresce o buffer de
+// leitura `needs + bytes.MinRead` (512B) de proposito, "melhor esforco
+// pra buscar o que ja estiver esperando no fio" -- se a proxima
+// escrita do cliente (a primeira requisicao HTTP) ja chegou ao buffer
+// do SO nesse instante, aquela leitura unica do crypto/tls pega bytes
+// de DOIS records (o ultimo do handshake E o primeiro de application
+// data pos-handshake), e countingConn.Read() (antes desta correcao)
+// contava tudo que aquela unica Read() devolvesse, sem saber onde um
+// record termina e o outro comeca.
+//
+// Correcao (sem tocar crypto/tls, and.patch nem o pin do toolchain):
+// enquanto `framingActive` for true (do Accept() at o Handshake()
+// retornar -- ver disableRecordFraming()), Read() nunca faz uma leitura
+// bruta maior do que o que falta pro record TLS atual (cabecalho de 5B
+// -- tipo, versao, tamanho, SEMPRE em claro, inclusive no TLS 1.3, RFC
+// 8446 Secao 5.1 -- e depois exatamente o corpo declarado). Isso
+// funciona por uma garantia do proprio contrato de net.Conn.Read: uma
+// chamada nunca devolve MAIS bytes do que o tamanho do buffer passado
+// -- fatiando esse buffer pro que falta do record atual, uma leitura
+// bruta fisicamente nao pode alcancar bytes do PROXIMO record, nao
+// importa quantos bytes extras o crypto/tls teria pedido nem quantos
+// bytes extras ja estejam esperando no buffer do SO. Depois que o
+// Handshake() retorna, framingActive vira false e Read() volta a ser
+// passthrough irrestrito, exatamente como antes desta correcao --
+// in/out continuam significando bytes lidos/escritos ATE O FIM do
+// handshake, enquadramento de record incluido (cabecalho conta, e
+// sempre contado).
+const tlsRecordHeaderLen = 5
+
 type countingConn struct {
 	net.Conn
 	in  atomic.Int64
 	out atomic.Int64
+
+	framingActive bool // true do Accept() at Handshake() retornar; so a goroutine da conexao toca isto, nunca concorrente
+	headerBuf     [tlsRecordHeaderLen]byte
+	headerLen     int // bytes do cabecalho do record ATUAL ja lidos (e ja devolvidos ao chamador)
+	bodyRemaining int // bytes do CORPO do record atual ainda por ler (0 com headerLen==5 == record totalmente servido)
+}
+
+func newCountingConn(raw net.Conn) *countingConn {
+	return &countingConn{Conn: raw, framingActive: true}
+}
+
+// disableRecordFraming: chamado exatamente uma vez por conexao, logo
+// depois que Handshake() retorna (sucesso ou erro) -- dali em diante
+// Read() e passthrough irrestrito de novo, igual a antes da Decisao
+// 159 (acima de qualquer record ja parcialmente lido/contado: o
+// enquadramento so precisa ser exato DENTRO do handshake, nunca depois).
+func (c *countingConn) disableRecordFraming() {
+	c.framingActive = false
 }
 
 func (c *countingConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
+	if !c.framingActive || len(b) == 0 {
+		n, err := c.Conn.Read(b)
+		c.in.Add(int64(n))
+		return n, err
+	}
+	return c.readFramed(b)
+}
+
+// readFramed: serve no maximo o que falta de UM record TLS por
+// chamada, nunca cruzando pro proximo record nesta mesma chamada --
+// ver o comentario de countingConn acima pro raciocinio completo.
+func (c *countingConn) readFramed(b []byte) (int, error) {
+	if c.headerLen < tlsRecordHeaderLen {
+		n, err := c.Conn.Read(b[:min(len(b), tlsRecordHeaderLen-c.headerLen)])
+		if n > 0 {
+			copy(c.headerBuf[c.headerLen:], b[:n])
+			c.headerLen += n
+			c.in.Add(int64(n))
+			if c.headerLen == tlsRecordHeaderLen {
+				c.bodyRemaining = int(c.headerBuf[3])<<8 | int(c.headerBuf[4])
+			}
+		}
+		return n, err
+	}
+	if c.bodyRemaining == 0 {
+		// Corpo do record atual totalmente servido (inclui o caso de
+		// um record de comprimento 0, legal em TLS) -- reseta pro
+		// cabecalho do PROXIMO record e tenta de novo, na mesma
+		// chamada (b ainda tem espaco, garantido pelo check len(b)==0
+		// no inicio de Read()).
+		c.headerLen = 0
+		return c.readFramed(b)
+	}
+	toRead := min(c.bodyRemaining, len(b))
+	n, err := c.Conn.Read(b[:toRead])
+	c.bodyRemaining -= n
 	c.in.Add(int64(n))
+	if err == nil && c.bodyRemaining == 0 {
+		c.headerLen = 0 // record servido por inteiro -- proxima chamada comeca um cabecalho novo
+	}
 	return n, err
 }
 
