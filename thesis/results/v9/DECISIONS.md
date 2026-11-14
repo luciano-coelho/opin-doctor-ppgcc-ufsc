@@ -12105,3 +12105,33 @@ Causa raiz COMUM aos tres: `dedicated_criteria.py` (`run_criterio2`/`run_criteri
 **6. Docstring de `opin_flow.py` corrigido.** "28 HTTP calls" (contagem de uma versao anterior do fluxo, antes das adicoes da v9 -- N_mTLS, endpoint de CA, /jwks x4) substituido por uma nota explicita: a contagem REAL e 44 chamadas/execucao (confirmado por `check_counts()` contra os dados reais), 28 e a contagem de JWTS (numero diferente, nunca confundir os dois). A lista passo-a-passo antiga (Flow 1/Flow 2, somando 12+16=28) foi preservada como contexto historico, nunca reescrita pro numero atual -- os dados persistidos da campanha real fundem insurance+person antes de salvar, perdendo a distincao que permitiria reconstruir uma lista nova com confianca.
 
 **Containers/imagens usados nesta rodada: nenhum** (Docker indisponivel a rodada inteira). Geracao de certificados via `openssl` local. Nenhuma acao contra AWS, nenhum push, nenhuma tag nova.
+
+## 152. Overhead HTTP do Classico nos 2 endpoints de CA e 97B, nao 103B -- `TestDirectoryHandlerResponseBytes` corrigido com Docker de volta, gabarito da Decisao 151 recalculado (2026-11-13)
+
+**1. Achado, com Docker de volta.** `TestDirectoryHandlerResponseBytes` falhou pro Classico: esperado 1.809/1.823, observado **1.803/1.817**. Causa raiz confirmada ao vivo (gateway real + cliente Python real, nao so o teste Go): a constante interna do `net/http` `bufferBeforeChunkingSize = 2048` faz o servidor escolher o enquadramento da resposta pelo tamanho do corpo no primeiro (e unico) `Write()` do handler -- corpo que caiba inteiro no buffer (< 2048B) permite calcular `Content-Length` direto (overhead de **97B**: `Content-Type`+`Date`+`Content-Length`); corpo maior forca `Transfer-Encoding: chunked` (overhead de **103B**), porque o tamanho total ainda nao e conhecido no momento de comecar a escrever. Os corpos novos do Classico (1.706B/1.720B, par RSA-2048 da Decisao 151) ficaram, por coincidencia, abaixo dos 2048B -- os outros 3 perfis (PQC 8.001B/8.013B, Controle 9.337B/9.341B, Hybrid 9.707B/9.733B) continuam acima, entao continuam chunked/103B, intocados. **Nao e bug, nao e regressao do handler, nao foi forcado nenhum enquadramento** -- comportamento correto e esperado do `net/http` reagindo a um corpo menor.
+
+**2. Teste corrigido, nao o handler.** `ca_handler_test.go`: tabela de casos ganhou um 4o campo, `wantFraming` (`"content-length"` pro Classico, `"chunked"` pros outros 3); `rawResponseBytes()` passou a retornar tambem o modo de enquadramento observado (`"chunked"`/`"content-length"`/`"neither (EOF-terminated)"`, lido do mesmo parsing da resposta bruta que ja existia), comparado contra `wantFraming` -- uma mudanca futura de comportamento do `net/http` (ou um novo certificado que cruze o limiar de 2048B de novo, em qualquer perfil) e pega estruturalmente, nao so por um numero de bytes que poderia ser mal-interpretado. Valores esperados do Classico atualizados pra 1.803/1.817. Comentario-cabecalho do arquivo reescrito: a antiga afirmacao de "overhead universal de 103B" removida, substituida pela explicacao do `bufferBeforeChunkingSize` e da excecao do Classico. **Handler (`directoryHandler`/`business_server.go`) NAO alterado** -- nenhum enquadramento foi forcado. Reconfirmado via Docker (`mockopin-v9-toolchain:latest`): `go vet`/`go build -trimpath`/`go test -v ./...` -- **todos PASS**, incluindo as novas asserções de `wantFraming` (Classico `framing=content-length`/97B; PQC, Controle e Hybrid `framing=chunked`/103B).
+
+**3. Gabarito da Decisao 151 corrigido (so o Classico muda; PQC, Controle e Hybrid inalterados):**
+
+| Termo | Classico | PQC | Controle | Hybrid |
+|---|---:|---:|---:|---:|
+| PKI_bytes medio (resposta) | **1.810,0** (era 1.816,0) | 8.110,0 | 9.442,0 | 9.823,0 |
+| term_mtls (x6) | 18.750 | 129.636 | 101.694 | 144.474 |
+| term_jwt (x28, assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 |
+| term_jwk (x4) | 1.536 | 8.320 | 9.856 | 9.856 |
+| term_pki (x4) | **7.240,0** (era 7.264,0) | 32.440,0 | 37.768,0 | 39.292,0 |
+| **3 termos (sem jwk)** | **32.645,88** (era 32.669,88) | 248.109,92 | 232.152,08 | 276.456,08 |
+| **4 termos** | **34.181,88** (era 34.205,88) | 256.429,92 | 242.008,08 | 286.312,08 |
+| Razao vs Classico (4 termos) | 1,00x | 7,50x (igual) | 7,08x (igual) | **8,38x** (era 8,37x) |
+
+**Tamanhos de resposta por perfil, os 2 endpoints de CA (so o Classico muda; overhead de 97B, nao 103B -- ver item 1):**
+
+| Perfil | /root-ca.pem | /issuer-ca.pem |
+|---|---:|---:|
+| Classico | **1.803** (era 1.809) | **1.817** (era 1.823) |
+| PQC | 8.104 (inalterado) | 8.116 (inalterado) |
+| Controle | 9.440 (inalterado) | 9.444 (inalterado) |
+| Hybrid | 9.810 (inalterado) | 9.836 (inalterado) |
+
+**Containers/imagens usados nesta rodada:** `mockopin-v9-toolchain:latest` (so `go vet`/`go build`/`go test`, nenhuma imagem reconstruida). Nenhuma acao contra AWS, nenhum push, nenhuma tag nova.

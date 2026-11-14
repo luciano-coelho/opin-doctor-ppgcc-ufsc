@@ -29,12 +29,22 @@ import (
 // off the raw TCP bytes, not through net/http.Client (which silently
 // drops Content-Length from resp.Header after parsing it, found live
 // in this test's first version, undercounting by exactly the size of
-// that one header). Confirmed separately against the real running
-// gateway+proxy (Docker, loopback, outside this test binary): the real
-// response has no Content-Length at all -- Content-Type + Date +
-// "Transfer-Encoding: chunked", a body-size-independent 103B of
-// headers, true for both the old single-certificate bodies and
-// hibrido-and's new 2-certificate bundle.
+// that one header).
+//
+// Header overhead is NOT a single constant across all 4 profiles
+// (achado real desta rodada): confirmed separately against the real
+// running gateway+proxy (Docker, loopback, outside this test binary),
+// pqc/hibrido-v8/hibrido-and all still get Content-Type + Date +
+// "Transfer-Encoding: chunked" (103B, body-size-independent). classico
+// does NOT, since its new RSA-2048-only bodies (1.706B/1.720B) fall
+// BELOW net/http's own bufferBeforeChunkingSize=2048 -- Go computes
+// Content-Length directly instead (97B of headers: Content-Type +
+// Date + Content-Length, whose own digit count happens not to matter
+// here since it's a real header line summed byte for byte, not
+// assumed). Never forced in the handler -- this is net/http's own,
+// real, correct behavior; `wantFraming` below pins it per profile so
+// a future change (cert size, or net/http's own threshold) is caught
+// here instead of silently drifting.
 
 func realCertsDirForTest(t *testing.T) string {
 	t.Helper()
@@ -115,15 +125,27 @@ func TestHibridoAndBundleIsTwoBlocksRSAThenMLDSA(t *testing.T) {
 func TestDirectoryHandlerResponseBytes(t *testing.T) {
 	dir := realCertsDirForTest(t)
 
+	// wantFraming fixa o modo de enquadramento HTTP esperado por perfil
+	// -- achado real (pedido do autor, item desta rodada): o par
+	// RSA-2048 novo deixou os corpos de classico (1.706B/1.720B)
+	// abaixo de bufferBeforeChunkingSize=2048 do proprio net/http do
+	// Go, a UNICA diferenca entre os 4 perfis que faz isso -- Go
+	// passa a usar "Content-Length" (97B de headers) em vez de
+	// "Transfer-Encoding: chunked" (103B) so pra classico. Nunca
+	// forcado no handler -- e o comportamento real e correto do
+	// net/http; fixado aqui pra que uma mudanca futura (cert maior/
+	// menor, ou o proprio net/http mudando esse limiar) seja
+	// detectada por este teste, nunca passe silenciosamente.
 	cases := []struct {
 		profile         string
 		wantRootBytes   int
 		wantIssuerBytes int
+		wantFraming     string
 	}{
-		{"classico", 1809, 1823},
-		{"pqc", 8104, 8116},
-		{"hibrido-v8", 9440, 9444},
-		{"hibrido-and", 9810, 9836},
+		{"classico", 1803, 1817, "content-length"},
+		{"pqc", 8104, 8116, "chunked"},
+		{"hibrido-v8", 9440, 9444, "chunked"},
+		{"hibrido-and", 9810, 9836, "chunked"},
 	}
 
 	for _, c := range cases {
@@ -142,22 +164,21 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 		// resp.ContentLength and does not put it back (confirmed live,
 		// first version of this test), which would silently undercount
 		// response_bytes relative to what the real campaign's Python
-		// client actually sees on the wire (confirmed live, separately,
-		// against the real running gateway+proxy in business mode: the
-		// real response has NO Content-Length at all -- Content-Type +
-		// Date + "Transfer-Encoding: chunked", exactly 103B of headers,
-		// body-size-independent). Reading the raw bytes ourselves
-		// matches that reality regardless of which header strategy Go's
-		// server picks.
+		// client actually sees on the wire. Reading the raw bytes
+		// ourselves matches that reality regardless of which header
+		// strategy Go's server picks (chunked or Content-Length -- see
+		// wantFraming/the comment above TestDirectoryHandlerResponseBytes
+		// for when each applies).
 		// httptest.NewTLSServer, not NewServer: Go's http.Server picks
 		// chunked vs Content-Length framing differently over a *tls.Conn
-		// than over a plain TCP listener (found live, first version of
-		// this test, over plain HTTP: Content-Length framing, 122B of
-		// headers -- NOT what the real gateway's TLS-terminated
-		// preHandshakenListener connections produce, confirmed
-		// separately against the real running gateway+proxy: chunked,
-		// 103B). The real gateway only ever serves this handler over
-		// TLS, so the test must too.
+		// than over a plain TCP listener for bodies AT/ABOVE the 2048B
+		// threshold (found live, first version of this test, over plain
+		// HTTP with the OLD, bigger classico body: Content-Length
+		// framing, 122B of headers -- NOT what the real gateway's
+		// TLS-terminated preHandshakenListener connections produced for
+		// that same body, confirmed separately: chunked, 103B). The
+		// real gateway only ever serves this handler over TLS, so the
+		// test must too.
 		srv := httptest.NewTLSServer(directoryHandler(rootPEM, issuerPEM))
 
 		for _, tc := range []struct {
@@ -167,13 +188,17 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 			{"/root-ca.pem", c.wantRootBytes},
 			{"/issuer-ca.pem", c.wantIssuerBytes},
 		} {
-			got, bodyLen, headerBytes := rawResponseBytes(t, srv.Listener.Addr().String(), tc.path)
+			got, bodyLen, headerBytes, framing := rawResponseBytes(t, srv.Listener.Addr().String(), tc.path)
 			if got != tc.want {
-				t.Errorf("%s %s: response_bytes = %d (body=%dB, headers=%dB), want %d",
-					c.profile, tc.path, got, bodyLen, headerBytes, tc.want)
+				t.Errorf("%s %s: response_bytes = %d (body=%dB, headers=%dB, framing=%s), want %d",
+					c.profile, tc.path, got, bodyLen, headerBytes, framing, tc.want)
 			} else {
-				t.Logf("%s %s: response_bytes = %d OK (body=%dB, headers=%dB)",
-					c.profile, tc.path, got, bodyLen, headerBytes)
+				t.Logf("%s %s: response_bytes = %d OK (body=%dB, headers=%dB, framing=%s)",
+					c.profile, tc.path, got, bodyLen, headerBytes, framing)
+			}
+			if framing != c.wantFraming {
+				t.Errorf("%s %s: framing = %q, want %q -- comportamento do net/http mudou (bufferBeforeChunkingSize?) ou o certificado mudou de tamanho sem atualizar este teste",
+					c.profile, tc.path, framing, c.wantFraming)
 			}
 		}
 		srv.Close()
@@ -186,7 +211,7 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 // actually received (status line excluded), plus the fully-received
 // body length (chunk-decoded if the response is chunked, matching
 // requests/urllib3's own automatic dechunking).
-func rawResponseBytes(t *testing.T, addr, path string) (responseBytes, bodyLen, headerBytes int) {
+func rawResponseBytes(t *testing.T, addr, path string) (responseBytes, bodyLen, headerBytes int, framing string) {
 	t.Helper()
 	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
@@ -222,6 +247,7 @@ func rawResponseBytes(t *testing.T, addr, path string) (responseBytes, bodyLen, 
 
 	var body []byte
 	if strings.EqualFold(headers["Transfer-Encoding"], "chunked") {
+		framing = "chunked"
 		for {
 			sizeLine, err := r.ReadString('\n')
 			if err != nil {
@@ -245,6 +271,7 @@ func rawResponseBytes(t *testing.T, addr, path string) (responseBytes, bodyLen, 
 			}
 		}
 	} else if cl, ok := headers["Content-Length"]; ok {
+		framing = "content-length"
 		n, err := strconv.Atoi(cl)
 		if err != nil {
 			t.Fatalf("parse Content-Length %q: %v", cl, err)
@@ -254,8 +281,9 @@ func rawResponseBytes(t *testing.T, addr, path string) (responseBytes, bodyLen, 
 			t.Fatalf("read body: %v", err)
 		}
 	} else {
+		framing = "neither (EOF-terminated)"
 		body, _ = io.ReadAll(r)
 	}
 
-	return headerBytes + len(body), len(body), headerBytes
+	return headerBytes + len(body), len(body), headerBytes, framing
 }
