@@ -51,10 +51,10 @@ func TestRealCAFilesForProfile(t *testing.T) {
 		wantRoot   []string
 		wantIssuer []string
 	}{
-		{"classico", []string{"root_ca.crt"}, []string{"issuer_ca.crt"}},
+		{"classico", []string{"root_ca_rsa2048.crt"}, []string{"issuer_ca_rsa2048.crt"}},
 		{"pqc", []string{"root_ca_pqc.crt"}, []string{"issuer_ca_pqc.crt"}},
 		{"hibrido-v8", []string{"root_ca_hybrid.crt"}, []string{"issuer_ca_hybrid.crt"}},
-		{"hibrido-and", []string{"root_ca.crt", "root_ca_pqc.crt"}, []string{"issuer_ca.crt", "issuer_ca_pqc.crt"}},
+		{"hibrido-and", []string{"root_ca_rsa2048.crt", "root_ca_pqc.crt"}, []string{"issuer_ca_rsa2048.crt", "issuer_ca_pqc.crt"}},
 	}
 	for _, c := range cases {
 		root, issuer := realCAFilesForProfile(c.profile)
@@ -120,10 +120,10 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 		wantRootBytes   int
 		wantIssuerBytes int
 	}{
-		{"classico", 2209, 2217},
+		{"classico", 1809, 1823},
 		{"pqc", 8104, 8116},
 		{"hibrido-v8", 9440, 9444},
-		{"hibrido-and", 10210, 10230},
+		{"hibrido-and", 9810, 9836},
 	}
 
 	for _, c := range cases {

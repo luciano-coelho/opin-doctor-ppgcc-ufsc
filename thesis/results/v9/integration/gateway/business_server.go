@@ -240,16 +240,24 @@ func attachInternalCallerCarveOut(cfg *tls.Config, profile string) error {
 // branch as classico, defaulting to the shared RSA-only pair --
 // serving only the RSA half of a profile whose own live mTLS identity
 // requires trusting an RSA chain AND an ML-DSA-65 chain independently
-// (main.go's dualServerConfig/dualClientConfig). The ML-DSA-65 half
-// added here is pqc's own root_ca_pqc.crt/issuer_ca_pqc.crt -- the
-// closest available REAL 2-level chain for that algorithm, same
-// "closest available match" convention classico's own pair already
-// used as a stand-in for the RSA half, not hibrido-and's own live
-// single-level hibrido_and_mldsa_ca.crt (that file never leaves the
-// gateway/proxy containers -- see main.go). Concatenating two PEM
-// blocks into one HTTP response body changes ONLY what each of the
-// existing /root-ca.pem and /issuer-ca.pem calls returns -- the
+// (main.go's dualServerConfig/dualClientConfig). Concatenating two
+// PEM blocks into one HTTP response body changes ONLY what each of
+// the existing /root-ca.pem and /issuer-ca.pem calls returns -- the
 // request count (2 GETs/subfluxo, 4/execucao) is unchanged.
+//
+// RSA half, segunda correcao (pedido do autor): classico e
+// hibrido-and usavam root_ca.crt/issuer_ca.crt -- RSA-4096, nunca
+// RSA-2048 como M1/M3 da metodologia exigem (achado da auditoria
+// independente desta sessao). root_ca_rsa2048.crt/issuer_ca_rsa2048.crt
+// (novos, gerados nesta rodada, mesma estrutura do par ML-DSA-65 do
+// PQC -- raiz autoassinada + emissor assinado por ela, mesmo SAN,
+// mesma validade) substituem esses dois SO neste endpoint, pros 2
+// perfis cuja cadeia mTLS real e RSA-2048. hibrido-v8 (Controle)
+// continua em root_ca_hybrid.crt/issuer_ca_hybrid.crt (RSA-4096 com a
+// extensao ML-DSA-65 embutida, "catalyst") -- regenerar esse par em
+// RSA-2048 exige a MESMA logica de geracao Go que criou a extensao
+// customizada original (certs/main.go), nao reproduzivel por linha
+// de comando openssl; nao feito nesta rodada (ver DECISIONS.md).
 func realCAFilesForProfile(profile string) (root, issuer []string) {
 	switch profile {
 	case "pqc":
@@ -257,9 +265,9 @@ func realCAFilesForProfile(profile string) (root, issuer []string) {
 	case "hibrido-v8":
 		return []string{"root_ca_hybrid.crt"}, []string{"issuer_ca_hybrid.crt"}
 	case "hibrido-and":
-		return []string{"root_ca.crt", "root_ca_pqc.crt"}, []string{"issuer_ca.crt", "issuer_ca_pqc.crt"}
+		return []string{"root_ca_rsa2048.crt", "root_ca_pqc.crt"}, []string{"issuer_ca_rsa2048.crt", "issuer_ca_pqc.crt"}
 	default: // classico
-		return []string{"root_ca.crt"}, []string{"issuer_ca.crt"}
+		return []string{"root_ca_rsa2048.crt"}, []string{"issuer_ca_rsa2048.crt"}
 	}
 }
 
