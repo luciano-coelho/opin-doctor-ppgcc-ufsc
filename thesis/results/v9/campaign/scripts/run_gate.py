@@ -65,6 +65,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -130,6 +131,99 @@ def _make_executor(images_staging_dir: Path) -> "orch.SSHExecutor":
     )
     _skip_transit_verification(executor)
     return executor
+
+
+# Decisao 166 (pedido do Luciano, diagnostico de classico/pqc
+# travando em start_block com "open /certs/<profile>_client.crt: no
+# such file or directory" apesar do arquivo existir no host com mtime
+# correto): lista exata dos arquivos que o PROPRIO
+# thesis/results/v9/integration/proxy/main.go's `buildClientTLSConfig`
+# le de V9_CERTS_DIR pra cada perfil (lida do codigo-fonte, nunca
+# adivinhada) -- usada SO pelo diagnostico abaixo, nunca pelo proxy em
+# si (que continua resolvendo seus proprios caminhos, sem alteracao).
+_REQUIRED_CERT_FILES = {
+    "classico": ["classico_client.crt", "classico_client.key", "classico_ca.crt"],
+    "pqc": ["pqc_client.crt", "pqc_client.key", "pqc_ca.crt"],
+    "hibrido-v8": ["hibrido_v8_client.crt", "hibrido_v8_client.key", "hibrido_v8_ca.crt"],
+    "hibrido-and": [
+        "hibrido_and_rsa_client.crt", "hibrido_and_rsa_client.key", "hibrido_and_rsa_ca.crt",
+        "hibrido_and_mldsa_client.crt", "hibrido_and_mldsa_client.key", "hibrido_and_mldsa_ca.crt",
+    ],
+}
+_DIAG_IMAGE = "alpine:3"
+
+
+def wait_for_cert_mount_visible(gateway_profile: str, timeout_seconds: int = 30) -> dict:
+    """Item 1(b) desta rodada de diagnostico: ANTES de `start_block`
+    (que e quem de fato lanca o proxy real, nunca tocado aqui), sobe
+    um container DESCARTAVEL com o MESMO bind mount (`V9_CERTS_DIR:
+    /certs:ro`) que `opin_flow.start_tls_kem_proxy(detached=True)` vai
+    usar, e roda `test -f` pra cada arquivo exigido por este perfil
+    (`_REQUIRED_CERT_FILES`), repetindo por ate `timeout_seconds`.
+    Isto e SO diagnostico -- nunca bloqueia nem adia o `start_block`
+    real (que roda do mesmo jeito depois, com ou sem sucesso aqui);
+    so registra quanto tempo o mount levou pra ficar visivel por FORA
+    do proxy, pra separar "o mount genuinamente nao propagou a tempo"
+    de outra causa."""
+    sys.path.insert(0, str(THESIS_SCRIPTS_DIR))
+    import opin_flow as of
+    certs_dir = of.V9_CERTS_DIR
+    required = _REQUIRED_CERT_FILES[gateway_profile]
+    test_expr = " && ".join(f"test -f /certs/{name}" for name in required)
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        r = subprocess.run(
+            ["docker", "run", "--rm", "-v", f"{certs_dir}:/certs:ro", _DIAG_IMAGE, "sh", "-c", test_expr],
+            capture_output=True, text=True, timeout=20,
+        )
+        waited = round(time.monotonic() - started, 2)
+        if r.returncode == 0:
+            return {"visible": True, "waited_seconds": waited, "attempts": attempt}
+        if time.monotonic() >= deadline:
+            return {
+                "visible": False, "waited_seconds": waited, "attempts": attempt,
+                "last_stderr": r.stderr.strip()[-1000:],
+            }
+        time.sleep(1)
+
+
+def capture_cert_mount_failure_diagnostics(gateway_profile: str) -> dict:
+    """Item 1(c): so chamado quando `start_block` de fato falhar com
+    o erro de certificado -- nunca roda no caminho feliz. Junta: logs
+    do `tls_kem_proxy` (container real, se ainda existir), `ls -la` no
+    host E dentro de um container descartavel com o MESMO mount, e o
+    mtime/ctime de cada arquivo exigido -- tudo so leitura, nada
+    recria/conserta nada."""
+    sys.path.insert(0, str(THESIS_SCRIPTS_DIR))
+    import opin_flow as of
+    certs_dir = of.V9_CERTS_DIR
+    diag: dict = {"certs_dir": str(certs_dir)}
+
+    logs = subprocess.run(["docker", "logs", of.TLS_KEM_PROXY_CONTAINER_NAME], capture_output=True, text=True)
+    diag["tls_kem_proxy_logs"] = ((logs.stdout or "") + (logs.stderr or ""))[-4000:]
+
+    host_ls = subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{certs_dir}:/certs:ro", _DIAG_IMAGE, "ls", "-la", "/certs"],
+        capture_output=True, text=True,
+    )
+    diag["container_ls"] = (host_ls.stdout or host_ls.stderr or "").strip()
+
+    diag["host_stat"] = {}
+    for name in _REQUIRED_CERT_FILES[gateway_profile]:
+        p = certs_dir / name
+        if not p.exists():
+            diag["host_stat"][name] = "AUSENTE no host"
+            continue
+        st = p.stat()
+        diag["host_stat"][name] = {
+            "size": st.st_size,
+            "mtime_utc": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            "ctime_utc": datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat(),
+        }
+    return diag
 
 
 def assert_precondition(opin_profile: str) -> None:
@@ -219,8 +313,18 @@ def run_gate_for_profile(executor: "orch.SSHExecutor", gateway_profile: str, run
     opin_profile = orch.CLIENT_CRYPTO_PROFILE_ENV[gateway_profile]
     entry = {"gateway_profile": gateway_profile, "opin_profile": opin_profile, "ok": False, "steps": {}}
     try:
-        executor.start_block(gateway_profile, ROUTE)
-        entry["steps"]["start_block"] = "ok"
+        # Decisao 166, item 1(b): so diagnostico -- registra quanto
+        # tempo o MESMO bind mount levou pra ficar visivel por fora
+        # do proxy real, mas nunca espera por isso antes de chamar
+        # start_block (que roda do mesmo jeito, com ou sem isto).
+        entry["cert_mount_wait"] = wait_for_cert_mount_visible(gateway_profile)
+        try:
+            executor.start_block(gateway_profile, ROUTE)
+            entry["steps"]["start_block"] = "ok"
+        except Exception as start_block_exc:
+            if "no such file or directory" in str(start_block_exc) and "_client" in str(start_block_exc):
+                entry["diagnostics"] = capture_cert_mount_failure_diagnostics(gateway_profile)
+            raise
 
         assert_precondition(opin_profile)
         entry["steps"]["precondition"] = "ok"
