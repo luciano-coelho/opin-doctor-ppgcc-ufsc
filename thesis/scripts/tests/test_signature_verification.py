@@ -125,7 +125,7 @@ def test_wrong_algorithm_rejected(live_artifacts):
     classic/pqc are the only 2 single-keyed ones this test is actually
     exercising."""
     if PROFILE in ("hybrid", "hibrido-and"):
-        pytest.skip("dual-keyed profile -- verify_jwt() dispatches by signature shape, not a declared expected_alg -- see the dedicated test below")
+        pytest.skip("dual-keyed profile -- verify_jwt() dispatches by signature shape, not a declared expected_alg -- see test_hybrid_scheme_confusion_rejected below, which now runs under both dual-keyed profiles and is this test's real equivalent for them")
     classic_jwk, pqc_jwk = live_artifacts["rs_keys"]
     wrong_alg = "RS256" if PROFILE == "classic" else "PS256"
     with pytest.raises(of.SignatureVerificationError):
@@ -174,11 +174,29 @@ def test_hybrid_rs256_payload_extension_rejected():
 
 
 def test_hybrid_scheme_confusion_rejected(live_artifacts):
-    """hybrid only: feeding a genuine payload-extension-signed RS response
-    through as if it were Strong-Nesting-shaped (by lying about which half
-    of rs_keys is which) must still fail closed, not silently misverify."""
-    if PROFILE != "hybrid":
-        pytest.skip("hybrid-only: the two dual-signature schemes only exist under this profile")
+    """Dual-keyed profiles only (hybrid, hibrido-and): feeding a genuine
+    RS response through verify_jwt() with classic_jwk/pqc_jwk SWAPPED must
+    still fail closed, not silently misverify.
+
+    This is also the real equivalent, for both dual-keyed profiles, of
+    test_wrong_algorithm_rejected above (which skips for both of them,
+    since signer_core.mjs's verifyJwt() dispatches by signature SHAPE
+    whenever both JWKs are present -- `if (classicJwk && pqcJwk)` --
+    never consulting a declared expected_alg). Swapping which jwk is fed
+    as "classic" vs "pqc" corrupts both the RS256 key material AND the
+    ML-DSA-65 key material verify_jwt() would use for that shape-dispatch
+    branch -- a real key/algorithm-confusion attempt, not merely cosmetic.
+
+    Until this round, this test's own guard only ran it under "hybrid",
+    leaving hibrido-and (also dual-keyed, confirmed hitting the exact same
+    isStrongNestingShaped() dispatch branch) with ZERO coverage for this
+    attack shape -- the "see the dedicated test below" skip message in
+    test_wrong_algorithm_rejected was not actually true for hibrido-and
+    until this fix. Extended to cover both profiles, and re-verified live
+    under hibrido-and specifically (not just hybrid) before this change
+    was trusted."""
+    if PROFILE not in ("hybrid", "hibrido-and"):
+        pytest.skip("hybrid/hibrido-and only: the two dual-signature schemes only exist under these 2 profiles")
     classic_jwk, pqc_jwk = live_artifacts["rs_keys"]
     # Swapping which jwk is passed as "classic" vs "pqc" corrupts both the
     # RS256 key material AND the ML-DSA-65 key material verify_jwt() would
