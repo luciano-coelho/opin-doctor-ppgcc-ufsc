@@ -13,6 +13,19 @@ deriva pro layout novo). Reexecutavel sem efeito colateral destrutivo
 rodar). `--expected-runs-per-cell` falha alto se o numero encontrado
 divergir do esperado (2 no piloto, 10 na oficial).
 
+Decisao 157 (item 4, pedido do Luciano): este script, sozinho, nao
+sabia distinguir "destino vazio, primeira rodada" de "destino ja tem
+uma campanha anterior" -- reexecutar apontando pra um --out-dir ja
+populado silenciosamente mistura dados de duas campanhas diferentes
+(mesmo mecanismo de risco que a Decisao 156/auditoria independente
+achou em thesis/results/v9/ como um todo, agora fechado aqui tambem
+no nivel deste script). `_refuse_if_populated_without_flag` abaixo
+recusa (RuntimeError, antes de escrever qualquer arquivo) sempre que
+--out-dir ja existir e tiver qualquer conteudo, a menos que
+--allow-overwrite-populated seja passado explicitamente -- e quando
+passado, isso fica registrado em report_data_v9.json
+(`overwrite_populated_dest_authorized: true`), nunca silencioso.
+
 Usage:
   python thesis/scripts/organize_v9_results.py \
     --calls-json <piloto_calls.json> \
@@ -102,6 +115,26 @@ def _write_cell(base_dir: Path, entries: list, warmups: list, expected_runs: int
         encoding="utf-8")
 
 
+def _refuse_if_populated_without_flag(out_dir: Path, allow_overwrite_populated: bool) -> None:
+    """Decisao 157: --out-dir ja existente e com qualquer conteudo e
+    tratado como "campanha anterior ja esta ai" -- recusa alto, antes
+    de tocar em qualquer arquivo, a menos que o chamador passe
+    --allow-overwrite-populated explicitamente. Diretorio inexistente
+    ou existente-mas-vazio (ex.: criado por mkdir -p sem nada dentro)
+    e o caminho feliz, nunca recusado."""
+    if not out_dir.exists():
+        return
+    if any(out_dir.iterdir()):
+        if not allow_overwrite_populated:
+            raise RuntimeError(
+                f"--out-dir {out_dir} ja existe e NAO esta vazio -- "
+                "provavel campanha anterior. Recusando misturar dados sem "
+                "autorizacao explicita. Passe --allow-overwrite-populated "
+                "se a intencao e mesmo sobrescrever (fica registrado em "
+                "report_data_v9.json)."
+            )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--calls-json", required=True)
@@ -112,9 +145,14 @@ def main():
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--expected-runs-per-cell", type=int, required=True)
     ap.add_argument("--label-piloto", action="store_true")
+    ap.add_argument("--allow-overwrite-populated", action="store_true",
+                     help="Decisao 157: autoriza explicitamente escrever sobre um --out-dir "
+                          "ja populado (fica registrado em report_data_v9.json). Sem esta "
+                          "flag, um --out-dir nao-vazio e recusado antes de qualquer escrita.")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
+    _refuse_if_populated_without_flag(out_dir, args.allow_overwrite_populated)
     calls = json.loads(Path(args.calls_json).read_text(encoding="utf-8"))
     criterio6 = json.loads(Path(args.criterio6_json).read_text(encoding="utf-8"))
     aquecimentos = json.loads(Path(args.aquecimento_json).read_text(encoding="utf-8")) if args.aquecimento_json else []
@@ -205,6 +243,7 @@ def main():
         "criterios": criterios_report,
         "divergencias_encontradas": divergences,
         "provenance": provenance,
+        "overwrite_populated_dest_authorized": args.allow_overwrite_populated,
     }
     (out_dir / "report_data_v9.json").write_text(
         json.dumps(report_data, indent=2, ensure_ascii=False), encoding="utf-8")
