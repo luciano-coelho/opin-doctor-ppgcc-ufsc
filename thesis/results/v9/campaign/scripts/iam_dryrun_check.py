@@ -6,10 +6,11 @@ termina, ou altera nenhum recurso de verdade (`--dry-run` faz a AWS
 avaliar a politica IAM e devolver `DryRunOperation` (autorizado) ou
 `UnauthorizedOperation` (negado) SEM executar a acao).
 
-Este script NUNCA e rodado por este processo (Claude) -- so escrito e
-testado com mock (`cli._run` stubado, nenhuma chamada real). O
-Luciano roda de verdade, com as credenciais da conta, antes do
-piloto.
+Ate esta rodada, este script nunca tinha sido rodado de verdade por
+este processo (Claude) -- so escrito e testado com mock (`cli._run`
+stubado, nenhuma chamada real). Rodado de verdade pela primeira vez
+nesta rodada, com autorizacao explicita e so com --dry-run (nunca
+muta nada), contra a conta nova (Decisao do autor).
 
 Limitacao honesta, registrada: as acoes abaixo que precisam de um ID
 de recurso JA EXISTENTE (TerminateInstances, DeleteKeyPair,
@@ -41,14 +42,37 @@ import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da ca
 REGIONS = ["sa-east-1", "eu-north-1", "ap-southeast-1"]
 
 # Decisao 46/Terraform real: AMIs pinadas, por regiao -- mesmos IDs
-# que thesis/results/v9/terraform/main.tf usa, nunca resolvidos de
-# novo aqui.
+# que thesis/results/v9/terraform_campanha_oficial/main.tf usa
+# (locals.pinned_ami_x86_by_region), nunca resolvidos de novo aqui.
+# Estendido nesta rodada das 3 regioes do piloto pras 7 da campanha
+# oficial -- achado real: rodar --campaign sem isso quebrava com
+# KeyError na primeira regiao sem entrada (us-east-1/ca-central-1/
+# ap-northeast-1/ap-northeast-2), antes mesmo de chamar a AWS.
 PINNED_AMI_X86 = {
-    "sa-east-1": "ami-0c7fb00ead73effc8",
-    "eu-north-1": "ami-0048d119f137c7738",
-    "ap-southeast-1": "ami-012634091f2034c69",
+    "sa-east-1": "ami-0947d58e57fa20c5f",
+    "us-east-1": "ami-0cf4b3ccd41c5a321",
+    "ap-northeast-1": "ami-04ff541c93bef7350",
+    "ca-central-1": "ami-0f39320fcf308a07f",
+    "eu-north-1": "ami-072b92f3846437950",
+    "ap-southeast-1": "ami-0e5c4d93500d698da",
+    "ap-northeast-2": "ami-0bef747b3acf85e8f",
 }
 INSTANCE_TYPE = "m7i-flex.large"
+
+# Decisao desta rodada (pedido do Luciano, item 3): a politica real da
+# conta nova condiciona as acoes de criacao a aws:RequestTag/Project
+# -- sem enviar essa tag nas chamadas de dry-run abaixo, um teste
+# "autorizado" seria um FALSO NEGATIVO perfeito (nega por falta da tag
+# exigida pela condicao, nunca por falta da acao em si -- a politica
+# real rejeitaria do mesmo jeito uma chamada real sem a tag). PROJECT_TAG
+# tem que bater exatamente com var.project_tag do Terraform real
+# (terraform_campanha_oficial/variables.tf) -- nunca inventado aqui.
+PROJECT_TAG = "mockopin-pqc-campanha-oficial"
+
+
+def _tag_spec(resource_type):
+    return ["--tag-specifications",
+            f"ResourceType={resource_type},Tags=[{{Key=Project,Value={PROJECT_TAG}}}]"]
 
 
 def _dryrun(argv, region, profile):
@@ -72,13 +96,13 @@ def _dryrun(argv, region, profile):
 def check_run_instances(region, profile):
     return _dryrun(
         ["ec2", "run-instances", "--image-id", PINNED_AMI_X86[region],
-         "--instance-type", INSTANCE_TYPE, "--count", "1"],
+         "--instance-type", INSTANCE_TYPE, "--count", "1", *_tag_spec("instance")],
         region, profile,
     )
 
 
 def check_allocate_address(region, profile):
-    return _dryrun(["ec2", "allocate-address", "--domain", "vpc"], region, profile)
+    return _dryrun(["ec2", "allocate-address", "--domain", "vpc", *_tag_spec("elastic-ip")], region, profile)
 
 
 def check_create_security_group(region, profile, vpc_id):
@@ -86,7 +110,8 @@ def check_create_security_group(region, profile, vpc_id):
         return {"ok": None, "note": "pulado -- precisa de --vpc-id (o default da conta/regiao)"}
     return _dryrun(
         ["ec2", "create-security-group", "--group-name", "iam-dryrun-check-nunca-criado",
-         "--description", "iam dry-run check -- nunca criado de verdade", "--vpc-id", vpc_id],
+         "--description", "iam dry-run check -- nunca criado de verdade", "--vpc-id", vpc_id,
+         *_tag_spec("security-group")],
         region, profile,
     )
 
@@ -105,7 +130,8 @@ def check_import_key_pair(region, profile):
     # chave publica sintetica, nunca usada de verdade (so pro dry-run) -- formato valido, conteudo irrelevante pro teste de permissao.
     fake_pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA iam-dryrun-check"
     return _dryrun(
-        ["ec2", "import-key-pair", "--key-name", "iam-dryrun-check-nunca-criada", "--public-key-material", fake_pubkey],
+        ["ec2", "import-key-pair", "--key-name", "iam-dryrun-check-nunca-criada",
+         "--public-key-material", fake_pubkey, *_tag_spec("key-pair")],
         region, profile,
     )
 
@@ -166,16 +192,13 @@ def run_all_checks(profile, vpc_id_by_region=None, instance_id=None, key_name=No
     """`regions=None` continua as 3 do piloto (REGIONS, compatibilidade
     -- item 1 do Luciano). Pedido do Luciano (item 2, fonte unica das
     regioes): a campanha oficial pode passar `campaign_topology.
-    CAMPAIGN_REGIONS` (7) aqui. LIMITACAO HONESTA, registrada: os
-    checks em si (`check_run_instances` etc.) dependem de AMI/VPC-id
-    POR REGIAO (`PINNED_AMI_X86`, `--vpc-id-*`) que so tem entrada pras
-    3 regioes do piloto -- rodar com as 7 regioes da campanha sem
-    tambem estender esses dois dicionarios reportaria "nao testado"
-    pras 4 regioes novas, nunca um falso PASS (fail-closed, mas
-    incompleto). A politica IAM da conta nova ja foi validada por
-    outro caminho, com DRY-RUN E APPLY+DESTROY REAIS nas 7 regioes
-    (ver a adaptacao do Terraform multi-regiao) -- este script
-    continua coberto so pro piloto por enquanto."""
+    CAMPAIGN_REGIONS` (7) aqui -- `PINNED_AMI_X86` ja tem entrada pras
+    7 (estendido nesta rodada). As acoes que precisam de `--vpc-id-*`
+    (so `CreateSecurityGroup`) ficam "nao testado" fail-closed nas
+    regioes cujo ID nao for passado -- nunca um falso PASS. Nenhum
+    apply/destroy real foi feito contra a conta nova ainda por
+    nenhum caminho -- este script, com --dry-run, e a UNICA
+    verificacao real de permissao ja feita nela."""
     vpc_id_by_region = vpc_id_by_region or {}
     regions = regions if regions is not None else REGIONS
     results = {}
@@ -215,18 +238,26 @@ def main():
     ap.add_argument("--allocation-id")
     ap.add_argument("--rule-id")
     ap.add_argument("--vpc-id-sa-east-1")
+    ap.add_argument("--vpc-id-us-east-1")
+    ap.add_argument("--vpc-id-ap-northeast-1")
+    ap.add_argument("--vpc-id-ca-central-1")
     ap.add_argument("--vpc-id-eu-north-1")
     ap.add_argument("--vpc-id-ap-southeast-1")
+    ap.add_argument("--vpc-id-ap-northeast-2")
     ap.add_argument("--campaign", action="store_true",
-                     help="usa as 7 regioes da campanha oficial (campaign_topology.py) -- ver limitacao "
-                          "honesta na docstring de run_all_checks: so as regioes com --vpc-id-* dado tem "
-                          "cobertura completa, as demais saem 'nao testado'")
+                     help="usa as 7 regioes da campanha oficial (campaign_topology.py) -- com PINNED_AMI_X86 "
+                          "ja estendido pras 7 (Decisao desta rodada); so as regioes sem --vpc-id-* dado "
+                          "ficam parciais (CreateSecurityGroup 'nao testado'), as demais saem completas")
     args = ap.parse_args()
 
     vpc_id_by_region = {
         "sa-east-1": args.vpc_id_sa_east_1,
+        "us-east-1": args.vpc_id_us_east_1,
+        "ap-northeast-1": args.vpc_id_ap_northeast_1,
+        "ca-central-1": args.vpc_id_ca_central_1,
         "eu-north-1": args.vpc_id_eu_north_1,
         "ap-southeast-1": args.vpc_id_ap_southeast_1,
+        "ap-northeast-2": args.vpc_id_ap_northeast_2,
     }
     regions = ct.CAMPAIGN_REGIONS if args.campaign else None
     result = run_all_checks(
