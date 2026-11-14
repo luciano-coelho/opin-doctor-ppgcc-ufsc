@@ -19,7 +19,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "integration"))
 import evaluate_criteria as ec  # noqa: E402
 
-_REF_DIR = Path(__file__).resolve().parents[2] / "campaign" / "local_validation_criterio1_v2"
+# Item 4 (gate em worktree limpa): este arquivo NUNCA leu de disco em
+# tempo de teste -- os blocos abaixo (_LEGACY_CLASSICO_BLOCK/
+# _STREAM_AWARE_CLASSICO_BLOCK) ja sao os valores extraidos, inlined
+# como string literal, da captura real `local_validation_criterio1_v2/`
+# (gitignorada por conter keylog de sessao TLS, Decisao 52 -- nunca
+# versionavel). A variavel `_REF_DIR` que apontava pra essa pasta
+# nunca foi de fato lida por nenhum teste aqui (confirmado: suite
+# inteira passa com a pasta ausente) -- morta, removida por ser
+# enganosa (sugeria uma dependencia de runtime que nao existe).
 
 
 # --- Decisao 91, item (e): regressao byte a byte contra o caminho
