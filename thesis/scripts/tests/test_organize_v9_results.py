@@ -11,6 +11,9 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "organize_v9_results.py"
 
 
+_MODE_OMITTED = object()  # sentinela: omite "mode" do manifesto (caso "ausente", Decisao 167)
+
+
 def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_bytes_per_connection=None,
                      manifest_mode="ssh", manifest_executor_class="SSHExecutor"):
     calls = [{
@@ -24,8 +27,10 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_by
     manifest = {
         "total_execucoes": 1, "expected_total": 1, "window_end_utc": "2026-11-14T00:00:02+00:00",
         "capturas_dedicadas_falhas": [], "capturas_dedicadas_feitas": 0,
-        "mode": manifest_mode, "executor_class": manifest_executor_class,
+        "executor_class": manifest_executor_class,
     }
+    if manifest_mode is not _MODE_OMITTED:
+        manifest["mode"] = manifest_mode
     calls_json = tmp_path / "calls.json"
     criterio6_json = tmp_path / "criterio6.json"
     manifest_json = tmp_path / "manifest.json"
@@ -190,6 +195,40 @@ def test_allows_real_ssh_data_without_label_piloto(tmp_path):
     out_dir = tmp_path / "out"
     result = _run(tmp_path, out_dir, manifest_mode="ssh", manifest_executor_class="SSHExecutor")
     assert result.returncode == 0, result.stderr
+
+
+def test_refuses_missing_mode_even_with_label_piloto(tmp_path):
+    """Decisao 167 (pedido do Luciano, "torne fail-closed"): manifesto
+    SEM a chave "mode" (orchestrator.py antigo/corrompido) tem que ser
+    recusado SEMPRE -- mesmo com --label-piloto, que so cobre o caso
+    "simulate" conhecido, nunca um modo ausente."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, extra_args=["--label-piloto"],
+                   manifest_mode=_MODE_OMITTED, manifest_executor_class="SSHExecutor")
+    assert result.returncode != 0
+    assert "mode=None" in result.stderr
+    assert not (out_dir / "report_data_v9.json").exists()
+
+
+def test_refuses_empty_mode(tmp_path):
+    """Decisao 167: "mode"=="" (string vazia) e tao invalido quanto
+    ausente -- recusado, nunca tratado como "modo desconhecido mas ok"."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, manifest_mode="", manifest_executor_class="SSHExecutor")
+    assert result.returncode != 0
+    assert "mode=''" in result.stderr
+    assert not (out_dir / "report_data_v9.json").exists()
+
+
+def test_refuses_unknown_mode(tmp_path):
+    """Decisao 167: "mode" com um valor que nao e "ssh" nem "simulate"
+    (typo, executor novo ainda nao reconhecido aqui, etc.) e recusado --
+    allowlist, nunca blocklist."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, manifest_mode="unknown", manifest_executor_class="SomeFutureExecutor")
+    assert result.returncode != 0
+    assert "mode='unknown'" in result.stderr
+    assert not (out_dir / "report_data_v9.json").exists()
 
 
 def test_allows_populated_dest_with_explicit_flag_and_records_it(tmp_path):

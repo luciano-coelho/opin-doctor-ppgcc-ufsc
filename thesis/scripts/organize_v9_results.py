@@ -135,10 +135,13 @@ def _refuse_if_populated_without_flag(out_dir: Path, allow_overwrite_populated: 
             )
 
 
+_VALID_REAL_MODES = {"ssh"}  # unico mode real que orchestrator.py produz hoje (_EXECUTOR_CLASS_TO_MODE)
+
+
 def _refuse_simulated_data_outside_piloto(manifest: dict, label_piloto: bool) -> None:
-    """Decisao 161 (item 3): orchestrator.py agora grava "mode"/
-    "executor_class" em todo manifesto (Decisao 161 do lado do
-    orquestrador) -- "mode"=="simulate" significa `LocalExecutor`,
+    """Decisao 161 (item 3) + Decisao 167 (pedido do Luciano, "torne
+    fail-closed"): orchestrator.py grava "mode"/"executor_class" em
+    todo manifesto -- "mode"=="simulate" significa `LocalExecutor`,
     que NUNCA toca rede/infra real, so fabrica um resultado plausivel.
     Dados simulados sao uteis pra exercitar o pipeline localmente
     (por isso continuam aceitos quando --label-piloto esta presente --
@@ -146,15 +149,38 @@ def _refuse_simulated_data_outside_piloto(manifest: dict, label_piloto: bool) ->
     oficial), mas NUNCA podem entrar numa arvore organizada SEM esse
     rotulo (o caso "oficial" por definicao, `--out-dir thesis/results/
     v9` sem --label-piloto) -- recusa alto, antes de qualquer escrita,
-    igual a `_refuse_if_populated_without_flag`."""
+    igual a `_refuse_if_populated_without_flag`.
+
+    Decisao 167 amplia a trava: antes, so "mode"=="simulate" era
+    checado -- um manifesto SEM a chave "mode" (ausente/vazia/valor
+    desconhecido, por exemplo um orchestrator.py antigo ou corrompido)
+    passava direto, sem ser nem "simulate" nem um modo real reconhecido.
+    Agora o fail-closed e por ALLOWLIST (`_VALID_REAL_MODES`, so "ssh"
+    hoje): "simulate" mantem a excecao de --label-piloto de sempre;
+    qualquer outro valor que NAO esteja na allowlist (ausente, "",
+    "unknown", typo, etc.) e recusado SEMPRE, independente de
+    --label-piloto -- nunca ha um "piloto com modo desconhecido"
+    legitimo, so "piloto com dado simulado conhecido" ou "campanha real
+    com SSHExecutor"."""
     mode = manifest.get("mode")
-    if mode == "simulate" and not label_piloto:
+    if mode == "simulate":
+        if not label_piloto:
+            raise RuntimeError(
+                f"manifest.json tem mode={mode!r} (executor_class={manifest.get('executor_class')!r}) -- "
+                "dados SIMULADOS (LocalExecutor, nunca tocou rede/infra real) nunca podem entrar numa "
+                "arvore organizada sem --label-piloto. Passe --label-piloto se a intencao e mesmo "
+                "organizar dado simulado pra teste local do pipeline, ou confirme que o executor "
+                "usado foi SSHExecutor (mode=\"ssh\") antes de tentar de novo."
+            )
+        return
+    if mode not in _VALID_REAL_MODES:
         raise RuntimeError(
             f"manifest.json tem mode={mode!r} (executor_class={manifest.get('executor_class')!r}) -- "
-            "dados SIMULADOS (LocalExecutor, nunca tocou rede/infra real) nunca podem entrar numa "
-            "arvore organizada sem --label-piloto. Passe --label-piloto se a intencao e mesmo "
-            "organizar dado simulado pra teste local do pipeline, ou confirme que o executor "
-            "usado foi SSHExecutor (mode=\"ssh\") antes de tentar de novo."
+            f"nao e um modo real aceito ({sorted(_VALID_REAL_MODES)!r}) nem \"simulate\". Fail-closed: "
+            "ausente, vazio ou desconhecido NUNCA autoriza organizar dados, nem como campanha oficial "
+            "nem como piloto (--label-piloto so cobre o caso \"simulate\" conhecido, nunca um modo "
+            "nao reconhecido). Confirme que orchestrator.py gravou \"mode\" corretamente (SSHExecutor "
+            "-> \"ssh\") antes de tentar de novo."
         )
 
 
