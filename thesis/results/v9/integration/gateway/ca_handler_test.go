@@ -229,16 +229,41 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 }
 
 // TestDirectoryHandlerResponseBytesMatchesFrozenManifest (Decisao 166,
-// item 2): verificacao SEPARADA e explicita, nunca misturada com
-// TestDirectoryHandlerResponseBytes acima (que agora deriva o esperado
-// dos arquivos reais, entao sempre passa mesmo se os arquivos forem
-// regenerados com outro tamanho). Esta aqui e o gabarito CONGELADO do
-// conjunto de certificados oficial da campanha (Decisao 166, item 3) --
-// os mesmos response_bytes publicados nos relatorios da campanha. Se
+// item 2; recalculado na Decisao 167 -- pedido do Luciano, "LF
+// canonico, renormalizar e recalcular"): verificacao SEPARADA e
+// explicita, nunca misturada com TestDirectoryHandlerResponseBytes
+// acima (que agora deriva o esperado dos arquivos reais, entao sempre
+// passa mesmo se os arquivos forem regenerados com outro tamanho).
+// Esta aqui e o gabarito CONGELADO do conjunto de certificados oficial
+// da campanha (tag v9-campanha-oficial-congelada-v8) -- os mesmos
+// response_bytes publicados nos relatorios da campanha. Se
 // mock-service-os/certs for regenerado (qualquer lote novo), este teste
 // -- so este -- quebra, apontando exatamente que o termo de PKI do
 // gabarito precisa ser recalculado antes da proxima campanha official;
 // TestDirectoryHandlerResponseBytes sozinho NUNCA detectaria isso.
+//
+// Os numeros abaixo (Decisao 167) substituem os da Decisao 166: aquele
+// gabarito foi calculado sobre root_ca_rsa2048.crt/issuer_ca_rsa2048.
+// crt com bytes CRLF obsoletos no disco local (1706B/1720B), nunca
+// renormalizados apos o .gitattributes ganhar eol=lf -- o blob git ja
+// era LF (1679B/1692B) desde antes da tag v6; so o checkout local
+// desta maquina estava desatualizado (confirmado: delete+checkout
+// reescreve correto, "git checkout --" sozinho e um no-op porque o
+// index ja achava o arquivo "limpo"). Com os bytes corretos (LF,
+// 1679B/1692B) classico e hibrido-and -- os dois perfis que usam
+// root_ca_rsa2048.crt/issuer_ca_rsa2048.crt -- mudam; pqc e
+// hibrido-v8 usam outros arquivos (root_ca_pqc.crt/root_ca_hybrid.
+// crt), nunca afetados pelo CRLF, por isso o numero delas repete
+// exatamente o da Decisao 166.
+//
+//	classico     root:  1679 (root_ca_rsa2048.crt)             + 97  (content-length) = 1776
+//	classico     issuer: 1692 (issuer_ca_rsa2048.crt)            + 97  (content-length) = 1789
+//	pqc          root:  8001 (root_ca_pqc.crt)                  + 103 (chunked)        = 8104
+//	pqc          issuer: 8013 (issuer_ca_pqc.crt)                + 103 (chunked)        = 8116
+//	hibrido-v8   root:  9337 (root_ca_hybrid.crt)                + 103 (chunked)        = 9440
+//	hibrido-v8   issuer: 9341 (issuer_ca_hybrid.crt)              + 103 (chunked)        = 9444
+//	hibrido-and  root:  1679 + 8001 (rsa2048 + pqc, concatenados) + 103 (chunked)        = 9783
+//	hibrido-and  issuer: 1692 + 8013 (rsa2048 + pqc, concatenados) + 103 (chunked)        = 9808
 func TestDirectoryHandlerResponseBytesMatchesFrozenManifest(t *testing.T) {
 	dir := realCertsDirForTest(t)
 
@@ -247,10 +272,10 @@ func TestDirectoryHandlerResponseBytesMatchesFrozenManifest(t *testing.T) {
 		wantRootBytes   int
 		wantIssuerBytes int
 	}{
-		{"classico", 1803, 1817},
+		{"classico", 1776, 1789},
 		{"pqc", 8104, 8116},
 		{"hibrido-v8", 9440, 9444},
-		{"hibrido-and", 9810, 9836},
+		{"hibrido-and", 9783, 9808},
 	}
 	wantFramingByProfile := map[string]string{
 		"classico": "content-length", "pqc": "chunked", "hibrido-v8": "chunked", "hibrido-and": "chunked",
