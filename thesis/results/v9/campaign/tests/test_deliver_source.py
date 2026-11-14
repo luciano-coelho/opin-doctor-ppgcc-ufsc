@@ -2,8 +2,16 @@
 SSH/SCP/tar stubados via cli._run, nenhuma chamada real, nenhum dado
 sensivel. Usa um repositorio FALSO (tmp_path) com os mesmos caminhos
 relativos de COMMON_FILES/CLIENT_ONLY_FILES -- nunca o repo real, pra
-nao depender do conteudo verdadeiro em disco."""
+nao depender do conteudo verdadeiro em disco.
+
+Decisao 168, item 3 (pedido do Luciano): `fake_repo` agora e tambem um
+repositorio git real (git init + commit), porque `build_delivery_
+manifest`/`assert_no_crlf_for_delivery` leem o BLOB do git (git
+ls-tree/cat-file/check-attr), nunca so o disco -- precisam de um
+`.git` de verdade pra funcionar, mesmo num repo de teste minusculo."""
 import hashlib
+import shlex
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -34,39 +42,68 @@ def _fake_sha256sum_stdout() -> str:
     return "".join(f"{digest}  {name}\n" for name, digest in _FAKE_CERT_HASHES.items())
 
 
-def fake_run_with_certs_ok(argv, timeout=None):
-    """Stub de cli._run que sempre responde OK, inclusive ao
-    `sha256sum` remoto que verify_delivered_certs dispara -- usado por
-    todo teste que exercita deliver_source() mas nao esta testando a
-    verificacao de certificado em si (ela so teria que FALHAR num
-    teste dedicado, nunca de surpresa num teste generico)."""
-    if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
-        return FakeProc(returncode=0, stdout=_fake_sha256sum_stdout())
-    return FakeProc(returncode=0)
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _real_git_blob_sha256(repo_root, rel_path):
+    proc = subprocess.run(["git", "-C", str(repo_root), "cat-file", "-p", f"HEAD:{rel_path}"],
+                           capture_output=True, check=True)
+    return hashlib.sha256(proc.stdout).hexdigest()
+
+
+def make_fake_run_ok(repo_root):
+    """Decisao 168, item 3 (pedido do Luciano): stub de cli._run que
+    sempre responde OK, tanto ao `sha256sum` do manifesto de
+    certificados congelado (verify_delivered_certs, nomes = basename,
+    `cd ~/mock-service-os/certs`) quanto ao `sha256sum` da arvore
+    inteira (verify_delivered_tree/deliver_to_control, nomes = caminho
+    relativo, `cd ~ &&`) -- usado por todo teste que exercita
+    deliver_source()/deliver_to_control() mas nao esta testando a
+    verificacao em si (ela so teria que FALHAR num teste dedicado,
+    nunca de surpresa num teste generico). A resposta da arvore e
+    calculada direto do BLOB git real do `repo_root` -- nunca
+    hardcoded -- pra sempre bater com build_delivery_manifest por
+    construcao."""
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+            cmd = argv[-1]
+            if "cd ~/mock-service-os/certs" in cmd:
+                return FakeProc(returncode=0, stdout=_fake_sha256sum_stdout())
+            names_part = cmd.split("sha256sum", 1)[1].strip()
+            names_part = names_part.rstrip("'")
+            names = shlex.split(names_part)
+            lines = [f"{_real_git_blob_sha256(repo_root, name)}  {name}" for name in names]
+            return FakeProc(returncode=0, stdout="\n".join(lines) + ("\n" if lines else ""))
+        return FakeProc(returncode=0)
+    return fake_run
 
 
 @pytest.fixture
 def fake_repo(tmp_path):
     """Monta, sob tmp_path, a MESMA arvore relativa que COMMON_FILES/
     CLIENT_ONLY_FILES/CONTROL_FILES referenciam -- arquivos com
-    conteudo falso, `mock-service-os/certs` e `thesis/results/v9/
-    certs/generated` como diretorios com um arquivo falso dentro cada.
-    Tambem grava certs_manifest.json FALSO (Decisao 166) no mesmo
-    caminho relativo que deliver_source() le de verdade -- sha256
-    casando com _FAKE_CERT_HASHES, nunca com o conteudo real do cert
-    falso (a verificacao real roda no HOST remoto via sha256sum
-    stubado, nunca relendo o arquivo local do tarball)."""
+    conteudo falso (sempre LF puro -- Decisao 168, item 3: `write_text`
+    traduziria `\\n` pro separador do SO, CRLF no Windows, o que faria
+    assert_no_crlf_for_delivery recusar toda entrega de teste),
+    `mock-service-os/certs` e `thesis/results/v9/certs/generated` como
+    diretorios com um arquivo falso dentro cada. Grava certs_manifest.
+    json FALSO (Decisao 166) no mesmo caminho relativo que deliver_
+    source() le de verdade -- sha256 casando com _FAKE_CERT_HASHES.
+    Tambem um repositorio GIT REAL (git init + commit) -- Decisao 168,
+    item 3: build_delivery_manifest/assert_no_crlf_for_delivery leem o
+    BLOB do git (ls-tree/cat-file/check-attr), nunca so o disco."""
     repo = tmp_path / "fake_repo"
     for rel in ds.COMMON_FILES + ds.CONTROL_FILES + ds.SERVER_ONLY_FILES:
         if rel.endswith((".py", ".txt", ".json", ".sh", ".yml", ".conf")):
             p = repo / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(f"conteudo falso de {rel}\n", encoding="utf-8")
+            p.write_bytes(f"conteudo falso de {rel}\n".encode("utf-8"))
     (repo / "mock-service-os" / "certs").mkdir(parents=True, exist_ok=True)
-    (repo / "mock-service-os" / "certs" / "ca.crt").write_text("cert falso\n", encoding="utf-8")
+    (repo / "mock-service-os" / "certs" / "ca.crt").write_bytes(b"cert falso\n")
     (repo / "thesis" / "results" / "v9" / "certs" / "generated").mkdir(parents=True, exist_ok=True)
-    (repo / "thesis" / "results" / "v9" / "certs" / "generated" / "classico_client.crt").write_text(
-        "cert falso\n", encoding="utf-8")
+    (repo / "thesis" / "results" / "v9" / "certs" / "generated" / "classico_client.crt").write_bytes(
+        b"cert falso\n")
 
     manifest_path = repo / "thesis" / "results" / "v9" / "campaign" / "certs_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,7 +111,11 @@ def fake_repo(tmp_path):
         "files": {name: {"sha256": digest, "pem_bytes": 1, "der_bytes": 1} for name, digest in _FAKE_CERT_HASHES.items()}
     }
     import json
-    manifest_path.write_text(json.dumps(fake_manifest), encoding="utf-8")
+    manifest_path.write_bytes(json.dumps(fake_manifest).encode("utf-8"))
+
+    _git(repo, "init", "-q")
+    _git(repo, "-c", "user.name=test", "-c", "user.email=test@test.invalid", "add", "-A")
+    _git(repo, "-c", "user.name=test", "-c", "user.email=test@test.invalid", "commit", "-q", "-m", "fake")
     return repo
 
 
@@ -143,7 +184,7 @@ def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -204,7 +245,7 @@ def test_deliver_source_modo_campanha_entrega_para_cada_servidor(monkeypatch, fa
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -238,7 +279,7 @@ def test_mutante_deliver_source_campanha_so_1_servidor_perderia_entrega(monkeypa
     servidor (comportamento ANTES da generalizacao) deixaria 2 dos 3
     servidores da campanha sem SERVER_ONLY_FILES nenhum -- prova que a
     iteracao sobre todos os servidores e necessaria, nao cosmetica."""
-    monkeypatch.setattr(cli, "_run", fake_run_with_certs_ok)
+    monkeypatch.setattr(cli, "_run", make_fake_run_ok(fake_repo))
     inventory = {
         "servers": {
             "sa-east-1": {"public_ip": "203.0.113.10"},
@@ -275,7 +316,7 @@ def test_deliver_source_instala_requirements_so_nos_clientes(monkeypatch, fake_r
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -303,7 +344,7 @@ def test_deliver_source_aborta_se_pip_install_falha_no_cliente(monkeypatch, fake
     def fake_run(argv, timeout=None):
         if argv and argv[0] == "ssh" and "pip3 install" in argv[-1]:
             return FakeProc(returncode=1, stderr="No matching distribution found for PyJWT==2.15.1")
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {"L0": {"public_ip": "203.0.113.60"}}}
@@ -323,7 +364,7 @@ def test_rele_extrai_antes_de_remover_o_tarball(monkeypatch, fake_repo):
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
@@ -376,7 +417,7 @@ def test_deliver_source_verifica_certs_contra_manifesto_apos_entrega(monkeypatch
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return fake_run_with_certs_ok(argv, timeout)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {"L0": {"public_ip": "203.0.113.60"}}}
@@ -386,19 +427,25 @@ def test_deliver_source_verifica_certs_contra_manifesto_apos_entrega(monkeypatch
         inventory=inventory, repo_root=fake_repo,
     )
     sha256sum_cmds = [c[-1] for c in calls if c and c[0] == "ssh" and "sha256sum" in c[-1]]
-    assert len(sha256sum_cmds) == 2, "um sha256sum por destino (servidor + 1 cliente) -- " + str(sha256sum_cmds)
-    assert any("@203.0.113.50" in c for c in sha256sum_cmds)
-    assert any("@203.0.113.60" in c for c in sha256sum_cmds)
+    cert_cmds = [c for c in sha256sum_cmds if "cd ~/mock-service-os/certs" in c]
+    tree_cmds = [c for c in sha256sum_cmds if "cd ~ &&" in c]
+    assert len(cert_cmds) == 2, "um sha256sum de certs por destino (servidor + 1 cliente) -- " + str(cert_cmds)
+    assert len(tree_cmds) == 2, (
+        "Decisao 168, item 3: um sha256sum de arvore por destino (servidor + 1 cliente) -- " + str(tree_cmds)
+    )
+    assert any("@203.0.113.50" in c for c in cert_cmds)
+    assert any("@203.0.113.60" in c for c in cert_cmds)
     assert all(r["certs_verified"] for r in report)
+    assert all(r["tree_verified"] for r in report)
 
 
 def test_deliver_source_aborta_se_sha256_de_um_cert_diverge_do_manifesto(monkeypatch, fake_repo):
     def fake_run(argv, timeout=None):
-        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1] and "cd ~/mock-service-os/certs" in argv[-1]:
             # ca.crt volta com um sha256 ERRADO -- qualquer outro arquivo bate.
             bad = _fake_sha256sum_stdout().replace(_FAKE_CERT_HASHES["ca.crt"], "0" * 64)
             return FakeProc(returncode=0, stdout=bad)
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
@@ -412,9 +459,9 @@ def test_deliver_source_aborta_se_sha256_de_um_cert_diverge_do_manifesto(monkeyp
 
 def test_deliver_source_aborta_se_sha256sum_remoto_falha(monkeypatch, fake_repo):
     def fake_run(argv, timeout=None):
-        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1] and "cd ~/mock-service-os/certs" in argv[-1]:
             return FakeProc(returncode=1, stderr="No such file or directory")
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
@@ -424,6 +471,72 @@ def test_deliver_source_aborta_se_sha256sum_remoto_falha(monkeypatch, fake_repo)
             campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
             inventory=inventory, repo_root=fake_repo,
         )
+
+
+# --- Decisao 168, item 3 (pedido do Luciano): fail-closed sha256 de
+# TODO arquivo rastreado entregue (nao so os certificados do manifesto
+# congelado), contra o BLOB do git -- e fail-closed de CRLF, ANTES de
+# empacotar.
+
+def test_deliver_source_aborta_se_sha256_da_arvore_diverge_do_blob(monkeypatch, fake_repo):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1] and "cd ~ &&" in argv[-1]:
+            return FakeProc(returncode=0, stdout="0" * 64 + "  thesis/scripts/opin_flow.py\n")
+        return make_fake_run_ok(fake_repo)(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
+    with pytest.raises(RuntimeError, match="sha256 divergente do blob git"):
+        ds.deliver_source(
+            control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+            campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+            inventory=inventory, repo_root=fake_repo,
+        )
+
+
+def test_deliver_source_aborta_antes_de_empacotar_se_arquivo_rastreado_esta_em_crlf(monkeypatch, fake_repo):
+    """CRLF introduzido no disco do operador (ex. checkout obsoleto)
+    tem que abortar a entrega inteira, ANTES de qualquer scp/ssh --
+    nunca so um aviso, nunca entregue."""
+    (fake_repo / "thesis" / "scripts" / "opin_flow.py").write_bytes(b"conteudo com crlf\r\n")
+
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
+    with pytest.raises(RuntimeError, match="CRLF"):
+        ds.deliver_source(
+            control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+            campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+            inventory=inventory, repo_root=fake_repo,
+        )
+    assert calls == [], "CRLF tem que abortar ANTES de qualquer chamada ssh/scp -- nada foi entregue de verdade"
+
+
+def test_build_delivery_manifest_usa_o_blob_git_nao_o_disco(fake_repo):
+    manifest = ds.build_delivery_manifest(["thesis/scripts/opin_flow.py"], repo_root=fake_repo)
+    assert list(manifest) == ["thesis/scripts/opin_flow.py"]
+    expected = _real_git_blob_sha256(fake_repo, "thesis/scripts/opin_flow.py")
+    assert manifest["thesis/scripts/opin_flow.py"] == expected
+
+
+def test_build_delivery_manifest_expande_diretorio_so_pros_arquivos_rastreados(fake_repo):
+    manifest = ds.build_delivery_manifest(["mock-service-os/certs"], repo_root=fake_repo)
+    assert list(manifest) == ["mock-service-os/certs/ca.crt"]
+
+
+def test_assert_no_crlf_for_delivery_aceita_arvore_limpa(fake_repo):
+    ds.assert_no_crlf_for_delivery(ds.COMMON_FILES, repo_root=fake_repo)  # nao levanta
+
+
+def test_assert_no_crlf_for_delivery_recusa_crlf(fake_repo):
+    (fake_repo / "thesis" / "scripts" / "opin_flow.py").write_bytes(b"conteudo com crlf\r\n")
+    with pytest.raises(RuntimeError, match="CRLF"):
+        ds.assert_no_crlf_for_delivery(ds.COMMON_FILES, repo_root=fake_repo)
 
 
 def test_deliver_source_aborta_se_hosts_divergem_entre_si(monkeypatch, fake_repo):
@@ -448,7 +561,7 @@ def test_assert_certs_consistent_aceita_hosts_identicos():
 
 
 def test_verify_delivered_certs_devolve_o_sha256_obtido(monkeypatch, fake_repo):
-    monkeypatch.setattr(cli, "_run", fake_run_with_certs_ok)
+    monkeypatch.setattr(cli, "_run", make_fake_run_ok(fake_repo))
     manifest = cert_manifest.load_manifest(fake_repo / "thesis/results/v9/campaign/certs_manifest.json")
     got = ds.verify_delivered_certs(
         "203.0.113.5", "/fake/operator_key", "/home/ec2-user/.ssh/campaign_key", "203.0.113.50", manifest)
@@ -464,7 +577,7 @@ def test_deliver_to_control_um_so_salto_nunca_fala_com_servidor_ou_cliente(monke
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory_path = tmp_path / "inventory.json"
@@ -486,7 +599,7 @@ def test_deliver_to_control_entrega_inventory_json_tambem(monkeypatch, fake_repo
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory_path = tmp_path / "inventory.json"
@@ -505,7 +618,7 @@ def test_deliver_to_control_extrai_antes_de_remover_o_tarball(monkeypatch, fake_
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory_path = tmp_path / "inventory.json"
@@ -536,10 +649,40 @@ def test_deliver_to_control_falha_no_scp_do_inventory_nunca_e_engolida(monkeypat
     def fake_run(argv, timeout=None):
         if argv[0] == "scp" and "inventory.json" in argv[-1]:
             return FakeProc(returncode=1, stderr="Permission denied")
-        return FakeProc(returncode=0)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory_path = tmp_path / "inventory.json"
     inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
     with pytest.raises(RuntimeError, match="scp do inventory.json falhou"):
         ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+
+
+def test_deliver_to_control_aborta_se_sha256_da_arvore_diverge_do_blob(monkeypatch, fake_repo, tmp_path):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+            return FakeProc(returncode=0, stdout="0" * 64 + "  thesis/results/v9/campaign/scripts/orchestrator.py\n")
+        return make_fake_run_ok(fake_repo)(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="sha256 divergente do blob git"):
+        ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+
+
+def test_deliver_to_control_aborta_antes_de_empacotar_se_arquivo_rastreado_esta_em_crlf(monkeypatch, fake_repo, tmp_path):
+    (fake_repo / "thesis" / "results" / "v9" / "campaign" / "scripts" / "orchestrator.py").write_bytes(
+        b"conteudo com crlf\r\n")
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return make_fake_run_ok(fake_repo)(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text('{"server": {}, "clients": {}}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="CRLF"):
+        ds.deliver_to_control("203.0.113.5", "/fake/operator_key", str(inventory_path), repo_root=fake_repo)
+    assert calls == [], "CRLF tem que abortar ANTES de qualquer chamada ssh/scp -- nada foi entregue de verdade"

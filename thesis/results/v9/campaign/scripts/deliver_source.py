@@ -57,7 +57,10 @@ mudanca de codigo nenhuma)/`orchestrator.py` (PINS_PATH = Path(
 __file__).resolve().parents[1] / "PINS.json") ja presumem.
 """
 import argparse
+import hashlib
 import json
+import shlex
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -257,6 +260,117 @@ def verify_delivered_certs(control_ip, operator_key_path, campaign_key_remote_pa
     return got
 
 
+def _tracked_files_under(repo_root: Path, rel_path: str, ref: str = "HEAD") -> list[str]:
+    """Decisao 168, item 3 (pedido do Luciano): expande `rel_path`
+    (arquivo ou diretorio) pros caminhos RASTREADOS do git dentro dele,
+    na `ref` dada. Um diretorio misto como `mock-service-os/certs`
+    (certificado publico rastreado + chave privada gitignorada) devolve
+    SO os rastreados -- `git ls-tree` nunca lista o que nao esta no
+    blob, entao material privado/gerado fica fora por construcao,
+    nunca por um filtro explicito que poderia errar."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", ref, "--", rel_path],
+        capture_output=True, text=True, check=True,
+    )
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def _blob_sha256(repo_root: Path, rel_path: str, ref: str = "HEAD") -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "cat-file", "-p", f"{ref}:{rel_path}"],
+        capture_output=True, check=True,
+    )
+    return hashlib.sha256(proc.stdout).hexdigest()
+
+
+def build_delivery_manifest(rel_paths: list[str], repo_root: Path = _REPO_ROOT, ref: str = "HEAD") -> dict[str, str]:
+    """Decisao 168, item 3 (pedido do Luciano): manifesto sha256 de
+    TODO arquivo RASTREADO entregue (scripts/config/certificado
+    publico), calculado direto do BLOB do git na `ref` dada -- nunca
+    do disco local do operador, que pode estar em qualquer estado de
+    eol (ver Decisao 167/168 sobre CRLF). Material gerado/gitignorado
+    (ex. `thesis/results/v9/certs/generated`, as chaves privadas
+    dentro de `mock-service-os/certs`) fica FORA deste manifesto por
+    construcao -- continua sem verificacao de integridade byte a byte,
+    mesma situacao de antes desta Decisao (nunca material pra
+    verificar contra um blob que nao existe)."""
+    manifest: dict[str, str] = {}
+    for rel in rel_paths:
+        for f in _tracked_files_under(repo_root, rel, ref=ref):
+            manifest[f] = _blob_sha256(repo_root, f, ref=ref)
+    return manifest
+
+
+def _git_text_attr(repo_root: Path, rel_path: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "check-attr", "text", "--", rel_path],
+        capture_output=True, text=True, check=True,
+    )
+    return proc.stdout.strip().rsplit(":", 1)[-1].strip()
+
+
+def assert_no_crlf_for_delivery(rel_paths: list[str], repo_root: Path = _REPO_ROOT) -> None:
+    """Decisao 168, item 3 (pedido do Luciano): fail-closed LOCAL,
+    ANTES de empacotar -- qualquer arquivo RASTREADO entregue, marcado
+    como texto pelo `.gitattributes` (nao `-text`; certificado/chave
+    publica ficam fora desta checagem por desenho, ver Decisao 167),
+    que esteja em CRLF no disco do operador aborta a entrega inteira.
+    Nunca um aviso silencioso: o `.gitattributes` global (Decisao 167)
+    ja devia ter normalizado tudo -- CRLF aqui e sinal de checkout
+    obsoleto/config local quebrada, nunca aceitavel numa entrega real."""
+    violations = []
+    for rel in rel_paths:
+        for f in _tracked_files_under(repo_root, rel):
+            if _git_text_attr(repo_root, f) == "unset":
+                continue
+            data = (repo_root / f).read_bytes()
+            if b"\r\n" in data:
+                violations.append(f)
+    if violations:
+        raise RuntimeError(
+            f"assert_no_crlf_for_delivery: arquivo(s) de texto em CRLF, entrega recusada (fail-closed): {violations}"
+        )
+
+
+def verify_delivered_tree(control_ip, operator_key_path, campaign_key_remote_path, target_ip, manifest: dict) -> dict:
+    """Decisao 168, item 3 (pedido do Luciano): generaliza
+    `verify_delivered_certs` pra TODO arquivo rastreado entregue (nao
+    so os certificados do manifesto congelado) -- UM `sha256sum`
+    remoto (mesmo rele de 2 saltos) pra todos os caminhos do manifesto
+    de uma vez, comparado contra o BLOB do git (`build_delivery_
+    manifest`), fail-closed em qualquer divergencia ou arquivo
+    ausente. `manifest` vazio (nenhum arquivo rastreado no conjunto
+    entregue) e um no-op, nunca um erro."""
+    if not manifest:
+        return {}
+    names = " ".join(shlex.quote(p) for p in manifest)
+    remote_cmd = (
+        f"ssh -i {campaign_key_remote_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"ec2-user@{target_ip} "
+        f"'cd ~ && sha256sum {names}'"
+    )
+    proc = cli.run_ssh(control_ip, remote_cmd, key_path=operator_key_path)
+    if proc.returncode != 0:
+        raise RuntimeError(f"verify_delivered_tree({target_ip}): sha256sum remoto falhou: {cli.redact(proc.stderr)}")
+
+    got = {}
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        digest, name = parts
+        got[name.strip()] = digest
+
+    mismatches = {
+        name: {"expected": expected, "got": got.get(name)}
+        for name, expected in manifest.items()
+        if got.get(name) != expected
+    }
+    if mismatches:
+        raise RuntimeError(f"verify_delivered_tree({target_ip}): sha256 divergente do blob git -- {mismatches}")
+    return got
+
+
 def _assert_certs_consistent_across_hosts(certs_by_target: dict) -> None:
     """Decisao 166, item 3: alem de cada host bater com o manifesto
     (ja fail-closed em `verify_delivered_certs`), confere que os
@@ -322,31 +436,43 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
     quando presente entrega pra CADA servidor da campanha, sem mudar
     nada do caminho do piloto."""
     manifest = cert_manifest.load_manifest(repo_root / "thesis/results/v9/campaign/certs_manifest.json")
+    server_rel_paths = COMMON_FILES + SERVER_ONLY_FILES
+    client_rel_paths = COMMON_FILES + CLIENT_ONLY_FILES
+    # Decisao 168, item 3: fail-closed LOCAL antes de empacotar qualquer
+    # coisa -- um CRLF obsoleto aborta a entrega inteira, nunca so o
+    # destino que teria recebido o arquivo ruim.
+    assert_no_crlf_for_delivery(server_rel_paths, repo_root)
+    assert_no_crlf_for_delivery(client_rel_paths, repo_root)
+    server_tree_manifest = build_delivery_manifest(server_rel_paths, repo_root)
+    client_tree_manifest = build_delivery_manifest(client_rel_paths, repo_root)
+
     certs_by_target = {}
     report = []
     with tempfile.TemporaryDirectory(prefix="v9_deliver_source_") as tmp:
-        server_tarball = build_tarball(COMMON_FILES + SERVER_ONLY_FILES, Path(tmp) / "server.tar.gz", repo_root=repo_root)
-        client_tarball = build_tarball(COMMON_FILES + CLIENT_ONLY_FILES, Path(tmp) / "client.tar.gz", repo_root=repo_root)
+        server_tarball = build_tarball(server_rel_paths, Path(tmp) / "server.tar.gz", repo_root=repo_root)
+        client_tarball = build_tarball(client_rel_paths, Path(tmp) / "client.tar.gz", repo_root=repo_root)
 
         servers = inventory["servers"] if "servers" in inventory else {"server": inventory["server"]}
         for server_id, server in servers.items():
             server_ip = server["public_ip"]
             staged = stage_on_control(control_ip, operator_key_path, server_tarball, f"{server_id}.tar.gz")
             relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, server_ip, staged)
+            verify_delivered_tree(control_ip, operator_key_path, campaign_key_remote_path, server_ip, server_tree_manifest)
             certs_by_target[server_id] = verify_delivered_certs(
                 control_ip, operator_key_path, campaign_key_remote_path, server_ip, manifest)
             report.append({"target": server_id, "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES),
-                            "certs_verified": True})
+                            "certs_verified": True, "tree_verified": True})
 
         for route, client in inventory["clients"].items():
             client_ip = client["public_ip"]
             staged = stage_on_control(control_ip, operator_key_path, client_tarball, f"{route}.tar.gz")
             relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, client_ip, staged)
+            verify_delivered_tree(control_ip, operator_key_path, campaign_key_remote_path, client_ip, client_tree_manifest)
             certs_by_target[route] = verify_delivered_certs(
                 control_ip, operator_key_path, campaign_key_remote_path, client_ip, manifest)
             install_client_requirements(control_ip, operator_key_path, campaign_key_remote_path, client_ip)
             report.append({"target": route, "ip": client_ip, "files": list(COMMON_FILES) + list(CLIENT_ONLY_FILES),
-                            "requirements_installed": True, "certs_verified": True})
+                            "requirements_installed": True, "certs_verified": True, "tree_verified": True})
 
         _assert_certs_consistent_across_hosts(certs_by_target)
     return report
@@ -359,6 +485,9 @@ def deliver_to_control(control_ip, operator_key_path, inventory_json_path, repo_
     e copiado em separado (nao esta no repositorio -- e gerado por
     `terraform output -json inventory` a cada apply, pela maquina do
     OPERADOR, que tem o state do Terraform)."""
+    assert_no_crlf_for_delivery(CONTROL_FILES, repo_root)
+    control_tree_manifest = build_delivery_manifest(CONTROL_FILES, repo_root)
+
     with tempfile.TemporaryDirectory(prefix="v9_deliver_control_") as tmp:
         tarball = build_tarball(CONTROL_FILES, Path(tmp) / "control.tar.gz", repo_root=repo_root)
 
@@ -378,11 +507,35 @@ def deliver_to_control(control_ip, operator_key_path, inventory_json_path, repo_
         if extract_proc.returncode != 0:
             raise RuntimeError(f"deliver_to_control: extracao no controle falhou: {cli.redact(extract_proc.stderr)}")
 
+        # Decisao 168, item 3: deliver_to_control e UM SO salto (operador
+        # -> controle, nunca a chave da campanha) -- verify_delivered_tree
+        # embute um 2o salto (ssh DENTRO do comando remoto, chave da
+        # campanha) que nao existe aqui; checagem direta, 1 salto so.
+        if control_tree_manifest:
+            names = " ".join(shlex.quote(p) for p in control_tree_manifest)
+            check_proc = cli.run_ssh(control_ip, f"cd ~ && sha256sum {names}", key_path=operator_key_path)
+            if check_proc.returncode != 0:
+                raise RuntimeError(f"deliver_to_control: sha256sum remoto falhou: {cli.redact(check_proc.stderr)}")
+            got = {}
+            for line in check_proc.stdout.strip().splitlines():
+                parts = line.split(maxsplit=1)
+                if len(parts) == 2:
+                    digest, name = parts
+                    got[name.strip()] = digest
+            mismatches = {
+                name: {"expected": expected, "got": got.get(name)}
+                for name, expected in control_tree_manifest.items()
+                if got.get(name) != expected
+            }
+            if mismatches:
+                raise RuntimeError(f"deliver_to_control: sha256 divergente do blob git -- {mismatches}")
+
         inv_scp = cli.run_scp(str(inventory_json_path), f"ec2-user@{control_ip}:{REMOTE_INVENTORY_PATH}", key_path=operator_key_path)
         if inv_scp.returncode != 0:
             raise RuntimeError(f"deliver_to_control: scp do inventory.json falhou: {cli.redact(inv_scp.stderr)}")
 
-    return {"target": "control", "ip": control_ip, "files": list(CONTROL_FILES) + ["inventory.json (gerado, nao versionado)"]}
+    return {"target": "control", "ip": control_ip, "files": list(CONTROL_FILES) + ["inventory.json (gerado, nao versionado)"],
+            "tree_verified": True}
 
 
 def main():
