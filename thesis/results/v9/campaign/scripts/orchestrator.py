@@ -1970,6 +1970,32 @@ def _assert_call_and_handshake_counts(profile, route, run, result, smoke: bool =
         )
 
 
+# Decisao 161 (item 3, pedido do autor apos a reauditoria da tag v6):
+# proveniencia do modo -- `LocalExecutor` (nunca toca rede/infra real,
+# fabrica um manifesto plausivel com os mesmos 44/28/4/4 campos de uma
+# execucao real) e `SSHExecutor` (o unico caminho que roda contra
+# infraestrutura de verdade) sao as DUAS unicas classes de executor
+# que existem neste modulo -- mapeamento explicito, nunca um default
+# "unknown" silencioso pra uma classe nova que alguem adicionar sem
+# atualizar este dict (`.get()` com fallback "unknown" serve so pra
+# nunca quebrar em tempo de execucao, nunca pra esconder um gap).
+_EXECUTOR_CLASS_TO_MODE = {"LocalExecutor": "simulate", "SSHExecutor": "ssh"}
+
+
+def _mode_provenance(executor) -> dict:
+    """Decisao 161: campos SEMPRE presentes em todo manifesto/
+    manifest_partial.json que run_pilot/run_smoke_gate escrevem --
+    nunca opcionais, nunca omitidos -- exatamente pra impedir que uma
+    execucao simulada (`--mode simulate`, o DEFAULT do CLI) produza um
+    artefato indistinguivel de uma execucao real so porque o operador
+    esqueceu `--mode ssh`."""
+    executor_class = type(executor).__name__
+    return {
+        "mode": _EXECUTOR_CLASS_TO_MODE.get(executor_class, "unknown"),
+        "executor_class": executor_class,
+    }
+
+
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
               routes: list[str] | None = None, profiles: list[str] | None = None,
               skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0,
@@ -2142,6 +2168,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         _atomic_write_json(out_dir / "manifest_partial.json", {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "complete": False, "window_start_utc": window_start_utc,
+            **_mode_provenance(executor),
             "total_execucoes_ate_agora": len(execucoes_calls),
             "total_aquecimentos_ate_agora": len(aquecimento_calls),
             "total_capturas_dedicadas_ate_agora": len(capturas_dedicadas_feitas),
@@ -2180,6 +2207,15 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "retry_failures": warmup_result.get("retry_failures", []),
                     "network_transport_retries": warmup_result.get("network_transport_retries", []),
                     "handshake_bytes_per_connection": warmup_result.get("handshake_bytes_per_connection", []),
+                    # Decisao 162 (achado da reauditoria: o smoke gate
+                    # nunca checava a contagem de handshakes -- so
+                    # tinha acesso a `gateway_log_lines` aqui dentro de
+                    # run_pilot, nunca persistido em calls.json antes
+                    # desta correcao). Persistido como CONTAGEM, nunca
+                    # as linhas de log cruas (evita inflar calls.json
+                    # com dado ja resumido em outro lugar).
+                    "n_client_facing_handshakes": _count_client_facing_handshakes(
+                        warmup_result.get("gateway_log_lines", [])),
                 }
                 aquecimento_calls.append(aquecimento_entry)
                 # Decisao 133, item 3: persistido no disco AGORA, nunca
@@ -2224,6 +2260,8 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "retry_failures": result.get("retry_failures", []),
                     "network_transport_retries": result.get("network_transport_retries", []),
                     "handshake_bytes_per_connection": result.get("handshake_bytes_per_connection", []),
+                    "n_client_facing_handshakes": _count_client_facing_handshakes(
+                        result.get("gateway_log_lines", [])),
                 }
                 execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({
@@ -2334,6 +2372,11 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     expected_total = len(profiles) * len(routes) * n_per_profile
     manifest = {
         "seed": seed, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        # Decisao 161 (item 3): "mode"/"executor_class" SEMPRE presentes
+        # -- nunca omitidos, nunca opcionais -- pra uma execucao
+        # simulada nunca poder produzir um manifesto indistinguivel de
+        # uma real. Ver _mode_provenance() acima.
+        **_mode_provenance(executor),
         # Pedido do Luciano (Etapa 1, item 4): carimbo da JANELA
         # inteira -- `window_start_utc` capturado antes do primeiro
         # bloco, `window_end_utc` aqui, depois do ultimo (e das
@@ -2471,6 +2514,7 @@ def run_smoke_gate(executor, seed: int, out_dir: Path, certs_dir=_DEFAULT_CERTS_
         ]
         return {
             "smoke": True, "smoke_ok": False, "aborted_before_execution": True,
+            **_mode_provenance(executor),
             "capture_preflight": capture_preflight,
             "smoke_failures": [], "total_execucoes": 0, "expected_total": SMOKE_EXPECTED_TOTAL,
             "note": ("pre-requisitos de captura (criterio 1) reprovaram -- nenhuma execucao rodou "
@@ -2486,6 +2530,21 @@ def run_smoke_gate(executor, seed: int, out_dir: Path, certs_dir=_DEFAULT_CERTS_
         if counts != _EXPECTED_HTTP:
             failures.append({"profile": entry["profile"], "route": entry["route"],
                               "esperado": _EXPECTED_HTTP, "obtido": counts})
+        # Decisao 162 (achado da reauditoria): `_assert_call_and_
+        # handshake_counts` pula a verificacao de handshakes inteira
+        # durante smoke (Decisao 159, item 3's propria excecao
+        # deliberada para a sondagem) -- esta e a verificacao
+        # equivalente, no MESMO lugar/padrao que a de `_http_counts_
+        # for_calls` acima (recusa fail-closed, mas so depois das 12
+        # execucoes completarem, pra reportar TODAS as celulas com
+        # problema juntas -- nunca abortar na primeira, mesmo
+        # raciocinio do docstring de `_assert_call_and_handshake_
+        # counts`).
+        n_handshakes = entry.get("n_client_facing_handshakes")
+        if n_handshakes != EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO:
+            failures.append({"profile": entry["profile"], "route": entry["route"],
+                              "esperado_handshakes": EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO,
+                              "obtido_handshakes": n_handshakes})
 
     capture_proof_dir = out_dir / "smoke_capture_proof"
     capture_proof_dir.mkdir(parents=True, exist_ok=True)

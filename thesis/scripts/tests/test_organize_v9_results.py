@@ -11,7 +11,8 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "organize_v9_results.py"
 
 
-def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_bytes_per_connection=None):
+def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_bytes_per_connection=None,
+                     manifest_mode="ssh", manifest_executor_class="SSHExecutor"):
     calls = [{
         "profile": "classico", "route": "L0", "run": 1,
         "start_utc": "2026-11-14T00:00:00+00:00", "end_utc": "2026-11-14T00:00:01+00:00",
@@ -23,6 +24,7 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_by
     manifest = {
         "total_execucoes": 1, "expected_total": 1, "window_end_utc": "2026-11-14T00:00:02+00:00",
         "capturas_dedicadas_falhas": [], "capturas_dedicadas_feitas": 0,
+        "mode": manifest_mode, "executor_class": manifest_executor_class,
     }
     calls_json = tmp_path / "calls.json"
     criterio6_json = tmp_path / "criterio6.json"
@@ -33,9 +35,11 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_by
     return calls_json, criterio6_json, manifest_json
 
 
-def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None, handshake_bytes_per_connection=None):
+def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None, handshake_bytes_per_connection=None,
+         manifest_mode="ssh", manifest_executor_class="SSHExecutor"):
     calls_json, criterio6_json, manifest_json = _write_fixtures(
-        tmp_path, network_transport_retries, handshake_bytes_per_connection)
+        tmp_path, network_transport_retries, handshake_bytes_per_connection,
+        manifest_mode, manifest_executor_class)
     args = [
         sys.executable, "-I", str(SCRIPT),
         "--calls-json", str(calls_json),
@@ -153,6 +157,39 @@ def test_handshake_bytes_alert_flags_divergent_connection_without_excluding_it(t
     median = json.loads((out_dir / "size" / "experiment1 - Classic" / "L0" / "median_metrics.json").read_text(encoding="utf-8"))
     assert median["n"] == 1
     assert median["values"] == [150]
+
+
+def test_refuses_simulated_data_without_label_piloto(tmp_path):
+    """Decisao 161 (item 3): mode="simulate" (LocalExecutor, nunca
+    tocou rede/infra real) sem --label-piloto tem que ser recusado
+    ANTES de qualquer escrita -- a arvore "oficial" nunca pode
+    acabar com dado fabricado."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, manifest_mode="simulate", manifest_executor_class="LocalExecutor")
+    assert result.returncode != 0
+    assert "SIMULADOS" in result.stderr
+    assert not (out_dir / "report_data_v9.json").exists()
+
+
+def test_allows_simulated_data_with_label_piloto(tmp_path):
+    """Mesmo dado simulado, agora com --label-piloto: o relatorio ja
+    sai marcado "(PILOTO)" -- uso legitimo pra exercitar o pipeline
+    localmente sem infraestrutura real, entao prossegue."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, extra_args=["--label-piloto"],
+                   manifest_mode="simulate", manifest_executor_class="LocalExecutor")
+    assert result.returncode == 0, result.stderr
+    report_data = json.loads((out_dir / "report_data_v9.json").read_text(encoding="utf-8"))
+    assert report_data["piloto"] is True
+
+
+def test_allows_real_ssh_data_without_label_piloto(tmp_path):
+    """Caminho feliz oficial: mode="ssh" (SSHExecutor, dado real),
+    sem --label-piloto -- nunca recusado (regressao do caminho normal
+    de toda a suite, que ja usa este default)."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, manifest_mode="ssh", manifest_executor_class="SSHExecutor")
+    assert result.returncode == 0, result.stderr
 
 
 def test_allows_populated_dest_with_explicit_flag_and_records_it(tmp_path):

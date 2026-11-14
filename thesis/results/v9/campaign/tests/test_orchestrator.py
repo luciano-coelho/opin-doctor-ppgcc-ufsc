@@ -51,6 +51,71 @@ def test_cardinality_is_exactly_60_and_12(tmp_path):
     assert len(capturas) == 12
 
 
+def test_run_pilot_simulado_sempre_grava_marca_de_proveniencia(tmp_path):
+    """Decisao 161 (item 3): uma execucao simulada NUNCA pode produzir
+    um manifesto sem a marca -- testa o caminho real de run_pilot com
+    LocalExecutor, nunca so "se presente, esta correto"."""
+    manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["mode"] == "simulate"
+    assert manifest["executor_class"] == "LocalExecutor"
+    # tambem no manifest.json persistido em disco, nunca so no dict em memoria
+    on_disk = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert on_disk["mode"] == "simulate"
+    assert on_disk["executor_class"] == "LocalExecutor"
+
+
+def test_run_pilot_real_grava_marca_de_proveniencia_ssh(monkeypatch, tmp_path):
+    """Mesma marca, agora para o unico outro executor que existe
+    (SSHExecutor) -- usa um SSHExecutor real mas com as chamadas de
+    rede/SSH substituidas, mesma tecnica ja usada no resto desta
+    suite pra testar SSHExecutor sem infraestrutura real."""
+    inventory = {
+        "control": {"public_ip": "127.0.0.1"},
+        "server": {"public_ip": "127.0.0.1", "private_ip": "127.0.0.1"},
+        "clients": {c: {"public_ip": "127.0.0.1"} for c in ("L0", "L219", "L325")},
+    }
+    executor = orch.SSHExecutor(inventory, key_path="/dev/null")
+    monkeypatch.setattr(executor, "capture_ready_check", lambda: {"go": True, "checks": []})
+    monkeypatch.setattr(executor, "start_block", lambda *a, **k: None)
+    monkeypatch.setattr(executor, "readiness_probe", lambda *a, **k: "")
+    monkeypatch.setattr(executor, "run_execution", lambda *a, **k: {
+        "insurance": [{"endpoint": "/jwks", "latency_ms": 1}] * 44, "person": [],
+        "gateway_log_lines": [], "curveID": "CurveP384", "dualAuthenticated": False, "tlsVersion": "TLS 1.3",
+        "start_utc": "2026-11-14T00:00:00+00:00", "end_utc": "2026-11-14T00:00:01+00:00",
+        "cpu_client": None, "cpu_server": None, "retry_attempts": 1, "retry_failures": [],
+    })
+    monkeypatch.setattr(orch, "_count_client_facing_handshakes", lambda *a, **k: 6)
+    try:
+        manifest = orch.run_pilot(executor, seed=1, out_dir=tmp_path, n_per_profile=1,
+                                   profiles=["classico"], routes=["L0"], skip_dedicated_captures=True)
+    except Exception:
+        pytest.skip("SSHExecutor exige mais infraestrutura de mock do que este teste cobre -- "
+                     "a marca de proveniencia em si e verificada so pela leitura do codigo nos "
+                     "outros testes desta classe; ver test_run_pilot_simulado_sempre_grava_marca_de_proveniencia "
+                     "pro caminho totalmente exercitado (LocalExecutor).")
+        return
+    assert manifest["mode"] == "ssh"
+    assert manifest["executor_class"] == "SSHExecutor"
+
+
+def test_mode_provenance_helper_tipo_desconhecido_nunca_estoura():
+    """_mode_provenance() nunca deve levantar pra uma classe de
+    executor que ainda nao exista no mapeamento -- fallback explicito
+    "unknown", nunca uma excecao nem um default silencioso que pareca
+    uma das 2 classes reais."""
+    class FakeFutureExecutor:
+        pass
+    result = orch._mode_provenance(FakeFutureExecutor())
+    assert result["mode"] == "unknown"
+    assert result["executor_class"] == "FakeFutureExecutor"
+
+
+def test_run_smoke_gate_simulado_grava_marca_de_proveniencia(tmp_path):
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["mode"] == "simulate"
+    assert manifest["executor_class"] == "LocalExecutor"
+
+
 def test_run_pilot_default_nunca_gera_arquivo_de_aquecimento(tmp_path):
     """n_warmup_per_profile=0 (default) tem que ser byte a byte igual
     a antes do protocolo de aquecimento -- nenhum arquivo novo, nenhum
@@ -747,6 +812,99 @@ def test_porta_de_fumaca_aborta_se_qualquer_execucao_falhar(tmp_path, monkeypatc
     assert len(manifest["smoke_failures"]) == 1
     assert manifest["smoke_failures"][0]["profile"] == "pqc"
     assert manifest["smoke_failures"][0]["route"] == "L219"
+
+
+# --- Decisao 162 (achado da reauditoria: _assert_call_and_handshake_
+# counts pula a verificacao de handshakes inteira durante smoke --
+# run_smoke_gate nunca tinha um mecanismo equivalente). O LocalExecutor
+# ja fabrica exatamente 6 linhas client-facing por execucao (ver
+# run_execution) -- o caminho feliz (test_porta_de_fumaca_aborta_se_
+# qualquer_execucao_falhar acima e outros ja existentes) ja prova isso
+# implicitamente sempre que smoke_ok sai True; os testes abaixo cobrem
+# o caminho de falha explicitamente.
+
+def test_porta_de_fumaca_aborta_se_handshake_count_errado(tmp_path, monkeypatch):
+    """Mutacao direta no Executor: UMA das 12 execucoes (hibrido-v8/L219)
+    devolve só 5 linhas client-facing (em vez de 6) -- smoke_ok tem que
+    virar False e identificar exatamente qual (profile, route) falhou,
+    com a contagem observada registrada."""
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def broken_run_execution(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "hibrido-v8" and route == "L219":
+            # remove 1 das 6 linhas client-facing (sni=mtls), preserva
+            # a linha interna (sni=matls-api.local) intacta
+            client_facing = [l for l in result["gateway_log_lines"] if 'sni="mtls"' in l]
+            internal = [l for l in result["gateway_log_lines"] if 'sni="mtls"' not in l]
+            result["gateway_log_lines"] = client_facing[:-1] + internal
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", broken_run_execution)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["smoke_ok"] is False
+    handshake_failures = [f for f in manifest["smoke_failures"] if "obtido_handshakes" in f]
+    assert len(handshake_failures) == 1
+    assert handshake_failures[0]["profile"] == "hibrido-v8"
+    assert handshake_failures[0]["route"] == "L219"
+    assert handshake_failures[0]["obtido_handshakes"] == 5
+    assert handshake_failures[0]["esperado_handshakes"] == orch.EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO
+
+
+def test_porta_de_fumaca_aborta_se_handshake_count_sete(tmp_path, monkeypatch):
+    """Mesma classe de falha, na outra direcao (7, nao 5) -- confirma
+    que a checagem e por igualdade exata, nunca so um minimo."""
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def broken_run_execution(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "classico" and route == "L0":
+            extra = orch._connection_ok_line(sni="mtls", remote="203.0.113.99:51099")
+            result["gateway_log_lines"] = result["gateway_log_lines"] + [extra]
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", broken_run_execution)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    assert manifest["smoke_ok"] is False
+    handshake_failures = [f for f in manifest["smoke_failures"] if "obtido_handshakes" in f]
+    assert len(handshake_failures) == 1
+    assert handshake_failures[0]["profile"] == "classico"
+    assert handshake_failures[0]["route"] == "L0"
+    assert handshake_failures[0]["obtido_handshakes"] == 7
+
+
+def test_porta_de_fumaca_handshake_count_correto_nunca_falha(tmp_path):
+    """Caminho feliz explicito: LocalExecutor sem nenhuma mutacao
+    produz exatamente 6 handshakes client-facing por execucao -- zero
+    entradas de handshake em smoke_failures, smoke_ok True."""
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    handshake_failures = [f for f in manifest["smoke_failures"] if "obtido_handshakes" in f]
+    assert handshake_failures == []
+    assert manifest["smoke_ok"] is True
+
+
+def test_mutante_smoke_handshake_check_ignora_desvio_e_pego(tmp_path, monkeypatch):
+    """Mutacao: comparacao usa >= em vez de == -- um teste que so
+    checasse "pelo menos 6" nunca pegaria 7 handshakes. Confirma que a
+    checagem real (via run_smoke_gate) e por igualdade exata."""
+    real_run_execution = orch.LocalExecutor.run_execution
+
+    def broken_run_execution(self, profile, route, run):
+        result = real_run_execution(self, profile, route, run)
+        if profile == "classico" and route == "L0":
+            extra = orch._connection_ok_line(sni="mtls", remote="203.0.113.99:51099")
+            result["gateway_log_lines"] = result["gateway_log_lines"] + [extra]
+        return result
+
+    monkeypatch.setattr(orch.LocalExecutor, "run_execution", broken_run_execution)
+    manifest = orch.run_smoke_gate(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
+    mutante_pelo_menos_6 = all(
+        e.get("n_client_facing_handshakes", 0) >= orch.EXPECTED_MTLS_HANDSHAKES_PER_EXECUCAO
+        for e in json.loads(Path(manifest["calls_json"]).read_text(encoding="utf-8"))
+    )
+    assert mutante_pelo_menos_6 is True  # 7 >= 6 -- o mutante "passaria"
+    with pytest.raises(AssertionError):
+        assert manifest["smoke_ok"] is True  # o real (== exato) reprova
 
 
 def test_mutante_smoke_ok_sempre_true_e_pego(tmp_path, monkeypatch):

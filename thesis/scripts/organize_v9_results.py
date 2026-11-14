@@ -135,6 +135,29 @@ def _refuse_if_populated_without_flag(out_dir: Path, allow_overwrite_populated: 
             )
 
 
+def _refuse_simulated_data_outside_piloto(manifest: dict, label_piloto: bool) -> None:
+    """Decisao 161 (item 3): orchestrator.py agora grava "mode"/
+    "executor_class" em todo manifesto (Decisao 161 do lado do
+    orquestrador) -- "mode"=="simulate" significa `LocalExecutor`,
+    que NUNCA toca rede/infra real, so fabrica um resultado plausivel.
+    Dados simulados sao uteis pra exercitar o pipeline localmente
+    (por isso continuam aceitos quando --label-piloto esta presente --
+    o relatorio ja sai marcado "(PILOTO)", ninguem le como resultado
+    oficial), mas NUNCA podem entrar numa arvore organizada SEM esse
+    rotulo (o caso "oficial" por definicao, `--out-dir thesis/results/
+    v9` sem --label-piloto) -- recusa alto, antes de qualquer escrita,
+    igual a `_refuse_if_populated_without_flag`."""
+    mode = manifest.get("mode")
+    if mode == "simulate" and not label_piloto:
+        raise RuntimeError(
+            f"manifest.json tem mode={mode!r} (executor_class={manifest.get('executor_class')!r}) -- "
+            "dados SIMULADOS (LocalExecutor, nunca tocou rede/infra real) nunca podem entrar numa "
+            "arvore organizada sem --label-piloto. Passe --label-piloto se a intencao e mesmo "
+            "organizar dado simulado pra teste local do pipeline, ou confirme que o executor "
+            "usado foi SSHExecutor (mode=\"ssh\") antes de tentar de novo."
+        )
+
+
 def _write_retries_report(out_dir: Path, calls: list, aquecimentos: list) -> dict:
     """Decisao 158 (item 6a): "arquivo de repetições", somado por
     célula (profile, route) -- deriva de `network_transport_retries`
@@ -218,6 +241,7 @@ def main():
     criterio6 = json.loads(Path(args.criterio6_json).read_text(encoding="utf-8"))
     aquecimentos = json.loads(Path(args.aquecimento_json).read_text(encoding="utf-8")) if args.aquecimento_json else []
     manifest = json.loads(Path(args.manifest_json).read_text(encoding="utf-8"))
+    _refuse_simulated_data_outside_piloto(manifest, args.label_piloto)
 
     by_cell = defaultdict(list)
     for e in calls:
