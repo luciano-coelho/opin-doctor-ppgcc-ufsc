@@ -163,16 +163,36 @@ def classify_failure(exc: Exception) -> str:
     return "network_transport" if _is_network_transport_failure(exc) else "fail_closed"
 
 
+def _classification_reason(exc: Exception, failure_class: str) -> str:
+    """Decisao 163 (item 2, pedido do Luciano apos a Decisao 161 --
+    limitacao conhecida do proxy legado nao sera corrigida nesta
+    rodada, mas o relatorio de retries precisa do motivo COMPLETO de
+    cada classificacao, nao so o rotulo). Nunca reimplementa a
+    classificacao -- so explica, em prosa, por que `classify_failure`
+    decidiu o que decidiu, pro mesmo `exc` ja classificado."""
+    if failure_class == "network_transport":
+        return f"type(exc) is {type(exc).__name__}, presente em _NETWORK_TRANSPORT_EXACT_TYPES (tipo exato, nao heranca)"
+    return f"type(exc) is {type(exc).__name__}, AUSENTE de _NETWORK_TRANSPORT_EXACT_TYPES -- fail_closed por exclusao"
+
+
 def run_once_timed_with_retry(crypto_profile: str, label: str, whole_run_retries: list, return_calls: bool = False) -> dict:
     last_error = None
     for attempt in range(1, NETWORK_TRANSPORT_MAX_ATTEMPTS + 1):
+        attempt_started_at_utc = datetime.now(timezone.utc).isoformat()
         try:
             return run_once_timed(crypto_profile, return_calls=return_calls)
         except Exception as e:
             failure_class = classify_failure(e)
             entry = {
                 "run": label, "attempt": attempt, "profile": crypto_profile,
-                "error": f"{type(e).__name__}: {e}", "failure_class": failure_class,
+                # Decisao 163: repr() (nao so str()) pra pegar a cadeia
+                # completa de excecoes encadeadas (ex.: ConnectionError
+                # envolvendo um ProtocolError envolvendo um
+                # ConnectionAbortedError do SO -- texto completo, nunca
+                # so a mensagem externa).
+                "error": repr(e), "failure_class": failure_class,
+                "classification_reason": _classification_reason(e, failure_class),
+                "attempt_started_at_utc": attempt_started_at_utc,
                 "at_utc": datetime.now(timezone.utc).isoformat(),
             }
             whole_run_retries.append(entry)

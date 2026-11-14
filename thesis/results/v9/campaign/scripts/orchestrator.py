@@ -1484,11 +1484,30 @@ class SSHExecutor:
             # acima (falha de TRANSPORTE SSH, rc=255, Decisao 139).
             # `result["whole_run_retries"]` ja vem com profile/run/
             # motivo/horario de latency_automation.py; so falta `route`,
-            # que so este metodo conhece.
+            # que so este metodo conhece. Decisao 163 (item 2): tambem
+            # anexa o recorte do log do gateway pra janela exata
+            # [attempt_started_at_utc, at_utc] de CADA tentativa
+            # descartada -- so leitura (`docker logs --since/--until`,
+            # ja usado pra tentativa bem-sucedida acima), nunca muda
+            # nenhum binario. `None` se a tentativa for antiga demais
+            # pra ter esses carimbos (campanhas gravadas antes desta
+            # Decisao) -- nunca quebra o campo, so fica vazio.
             "network_transport_retries": [
-                {**r, "route": route} for r in result.get("whole_run_retries", [])
+                {**r, "route": route, "gateway_log_excerpt": self._gateway_log_excerpt_for_retry(r, route)}
+                for r in result.get("whole_run_retries", [])
             ],
         }
+
+    def _gateway_log_excerpt_for_retry(self, retry_entry: dict, route) -> str | None:
+        """Decisao 163: recorte do log do gateway so pra janela da
+        tentativa DESCARTADA -- nunca a janela da tentativa que
+        sucedeu (essa ja tem seu proprio `gateway_log_lines`, campo
+        separado). So leitura (`docker logs`), nenhum binario muda."""
+        since = retry_entry.get("attempt_started_at_utc")
+        until = retry_entry.get("at_utc")
+        if not since or not until:
+            return None
+        return self._gateway_logs(since, until, route)
 
     @staticmethod
     def _read_proc_stat_cpu(proc_stat_text: str) -> tuple[int, ...] | None:

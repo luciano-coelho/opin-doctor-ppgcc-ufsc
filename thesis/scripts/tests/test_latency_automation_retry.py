@@ -77,6 +77,28 @@ def test_network_transport_retries_then_succeeds():
     assert all("at_utc" in e and "error" in e for e in whole_run_retries)
 
 
+def test_retry_entry_has_full_exception_text_reason_and_both_timestamps():
+    """Decisao 163 (item 2): retries_report precisa do texto completo
+    da excecao (nao so a mensagem externa), do motivo da classificacao
+    em prosa, e do horario de INICIO e de CAPTURA de cada tentativa
+    descartada."""
+    def fake_run_once_timed(crypto_profile, return_calls=False):
+        raise requests.exceptions.ConnectionError("reset by peer")
+
+    whole_run_retries = []
+    with mock.patch.object(la, "run_once_timed", side_effect=fake_run_once_timed):
+        with pytest.raises(SystemExit):
+            la.run_once_timed_with_retry("classico", "run07", whole_run_retries)
+
+    assert len(whole_run_retries) == la.NETWORK_TRANSPORT_MAX_ATTEMPTS
+    for e in whole_run_retries:
+        assert e["error"] == repr(requests.exceptions.ConnectionError("reset by peer"))
+        assert "ConnectionError" in e["classification_reason"]
+        assert "_NETWORK_TRANSPORT_EXACT_TYPES" in e["classification_reason"]
+        assert "attempt_started_at_utc" in e and "at_utc" in e
+        assert e["attempt_started_at_utc"] <= e["at_utc"]
+
+
 def test_network_transport_exhausts_all_attempts_aborts():
     calls = []
 

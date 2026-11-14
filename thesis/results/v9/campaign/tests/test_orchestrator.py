@@ -2991,3 +2991,121 @@ def test_captura_dedicada_falha_isolada_nunca_derruba_o_processo(tmp_path, monke
     assert manifest["capturas_dedicadas_falhas"][0]["profile"] == "pqc"
     # 12 capturas esperadas (4 perfis x 3 rotas do piloto) - 1 que falhou = 11 ok
     assert manifest["capturas_dedicadas_feitas"] == manifest["total_capturas"] - 1
+
+
+# --- Decisao 163 (item 2, pedido do Luciano apos a Decisao 161):
+# retries_report precisa, pra cada tentativa descartada, de um
+# recorte do log do gateway na janela exata da tentativa -- so
+# leitura (`docker logs --since/--until`), nenhum binario muda.
+
+def _fake_run_with_retry_and_gateway_excerpt(calls, retry_window_log_output):
+    """Como `_fake_run_factory`, mas a resposta de `campaign_client_
+    runner.py` carrega um `whole_run_retries` real (profile/run/
+    attempt_started_at_utc/at_utc), e a chamada `docker logs --since
+    <attempt_started_at_utc> --until <at_utc>` (a janela da tentativa
+    DESCARTADA, nunca a da que sucedeu) devolve um conteudo PROPRIO,
+    distinto do log da janela principal -- prova que o metodo busca a
+    janela certa, nao so repete o log da execucao bem-sucedida."""
+    retry_entry = {
+        "run": "classico_L0_1", "attempt": 1, "profile": "classico",
+        "error": "ConnectionError('reset by peer')", "failure_class": "network_transport",
+        "classification_reason": "type(exc) is ConnectionError, presente em _NETWORK_TRANSPORT_EXACT_TYPES",
+        "attempt_started_at_utc": "2026-11-14T10:00:00+00:00",
+        "at_utc": "2026-11-14T10:00:05+00:00",
+    }
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
+        if "campaign_client_runner.py" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps({
+                "calls": [], "call_count": 0, "retries": [],
+                "whole_run_retries": [retry_entry], "retried": True,
+            }))
+        if "docker logs -t --since 2026-11-14T10:00:00+00:00 --until 2026-11-14T10:00:05+00:00" in remote_cmd:
+            return _SimpleProc(stdout=retry_window_log_output)
+        if "docker logs -t --since" in remote_cmd:
+            return _SimpleProc(stdout="")  # janela da execucao bem-sucedida -- vazia, nao e o foco deste teste
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout="gateway: OK\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
+        return _SimpleProc()
+    return fake_run
+
+
+def test_network_transport_retry_carrega_recorte_do_log_do_gateway(monkeypatch):
+    calls = []
+    retry_window_log = "2026/11/14 10:00:02 gateway: connection reset mid-handshake\n"
+    monkeypatch.setattr(cli, "_run", _fake_run_with_retry_and_gateway_excerpt(calls, retry_window_log))
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+
+    result = executor.run_execution("classico", "L0", 1)
+
+    retries = result["network_transport_retries"]
+    assert len(retries) == 1
+    assert retries[0]["gateway_log_excerpt"] == retry_window_log
+    assert retries[0]["route"] == "L0"
+    assert retries[0]["failure_class"] == "network_transport"
+    # a janela da tentativa descartada e DISTINTA da string vazia que a
+    # janela da execucao bem-sucedida devolveu -- prova que nao e so
+    # reaproveitamento do mesmo log por acidente.
+    assert retries[0]["gateway_log_excerpt"] != ""
+
+
+def test_network_transport_retry_sem_carimbo_nao_quebra(monkeypatch):
+    """Entrada antiga (gravada antes desta Decisao), sem
+    attempt_started_at_utc/at_utc -- gateway_log_excerpt vira None,
+    nunca uma excecao."""
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        local_docker = _fake_local_docker_gateway_binary_call(argv)
+        if local_docker is not None:
+            return local_docker
+        sh_save_load = _fake_sh_docker_save_load_call(argv)
+        if sh_save_load is not None:
+            return sh_save_load
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        tcp_preflight = _fake_tcp_preflight_call(remote_cmd)
+        if tcp_preflight is not None:
+            return tcp_preflight
+        if "campaign_client_runner.py" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps({
+                "calls": [], "call_count": 0, "retries": [],
+                "whole_run_retries": [{"run": "x", "attempt": 1, "profile": "classico", "error": "e",
+                                        "failure_class": "network_transport"}],
+                "retried": True,
+            }))
+        if "docker logs -t --since" in remote_cmd:
+            return _SimpleProc(stdout="")
+        if "sha256sum -c" in remote_cmd:
+            return _SimpleProc(stdout="gateway: OK\n")
+        if "sha256sum /gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{_FAKE_GATEWAY_SHA256}  /gateway\n")
+        if "listening on" in remote_cmd:
+            return _SimpleProc(stdout="FOUND\n")
+        image_id_stdout = _fake_image_id_for_remote_cmd(remote_cmd)
+        if image_id_stdout is not None:
+            return _SimpleProc(stdout=image_id_stdout)
+        return _SimpleProc()
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    result = executor.run_execution("classico", "L0", 1)
+    assert result["network_transport_retries"][0]["gateway_log_excerpt"] is None
