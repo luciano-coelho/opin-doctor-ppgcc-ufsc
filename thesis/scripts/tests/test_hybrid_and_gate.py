@@ -29,133 +29,53 @@ import requests
 
 PROFILE = os.environ.get("CRYPTO_PROFILE", "classic")
 
-# Decisao 164 (item 1b, pedido do Luciano apos a reauditoria da tag v6):
-# o ramo legado de opin_flow.start_tls_kem_proxy() (usado quando
-# V9_HARNESS nao esta setado) nao sustenta handshake sob CRYPTO_PROFILE=
-# hybrid contra mock_mtls (confirmado ao vivo: "remote error: tls:
-# handshake failure", 30s de timeout) -- mock_mtls nao fala o grupo TLS
-# que o perfil hybrid negocia. V9_HARNESS=1 TAMBEM falhava como estava,
-# mas por um motivo DIFERENTE e corrigivel: relay.go fixa ServerName=
-# "mtls" (correto -- os certificados REAIS do gateway v9 tem "mtls" no
-# SAN), mas quem respondia por "mtls" na rede do compose ainda era o
-# mock_mtls, cujo certificado e valido pra auth.local/api.local/
-# directory/etc, nunca "mtls" -- um erro puro de identidade na rede, nao
-# do proxy. Corrigido NAO alterando o proxy, mas subindo o gateway v9
-# REAL (business mode) nos MESMOS aliases que `thesis/results/v9/
-# campaign/local_validation_criterio1_v2/capture_one_profile.sh` ja usa
-# pra este exato proposito -- confirmado ao vivo (POST /token real,
-# assertion valida, 200 com access_token) antes de escrever este codigo.
-# `business.go`'s businessMux encaminha pra AUTH_URI=http://auth:3000
-# (o servico REAL `auth` do compose, onde clientHybridAuth.js de fato
-# mora) -- nunca por "mtls", entao o resto do roteamento funciona sem
-# mudanca nenhuma.
-_V9_GATEWAY_CONTAINER = "v9-mtls-hybrid-and-gate-test"
-_V9_GATEWAY_ALIASES = ("mtls", "matls-auth.local", "auth.local", "matls-api.local", "api.local", "directory")
-_COMPOSE_NETWORK = "insurance-server-lambdas_default"
-_REAL_CERTS_DIR = str(Path(__file__).resolve().parents[3] / "mock-service-os" / "certs")
 
-
-def _mock_mtls_was_running() -> bool:
-    import subprocess
-    r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
-    return "insurance-server-lambdas-mtls-1" in r.stdout
-
-
-def _docker_compose_mtls(action: str) -> None:
-    import subprocess
-    env = dict(os.environ, COMPOSE_PROFILES="main,dev,cs,build-only")
-    compose_dir = Path(__file__).resolve().parents[3] / "insurance-server-lambdas"
-    subprocess.run(["docker", "compose", action, "mtls"], cwd=str(compose_dir), env=env, capture_output=True)
-
-
-def _auth_container_crypto_profile() -> str:
-    """Decisao 164: o CRYPTO_PROFILE do `auth` real (mock_as) e um env
-    var PROPRIO do container, INDEPENDENTE do CRYPTO_PROFILE que o
-    gateway v9 usa -- confirmado ao vivo (achado real desta rodada): o
-    AND-gate de clientHybridAuth.js so ativa se o PROPRIO `auth` estiver
-    rodando sob hybrid/hibrido-and; sem isso, `isHybridProfile` nunca
-    verdadeiro e QUALQUER assertion e aceita, mascarando os 2 testes
-    negativos como falsos-PASS (achado ao vivo: 200 onde devia dar 400).
-    O proprio docker-compose.yml ja documenta a recriacao exigida
-    (linha do CRYPTO_PROFILE do servico auth): "CRYPTO_PROFILE=pqc
-    docker-compose --profile main up -d --force-recreate auth mtls
-    mongo_seed mockapi" -- reaproveitado aqui, so sem o `mtls` (que este
-    fixture ja superseding com o gateway v9 real)."""
-    import subprocess
-    r = subprocess.run(["docker", "exec", "insurance-server-lambdas-auth-1", "printenv", "CRYPTO_PROFILE"],
-                        capture_output=True, text=True)
-    return r.stdout.strip() or "classic"
-
-
-def _recreate_auth_backend(crypto_profile: str) -> None:
-    import subprocess
-    env = dict(os.environ, COMPOSE_PROFILES="main,dev,cs,build-only", CRYPTO_PROFILE=crypto_profile)
-    compose_dir = Path(__file__).resolve().parents[3] / "insurance-server-lambdas"
-    r = subprocess.run(
-        ["docker", "compose", "up", "-d", "--force-recreate", "auth", "mongo_seed", "mockapi"],
-        cwd=str(compose_dir), env=env, capture_output=True, text=True,
-    )
-    if r.returncode != 0:
-        raise RuntimeError(f"falha ao recriar auth/mongo_seed/mockapi sob CRYPTO_PROFILE={crypto_profile}: {r.stderr}")
-    import time
-    time.sleep(3)  # tempo pro oidc-provider/express subirem antes da primeira chamada real
-
-
-def _start_real_v9_gateway():
-    """Sobe o gateway v9 REAL (business mode, perfil hibrido-v8 --
-    V9_PROFILE_NAME["hybrid"] em opin_flow.py), superseding os aliases
-    de rede "mtls"/"matls-auth.local"/etc que mock_mtls normalmente
-    ocupa. Espera "listening on" no log antes de devolver -- mesma
-    convencao de polling que opin_flow.py's proprio _wait_for_tls_kem_
-    proxy_ready usa pra outros containers."""
-    import subprocess
-    import time
-    subprocess.run(["docker", "rm", "-f", _V9_GATEWAY_CONTAINER], capture_output=True)
-    argv = ["docker", "run", "-d", "--name", _V9_GATEWAY_CONTAINER, "--network", _COMPOSE_NETWORK]
-    for alias in _V9_GATEWAY_ALIASES:
-        argv += ["--network-alias", alias]
-    argv += [
-        "-e", "HTTP_MODE=business", "-e", "TICKETS_DISABLED=true", "-e", "CRYPTO_PROFILE=hibrido-v8",
-        "-v", f"{_REAL_CERTS_DIR}:/real-certs:ro", "mockopin-v9-gateway",
-    ]
-    r = subprocess.run(argv, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"falha ao subir o gateway v9 real: {r.stderr}")
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        logs = subprocess.run(["docker", "logs", _V9_GATEWAY_CONTAINER], capture_output=True, text=True)
-        if "listening on" in (logs.stdout + logs.stderr):
-            return
-        time.sleep(0.5)
-    raise RuntimeError("gateway v9 real nao respondeu 'listening on' em 30s")
-
-
-def _stop_real_v9_gateway():
-    import subprocess
-    subprocess.run(["docker", "rm", "-f", _V9_GATEWAY_CONTAINER], capture_output=True)
-
-
-@pytest.fixture(scope="module")
-def stack():
-    if PROFILE not in ("hybrid", "hibrido-and"):
-        pytest.skip("the payload-extension AND-gate only exists in the two hybrid profiles -- "
-                     "classic/pqc never load clientHybridAuth.js (express.js's isHybridProfile gate)")
-    conftest.skip_if_stack_not_up()
-
-    mock_mtls_running = _mock_mtls_was_running()
-    original_auth_profile = _auth_container_crypto_profile()
-    if mock_mtls_running:
-        _docker_compose_mtls("stop")
+def _with_v9_harness_forced(generator_func):
+    """Decisao 165 (pedido do Luciano): TODO perfil (classic/pqc/hybrid/
+    hibrido-and) passa pelo MESMO caminho agora -- V9_HARNESS=1 forcado
+    incondicionalmente, nunca so pra hybrid/hibrido-and. Elimina de vez
+    o ramo legado de opin_flow.start_tls_kem_proxy() (o unico que tinha
+    o KeyError 'hibrido-and' -- TLS_KEM_PROXY_CURVE_BY_PROFILE nunca
+    teve entrada pra esse perfil, por ser uma ferramenta de 3 perfis
+    so). V9_HARNESS e lido no IMPORT do modulo opin_flow (variavel de
+    modulo) -- por isso o reload apos setar a env var, revertido no
+    finally (mesmo padrao de thesis/scripts/tests/test_profile_cert_
+    dispatch.py's _reload_with_v9_harness)."""
     import importlib
     os.environ["V9_HARNESS"] = "1"
     importlib.reload(of)
     try:
-        # Decisao 164: o PROPRIO `auth` real precisa estar sob hybrid/
-        # hibrido-and pro AND-gate (clientHybridAuth.js) de fato ativar
-        # -- e um env var independente do que o gateway v9 usa (achado
-        # ao vivo, ver _auth_container_crypto_profile() acima).
-        _recreate_auth_backend(PROFILE)
-        _start_real_v9_gateway()
+        yield from generator_func()
+    finally:
+        os.environ.pop("V9_HARNESS", None)
+        importlib.reload(of)
+
+
+@pytest.fixture(scope="module")
+def stack():
+    """Decisao 165: NAO recria mais nenhum container, NAO troca mais
+    nenhum alias de rede -- assume que o stack JA esta de pe, no
+    perfil certo, subido pelo lancador padrao do repositorio
+    (thesis/results/v9/campaign/scripts/run_gate.py, que usa
+    orchestrator.SSHExecutor.start_block -- o MESMO caminho que a
+    campanha e o piloto usam). A tentativa anterior (Decisao 164) de
+    recriar auth/mongo_seed/mockapi AD-HOC de dentro desta fixture nao
+    se sustentava de forma confiavel (achado ao vivo, reproduzido 2x:
+    auth continuava relatando CRYPTO_PROFILE=classic depois do
+    --force-recreate sob hybrid) -- a correcao nao e tentar de novo
+    aqui, e nunca mais tentar: `run_gate.py` sobe tudo UMA vez, antes
+    de qualquer teste, pelo caminho ja comprovado.
+
+    conftest.assert_stack_profile_matches() FALHA (nunca pula) se o
+    perfil vivo nao bater com PROFILE -- essa e a UNICA verificacao
+    que esta fixture ainda faz sobre o estado do stack."""
+    if PROFILE not in ("hybrid", "hibrido-and"):
+        pytest.skip("the payload-extension AND-gate only exists in the two hybrid profiles -- "
+                     "classic/pqc never load clientHybridAuth.js (express.js's isHybridProfile gate)")
+    conftest.skip_if_stack_not_up()
+    conftest.assert_stack_profile_matches(PROFILE)
+
+    def _inner():
         proc = of.start_tls_kem_proxy(PROFILE)
         signer_started = of.start_pqc_signer_service(PROFILE)
         try:
@@ -166,13 +86,8 @@ def stack():
         finally:
             of.stop_pqc_signer_service(signer_started)
             of.stop_tls_kem_proxy(proc)
-    finally:
-        _stop_real_v9_gateway()
-        os.environ.pop("V9_HARNESS", None)
-        importlib.reload(of)
-        if mock_mtls_running:
-            _docker_compose_mtls("start")
-        _recreate_auth_backend(original_auth_profile)
+
+    yield from _with_v9_harness_forced(_inner)
 
 
 _MOCK_SERVICE_OS_CERTS_DIR = Path(__file__).resolve().parents[3] / "mock-service-os" / "certs"
@@ -267,24 +182,36 @@ def _ensure_client_one_material_exists() -> bool:
 def any_profile_stack():
     """Same as `stack`, minus the hybrid-only skip -- used only by
     test_classic_and_pqc_unaffected, which needs to run precisely for the
-    two profiles `stack` skips. Decisao 164 (item 3): auto-gera o
-    material privado de client_one se ainda nao existir (worktree
-    limpa) -- ver _ensure_client_one_material_exists() pra correcao
-    completa; nunca sobrescreve material real ja presente."""
+    two profiles `stack` skips. Decisao 165 (item 3): repontado pro
+    mesmo caminho do harness que `stack` usa -- trivial, porque
+    `run_gate.py` (item 2) ja garante o backend certo de pe antes de
+    qualquer teste rodar; nao ha mais motivo pra quarentena. A chamada a
+    `_recreate_auth_backend` (removida do arquivo -- item 1) que antes
+    seguia um `generated=True` foi descartada, nao substituida: o
+    proprio docstring de _ensure_client_one_material_exists() ja
+    documentava que ela so gera material NOVO (nunca sobrescreve o que
+    existe), e so nesse caso (nada "ja existente" pra entrar em
+    conflito) -- ou seja, o restart nunca era necessario no cenario que
+    esta funcao de fato trata (worktree limpa); so seria necessario pra
+    sobrescrever material em uso, o que a funcao explicitamente nunca
+    faz."""
     conftest.skip_if_stack_not_up()
-    generated = _ensure_client_one_material_exists()
-    if generated:
-        _recreate_auth_backend(PROFILE)
-    proc = of.start_tls_kem_proxy(PROFILE)
-    signer_started = of.start_pqc_signer_service(PROFILE)
-    try:
-        session = requests.Session()
-        cert = of.get_local_leg_cert_paths(PROFILE)
-        signing_key, kid, alg = of.load_client_signing_key(PROFILE)
-        yield session, cert, signing_key, kid, alg
-    finally:
-        of.stop_pqc_signer_service(signer_started)
-        of.stop_tls_kem_proxy(proc)
+    conftest.assert_stack_profile_matches(PROFILE)
+    _ensure_client_one_material_exists()
+
+    def _inner():
+        proc = of.start_tls_kem_proxy(PROFILE)
+        signer_started = of.start_pqc_signer_service(PROFILE)
+        try:
+            session = requests.Session()
+            cert = of.get_local_leg_cert_paths(PROFILE)
+            signing_key, kid, alg = of.load_client_signing_key(PROFILE)
+            yield session, cert, signing_key, kid, alg
+        finally:
+            of.stop_pqc_signer_service(signer_started)
+            of.stop_tls_kem_proxy(proc)
+
+    yield from _with_v9_harness_forced(_inner)
 
 
 def _token_request(session, cert, assertion: str):

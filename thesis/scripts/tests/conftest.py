@@ -39,6 +39,66 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(reason=f"legacy_unsupported: {reason}"))
 
 
+_BACKEND_CRYPTO_PROFILE_ENV = {"classico": "classic", "pqc": "pqc", "hibrido-v8": "hybrid", "hibrido-and": "hybrid"}
+_GATEWAY_CONTAINER = "v9-mtls"
+
+
+def _container_crypto_profile(container: str) -> str | None:
+    result = subprocess.run(["docker", "exec", container, "printenv", "CRYPTO_PROFILE"],
+                             capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def assert_stack_profile_matches(expected_opin_profile: str) -> None:
+    """Decisao 165 (pedido do Luciano -- as fixtures de teste NAO
+    recriam mais container nenhum; assumem que o stack ja esta de pe
+    no perfil certo, subido pelo lancador padrao do repositorio --
+    `run_gate.py`/`orchestrator.SSHExecutor.start_block`, o MESMO
+    caminho que a campanha e o piloto usam). Esta checagem e a unica
+    coisa que um teste ainda faz sobre o perfil do stack: confere, e
+    FALHA (nunca pula) se nao bater -- um skip aqui escondia exatamente
+    o tipo de falso-PASS que a Decisao 164 achou (auth ainda em
+    "classic" enquanto o teste pensava estar testando "hybrid").
+
+    `expected_opin_profile` esta na nomenclatura de `opin_flow.py`
+    (classic/pqc/hybrid/hibrido-and) -- convertida aqui pra nomenclatura
+    do gateway (classico/pqc/hibrido-v8/hibrido-and, via
+    `opin_flow.V9_PROFILE_NAME`) e pra nomenclatura do backend
+    (`_BACKEND_CRYPTO_PROFILE_ENV`, a MESMA tabela que
+    `orchestrator.BACKEND_CRYPTO_PROFILE_ENV` ja usa -- duplicada aqui
+    de proposito, nunca importando `orchestrator.py` deste modulo de
+    teste, pra nao criar uma dependencia circular entre
+    `campaign/scripts` e `thesis/scripts/tests`; os dois dicts tem que
+    ficar idênticos -- conferido por teste dedicado)."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import opin_flow as of
+
+    gateway_profile = of.V9_PROFILE_NAME[expected_opin_profile]
+    backend_profile = _BACKEND_CRYPTO_PROFILE_ENV[gateway_profile]
+
+    checks = {
+        _GATEWAY_CONTAINER: gateway_profile,
+        "insurance-server-lambdas-auth-1": backend_profile,
+        "insurance-server-lambdas-mockapi-1": backend_profile,
+    }
+    mismatches = {}
+    for container, expected in checks.items():
+        actual = _container_crypto_profile(container)
+        if actual != expected:
+            mismatches[container] = {"expected": expected, "actual": actual}
+    if mismatches:
+        raise AssertionError(
+            f"stack vivo NAO esta no perfil esperado pra CRYPTO_PROFILE={expected_opin_profile!r} "
+            f"(pytest) -- {mismatches}. Suba o stack pelo lancador padrao "
+            f"(thesis/results/v9/campaign/scripts/run_gate.py) com este perfil ANTES de rodar este "
+            f"teste -- esta checagem nunca recria nem conserta nada, so confirma."
+        )
+
+
 def skip_if_stack_not_up():
     """Checagem estreita e especifica: so confirma que a rede docker
     do stack local existe. Nao confirma mais nada sobre o stack (os
