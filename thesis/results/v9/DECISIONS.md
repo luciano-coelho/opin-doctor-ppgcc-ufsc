@@ -12312,3 +12312,30 @@ Nota lateral: o cliente patched anuncia `mldsa44/65/87` em `signature_algorithms
 **3. Nota de processo: os itens 2 e 3 foram delegados a 2 agentes em paralelo, os dois editando `orchestrator.py` -- uma corrida real, nao hipotetica.** O agente do item 2 terminou primeiro, fez suas edicoes, mas DETECTOU (via `git diff`) que o agente do item 3 ainda tinha mudancas nao commitadas no MESMO arquivo, e corretamente se absteve de commitar pra nao varrer trabalho nao revisado junto. O agente do item 3, ao terminar e commitar, leu o arquivo com AMBAS as edicoes ja aplicadas (as do item 2 e as suas) e commitou tudo junto, sem saber que parte do diff nao era seu -- o commit `3639e507` e a mensagem so descrevem o item 3, mas o `git show --stat`/diff confirma que as linhas do item 2 (`n_client_facing_handshakes`, `esperado_handshakes`) tambem estao la. Suite completa revalidada despois do fato: **415/415 passando** -- os dois recursos funcionam corretamente juntos, so a atribuicao no historico do commit ficou incompleta. Registrado aqui pra nao sumir essa informacao -- nenhuma correcao de historico foi tentada (nunca reescrever commit ja feito).
 
 **Nenhuma acao contra AWS, nenhum push, nenhum apply.**
+
+## 163. Quarentena nominal dos 7 testes exclusivamente legados, retries_report com texto completo e recorte de log, regra de processo (nunca mais 2 agentes no mesmo arquivo)
+
+**1. Quarentena nominal -- investigada caso a caso, nunca em bloco.** Commit `70cb28e3`. Dos 8 testes candidatos (os que usam `live_artifacts`/`stack`/`any_profile_stack`), 7 confirmados quebrados ao vivo, de 3 formas DIFERENTES (nao uma unica causa facil de apontar):
+
+| Teste | Afirma | Cobertura equivalente no caminho real? | Motivo da quarentena |
+|---|---|---|---|
+| `test_tampered_signature_rejected` | `verify_jwt()` rejeita assinatura adulterada (1 byte XORado) | Nao encontrada (grep: zero hits de "tamper"/"SignatureVerificationError" fora deste arquivo) | `live_artifacts` so obtem JWT real via `tls_kem_proxy` legado -- confirmado 404 roteado por SNI (classico) |
+| `test_wrong_key_rejected` | `verify_jwt()` rejeita quando verificado com a chave do AS em vez do RS | Nao encontrada | Mesma fixture, mesma causa |
+| `test_wrong_algorithm_rejected` | `verify_jwt()` rejeita `expected_alg` errado (classic/pqc) | Nao encontrada | Mesma fixture, mesma causa |
+| `test_hybrid_scheme_confusion_rejected` | `verify_jwt()` rejeita `classic_jwk`/`pqc_jwk` trocados (hybrid/hibrido-and) | Parcial -- mesma LOGICA que o commit `0b18ebea` corrigiu, mas sem execucao real via o caminho atual | Mesma fixture; alem disso, o proxy legado nem tem entrada de curva pra `hibrido-and` (`KeyError` confirmado ao vivo) |
+| `test_pqc_absent_rejected` | AS rejeita `client_assertion` sem claim `pqc` (AND-gate, camada de aplicacao) | Nao encontrada pra esta camada (a camada TLS -- `DualAuthenticated` -- tem cobertura propria: `and.patch`'s `dual_test.go`, `orchestrator.py`'s `_assert_profile_negotiated`) | `stack` fixture sob `CRYPTO_PROFILE=hybrid` -- confirmado `tls: handshake failure` bruto contra `mock_mtls`, 30s de timeout |
+| `test_pqc_invalid_rejected` | AS rejeita assinatura `pqc` presente mas invalida | Nao encontrada pra esta camada | Mesma fixture, mesma causa |
+| `test_pqc_valid_accepted` | AS aceita assinatura `pqc` valida (caminho feliz) | Nao encontrada pra esta camada | Mesma fixture, mesma causa |
+
+**`test_classic_and_pqc_unaffected` (mesma familia de fixture, `any_profile_stack`) NAO foi quarentenado** -- confirmado PASSANDO ao vivo sob seu perfil real (`classic`, o unico que este teste de fato usa; ele mesmo pula sob `hybrid`). E o unico dos 8 candidatos que funciona via o proxy legado -- o legado tem mapeamento de curva pra `classic`/`pqc`, so falta pra `hibrido-and`.
+
+Nenhum redirecionamento pro caminho real (`relay.go`/`V9_HARNESS=1`) foi implementado -- exigiria trocar o alias de rede `mtls` do `docker-compose` pro gateway v9 real em modo `business`, uma mudanca de infraestrutura de teste maior, fora do escopo seguro autorizado nesta rodada. Marcador `legacy_unsupported` (pytest, `conftest.py`) registrado: aparece no relatorio como `SKIPPED`, com o motivo completo -- nunca deselecionado, nunca invisivel.
+
+**2. Limitacao conhecida do proxy, mitigacoes registradas (proxy NAO alterado).** Confirmado nesta sessao (Decisao 161): falhas upstream do `relay.go` (verificacao TLS/cadeia, dual-auth do Hibrido, conexao, timeout) chegam ao Python como `requests.exceptions.ConnectionError` -- indistinguivel entre si, sem corpo nem cabecalho. O proxy NAO sera alterado nesta rodada (decisao do autor). Mitigacoes ja existentes, confirmadas aqui:
+- Uma falha DETERMINISTICA (ex.: perfil/curva sempre incompativel) esgota as `NETWORK_TRANSPORT_MAX_ATTEMPTS=3` tentativas e aborta via `SystemExit` -- nunca repete indefinidamente.
+- O piloto (`run_pilot`) exige zero retries pra ser aceito como valido -- qualquer `network_transport_retries` nao-vazio fica visivel em `retries_report.json`, nunca escondido.
+- `retries_report.json` (commit `db724cd6`) agora grava, por tentativa descartada: o texto COMPLETO da excecao (`repr(e)`, cadeia de excecoes encadeadas incluida -- nao so a mensagem externa), o motivo da classificacao em prosa (`classification_reason`), o horario de INICIO e de CAPTURA da tentativa (`attempt_started_at_utc`/`at_utc`, os dois, nao so um), e -- mecanismo ja existente (`_gateway_logs`, reaproveitado, nenhum binario mudou) -- o recorte do log do GATEWAY na janela exata da tentativa (`gateway_log_excerpt`), nunca a janela da tentativa que sucedeu.
+
+**3. Regra de processo adotada a partir desta rodada (pedido do autor): nenhum agente paralelo edita o mesmo arquivo de outro.** Os itens 1 e 2 desta Decisao foram feitos SERIALMENTE, por mim mesmo, nunca por agentes concorrentes -- exatamente pra nao repetir a corrida da Decisao 162. Onde paralelizar ainda fizer sentido, os commits ficam serializados e a mensagem de cada um descreve tudo o que entrou nele.
+
+**Nenhuma acao contra AWS, nenhum push, nenhum apply.**
