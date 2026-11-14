@@ -108,12 +108,24 @@ def test_wrong_key_rejected(live_artifacts):
 
 
 def test_wrong_algorithm_rejected(live_artifacts):
-    """Only meaningful for classic/pqc (hybrid's own verify_jwt() call
-    shape doesn't take expected_alg -- it dispatches structurally, by
-    signature shape, which is itself the "wrong algorithm" defense for
-    that profile: see test_hybrid_scheme_confusion_rejected below)."""
-    if PROFILE == "hybrid":
-        pytest.skip("hybrid dispatches by signature shape, not a declared expected_alg -- see the dedicated test below")
+    """Only meaningful for classic/pqc. Real gap found and fixed this
+    round: this used to skip only "hybrid", but signer_core.mjs's own
+    verifyJwt() dispatches by signature SHAPE (isStrongNestingShaped)
+    whenever BOTH classic_jwk and pqc_jwk are passed -- `if (classicJwk
+    && pqcJwk)`, never a check on CRYPTO_PROFILE's name -- completely
+    ignoring expected_alg in that branch. hibrido-and is ALSO a
+    dual-keyed profile (both halves of its AND-gate get verified
+    together), so it hits this exact same branch -- confirmed live:
+    running this test under hibrido-and before this fix made
+    verify_jwt() silently accept the "wrong" algorithm (DID NOT RAISE),
+    not because of a real verification gap, but because expected_alg
+    was never consulted for either dual-keyed profile. hybrid and
+    hibrido-and are the project's only 2 dual-keyed profiles (same
+    pairing test_hybrid_and_gate.py's own PROFILE check already uses) --
+    classic/pqc are the only 2 single-keyed ones this test is actually
+    exercising."""
+    if PROFILE in ("hybrid", "hibrido-and"):
+        pytest.skip("dual-keyed profile -- verify_jwt() dispatches by signature shape, not a declared expected_alg -- see the dedicated test below")
     classic_jwk, pqc_jwk = live_artifacts["rs_keys"]
     wrong_alg = "RS256" if PROFILE == "classic" else "PS256"
     with pytest.raises(of.SignatureVerificationError):
