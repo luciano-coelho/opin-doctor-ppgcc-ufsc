@@ -17,6 +17,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "integration"))
 import evaluate_criteria as ec  # noqa: E402
 
 
+# Item 4 (gate em worktree limpa): certs/generated/ e gitignorado/
+# efemero (gerado por `make certs`, Decisao 11 -- nunca commitado,
+# mesmo sem segredo real: certificados de teste autoassinados, so
+# evita reuso acidental de uma chave privada antiga). Os 3 testes de
+# `_bytes_diagnostic_for_profile` abaixo sempre dependeram dele
+# existir -- antes desta correcao, isso so funcionava por acidente,
+# se alguem ja tivesse rodado `make certs` manualmente na arvore
+# principal. Fixture de sessao: gera os certs aqui mesmo se ainda nao
+# existirem, nunca assume que estao la.
+@pytest.fixture(scope="session")
+def real_generated_certs():
+    certs_root = orch._DEFAULT_CERTS_DIR.parent
+    if not (orch._DEFAULT_CERTS_DIR / "hibrido_v8_client.crt").exists():
+        import subprocess
+        result = subprocess.run(["make", "certs"], cwd=str(certs_root), capture_output=True, text=True)
+        if result.returncode != 0:
+            pytest.skip(f"make certs falhou (precisa de Docker) -- stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r}")
+    return orch._DEFAULT_CERTS_DIR
+
+
 def test_cardinality_is_exactly_60_and_12(tmp_path):
     manifest = orch.run_pilot(orch.LocalExecutor(), seed=1, out_dir=tmp_path)
     # Literal, nao derivado de orch.EXPECTED_TOTAL -- um bug que
@@ -611,8 +631,8 @@ def test_porta_de_fumaca_capture_proof_falha_se_qualquer_perfil_falhar(tmp_path,
 # (nunca o gate oficial do criterio 1), desvio != 0 PAUSA e pede
 # decisao, nunca aborta por conta propria.
 
-def test_bytes_diagnostic_zero_desvio_com_certs_reais_e_log_real():
-    certs_dir = orch._DEFAULT_CERTS_DIR
+def test_bytes_diagnostic_zero_desvio_com_certs_reais_e_log_real(real_generated_certs):
+    certs_dir = real_generated_certs
     log = (
         '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
         'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
@@ -623,8 +643,8 @@ def test_bytes_diagnostic_zero_desvio_com_certs_reais_e_log_real():
     assert row["delta_in"] == 0 and row["delta_out"] == 0
 
 
-def test_bytes_diagnostic_detecta_desvio():
-    certs_dir = orch._DEFAULT_CERTS_DIR
+def test_bytes_diagnostic_detecta_desvio(real_generated_certs):
+    certs_dir = real_generated_certs
     log = (
         '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
         'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
@@ -647,11 +667,11 @@ def test_porta_de_fumaca_sinaliza_decisao_pendente_sem_bloquear_smoke_ok_quando_
     assert manifest["smoke_ok"] is True  # diagnostico nunca bloqueia o gate oficial por conta propria
 
 
-def test_mutante_bytes_diagnostic_ignora_desvio_e_pego():
+def test_mutante_bytes_diagnostic_ignora_desvio_e_pego(real_generated_certs):
     """Mutacao: compara so handshakeBytesOut, nunca In -- um teste que
     dependesse de detectar desvio SO em In reprovaria com essa
     mutacao."""
-    certs_dir = orch._DEFAULT_CERTS_DIR
+    certs_dir = real_generated_certs
     log = (
         '2026/11/08 03:00:00 gateway: hibrido-v8 connection OK remoteAddr=172.21.0.6:1 '
         'sni="mtls" curve=SecP384r1MLKEM1024 dualAuthenticated=false clientCert="hibrido_v8_client" '
