@@ -12061,3 +12061,47 @@ Causa raiz COMUM aos tres: `dedicated_criteria.py` (`run_criterio2`/`run_criteri
 `thesis/scripts/verify_consolidated_report_v9.py`'s `BASE` atualizado pra apontar pro novo local -- reexecutado contra os dados ja movidos, confirmado identico (320/320 execucoes, 32/32 capturas, mesmo hash do gateway, mesmos numeros de OPINsize de sempre, 0 divergencia). Nada mais precisou de ajuste (levantamento da Decisao 149 ja tinha confirmado isso -- so este script tinha caminho hardcoded pros 3 itens movidos). `DECISIONS.md` fica onde esta (nao listado pelo autor entre os itens a mover -- continua sendo o log corrido de todo o trabalho da v9, pre e pos fix). `thesis/results/v9/` confirmado limpo desses 3 itens, com todo o codigo de infraestrutura (`campaign/scripts/`, `integration/`, `certs/`, `toolchain/`, os dois `terraform*/`) intacto no lugar -- a proxima campanha grava num `oficial_raw/`/relatorio/opinsize novos, sem colidir com nada.
 
 **Nenhuma acao contra AWS, nenhum push, nenhuma tag nova.**
+
+## 151. Par RSA-2048 novo pro endpoint de CA, AS passa a verificar o certificado do RS, STRICT fixado, dualAuthenticated conferido em 100% das conexoes Hybrid -- Docker indisponivel nesta maquina durante toda a rodada (disco cheio, depois Docker Desktop nao sobe mesmo com espaco liberado), itens dependentes dele ficam pendentes, registrados explicitamente
+
+**1. Par RSA-2048 novo, gerado via openssl (nao precisa de Docker).** `mock-service-os/certs/root_ca_rsa2048.{crt,key}` (raiz autoassinada, 1706B PEM/1199B DER) + `issuer_ca_rsa2048.{crt,key}` (emissor assinado pela raiz, 1720B PEM/1207B DER) -- mesma estrutura do par ML-DSA-65 do PQC (mesmo layout de Subject/Issuer com x500UniqueIdentifier/UID/organizationIdentifier, mesmo SAN, mesma validade de 5 anos, mesma relacao raiz-autoassinada+emissor-assinado-pela-raiz), confirmada via `openssl verify`. Arquivos originais de `mock-service-os/certs/` (`root_ca.crt`, `ca.crt`, `mtls.crt`, etc.) intocados -- so arquivos novos adicionados.
+
+`business_server.go` (`realCAFilesForProfile`): classico e a metade RSA de hibrido-and passam a servir esse par novo em vez de `root_ca.crt`/`issuer_ca.crt` (RSA-4096, achado da auditoria independente desta sessao -- M1/M3 exigem RSA-2048). `opin_flow.py` (`verify_ca_chain`): o branch classico mudou de "sibling assinado por ca.crt" pra "raiz autoassinada + emissor assinado pela raiz" (mesma logica que pqc ja usava) -- testado localmente (sem Docker) contra os certificados reais: 3 casos positivos/negativos passam (`thesis/scripts/tests/test_verify_ca_chain.py`, novo arquivo, 8 testes -- 3 rodam sem Docker e passam, 5 precisam do servico pqc-signer pra verificar a metade ML-DSA-65, marcados SKIP explicito, nunca inventados como PASS).
+
+**Hibrido-v8 (Controle) NAO migrado pra RSA-2048 -- esforco alto, nao feito nesta rodada.** O par que esse perfil serve (`root_ca_hybrid.crt`/`issuer_ca_hybrid.crt`) e um RSA "catalyst" com a assinatura ML-DSA-65 embutida como extensao X.509v3 customizada (`certs/main.go`) -- regenerar em RSA-2048 exige rodar a MESMA logica Go de geracao de extensao, nao reproduzivel por linha de comando openssl (confirmado tentando -- as extensoes "Subject Alternative Public Key Info"/"Alternative Signature Algorithm" nao sao extensoes X.509 padrao que o openssl sabe escrever). Precisa do toolchain Go pinado (Docker), indisponivel durante toda esta rodada. O que mudaria: o termo de PKI do Controle cairia um pouco (so a parte RSA do catalyst encolhe, a extensao ML-DSA-65 embutida fica do mesmo tamanho) -- impacto pequeno (poucos %), bem menor que o impacto no Classico (~48%) ou no Hybrid (~10%), porque a ML-DSA-65 domina o tamanho total do Controle.
+
+**2. AS verifica o certificado do RS na chamada interna de getConsent() -- corrigido, teste em Docker PENDENTE.** `rejectUnauthorized: false` -> `true` em `adapter.js:448` (achado da auditoria independente), com `ca` (nova SSM parameter `transport_ca`, publicando `ca.crt` -- a mesma raiz que `mtls.crt` do gateway sempre usou, nunca alterada, nunca variavel por `CRYPTO_PROFILE`) e `servername: "matls-api.local"` explicito (redundante com o que Node já infere do host de `apiUrl`, mas deixado explicito por clareza, a pedido do autor). `setup_ssm.sh` publica o novo parametro; `express.js` busca e passa pro `init()`; `insurance-server-lambdas/docker-compose.yml` monta `ca.crt` no container do localstack (`/init/certs/ca.crt`, nunca existia antes -- achado real, sem o mount o SSM nunca teria o arquivo pra publicar).
+
+**Nao pode ser testado nesta rodada: o fluxo completo de consentimento nos 4 perfis, em Docker.** Docker Desktop ficou indisponivel a rodada inteira (primeiro por disco cheio -- 453G/453G, 0 livre --, depois, mesmo com 26G liberados e uma tentativa de relancar o processo, continuou recusando subir). Nao commitado como "testado" -- commit separado, mensagem explicita sobre a pendencia. Quantas conexoes internas por execucao e o efeito nos bytes das 6 conexoes mTLS contadas (esperado: nenhum, essa correcao e so do lado AS/Node, nunca toca o gateway Go nem os bytes que `handshake_bytes` conta) tambem ficam pendentes de confirmacao real -- a contagem empirica de 7/execucao já registrada (Decisao anterior desta sessao, `evaluate_criteria.py:562`) nao foi refeita aqui.
+
+**3. STRICT fixado explicitamente.** `orchestrator.py` (`_launch_gateway`, linha ~1071): `-e STRICT=true` acrescentado ao lado de `-e TICKETS_DISABLED=true`, mesmo padrao, incondicional nos 4 perfis (so `hibrido-and`/`dualServerConfig` le essa variavel -- fixa-la nos outros 3 nao tem efeito nenhum, nunca arrisca nada). **Terraform nunca define nem STRICT nem TICKETS_DISABLED em lugar nenhum** (`grep` confirmado vazio em `terraform_campanha_oficial/` e `terraform/modules/campaign_instance/`) -- as duas sao passadas exclusivamente pelo `docker run` do orquestrador, em tempo de execucao, nunca em userdata/Terraform.
+
+**dualAuthenticated=true confirmado em 100% das conexoes Hybrid client-facing, direto do log real.** Novo `dual_authenticated_check()` em `verify_consolidated_report_v9.py`, rodado contra o log combinado real da janela v3 (`v9_pre_pki_fix/`): **488/488 conexoes com `sni="mtls"` (client-facing) tem `dualAuthenticated=true`** -- 100%. Achado ao escrever o check (nunca visto antes): o MESMO log tambem tem 560 linhas "hibrido-and connection OK" pro carve-out interno (`sni="matls-api.local"`), das quais **0/560 tem dualAuthenticated=true** -- isso e CORRETO E ESPERADO (`business_server.go:107` exclui esse SNI da exigencia de proposito, o caller interno nunca apresenta certificado dual), nao uma falha; o check filtra por SNI pra nunca confundir os dois grupos.
+
+**4. Imagem `raidiam-insurance-lambdas` -- NAO pinada por digest, bloqueado pelo Docker.** Unica referencia real: `insurance-server-lambdas/docker-compose.yml:42`, tag flutuante `:latest`. E uma imagem buildada LOCALMENTE (`docker build -t raidiam-insurance-lambdas:latest .`, nunca baixada de um registry) -- pinar por digest exige primeiro ter a imagem construida pra ler o digest real (`docker images --digests`/`docker inspect`), o que precisa do Docker rodando. Nao feito nesta rodada; o comando exato a rodar depois esta registrado aqui pra nao esquecer: `docker inspect --format='{{index .RepoDigests 0}}' raidiam-insurance-lambdas:latest` (ou, se a imagem nunca tiver sido enviada a um registry e nao tiver RepoDigest, usar `docker inspect --format='{{.Id}}' raidiam-insurance-lambdas:latest` e referenciar por esse Id/sha256 do manifesto local em vez de um RepoDigest).
+
+**5. Gabarito do piloto recalculado (OPINsize, so codigo/arquivos, overhead HTTP 103B constante):**
+
+| Termo | Classico | PQC | Controle | Hybrid |
+|---|---:|---:|---:|---:|
+| PKI_bytes medio (resposta, com 103B) | 1.816,0 | 8.110,0 | 9.442,0 (inalterado) | 9.823,0 |
+| term_mtls (x6) | 18.750 | 129.636 | 101.694 | 144.474 |
+| term_jwt (x28, assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 |
+| term_jwk (x4) | 1.536 | 8.320 | 9.856 | 9.856 |
+| term_pki (x4) | 7.264,0 | 32.440,0 | 37.768,0 | 39.292,0 |
+| **3 termos (sem jwk)** | 32.669,88 | 248.109,92 | 232.152,08 | 276.456,08 |
+| **4 termos** | **34.205,88** | **256.429,92** | **242.008,08** | **286.312,08** |
+| Razao vs Classico (4 termos) | 1,00x | 7,50x | 7,08x | 8,37x |
+
+**Tamanhos de resposta por perfil, os 2 endpoints de CA (PEM do arquivo + 103B, confirmado constante em todas as rodadas anteriores desta sessao):**
+
+| Perfil | /root-ca.pem | /issuer-ca.pem |
+|---|---:|---:|
+| Classico | 1.809 | 1.823 |
+| PQC | 8.104 (inalterado) | 8.116 (inalterado) |
+| Controle | 9.440 (inalterado) | 9.444 (inalterado) |
+| Hybrid | 9.810 | 9.836 |
+
+**6. Docstring de `opin_flow.py` corrigido.** "28 HTTP calls" (contagem de uma versao anterior do fluxo, antes das adicoes da v9 -- N_mTLS, endpoint de CA, /jwks x4) substituido por uma nota explicita: a contagem REAL e 44 chamadas/execucao (confirmado por `check_counts()` contra os dados reais), 28 e a contagem de JWTS (numero diferente, nunca confundir os dois). A lista passo-a-passo antiga (Flow 1/Flow 2, somando 12+16=28) foi preservada como contexto historico, nunca reescrita pro numero atual -- os dados persistidos da campanha real fundem insurance+person antes de salvar, perdendo a distincao que permitiria reconstruir uma lista nova com confianca.
+
+**Containers/imagens usados nesta rodada: nenhum** (Docker indisponivel a rodada inteira). Geracao de certificados via `openssl` local. Nenhuma acao contra AWS, nenhum push, nenhuma tag nova.
