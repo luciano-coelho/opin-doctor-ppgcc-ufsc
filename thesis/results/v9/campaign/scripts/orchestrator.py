@@ -1059,7 +1059,16 @@ class SSHExecutor:
         run_proc = cli.run_ssh(self._server_ip(route),
                     f"docker run -d --name {self.gateway_container} "
                     f"{network_flags}"
-                    f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e CRYPTO_PROFILE={profile} "
+                    # STRICT (pedido do autor, achado da auditoria independente
+                    # desta sessao): o default do proprio codigo Go (envOr
+                    # "STRICT", "true") ja produz True, mas nunca era fixado
+                    # explicitamente pelo lancador real -- uma env var pode
+                    # ser setada False em producao sem nenhuma mudanca de
+                    # codigo, nunca verificado antes. So gateway/main.go:342
+                    # (dualServerConfig) le isso, e so hibrido-and usa
+                    # dualServerConfig -- fixar incondicionalmente, igual a
+                    # TICKETS_DISABLED, nunca afeta os outros 3 perfis.
+                    f"-e HTTP_MODE=business -e TICKETS_DISABLED=true -e STRICT=true -e CRYPTO_PROFILE={profile} "
                     f"{keylog_flag}"
                     f"-v {real_certs_mount}:/real-certs:ro mockopin-v9-gateway",
                     key_path=self.key_path)

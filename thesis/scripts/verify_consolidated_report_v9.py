@@ -106,6 +106,44 @@ def handshake_composition():
         print(profile, rows)
 
 
+def dual_authenticated_check():
+    """Pedido do autor (item 3, acrescentar ao piloto): confere, direto
+    do log combinado real (nunca de um resumo por execucao), que TODAS
+    as conexoes hibrido-and client-facing (sni="mtls" -- as 6 por
+    execucao, nao so uma representante) tem dualAuthenticated=true.
+
+    Achado ao vivo escrevendo este check: o log TAMBEM tem linhas
+    "hibrido-and connection OK" pro carve-out interno (sni=
+    "matls-api.local", business_server.go:107 as EXCLUI da exigencia
+    de dualAuthenticated de proposito -- o caller interno nunca
+    apresenta certificado dual). Sem filtrar por sni="mtls", a
+    primeira versao deste check contou 1048 conexoes com 560
+    dualAuthenticated=false -- parecia uma falha real, mas eram todas
+    do carve-out interno (esperado, correto, documentado). Filtrado
+    aqui pra nunca repetir esse falso alarme."""
+    print("\n=== dualAuthenticated=true em TODAS as conexoes Hybrid client-facing (sni=\"mtls\", nao so 1/execucao) ===")
+    text = COMBINED_LOG.read_text(encoding="utf-8", errors="replace")
+    rows, internal_rows = [], []
+    for line in text.splitlines():
+        m = re.search(r'hibrido-and connection OK .*?sni="([^"]*)".*?dualAuthenticated=(true|false)', line)
+        if not m:
+            continue
+        sni, dual = m.group(1), m.group(2) == "true"
+        if sni == "mtls":
+            rows.append(dual)
+        else:
+            internal_rows.append((sni, dual))
+    n = len(rows)
+    n_true = sum(rows)
+    print(f"conexoes client-facing (sni=\"mtls\") encontradas: {n}; dualAuthenticated=true: {n_true}/{n}")
+    print(f"conexoes do carve-out interno (sni != \"mtls\") encontradas, separadas e NAO exigidas: {len(internal_rows)} "
+          f"(dualAuthenticated=true nelas: {sum(d for _, d in internal_rows)}/{len(internal_rows)}, esperado baixo/zero -- "
+          f"business_server.go:107 as exclui de proposito)")
+    assert n > 0, "nenhuma conexao hibrido-and client-facing encontrada no log combinado -- caminho do arquivo errado?"
+    assert n_true == n, f"{n - n_true} conexao(oes) hibrido-and CLIENT-FACING com dualAuthenticated=false -- FALHA REAL"
+    print("OK: dualAuthenticated=true em 100% das conexoes hibrido-and client-facing (sni=\"mtls\").")
+
+
 def manifest_hash_check():
     print("\n=== Manifesto / hash do congelamento ===")
     m = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -127,6 +165,7 @@ def main():
     retries(execs, warmups)
     opinsize()
     handshake_composition()
+    dual_authenticated_check()
     manifest_hash_check()
     print("\n=== FIM -- tudo recomputado direto dos dados brutos, 0 valor de memoria/sessao anterior ===")
 
