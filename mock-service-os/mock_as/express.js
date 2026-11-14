@@ -74,8 +74,13 @@ async function loadSsmParameters() {
   issuer = issuer.startsWith('https://') ? issuer : `https://${issuer}`;
   const clientCert = await getSsmParameter(`${SSM_PARAMETER_PREFIX}/transport_certificate`);
   const clientCertKey = await getSsmParameter(`${SSM_PARAMETER_PREFIX}/transport_key`);
+  // Pedido do autor: a CA que verifica o certificado do RS na chamada
+  // interna de getConsent() (adapter.js's InsurerAdapter) -- nunca
+  // varia por CRYPTO_PROFILE, ao contrario de transport_certificate/
+  // transport_key acima (mesmo mtls.crt do gateway nos 4 perfis).
+  const transportCa = await getSsmParameter(`${SSM_PARAMETER_PREFIX}/transport_ca`);
 
-  return { issuer, clientCert, clientCertKey };
+  return { issuer, clientCert, clientCertKey, transportCa };
 }
 
 async function loadSupportFunctions(provider, dynamicScopes) {
@@ -136,7 +141,7 @@ async function main() {
 
   log(`Load configuration for ${BRAND}`);
   const config = brandConfig[BRAND] || brandConfig.default;
-  const { issuer, clientCert, clientCertKey } = await loadSsmParameters();
+  const { issuer, clientCert, clientCertKey, transportCa } = await loadSsmParameters();
 
   let mtlsIssuer = new URL(issuer);
   mtlsIssuer.host = `matls-${mtlsIssuer.host}`;
@@ -164,7 +169,7 @@ async function main() {
 
   log(`Init Adapter for ${BRAND || 'Default'}`);
   const { init } = await import(`./utils/${config.brand}/adapter.js`);
-  init(apiUrl, provider, config.clientId, clientCert, clientCertKey);
+  init(apiUrl, provider, config.clientId, clientCert, clientCertKey, transportCa);
 
   loadSupportFunctions(provider, config.dynamicScopesSupported);
 

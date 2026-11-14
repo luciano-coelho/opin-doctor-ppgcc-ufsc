@@ -441,11 +441,26 @@ export class InsurerAdapter {
 
 export let insurerAdapter = undefined;
 
-export function init(baseUrl, oidcProvider, clientId, clientCert, clientCertKey) {
+export function init(baseUrl, oidcProvider, clientId, clientCert, clientCertKey, transportCa) {
+  // Pedido do autor: esta conexao (AS chamando de volta o RS pra
+  // getConsent()) nunca verificava o certificado apresentado pelo
+  // RS (rejectUnauthorized:false) -- achado real na auditoria desta
+  // sessao, contraparte Node do lado servidor (business_server.go's
+  // attachInternalCallerCarveOut, VerifyPeerCertificate=nil, mas que
+  // continua exigindo e verificando o certificado de CLIENTE do AS
+  // via ClientAuth/ClientCAs, inalterado). Corrigido: verifica de
+  // verdade contra a CA real (ca.crt, a mesma que assina mtls.crt do
+  // gateway nos 4 perfis -- nunca varia por CRYPTO_PROFILE) e fixa o
+  // SNI/hostname esperado em "matls-api.local" (o mesmo SNI que
+  // aciona attachInternalCallerCarveOut do lado do gateway -- sem
+  // isso, o Node validaria contra o hostname literal da URL, que
+  // nunca bate com o SAN do certificado apresentado).
   const httpsAgent = new https.Agent({
     key: clientCertKey,
     cert: clientCert,
-    rejectUnauthorized: false,
+    ca: transportCa,
+    rejectUnauthorized: true,
+    servername: 'matls-api.local',
   });
 
   const instance = axios.create({ baseURL: baseUrl, httpsAgent: httpsAgent });

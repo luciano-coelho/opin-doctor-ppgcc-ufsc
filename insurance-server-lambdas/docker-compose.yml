@@ -198,6 +198,11 @@ services:
       - ../mock-service-os/certs/op_pqc.crt:/init/certs/client_pqc.crt
       - ../mock-service-os/certs/op_hybrid.key:/init/certs/client_hybrid.key
       - ../mock-service-os/certs/op_hybrid.crt:/init/certs/client_hybrid.crt
+      # Pedido do autor: setup_ssm.sh agora tambem publica transport_ca
+      # (ca.crt, a mesma raiz que mtls.crt do gateway ja usava -- nunca
+      # alterada), pra InsurerAdapter.getConsent() poder verificar o
+      # certificado do RS em vez de rejectUnauthorized:false.
+      - ../mock-service-os/certs/ca.crt:/init/certs/ca.crt
       - ../mock-service-os/ssa/jwks.json:/init/ssa/jwks.json
       - ../mock-service-os/ssa/private_jwk.json:/init/ssa/private_jwk.json
       - config:/init/config

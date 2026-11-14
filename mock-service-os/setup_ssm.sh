@@ -45,6 +45,20 @@ awslocal ssm put-parameter \
     --type "SecureString" \
     --overwrite \
     --region "${REGION}"
+# Pedido do autor (adapter.js:448 verificava o certificado do RS com
+# rejectUnauthorized:false -- corrigido pra true, precisa de uma CA
+# real pra validar contra): a conexao interna de getConsent() sempre
+# recebeu mtls.crt do gateway (business_server.go, attachInternalCaller
+# CarveOut), assinado por ca.crt, nos 4 perfis -- NUNCA varia por
+# CRYPTO_PROFILE (diferente de transport_certificate/transport_key
+# acima, que SAO o proprio certificado de CLIENTE do AS, e esses sim
+# variam). Mesmo arquivo ca.crt que ja existia, nunca alterado.
+awslocal ssm put-parameter \
+    --name "/local/op_fapi_client_config/transport_ca" \
+    --value "$(cat /init/certs/ca.crt)" \
+    --type "SecureString" \
+    --overwrite \
+    --region "${REGION}"
 
  awslocal s3 mb s3://keystore
  awslocal s3 website s3://keystore --index-document jwks.json
