@@ -27,9 +27,10 @@ consents_v3__opin-consent-api-status-test-v3_20260803T192725Z.json:
   9.  POST /token          grant_type=authorization_code    -> new bearer token
   10. GET  /open-insurance/consents/v3/consents/{id}  x2    (AUTHORISED)
 
-  Total: 12 HTTP calls (the step list above sums to 12; confirmed against
-  a direct parse of the raw log's request entries, which also counted 12 --
-  an earlier "13" here was a stale miscount, not a real discrepancy).
+  Total (AT THE TIME this list was written): 12 HTTP calls -- see the
+  correction note after Flow 2 below. This per-step list itself was never
+  rewritten for the v9 additions and is kept here as historical context
+  only, not as the current call count.
 
 Flow 2 -- run_person_flow(), person_api_core_test-module_v2.0.0 module
 (person_test-plan_v2.0.0 plan), validated against
@@ -45,11 +46,27 @@ none after:
   12.  GET  .../insurance-person/{policyId}/policy-info               x2
   13.  GET  .../insurance-person/{policyId}/premium                   x2
 
-  Total: 16 HTTP calls (insurance-person is genuinely fetched twice in the
-  real log, not once, despite reading like a single lookup).
+  Total (AT THE TIME this list was written): 16 HTTP calls (insurance-person
+  is genuinely fetched twice in the real log, not once, despite reading like
+  a single lookup).
 
-Combined: 28 HTTP calls per scenario (verified against a live 0ms run's
-baseline_metrics.json). This intentionally excludes the two
+Combined (AT THE TIME this list was written): 28 HTTP calls per scenario
+(verified against a live 0ms run's baseline_metrics.json, from before v9's
+own additions -- the real campaign's own instrumentation, `check_counts()`
+in thesis/scripts/verify_consolidated_report_v9.py, asserts the CURRENT,
+real count instead: 44 HTTP calls per execution, constant across the 4
+profiles and all 320 real executions, with 28 being the count of JWTs
+inside those 44 calls (a different, never-to-be-confused number -- see
+opinsize_v9_oficial.py's own N_JWT=28 vs N of HTTP calls=44). The step-by-
+step lists above (Flow 1/Flow 2) were never rewritten for v9's own additions
+(N_mTLS=6 real mTLS connections instead of an implicit one, the 4 CA-
+distribution fetches, the 4 /jwks fetches) and should be read as historical
+context for the ORIGINAL 28-call design, not as an enumeration of the
+current 44-call flow -- nenhuma tentativa foi feita de reconstruir essa
+lista passo a passo pro numero atual nesta correcao, porque os dados
+persistidos da campanha real fundem os dois subfluxos (insurance+person)
+antes de serem salvos, perdendo a distincao original entre eles (ver
+DECISIONS.md). This intentionally excludes the two
 opin-consents_api_preflight_test-module_v3 modules (9 more calls in the raw
 logs) -- see thesis/results/experiment2 - PQC/DECISIONS.md for why: they
 depend on Raidiam's real Directory and always resulted in FAILED, so their
@@ -993,25 +1010,23 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
         _verify_cert_signed_by_mldsa65() against each cert's own real
         issuer (root_ca_pqc against itself, then issuer_ca_pqc against
         root_ca_pqc).
-      - classic: NOT a root->issuer chain at all -- root-ca.pem
-        and issuer-ca.pem are SIBLINGS, both signed directly by this
-        project's own real mTLS trust anchor (`ca.crt`, CN=ca, a static
-        local file, not fetched over the wire), confirmed live: both
-        certs' own issuer field names "ca", neither names the other.
-        Verified via `cryptography`'s own verify_directly_issued_by(),
-        each cert against ca.crt independently.
-      - hibrido-and (real finding, fixed here): this profile's own live
-        mTLS identity requires trusting an RSA chain AND an ML-DSA-65
-        chain independently (main.go's dualServerConfig/
-        dualClientConfig) -- but root_ca_pem/issuer_ca_pem used to be
-        single-certificate bodies carrying ONLY the RSA half (gateway's
-        business_server.go defaulted hibrido-and into the same branch as
-        classic). The gateway now concatenates two CERTIFICATE blocks
-        per endpoint for this profile -- RSA half first (same
-        relationship as classic, against ca.crt), ML-DSA-65 half second
-        (same relationship as pqc, self-signed root + root-signed
-        issuer) -- so both halves are split out and verified here,
-        instead of only the first one silently winning.
+      - classic (changed this round): root_ca_rsa2048/issuer_ca_rsa2048
+        (new, RSA-2048, generated to match M1/M3's own key size -- the
+        files served here used to be root_ca.crt/issuer_ca.crt, RSA-4096
+        SIBLINGS both signed by a separate `ca.crt` anchor; the new pair
+        is a real 2-level chain instead, root_ca_rsa2048 self-signed,
+        issuer_ca_rsa2048 signed BY it -- same shape as pqc's own pair,
+        confirmed live via `openssl verify`). Verified the same way as
+        pqc's RSA case: root against itself, issuer against root, both
+        via `cryptography`'s own verify_directly_issued_by().
+      - hibrido-and: this profile's own live mTLS identity requires
+        trusting an RSA chain AND an ML-DSA-65 chain independently
+        (main.go's dualServerConfig/dualClientConfig) -- the gateway
+        concatenates two CERTIFICATE blocks per endpoint for this
+        profile -- RSA half first (same NEW relationship as classic,
+        self-signed root + root-signed issuer), ML-DSA-65 half second
+        (same relationship as pqc) -- both halves split out and
+        verified here.
 
     Raises SignatureVerificationError if any link doesn't verify."""
     if crypto_profile == "hibrido-and":
@@ -1025,12 +1040,12 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
         root_rsa, root_pqc = (x509.load_pem_x509_certificate(p) for p in root_parts)
         issuer_rsa, issuer_pqc = (x509.load_pem_x509_certificate(p) for p in issuer_parts)
 
-        anchor = x509.load_pem_x509_certificate((CERTS_DIR / "ca.crt").read_bytes())
-        for cert, name in ((root_rsa, "root-ca.pem[rsa half]"), (issuer_rsa, "issuer-ca.pem[rsa half]")):
+        for cert, anchor, name in ((root_rsa, root_rsa, "root-ca.pem[rsa half] (self-signed)"),
+                                    (issuer_rsa, root_rsa, "issuer-ca.pem[rsa half] (signed by root)")):
             try:
                 cert.verify_directly_issued_by(anchor)
             except Exception as e:
-                raise SignatureVerificationError(f"{name} not validly signed by ca.crt: {e}") from None
+                raise SignatureVerificationError(f"{name}: {e}") from None
 
         if not _verify_cert_signed_by_mldsa65(root_pqc, root_pqc):
             raise SignatureVerificationError("root-ca.pem[ml-dsa-65 half] is not validly self-signed (ML-DSA-65)")
@@ -1050,12 +1065,16 @@ def verify_ca_chain(root_ca_pem: bytes, issuer_ca_pem: bytes, crypto_profile: st
             raise SignatureVerificationError("issuer-ca.pem not validly signed by root-ca.pem (ML-DSA-65)")
         return
 
-    anchor = x509.load_pem_x509_certificate((CERTS_DIR / "ca.crt").read_bytes())
-    for cert, name in ((root_ca, "root-ca.pem"), (issuer_ca, "issuer-ca.pem")):
-        try:
-            cert.verify_directly_issued_by(anchor)
-        except Exception as e:
-            raise SignatureVerificationError(f"{name} not validly signed by ca.crt: {e}") from None
+    # classic (default): root_ca_rsa2048 self-signed, issuer_ca_rsa2048
+    # signed by it -- same shape as pqc's own RSA-equivalent check above.
+    try:
+        root_ca.verify_directly_issued_by(root_ca)
+    except Exception as e:
+        raise SignatureVerificationError(f"root-ca.pem (root_ca_rsa2048) is not validly self-signed: {e}") from None
+    try:
+        issuer_ca.verify_directly_issued_by(root_ca)
+    except Exception as e:
+        raise SignatureVerificationError(f"issuer-ca.pem not validly signed by root-ca.pem: {e}") from None
 
 
 TLS_KEM_PROXY_SRC_DIR = THESIS_DIR / "scripts" / "tls_kem_proxy"
