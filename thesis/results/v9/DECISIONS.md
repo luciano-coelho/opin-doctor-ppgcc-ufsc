@@ -12436,3 +12436,84 @@ PINS.json (sem alteracao -- nenhuma Emenda necessaria): `binary_sha256` de `gate
 **Tag `v9-campanha-oficial-congelada-v7` criada** (anotada, local, sem push) neste mesmo commit (o commit que grava esta Decisao 166), working tree limpa antes de taggear. `v5` e `v6` preservadas, nenhuma apagada. **A v7 substitui a v6** como ponto de referencia oficial da campanha porque fecha a matriz 9x4 completa (os 7 testes de seguranca revertidos da quarentena pra o caminho real -- Decisao 164 -- e verificados ao vivo nos 4 perfis -- Decisao 165/166 -- nunca estiveram cobertos pela v6), substitui a arquitetura de fixtures que recriava container dentro do pytest (fonte de instabilidade, Decisao 165) pelo lancador padrao (`run_gate.py`) com pre-condicao fail-closed de perfil, e acrescenta o congelamento+verificacao fail-closed do conjunto de certificados da campanha (item 3), nenhum dos quais existia na v6.
 
 **Nenhuma acao contra AWS, nenhum push, nenhum apply.**
+
+## 167. LF canonico (CRLF renormalizado + `.gitattributes` com `-text`), manifesto/gabarito de PKI recalculados, `organize_v9_results.py` fail-closed por allowlist de `mode` -- gate fechou nos 4 perfis (zero falha/zero erro), tag v8 criada substituindo a v7
+
+**Pedido do autor:** a reauditoria da tag v7 achou que o manifesto de certificados e o gabarito congelado de `TestDirectoryHandlerResponseBytesMatchesFrozenManifest` foram calculados sobre bytes CRLF obsoletos no disco local (`root_ca_rsa2048.crt`/`issuer_ca_rsa2048.crt`), nunca renormalizados apos o `.gitattributes` ganhar `eol=lf` -- o blob git ja era LF desde antes da v6. Decisao do autor: **LF canonico, renormalizar e recalcular.** (1) varrer todo arquivo que a campanha entrega/pina/consome por divergencia disco-vs-blob, renormalizar os achados, tratar `.crt`/`.pem`/`.jwks`/`.cer` como `-text` no `.gitattributes` (bytes do disco sempre os do blob, em qualquer SO), confirmar quais dos 16 certificados do manifesto ja estao versionados, recalcular manifesto+gabarito+`evaluate_criteria.py` com a aritmetica completa, provar num clone limpo. (2) `organize_v9_results.py` fail-closed por allowlist de `mode` (nao so blocklist de "simulate"). (3) documentar `http.client.RemoteDisconnected` sem mudar codigo. (4) gate completo (`run_gate.py`, os 4 perfis, mais Go e `campaign/tests`) numa worktree limpa no commit final. (5)/(6) continuacao condicional: tag v8 + reauditoria se o gate fechar.
+
+**1. CRLF/LF -- varredura, renormalizacao, `.gitattributes`, confirmacao de versionamento, recalculo, prova em clone limpo.**
+
+(a) Varredura (sha256 disco vs blob) de TODOS os arquivos que `deliver_source.py` entrega (`COMMON_FILES`/`CLIENT_ONLY_FILES`/`SERVER_ONLY_FILES`/`CONTROL_FILES`, incluindo o diretorio `mock-service-os/certs` inteiro -- 32 arquivos tracked) + `PINS.json`: **exatamente os mesmos 2 arquivos ja identificados pela reauditoria** (`root_ca_rsa2048.crt`, `issuer_ca_rsa2048.crt`) divergiam -- todos os outros 54 arquivos varridos batiam byte a byte com seu blob. `thesis/results/v9/certs/generated/` (certs de handshake mTLS, usados pelo criterio 1/`CERT_FILES_BY_PROFILE`) e gitignorado -- fora do escopo desta varredura por desenho (nunca versionado, regenerado a cada `make certs`).
+
+(b) Renormalizados (`git checkout --` sozinho e um no-op aqui -- o index ja marcava o arquivo como "limpo" desde antes do `eol=lf` existir; precisou `rm` + `git checkout --` pra forcar a reescrita). Confirmado: sha256 do disco == sha256 do blob nos dois, 1679B/1692B (LF), `git status`/`git diff` limpos.
+
+(c) `.gitattributes`: `*.crt`/`*.pem`/`*.jwks` trocaram de `text eol=lf` pra `-text`; `*.cer` adicionado (nao existia antes, nenhum arquivo tracked usa essa extensao hoje). `-text` nunca normaliza em nenhuma direcao (commit ou checkout) -- o byte do disco passa a ser SEMPRE o byte do blob, em qualquer SO, elimina a classe de bug inteira (um arquivo comitado antes de uma regra de `eol` nunca era retroativamente reescrito por ela). `*.key` ficou de fora (nao pedido, e nenhum `.key` e versionado -- `git ls-files '*.key'` vazio, confirmado). Blobs confirmados LF via `git check-attr`/`git ls-files --eol` pos-mudanca.
+
+(d) Todos os 16 certificados do manifesto **ja estavam versionados** no git (`git ls-files` confirma os 16; `git check-ignore` confirma nenhum gitignorado) -- nao havia nada "gerado e sem tracking" entre eles pra propor versionar. Os ARQUIVOS DE HANDSHAKE mTLS (`thesis/results/v9/certs/generated/`, usados por `evaluate_criteria.py`'s `CERT_FILES_BY_PROFILE`) sao um conjunto DIFERENTE, deliberadamente gitignorado (Decisao 11) -- fixado pelo PROCEDIMENTO (`make certs`) descrito em `PINS.json`/`DECISIONS.md`, nunca por byte; nao ha razao pra mudar isso agora, nao proposto.
+
+(e) Recalculo, aritmetica completa (overhead de framing do `net/http`: 97B content-length classico, 103B chunked os outros 3 -- propriedade do Go, nao do certificado):
+
+| Perfil | Resposta | PEM real (LF) | + overhead | = response_bytes | Valor anterior (CRLF) |
+|---|---|---|---|---|---|
+| classico | root-ca.pem | 1679B (`root_ca_rsa2048.crt`) | +97 | **1776** | 1803 |
+| classico | issuer-ca.pem | 1692B (`issuer_ca_rsa2048.crt`) | +97 | **1789** | 1817 |
+| pqc | root-ca.pem | 8001B (`root_ca_pqc.crt`) | +103 | **8104** | 8104 (sem mudanca) |
+| pqc | issuer-ca.pem | 8013B (`issuer_ca_pqc.crt`) | +103 | **8116** | 8116 (sem mudanca) |
+| hibrido-v8 | root-ca.pem | 9337B (`root_ca_hybrid.crt`) | +103 | **9440** | 9440 (sem mudanca) |
+| hibrido-v8 | issuer-ca.pem | 9341B (`issuer_ca_hybrid.crt`) | +103 | **9444** | 9444 (sem mudanca) |
+| hibrido-and | root-ca.pem | 1679+8001=9680B (concat.) | +103 | **9783** | 9810 |
+| hibrido-and | issuer-ca.pem | 1692+8013=9705B (concat.) | +103 | **9808** | 9836 |
+
+pqc/hibrido-v8 repetem o valor anterior porque nunca usam os 2 arquivos RSA2048 afetados -- so classico/hibrido-and mudam, exatamente pela diferenca dos 2 arquivos (27B/28B). Confirmado AO VIVO (nao so por aritmetica): `go test` dos 2 testes (`TestDirectoryHandlerResponseBytes`/`TestDirectoryHandlerResponseBytesMatchesFrozenManifest`) passa com os 8 numeros novos, contra o toolchain patch real (`mockopin-v9-toolchain`) e os certificados reais do repositorio. `certs_manifest.json` regerado via `cert_manifest.py --write` -- so os 2 arquivos RSA2048 mudam de sha256/`pem_bytes`, os outros 14 identicos.
+
+`evaluate_criteria.py` **conferido e NAO alterado** -- grep confirma que nenhum dos 8 numeros do gabarito (nem os antigos nem os novos) aparece nesse arquivo. O termo de PKI do OPINsize (`thesis/scripts/opinsize_v9_oficial.py`'s `pki_response_bytes_avg`) ja e inteiramente medido a partir de `piloto_calls.json` (dados REAIS de execucao), nunca de uma constante -- a premissa do pedido ("o pipeline de OPINsize continua sem conter valores do gabarito") ja valia antes desta rodada e continua valendo; nada a atualizar la. `BASELINE_CERT_DER_SIZES`/`CERT_FILES_BY_PROFILE` em `evaluate_criteria.py` pertencem a um conjunto de certificados DIFERENTE (handshake mTLS, `certs/generated/`, gitignorado) -- nunca tocados pelo CRLF (nunca comitados), fora do escopo desta correcao.
+
+(f) Prova em clone limpo: `git clone` do commit com os itens 1-3 ja aplicados (sem o `.key` nenhum, confirmado -- nenhum material privado no clone) -- `cert_manifest.py --verify` passou **sem nenhuma provisao extra** (o manifesto e 100% certificados PUBLICOS, nunca precisa de chave privada pra verificar), e `go test -run TestDirectoryHandlerResponseBytes...` contra os certs do MESMO clone passou com os 8 numeros novos, tambem sem provisao extra. Achado: **nenhum material privado e necessario pra esta verificacao especifica** -- os 16 arquivos do manifesto sao inteiramente publicos.
+
+**2. `organize_v9_results.py` -- fail-closed por allowlist.**
+
+`_VALID_REAL_MODES = {"ssh"}` (unico mode real que `orchestrator.py` produz, `_EXECUTOR_CLASS_TO_MODE`). `mode=="simulate"` mantem a excecao de sempre (recusa sem `--label-piloto`, aceita com); qualquer `mode` FORA da allowlist e fora de `"simulate"` (ausente, `""`, `"unknown"`, typo) **e recusado sempre**, independente de `--label-piloto` -- antes, um manifesto sem a chave `"mode"` nunca era nem `"simulate"` nem reconhecido, e passava direto. 3 testes novos (ausente mesmo com `--label-piloto`, vazio, desconhecido) + os 2 existentes (simulate com/sem label, ssh real) = 5 casos pedidos, 14/14 passam.
+
+**3. `http.client.RemoteDisconnected` -- documentado, sem mudanca de codigo.**
+
+`RemoteDisconnected` e subclasse de `ConnectionResetError`, mas `classify_failure()` compara por TIPO EXATO (`type(exc) in _NETWORK_TRANSPORT_EXACT_TYPES`), nunca por heranca -- um `RemoteDisconnected` cru NUNCA cai em `network_transport`, sempre em `fail_closed` (aborta, nunca repete) por exclusao da allowlist. Na pratica isto nem chega a ser testado contra o sistema real: `requests`/`urllib3` sempre encapsulam qualquer `RemoteDisconnected` interno numa `requests.exceptions.ConnectionError` (essa SIM esta na allowlist) antes de qualquer codigo deste projeto ver a excecao -- um `RemoteDisconnected` cru so apareceria se algo chamasse `http.client` diretamente, o que este projeto nunca faz. Direcao confirmada segura (fail-closed por desenho, nunca fail-open por uma lacuna de tipo) -- nenhuma mudanca de codigo, conforme pedido.
+
+**4. Gate completo -- numa worktree limpa (`git worktree add --detach` no commit com os itens 1-3), certs de handshake gerados via `make certs` no proprio worktree (material privado de `mock-service-os/certs` -- `.key`/`.jwks` privado/`crypto-profiles/*.json` -- gitignorado por desenho, copiado do checkout principal pra o worktree antes do gate, igual a qualquer outra maquina nova precisaria fazer uma vez).**
+
+| Perfil | start_block | precondicao | pytest (suite completa) | 44 chamadas | 6 handshakes | OK |
+|---|---|---|---|---|---|---|
+| classico | ok | ok | 134 passed, 5 skipped | 44 | 6 | SIM |
+| pqc | ok | ok | 134 passed, 5 skipped | 44 | 6 | SIM |
+| hibrido-v8 | ok | ok | 137 passed, 2 skipped | 44 | 6 | SIM |
+| hibrido-and | ok | ok | 137 passed, 2 skipped | 44 | 6 | SIM |
+
+Matriz 9 testes de seguranca x 4 perfis (reexecucao dedicada, `-v`, reusando `run_gate.py` sem modifica-lo -- so filtrando os node ids), PASS/SKIP, zero falha:
+
+| Teste | classico | pqc | hibrido-v8 | hibrido-and |
+|---|---|---|---|---|
+| `test_tampered_signature_rejected` | PASS | PASS | PASS | PASS |
+| `test_wrong_key_rejected` | PASS | PASS | PASS | PASS |
+| `test_wrong_algorithm_rejected` | PASS | PASS | SKIP (dual-keyed) | SKIP (dual-keyed) |
+| `test_hybrid_rs256_payload_extension_rejected` | SKIP (so existe no hybrid) | SKIP | PASS | SKIP (so hybrid=hibrido-v8) |
+| `test_hybrid_scheme_confusion_rejected` | SKIP (so dual-keyed) | SKIP | PASS | PASS |
+| `test_pqc_absent_rejected` | SKIP (AND-gate so existe nos 2 hybrid) | SKIP | PASS | PASS |
+| `test_pqc_invalid_rejected` | SKIP | SKIP | PASS | PASS |
+| `test_pqc_valid_accepted` | SKIP | SKIP | PASS | PASS |
+| `test_classic_and_pqc_unaffected` | PASS | PASS | SKIP (coberto por `test_pqc_valid_accepted`) | PASS |
+| **Total** | **4 PASS, 5 SKIP** | **4 PASS, 5 SKIP** | **7 PASS, 2 SKIP** | **7 PASS, 2 SKIP** |
+
+**PASS total = 22** (classico 4 + pqc 4 + hibrido-v8 7 + hibrido-and 7), zero falha, zero erro -- bate exatamente com o esperado. Tabela de totais:
+
+| Suite | Resultado |
+|---|---|
+| Go (`go test ./...`, gateway, toolchain patch, certs reais) | 10 PASS, 0 FAIL |
+| `campaign/tests/` (`pytest`) | 429 passed, 1 skipped ("venv do projeto nao existe nesta maquina" -- infra da worktree nova, nao regressao) |
+| `thesis/scripts/tests/` (4 execucoes, 1 por perfil, suite completa) | ver tabela acima -- 542 passed, 17 skipped no total, 0 failed |
+
+**Achado real desta rodada (ambiental, nunca de codigo medido):** a primeira tentativa do gate falhou nos 4 perfis em `start_block`, antes de qualquer teste -- `psql` (postgres, dependencia do backend) saia com `cp: cannot stat '/certs-src/postgres.key': No such file or directory`. Causa: a worktree nova, por ser um checkout git LIMPO, nunca contem material gitignorado (`.key`/`.jwks` privados de `mock-service-os/certs`, `crypto-profiles/*.json`) -- esse material e local a cada maquina, nunca versionado, e precisa ser copiado uma vez do checkout principal pra qualquer worktree/clone novo antes do primeiro gate (o mesmo seria necessario em qualquer maquina nova rodando este projeto pela primeira vez). Resolvido copiando os 28 arquivos gitignorados identificados (`git status --porcelain --ignored`) -- nenhuma regeneracao, nenhuma mudanca de codigo, nenhum achado em sistema medido. Registrado aqui como achado de ambiente/processo, nao de codigo: um gate futuro numa worktree nova deve copiar esse material ANTES do primeiro `run_gate.py`.
+
+**5. PINS.json -- conferido, sem alteracao necessaria.** `binary_sha256` de `gateway` (`9d21b901...`) e `proxy` (`07c9fb03...`) conferidos ao vivo contra o binario DENTRO das imagens `mockopin-v9-gateway:latest`/`mockopin-v9-proxy:latest` atuais -- identicos aos pinados. `tar_sha256` de `proxy` tambem identico. `tar_sha256` de `gateway` diverge do pinado -- o MESMO padrao ja documentado desde a Decisao 166 (a camada `COPY certs` efemera muda a cada `make certs`, nunca afeta o binario) -- nao e um achado novo, nao exige re-pin. Nenhum `docker build`/`docker compose build` disparado por nenhuma mudanca desta rodada.
+
+**Tag `v9-campanha-oficial-congelada-v8` criada** (anotada, local, sem push) neste mesmo commit (o commit que grava esta Decisao 167), working tree limpa antes de taggear. `v5`, `v6` e `v7` preservadas, nenhuma apagada. **A v8 substitui a v7** porque a v7 tinha um gabarito de PKI e um manifesto de certificados calculados sobre bytes CRLF locais desta maquina, NAO reproduziveis a partir de um clone limpo (a reauditoria da v7 achou exatamente isso) -- a v8 corrige a causa raiz (`.gitattributes` com `-text`, nunca mais normalizavel de volta pra CRLF em nenhum SO) e reconfirma, com prova em clone limpo, que o manifesto/gabarito agora descrevem o conteudo CANONICO do git, nao o estado de disco de uma maquina especifica.
+
+**Nenhuma acao contra AWS, nenhum push, nenhum apply.**
