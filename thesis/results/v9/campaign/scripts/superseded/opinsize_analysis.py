@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# SUPERSEDED (Decisao 157): N_JWK=2 fixo no --n-jwk aqui embaixo esta
+# DEFASADO -- o valor real, confirmado por captura ao vivo e usado por
+# thesis/scripts/opinsize_v9_oficial.py (a ferramenta realmente usada
+# na campanha oficial), e N_JWK=4 nos 4 perfis. Nao importado por
+# nenhum outro arquivo do repositorio -- mantido so por historico.
 """v9, piloto: script de ANALISE. O coletor real
 (`thesis/scripts/baseline_automation.py`) persiste tanto o tamanho
 TOTAL do token (`jwt_sizes_bytes`, ja existia) quanto, desde a

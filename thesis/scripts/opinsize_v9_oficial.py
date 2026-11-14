@@ -35,8 +35,8 @@ nunca estimadas:
     dos campos `/root-ca.pem`/`/issuer-ca.pem`), agregada nas 320
     execucoes reais.
 
-Formula (identica a `campaign/scripts/opinsize_analysis.py`, nunca
-reinventada): OPINsize = N_mTLS*handshake_bytes + N_JWT*jwt_sig_bytes
+Formula (identica a `campaign/scripts/superseded/opinsize_analysis.py`,
+nunca reinventada): OPINsize = N_mTLS*handshake_bytes + N_JWT*jwt_sig_bytes
 + N_JWK*jwk_bytes [+ N_PKI*pki_bytes, so na variante de 4 termos desta
 tese]. A variante de TRES termos (sem PKI) e a diretamente comparavel
 contra a Eq. 3.1 de Schardong et al. (CANS 2022) -- reportada em
