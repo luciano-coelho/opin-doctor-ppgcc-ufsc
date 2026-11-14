@@ -122,30 +122,50 @@ func TestHibridoAndBundleIsTwoBlocksRSAThenMLDSA(t *testing.T) {
 	}
 }
 
+// headerOverheadByFraming (Decisao 166, pedido do autor: a verificacao
+// achou que `root_ca_rsa2048.crt`/`issuer_ca_rsa2048.crt` -- os ARQUIVOS
+// REAIS que classico e hibrido-and servem, regenerados pelo gerador de
+// mock-service-os/certs -- variam de tamanho entre lotes de geracao
+// (confirmado ao vivo: o lote comitado hoje tem 1706B/1720B; um lote
+// anterior, gerado numa worktree de verificacao diferente, tinha
+// 1679B/1692B -- 27B/28B menor, consistente com uma diferenca real de
+// conteudo do certificado, nao so o tamanho do serial ASN.1, que ficou
+// estavel em 20 bytes nos dois casos RSA observados). `pqc`/`hibrido-v8`
+// usam arquivos DIFERENTES -- root_ca_pqc.crt/root_ca_hybrid.crt --
+// que nao regeneraram nesse mesmo lote, por isso bateram exatamente.
+// O teste agora deriva o tamanho esperado do ARQUIVO REAL lido do
+// disco (nunca de uma constante presa a um lote especifico) -- so o
+// overhead de cabecalho HTTP por modo de enquadramento continua fixo
+// aqui, porque esse numero e uma propriedade do net/http (Content-
+// Type + Date + Content-Length/Transfer-Encoding), independente do
+// conteudo do certificado.
+var headerOverheadByFraming = map[string]int{
+	"content-length": 97,
+	"chunked":        103,
+}
+
 func TestDirectoryHandlerResponseBytes(t *testing.T) {
 	dir := realCertsDirForTest(t)
 
 	// wantFraming fixa o modo de enquadramento HTTP esperado por perfil
-	// -- achado real (pedido do autor, item desta rodada): o par
-	// RSA-2048 novo deixou os corpos de classico (1.706B/1.720B)
-	// abaixo de bufferBeforeChunkingSize=2048 do proprio net/http do
-	// Go, a UNICA diferenca entre os 4 perfis que faz isso -- Go
-	// passa a usar "Content-Length" (97B de headers) em vez de
-	// "Transfer-Encoding: chunked" (103B) so pra classico. Nunca
-	// forcado no handler -- e o comportamento real e correto do
-	// net/http; fixado aqui pra que uma mudanca futura (cert maior/
-	// menor, ou o proprio net/http mudando esse limiar) seja
-	// detectada por este teste, nunca passe silenciosamente.
+	// -- achado real (rodada anterior): o par RSA-2048 novo deixou os
+	// corpos de classico abaixo de bufferBeforeChunkingSize=2048 do
+	// proprio net/http do Go, a UNICA diferenca entre os 4 perfis que
+	// faz isso -- Go passa a usar "Content-Length" em vez de
+	// "Transfer-Encoding: chunked" so pra classico. Nunca forcado no
+	// handler -- e o comportamento real e correto do net/http; fixado
+	// aqui (nao derivado do tamanho do arquivo) pra que uma mudanca
+	// futura (cert cruzando o limiar, ou o proprio net/http mudando
+	// esse limiar) seja detectada por este teste, nunca passe
+	// silenciosamente.
 	cases := []struct {
-		profile         string
-		wantRootBytes   int
-		wantIssuerBytes int
-		wantFraming     string
+		profile     string
+		wantFraming string
 	}{
-		{"classico", 1803, 1817, "content-length"},
-		{"pqc", 8104, 8116, "chunked"},
-		{"hibrido-v8", 9440, 9444, "chunked"},
-		{"hibrido-and", 9810, 9836, "chunked"},
+		{"classico", "content-length"},
+		{"pqc", "chunked"},
+		{"hibrido-v8", "chunked"},
+		{"hibrido-and", "chunked"},
 	}
 
 	for _, c := range cases {
@@ -158,6 +178,9 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: reading issuer bundle: %v", c.profile, err)
 		}
+		overhead := headerOverheadByFraming[c.wantFraming]
+		wantRootBytes := len(rootPEM) + overhead
+		wantIssuerBytes := len(issuerPEM) + overhead
 
 		// Raw TCP round trip -- deliberately NOT net/http.Client: Go's
 		// client parses Content-Length out of resp.Header into
@@ -185,8 +208,8 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 			path string
 			want int
 		}{
-			{"/root-ca.pem", c.wantRootBytes},
-			{"/issuer-ca.pem", c.wantIssuerBytes},
+			{"/root-ca.pem", wantRootBytes},
+			{"/issuer-ca.pem", wantIssuerBytes},
 		} {
 			got, bodyLen, headerBytes, framing := rawResponseBytes(t, srv.Listener.Addr().String(), tc.path)
 			if got != tc.want {
@@ -202,6 +225,60 @@ func TestDirectoryHandlerResponseBytes(t *testing.T) {
 			}
 		}
 		srv.Close()
+	}
+}
+
+// TestDirectoryHandlerResponseBytesMatchesFrozenManifest (Decisao 166,
+// item 2): verificacao SEPARADA e explicita, nunca misturada com
+// TestDirectoryHandlerResponseBytes acima (que agora deriva o esperado
+// dos arquivos reais, entao sempre passa mesmo se os arquivos forem
+// regenerados com outro tamanho). Esta aqui e o gabarito CONGELADO do
+// conjunto de certificados oficial da campanha (Decisao 166, item 3) --
+// os mesmos response_bytes publicados nos relatorios da campanha. Se
+// mock-service-os/certs for regenerado (qualquer lote novo), este teste
+// -- so este -- quebra, apontando exatamente que o termo de PKI do
+// gabarito precisa ser recalculado antes da proxima campanha official;
+// TestDirectoryHandlerResponseBytes sozinho NUNCA detectaria isso.
+func TestDirectoryHandlerResponseBytesMatchesFrozenManifest(t *testing.T) {
+	dir := realCertsDirForTest(t)
+
+	cases := []struct {
+		profile         string
+		wantRootBytes   int
+		wantIssuerBytes int
+	}{
+		{"classico", 1803, 1817},
+		{"pqc", 8104, 8116},
+		{"hibrido-v8", 9440, 9444},
+		{"hibrido-and", 9810, 9836},
+	}
+	wantFramingByProfile := map[string]string{
+		"classico": "content-length", "pqc": "chunked", "hibrido-v8": "chunked", "hibrido-and": "chunked",
+	}
+
+	for _, c := range cases {
+		rootNames, issuerNames := realCAFilesForProfile(c.profile)
+		rootPEM, err := readAndConcatCAFiles(dir, rootNames)
+		if err != nil {
+			t.Fatalf("%s: reading root bundle: %v", c.profile, err)
+		}
+		issuerPEM, err := readAndConcatCAFiles(dir, issuerNames)
+		if err != nil {
+			t.Fatalf("%s: reading issuer bundle: %v", c.profile, err)
+		}
+		overhead := headerOverheadByFraming[wantFramingByProfile[c.profile]]
+		if got := len(rootPEM) + overhead; got != c.wantRootBytes {
+			t.Errorf("%s root-ca.pem: response_bytes = %d, want %d (gabarito congelado) -- "+
+				"o conjunto de mock-service-os/certs em uso NAO e mais o conjunto oficial congelado; "+
+				"recalcule o termo de PKI do gabarito (Decisao 166) antes de qualquer campanha oficial",
+				c.profile, got, c.wantRootBytes)
+		}
+		if got := len(issuerPEM) + overhead; got != c.wantIssuerBytes {
+			t.Errorf("%s issuer-ca.pem: response_bytes = %d, want %d (gabarito congelado) -- "+
+				"o conjunto de mock-service-os/certs em uso NAO e mais o conjunto oficial congelado; "+
+				"recalcule o termo de PKI do gabarito (Decisao 166) antes de qualquer campanha oficial",
+				c.profile, got, c.wantIssuerBytes)
+		}
 	}
 }
 
