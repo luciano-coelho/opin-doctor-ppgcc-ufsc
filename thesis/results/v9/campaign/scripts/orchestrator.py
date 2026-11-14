@@ -461,7 +461,16 @@ _INTERNAL_CALLER_SNI = "matls-api.local"  # mesma convencao de evaluate_criteria
 _CONNECTION_OK_LOG_RE = _re.compile(
     r'gateway: \S+ connection OK remoteAddr=(?P<addr>\S+) sni="(?P<sni>[^"]*)"'
     r'(?: curve=(?P<curve>\S+) dualAuthenticated=(?P<dual>\S+)'
-    r'(?: version="(?P<version>[^"]*)")?)?'
+    r'(?: version="(?P<version>[^"]*)")?'
+    # Decisao 160 (pedido do Luciano, item 1 -- alerta de pipeline):
+    # business_server.go:131-132 (o log.Printf REAL do caminho de
+    # campanha) sempre termina em `clientCert="..." handshakeBytesIn=
+    # %d handshakeBytesOut=%d` -- capturados aqui tambem, opcionais
+    # (nunca quebra contra uma linha mais antiga/formato diferente
+    # que nao os tenha).
+    r'(?: clientCert="(?P<client_cert>[^"]*)")?'
+    r'(?: handshakeBytesIn=(?P<hs_in>\d+) handshakeBytesOut=(?P<hs_out>\d+))?'
+    r')?'
 )
 
 # Adendo a Etapa 1 do piloto v9 (achado da verificacao independente EQD):
@@ -1440,11 +1449,21 @@ class SSHExecutor:
         # campo (gateway antigo, antes deste adendo) -- o assert trata isso
         # como divergencia, nunca aceita silenciosamente.
         tls_version = client_facing[0]["version"] if client_facing and client_facing[0].get("version") else None
+        # Decisao 160 (pedido do Luciano, item 1 -- alerta de pipeline):
+        # TODAS as conexoes client-facing desta execucao (ate 6,
+        # N_mTLS), nunca so a primeira -- organize_v9_results.py usa
+        # isto pra alertar (sem descartar) qualquer conexao cujo
+        # in/out divirja do valor do perfil na mesma celula.
+        handshake_bytes_per_connection = [
+            {"in": int(p["hs_in"]), "out": int(p["hs_out"])}
+            for p in client_facing if p.get("hs_in") and p.get("hs_out")
+        ]
 
         return {
             "insurance": result.get("calls", []), "person": [],
             "gateway_log_lines": raw_lines,
             "curveID": curve_id, "dualAuthenticated": dual_auth, "tlsVersion": tls_version,
+            "handshake_bytes_per_connection": handshake_bytes_per_connection,
             # Pedido do Luciano (Etapa 1, item 4): carimbo por EXECUCAO
             # (nao so por chamada individual, que ja vem de
             # opin_flow.py dentro de result["calls"]) -- t0/t1 ja
@@ -2160,6 +2179,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "retry_attempts": warmup_result.get("retry_attempts", 1),
                     "retry_failures": warmup_result.get("retry_failures", []),
                     "network_transport_retries": warmup_result.get("network_transport_retries", []),
+                    "handshake_bytes_per_connection": warmup_result.get("handshake_bytes_per_connection", []),
                 }
                 aquecimento_calls.append(aquecimento_entry)
                 # Decisao 133, item 3: persistido no disco AGORA, nunca
@@ -2203,6 +2223,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "retry_attempts": result.get("retry_attempts", 1),
                     "retry_failures": result.get("retry_failures", []),
                     "network_transport_retries": result.get("network_transport_retries", []),
+                    "handshake_bytes_per_connection": result.get("handshake_bytes_per_connection", []),
                 }
                 execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({

@@ -11,12 +11,13 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / "organize_v9_results.py"
 
 
-def _write_fixtures(tmp_path: Path, network_transport_retries=None):
+def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_bytes_per_connection=None):
     calls = [{
         "profile": "classico", "route": "L0", "run": 1,
         "start_utc": "2026-11-14T00:00:00+00:00", "end_utc": "2026-11-14T00:00:01+00:00",
         "insurance": [{"total_bytes": 100}], "person": [{"total_bytes": 50}],
         "network_transport_retries": network_transport_retries or [],
+        "handshake_bytes_per_connection": handshake_bytes_per_connection or [],
     }]
     criterio6 = [{"profile": "classico", "dualAuthenticated": False}]
     manifest = {
@@ -32,8 +33,9 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None):
     return calls_json, criterio6_json, manifest_json
 
 
-def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None):
-    calls_json, criterio6_json, manifest_json = _write_fixtures(tmp_path, network_transport_retries)
+def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None, handshake_bytes_per_connection=None):
+    calls_json, criterio6_json, manifest_json = _write_fixtures(
+        tmp_path, network_transport_retries, handshake_bytes_per_connection)
     args = [
         sys.executable, "-I", str(SCRIPT),
         "--calls-json", str(calls_json),
@@ -109,6 +111,48 @@ def test_retries_report_empty_when_no_retries(tmp_path):
     assert result.returncode == 0, result.stderr
     report = json.loads((out_dir / "retries_report.json").read_text(encoding="utf-8"))
     assert report == {"total_retries": 0, "por_celula": {}}
+
+
+def test_handshake_bytes_alert_empty_when_all_connections_match(tmp_path):
+    """Decisao 160 (item 1): todas as conexoes da celula com o mesmo
+    in/out -- zero divergentes, mas a celula aparece no relatorio."""
+    out_dir = tmp_path / "out"
+    conns = [{"in": 1485, "out": 1640}, {"in": 1485, "out": 1640}, {"in": 1485, "out": 1640}]
+    result = _run(tmp_path, out_dir, handshake_bytes_per_connection=conns)
+    assert result.returncode == 0, result.stderr
+
+    report = json.loads((out_dir / "handshake_bytes_alert.json").read_text(encoding="utf-8"))
+    assert report["total_divergentes"] == 0
+    cell = report["por_celula"]["classico/L0"]
+    assert cell["n_conexoes"] == 3
+    assert cell["valor_esperado"] == {"in": 1485, "out": 1640}
+    assert cell["divergentes"] == []
+
+
+def test_handshake_bytes_alert_flags_divergent_connection_without_excluding_it(tmp_path):
+    """Decisao 160: uma conexao fora do valor esperado da celula
+    (ex.: o leak de +71B voltando) e REGISTRADA, nunca descartada --
+    size/latency continuam calculados sobre as mesmas execucoes
+    normalmente (este campo nunca entra no calculo delas)."""
+    out_dir = tmp_path / "out"
+    conns = [{"in": 1485, "out": 1640}, {"in": 1485, "out": 1640}, {"in": 1556, "out": 1640}]
+    result = _run(tmp_path, out_dir, handshake_bytes_per_connection=conns)
+    assert result.returncode == 0, result.stderr
+
+    report = json.loads((out_dir / "handshake_bytes_alert.json").read_text(encoding="utf-8"))
+    assert report["total_divergentes"] == 1
+    cell = report["por_celula"]["classico/L0"]
+    assert cell["n_conexoes"] == 3, "a conexao divergente continua contada, nunca excluida"
+    assert cell["valor_esperado"] == {"in": 1485, "out": 1640}
+    assert cell["n_divergentes"] == 1
+    assert cell["divergentes"] == [{"run": 1, "in": 1556, "out": 1640}]
+
+    report_data = json.loads((out_dir / "report_data_v9.json").read_text(encoding="utf-8"))
+    assert report_data["handshake_bytes_divergentes_total"] == 1
+    # a divergencia nunca afeta median_metrics -- mesma execucao, mesmos bytes de size
+    median = json.loads((out_dir / "size" / "experiment1 - Classic" / "L0" / "median_metrics.json").read_text(encoding="utf-8"))
+    assert median["n"] == 1
+    assert median["values"] == [150]
 
 
 def test_allows_populated_dest_with_explicit_flag_and_records_it(tmp_path):

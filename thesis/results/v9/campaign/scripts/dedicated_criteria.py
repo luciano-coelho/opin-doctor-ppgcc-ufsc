@@ -437,6 +437,23 @@ def run_all_campaign(executor, collected_dir: Path, out_dir: Path) -> dict:
 
     report = {}
     for key, call in (
+        # Decisao 160 (pedido do Luciano, item 1): criterio1 nunca
+        # tinha sido wireado aqui -- mesmo gap de processo que
+        # criterio3/2/7 ja tinham (achado real, Decisao 149): um
+        # criterio real, correto, existente desde a Decisao 91 (item
+        # d -- consistencia OBRIGATORIA, tolerancia zero, entre os
+        # bytes brutos TCP decifrados da captura dedicada e
+        # `handshakeBytesIn`/`handshakeBytesOut` que o PROPRIO gateway
+        # loga pra essa mesma conexao), mas nunca executado
+        # automaticamente -- so via `evaluate_criteria.py --campaign`
+        # manual, facil de esquecer, exatamente como os outros 3
+        # ficaram antes de serem corrigidos. Guarda de regressao
+        # direta pro leak de +71B que a Decisao 159 corrigiu: se o
+        # countingConn (ou qualquer coisa no caminho do handshake)
+        # voltar a vazar bytes do record seguinte, este criterio
+        # reprova a captura dedicada daquele perfil/rota na proxima
+        # campanha real, nunca silenciosamente.
+        ("criterio1", lambda: ec.criterion_1_message_sizes_campaign(str(collected_dir))),
         ("criterio3", lambda: build_criterio3_campaign(collected_dir, out_dir)),
         ("criterio2", lambda: run_criterio2_campaign(executor, out_dir)),
         ("criterio7", lambda: run_criterio7(executor, out_dir, routes=ct.CAMPAIGN_ROUTES)),

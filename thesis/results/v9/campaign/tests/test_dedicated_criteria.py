@@ -689,3 +689,87 @@ def test_run_all_campaign_isola_falha_de_um_passo_nunca_impede_os_outros(monkeyp
     assert report["criterio7"] == {"L219": {"ok": True}}, \
         "run_criterio7 tem que rodar mesmo com criterio3 tendo falhado"
     assert report["full_logs"] == {"containers": {}, "instances": []}
+
+
+# Decisao 160 (pedido do Luciano, item 1): criterio1 (consistencia
+# OBRIGATORIA, tolerancia zero, entre bytes brutos decifrados e
+# handshakeBytesIn/Out do gateway -- Decisao 91, item d) agora roda
+# AUTOMATICAMENTE dentro de run_all_campaign, nunca mais so via
+# `evaluate_criteria.py --campaign` manual. Guarda de regressao direta
+# pro leak de +71B que a Decisao 159 corrigiu.
+
+def test_run_all_campaign_inclui_criterio1_e_passa_quando_consistente(monkeypatch, tmp_path):
+    """Caso sintetico em que os dois metodos (captura decifrada e log
+    do gateway) BATEM -- criterio1 tem que passar, e tem que receber
+    o `collected_dir` correto (onde `criterio1_capturas/` realmente
+    fica)."""
+    captured = {}
+
+    def fake_criterion_1(aws_dir):
+        captured["aws_dir"] = aws_dir
+        return {"criterion": 1, "name": "tamanhos por mensagem", "pass": True,
+                "rows": [{"ok": True, "consistency": [{"raw_in": 1485, "raw_out": 1640,
+                                                         "gateway_in": 1485, "gateway_out": 1640, "ok": True}]}]}
+
+    monkeypatch.setattr(dc.ec, "criterion_1_message_sizes_campaign", fake_criterion_1)
+    monkeypatch.setattr(dc, "build_criterio3_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio2_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio7", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "collect_full_logs", lambda *a, **k: {"ok": True})
+
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    collected_dir = tmp_path / "coletado"
+    report = dc.run_all_campaign(executor, collected_dir, tmp_path / "out")
+
+    assert report["criterio1"]["pass"] is True
+    assert captured["aws_dir"] == str(collected_dir)
+
+
+def test_run_all_campaign_criterio1_reprova_sem_bloquear_os_outros_passos(monkeypatch, tmp_path):
+    """Caso sintetico em que os dois metodos DIVERGEM (ex.: o leak de
+    +71B voltou) -- criterio1 tem que reprovar, mas isso nunca pode
+    impedir os outros 4 passos de rodar (mesma garantia de isolamento
+    de falha que os outros 3 ja tinham)."""
+    def fake_criterion_1_divergent(aws_dir):
+        return {"criterion": 1, "pass": False,
+                "rows": [{"ok": False, "consistency": [{"raw_in": 1485, "raw_out": 1640,
+                                                          "gateway_in": 1556, "gateway_out": 1640, "ok": False}]}]}
+
+    monkeypatch.setattr(dc.ec, "criterion_1_message_sizes_campaign", fake_criterion_1_divergent)
+    monkeypatch.setattr(dc, "build_criterio3_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio2_campaign", lambda *a, **k: {"L219_server-to-client": {"ok": True}})
+    monkeypatch.setattr(dc, "run_criterio7", lambda *a, **k: {"L219": {"ok": True}})
+    monkeypatch.setattr(dc, "collect_full_logs", lambda *a, **k: {"containers": {}, "instances": []})
+
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    report = dc.run_all_campaign(executor, tmp_path / "coletado", tmp_path / "out")
+
+    assert report["criterio1"]["pass"] is False
+    assert report["criterio1"]["rows"][0]["consistency"][0]["ok"] is False
+    # os outros 4 passos rodam normalmente, nunca bloqueados pela reprovacao do criterio1
+    assert report["criterio2"] == {"L219_server-to-client": {"ok": True}}
+    assert report["criterio7"] == {"L219": {"ok": True}}
+    assert report["full_logs"] == {"containers": {}, "instances": []}
+
+
+def test_run_all_campaign_criterio1_excecao_isolada_nunca_bloqueia_os_outros(monkeypatch, tmp_path):
+    """Mesma garantia de isolamento que os outros 3 passos ja tinham,
+    agora tambem pro criterio1: uma excecao real (nao so um `pass:
+    False`) nunca pode impedir os demais passos."""
+    def falha(*a, **k):
+        raise RuntimeError("falha simulada no criterio1")
+
+    monkeypatch.setattr(dc.ec, "criterion_1_message_sizes_campaign", falha)
+    monkeypatch.setattr(dc, "build_criterio3_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio2_campaign", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "run_criterio7", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(dc, "collect_full_logs", lambda *a, **k: {"ok": True})
+
+    executor = orch.SSHExecutor(_inventory(), key_path="/fake/key")
+    report = dc.run_all_campaign(executor, tmp_path / "coletado", tmp_path / "out")
+
+    assert report["criterio1"] == {"ok": False, "error": "falha simulada no criterio1"}
+    assert report["criterio3"] == {"ok": True}
+    assert report["criterio2"] == {"ok": True}
+    assert report["criterio7"] == {"ok": True}
+    assert report["full_logs"] == {"ok": True}

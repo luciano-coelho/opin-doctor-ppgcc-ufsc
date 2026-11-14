@@ -42,7 +42,7 @@ import json
 import shutil
 import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 PROFILE_TO_EXPERIMENT = {
@@ -157,6 +157,45 @@ def _write_retries_report(out_dir: Path, calls: list, aquecimentos: list) -> dic
     return report
 
 
+def _write_handshake_bytes_alert(out_dir: Path, calls: list, aquecimentos: list) -> dict:
+    """Decisao 160 (item 1, pedido do Luciano): alerta -- NUNCA
+    gate, NUNCA descarta nada -- pra qualquer conexao cliente-gateway
+    cujo handshakeBytesIn/Out (log do PROPRIO gateway,
+    `handshake_bytes_per_connection`, ja presente em cada execucao/
+    aquecimento real gravado por orchestrator.py) divirja do valor
+    ESTABELECIDO (o modal -- o par (in,out) mais comum) da MESMA
+    celula (profile, route). A conexao divergente continua contando
+    normalmente em todo o resto do pipeline (OPINsize, criterios,
+    median_metrics) -- isto so REGISTRA o desvio, informativo,
+    jamais excluindo nem recalculando nada em cima dele."""
+    by_cell = defaultdict(list)
+    for e in list(calls) + list(aquecimentos):
+        key = (e["profile"], e["route"])
+        run_label = e.get("run", e.get("warmup"))
+        for conn in e.get("handshake_bytes_per_connection", []):
+            by_cell[key].append({"run": run_label, "in": conn["in"], "out": conn["out"]})
+
+    por_celula = {}
+    for (profile, route), conns in sorted(by_cell.items()):
+        pairs = Counter((c["in"], c["out"]) for c in conns)
+        expected_in, expected_out = pairs.most_common(1)[0][0] if pairs else (None, None)
+        divergentes = [c for c in conns if (c["in"], c["out"]) != (expected_in, expected_out)]
+        por_celula[f"{profile}/{route}"] = {
+            "n_conexoes": len(conns),
+            "valor_esperado": {"in": expected_in, "out": expected_out},
+            "n_divergentes": len(divergentes),
+            "divergentes": divergentes,
+        }
+    report = {
+        "total_conexoes": sum(v["n_conexoes"] for v in por_celula.values()),
+        "total_divergentes": sum(v["n_divergentes"] for v in por_celula.values()),
+        "por_celula": por_celula,
+    }
+    (out_dir / "handshake_bytes_alert.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--calls-json", required=True)
@@ -257,6 +296,7 @@ def main():
 
     out_dir.mkdir(parents=True, exist_ok=True)
     retries_report = _write_retries_report(out_dir, calls, aquecimentos)
+    handshake_bytes_alert = _write_handshake_bytes_alert(out_dir, calls, aquecimentos)
     report_data = {
         "gerado_em_utc": manifest.get("window_end_utc"),
         "piloto": args.label_piloto,
@@ -268,6 +308,7 @@ def main():
         "provenance": provenance,
         "overwrite_populated_dest_authorized": args.allow_overwrite_populated,
         "network_transport_retries_total": retries_report["total_retries"],
+        "handshake_bytes_divergentes_total": handshake_bytes_alert["total_divergentes"],
     }
     (out_dir / "report_data_v9.json").write_text(
         json.dumps(report_data, indent=2, ensure_ascii=False), encoding="utf-8")
