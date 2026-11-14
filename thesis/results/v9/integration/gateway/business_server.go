@@ -163,20 +163,40 @@ const internalCallerSNI = "matls-api.local"
 
 // attachInternalCallerCarveOut sets cfg.GetConfigForClient so a
 // connection whose ClientHello SNI is internalCallerSNI gets a
-// DIFFERENT, purely classical config presenting the REAL production
-// server cert (mock-service-os/certs/mtls.crt) and trusting the REAL
-// production CA (ca.crt) -- auth's own client cert for this call
-// (op.crt) is signed by that real CA, not by any of v9's own freshly
-// generated ones, so the main per-profile config (which only trusts
-// v9's own CAs) would reject it. REAL_CERTS_DIR must be mounted
-// read-only from mock-service-os/certs -- never copied, never
-// versioned here.
+// DIFFERENT, purely classical config presenting a dedicated
+// SERVER-purposed identity (mock-service-os/certs/mtls_internal_
+// server.crt, ExtKeyUsage=ServerAuth) signed by the REAL production CA
+// (ca.crt) -- auth's own client cert for this call (op.crt) is signed
+// by that real CA, not by any of v9's own freshly generated ones, so
+// the main per-profile config (which only trusts v9's own CAs) would
+// reject it. REAL_CERTS_DIR must be mounted read-only from
+// mock-service-os/certs -- never copied, never versioned here.
+//
+// Real bug found and fixed this round: this carve-out used to present
+// mtls.crt here -- a cert generated (mock-service-os/certs/main.go,
+// generateCert/generateCertWithBits) with ExtKeyUsage=ClientAuth ONLY,
+// by design shared with op.crt/client_one.crt/client_two.crt, all of
+// which really are presented as mTLS CLIENT identities elsewhere.
+// Go's crypto/tls never checks EKU purpose, so reusing a client-only
+// cert as this hop's SERVER identity silently worked for the whole
+// life of this project. The AS's own TLS client (adapter.js) did too,
+// as long as it ran with rejectUnauthorized:false -- once that flag
+// became true (this round's AS->RS verification fix), Node's TLS
+// stack started enforcing EKU purpose and rejected the connection with
+// "unsuitable certificate purpose", breaking 100% of calls on every
+// profile. mtls_internal_server.crt (ExtKeyUsage=ServerAuth, its own
+// dedicated file, generated via `certs/main.go -internal-server-name
+// mtls_internal_server`) fixes this without touching mtls.crt or any
+// other cert generateCert's shared template still signs -- several of
+// those ARE measured (JWK/cert sizes feeding real OPINsize terms),
+// this one never was (business_server.go's own exclusion of this SNI
+// from client-facing counting, confirmed elsewhere in this file).
 func attachInternalCallerCarveOut(cfg *tls.Config, profile string) error {
 	realCertsDir := envOr("REAL_CERTS_DIR", "/real-certs")
 
-	cert, err := tls.LoadX509KeyPair(filepath.Join(realCertsDir, "mtls.crt"), filepath.Join(realCertsDir, "mtls.key"))
+	cert, err := tls.LoadX509KeyPair(filepath.Join(realCertsDir, "mtls_internal_server.crt"), filepath.Join(realCertsDir, "mtls_internal_server.key"))
 	if err != nil {
-		return fmt.Errorf("load real mtls.crt/.key for internal-caller carve-out: %w", err)
+		return fmt.Errorf("load real mtls_internal_server.crt/.key for internal-caller carve-out: %w", err)
 	}
 	// ClientCAs: always trust the real classical ca.crt (op.crt's
 	// issuer); ALSO trust root_ca_pqc.crt under the pqc profile

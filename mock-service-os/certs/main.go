@@ -479,6 +479,7 @@ func main() {
 	pqcCAFullyPostQuantum := flag.Bool("pqc-ca-fully-post-quantum", false, "Re-issues root_ca_pqc.crt (self-signed) and issuer_ca_pqc.crt (signed by root_ca_pqc's own ML-DSA-65 key) as a genuinely self-contained ML-DSA-65 chain, replacing the classical-RSA-signed wrapper both have used since v2's Decision 12. Reuses both certs' existing ML-DSA-65 keys unchanged (root_ca_pqc.key/issuer_ca_pqc.key) -- only the certificate wrapper (issuer field, signature) changes. Does not touch client_one_pqc.crt, mtls_pqc.crt, op_pqc.crt, or any live mTLS trust chain: root_ca_pqc/issuer_ca_pqc are PKI/CRL simulation stand-ins only, downloaded by opin_flow.py purely to measure PEM size, never used to verify a real connection. See thesis/results/v7/DECISIONS.md.")
 	pqcLiveCertsFullyPostQuantum := flag.Bool("pqc-live-certs-fully-post-quantum", false, "Re-issues client_one_pqc.crt, mtls_pqc.crt, and op_pqc.crt signed directly by root_ca_pqc's ML-DSA-65 key instead of the classical ca.crt -- requires -pqc-ca-fully-post-quantum to have already been run. Reuses each cert's existing ML-DSA-65 key unchanged. mock_mtls's caCertPool() must also trust root_ca_pqc.crt under CRYPTO_PROFILE=pqc for the handshake to keep working -- see mock_mtls/main.go. See thesis/results/v7/DECISIONS.md.")
 	clientOneRSA2048 := flag.Bool("client-one-rsa2048", false, "Regenerates ALL of client_one's own RSA keys (never mtls/op/client_two, never the AS/RS's own crypto-profiles/*.json keys, never client_one_pqc's ML-DSA-65 sig key) at 2048 bits instead of the inherited 4096: the sig key backing client_one.crt/client_one_hybrid.crt/client_one.jwks, the enc key in client_one.jwks, and the separate enc key in client_one_pqc.jwks. Fresh keys, fresh kids -- a real rotation, not a re-wrap. Writes client_one.crt/.key, client_one_hybrid.crt (RSA half re-issued, reuses the EXISTING client_one_pqc.key/.crt's ML-DSA-65 material unchanged), client_one.jwks/_pub.jwks, client_one_hybrid_pub.jwks, client_one_pqc.jwks/_pub.jwks (enc entry only -- the AKP sig entry is copied through byte-for-byte). Does not touch the CA. See the Decisao this flag's own commit registers in thesis/results/v9/DECISIONS.md.")
+	internalServerName := flag.String("internal-server-name", "", "Generates <name>_internal_server.crt/.key (fresh RSA-2048 key, ExtKeyUsage=ServerAuth ONLY), signed by the existing ca.crt/ca.key on disk -- same mechanism as -pqc-name/-classic-name (loads the existing CA, never regenerates it). Does not touch mtls.crt/.key, op.crt/.key, client_one*/client_two*, the CA, or any other cert this tool has ever generated. Written for business_server.go's attachInternalCallerCarveOut (gateway/v9), which needs its OWN server-purposed identity for the matls-api.local internal carve-out instead of reusing mtls.crt (a client-auth-only cert by design -- see the generateCert/generateCertWithBits template this whole file shares -- which Node's strict EKU/purpose checking now rejects as a server cert once rejectUnauthorized=true). See the Decisao this flag's own commit registers in thesis/results/v9/DECISIONS.md.")
 	flag.Parse()
 
 	if *clientOneRSA2048 {
@@ -524,6 +525,12 @@ func main() {
 		caCert, caKey := loadCACert(sourceDir)
 		subjectKey := loadRSAKeyPEM(filepath.Join(sourceDir, *classicName+".key"))
 		generateClassicCertReuse(*classicName, *orgID, caCert, caKey, subjectKey, sourceDir)
+		return
+	}
+
+	if *internalServerName != "" {
+		caCert, caKey := loadCACert(sourceDir)
+		generateInternalServerCert(*internalServerName, *orgID, caCert, caKey, sourceDir)
 		return
 	}
 
@@ -973,6 +980,92 @@ func generateCertWithBits(
 	savePEMFile(filepath.Join(dir, name+".crt"), "CERTIFICATE", certBytes)
 
 	fmt.Printf("Generated key and certificate for %s\n", name)
+	return cert, key
+}
+
+// generateInternalServerCert: a SERVER-purposed sibling of generateCertWithBits
+// -- same CA, same Subject/DNSNames/IPAddresses shape, but ExtKeyUsage is
+// ServerAuth instead of ClientAuth (never both: this cert's one and only job
+// is being a TLS SERVER identity, never presented as a client cert anywhere).
+// Written because business_server.go's attachInternalCallerCarveOut (gateway/
+// v9's matls-api.local internal carve-out) was reusing mtls.crt -- a
+// client-auth-only cert by every other call site's own design -- as a SERVER
+// cert. Go's crypto/tls never checked EKU purpose, so that silently worked;
+// Node's TLS stack does check it, and started rejecting it the moment
+// adapter.js's rejectUnauthorized went from false to true (this round's
+// AS->RS fix), with "unsuitable certificate purpose". Deliberately its own
+// function, never a new branch inside generateCertWithBits, so mtls/op/
+// client_one/client_two's own certs (several of them measured -- JWK/cert
+// sizes feed real OPINsize terms) are never touched by this change.
+func generateInternalServerCert(
+	name, orgID string,
+	caCert *x509.Certificate,
+	caKey *rsa.PrivateKey,
+	dir string,
+) (
+	*x509.Certificate,
+	*rsa.PrivateKey,
+) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: name,
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{
+					Type:  oidX500UID,
+					Value: name,
+				},
+				{
+					Type:  oidLDAPUID,
+					Value: uuid.NewString(),
+				},
+				{
+					Type:  oidOrganizationID,
+					Value: orgID,
+				},
+			},
+		},
+		DNSNames: []string{
+			"auth.local",
+			"matls-auth.local",
+			"api.local",
+			"matls-api.local",
+			"directory",
+			"directory.local",
+			"keystore",
+		},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certBytes, err := x509.CreateCertificate(
+		rand.Reader,
+		cert,
+		caCert,
+		&key.PublicKey,
+		caKey,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+	cert.Raw = certBytes
+
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		log.Fatalf("Failed to create key: %v", err)
+	}
+	savePEMFile(filepath.Join(dir, name+".key"), "PRIVATE KEY", keyBytes)
+	savePEMFile(filepath.Join(dir, name+".crt"), "CERTIFICATE", certBytes)
+
+	fmt.Printf("Generated SERVER-purposed (ExtKeyUsage=ServerAuth) key and certificate for %s\n", name)
 	return cert, key
 }
 
