@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest
 import opin_flow as of
 import pytest
 import requests
@@ -34,6 +36,7 @@ def live_artifacts():
     """Runs one real flow against the local stack, capturing the real
     classic_jwk/pqc_jwk pairs (AS and RS) and one real RS-signed response
     -- the artifacts every test below tampers."""
+    conftest.skip_if_stack_not_up()
     proc = of.start_tls_kem_proxy(PROFILE)
     signer_started = of.start_pqc_signer_service(PROFILE)
     try:

@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest
 import opin_flow as of
 import pytest
 import requests
@@ -33,6 +35,7 @@ def stack():
     if PROFILE not in ("hybrid", "hibrido-and"):
         pytest.skip("the payload-extension AND-gate only exists in the two hybrid profiles -- "
                      "classic/pqc never load clientHybridAuth.js (express.js's isHybridProfile gate)")
+    conftest.skip_if_stack_not_up()
     proc = of.start_tls_kem_proxy(PROFILE)
     signer_started = of.start_pqc_signer_service(PROFILE)
     try:
@@ -50,6 +53,7 @@ def any_profile_stack():
     """Same as `stack`, minus the hybrid-only skip -- used only by
     test_classic_and_pqc_unaffected, which needs to run precisely for the
     two profiles `stack` skips."""
+    conftest.skip_if_stack_not_up()
     proc = of.start_tls_kem_proxy(PROFILE)
     signer_started = of.start_pqc_signer_service(PROFILE)
     try:
