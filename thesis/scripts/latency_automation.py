@@ -75,13 +75,12 @@ BASE_DIR = of.BASE_DIR
 #   upstream (hoje `proxy/relay.go`'s `handleRelayConn` so fecha a
 #   conexao do lado local numa falha de dial -- NUNCA escreve uma
 #   resposta HTTP 502/504 de verdade -- entao isso hoje chega aqui como
-#   `requests.exceptions.ConnectionError`, ja coberta pela classe de
-#   excecao abaixo; o check explicito de status 502/504 fica mantido
-#   so por robustez/documentacao, caso esse ou outro proxy local passe
-#   a responder com um status em vez de so fechar o socket).
-#   Descarta a tentativa e repete a EXECUCAO INTEIRA, no maximo
-#   NETWORK_TRANSPORT_MAX_ATTEMPTS vezes, cada tentativa descartada
-#   registrada (perfil, label/execucao, motivo, horario).
+#   um dos tipos abaixo; o check explicito de status 502/504 fica
+#   mantido so por robustez/documentacao, caso esse ou outro proxy
+#   local passe a responder com um status em vez de so fechar o
+#   socket). Descarta a tentativa e repete a EXECUCAO INTEIRA, no
+#   maximo NETWORK_TRANSPORT_MAX_ATTEMPTS vezes, cada tentativa
+#   descartada registrada (perfil, label/execucao, motivo, horario).
 #
 #   "fail_closed" -- tudo o mais, por EXCLUSAO, nunca por uma lista
 #   positiva de "excecoes conhecidas que abortam": falha criptografica/
@@ -94,6 +93,23 @@ BASE_DIR = of.BASE_DIR
 #   orquestracao (servico nao foi iniciado), nao algo que repetir a
 #   execucao resolveria.
 #
+# Decisao 161 (correcao, achado real da reauditoria da tag v6):
+# `isinstance(exc, requests.exceptions.ConnectionError)` CASA com
+# `requests.exceptions.SSLError` e `requests.exceptions.ProxyError`
+# (as DUAS sao subclasses de ConnectionError) -- uma falha
+# criptografica/de verificacao TLS real (certificado errado, curva
+# incompativel, rejeicao do servidor) passava por `requests.
+# exceptions.SSLError` e era classificada como "network_transport"
+# (retried) em vez de "fail_closed", o oposto do que a Decisao 158
+# pretendia. Instalado o `requests==2.32.5` pinado e inspecionado
+# `Exception.__subclasses__()` pra confirmar a hierarquia real antes
+# de corrigir (nunca so por suposicao). Correcao: `isinstance()`
+# trocado por comparacao de TIPO EXATO (`type(exc) in
+# _NETWORK_TRANSPORT_EXACT_TYPES`) contra uma lista EXPLICITA --
+# qualquer subclasse NAO listada (SSLError, ProxyError, ou qualquer
+# outra futura) cai em fail_closed por exclusao, mesmo sendo
+# subclasse de uma classe que ESTA na lista.
+#
 # A janela usada pro T_fluxo/handshake_bytes/OPINsize e sempre so a da
 # tentativa BEM-SUCEDIDA -- run_once_timed() ja limpa os acumuladores
 # de timing no seu proprio inicio (clear_verification_timings() etc.,
@@ -102,17 +118,35 @@ BASE_DIR = of.BASE_DIR
 # inteiro aqui, nunca mesclado.
 NETWORK_TRANSPORT_MAX_ATTEMPTS = 3
 
-_NETWORK_TRANSPORT_EXCEPTION_TYPES = (
+# Lista EXPLICITA, por tipo EXATO (nunca isinstance/heranca) -- cada
+# entrada e um tipo CONCRETO que `requests`/a stdlib realmente levanta
+# pra falha de transporte genuina (reset, recusa de conexao, timeout).
+# `requests.exceptions.ConnectionError`/`Timeout` (as classes BASE)
+# ficam na lista pro caso raro de algo levantar a base diretamente,
+# mas suas subclasses de significado CRIPTOGRAFICO/PROXY (SSLError,
+# ProxyError) sao deliberadamente EXCLUIDAS -- nunca entram aqui, nem
+# por engano futuro, porque a comparacao e por tipo exato, nao heranca.
+_NETWORK_TRANSPORT_EXACT_TYPES = frozenset({
+    # requests.exceptions -- genuino transporte
     requests.exceptions.ConnectionError,
+    requests.exceptions.ConnectTimeout,
+    requests.exceptions.ReadTimeout,
     requests.exceptions.Timeout,
-    ConnectionError,  # builtin -- cobre ConnectionResetError/ConnectionRefusedError
-)
+    # builtins (socket-level) -- a stdlib pode levantar estes direto
+    # se escaparem de qualquer wrapping do requests/urllib3
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionRefusedError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    TimeoutError,  # cobre socket.timeout (alias de TimeoutError desde Python 3.10)
+})
 
 
 def _is_network_transport_failure(exc: Exception) -> bool:
-    if isinstance(exc, _NETWORK_TRANSPORT_EXCEPTION_TYPES):
+    if type(exc) in _NETWORK_TRANSPORT_EXACT_TYPES:
         return True
-    if isinstance(exc, requests.exceptions.HTTPError):
+    if type(exc) is requests.exceptions.HTTPError:
         resp = getattr(exc, "response", None)
         if resp is not None and getattr(resp, "status_code", None) in (502, 504):
             return True
@@ -120,9 +154,12 @@ def _is_network_transport_failure(exc: Exception) -> bool:
 
 
 def classify_failure(exc: Exception) -> str:
-    """Decisao 158: devolve exatamente "network_transport" ou
-    "fail_closed" -- nunca uma terceira classe. Ver o comentario acima
-    de NETWORK_TRANSPORT_MAX_ATTEMPTS pro raciocinio completo."""
+    """Decisao 158/161: devolve exatamente "network_transport" ou
+    "fail_closed" -- nunca uma terceira classe, e NUNCA por heranca --
+    so por tipo exato contra _NETWORK_TRANSPORT_EXACT_TYPES. Ver o
+    comentario acima de NETWORK_TRANSPORT_MAX_ATTEMPTS pro raciocinio
+    completo, incluindo por que SSLError/ProxyError (subclasses de
+    ConnectionError) ficam de fora deliberadamente."""
     return "network_transport" if _is_network_transport_failure(exc) else "fail_closed"
 
 
