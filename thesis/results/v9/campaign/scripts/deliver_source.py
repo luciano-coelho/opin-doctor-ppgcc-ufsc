@@ -65,6 +65,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
+import cert_manifest  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -213,6 +214,69 @@ def relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, t
     return proc
 
 
+def verify_delivered_certs(control_ip, operator_key_path, campaign_key_remote_path, target_ip, manifest):
+    """Decisao 166, item 3 (pedido do Luciano): fail-closed -- depois
+    que `relay_and_extract` entrega `mock-service-os/certs` (sempre em
+    COMMON_FILES, pra servidor E todo cliente), confere via `sha256sum`
+    REMOTO (segundo salto, chave da CAMPANHA -- mesmo rele de sempre)
+    que cada certificado do manifesto (`cert_manifest.MANIFEST_FILENAMES`)
+    chegou IDENTICO ao que o manifesto fixa. Levanta RuntimeError (nunca
+    silencioso) se QUALQUER arquivo divergir -- aborta a entrega pra
+    esse destino antes de start_block tentar usar material corrompido/
+    adulterado. Devolve o dict {nome: sha256} obtido, pra o chamador
+    cruzar entre hosts (ver `deliver_source`'s checagem de consistencia
+    entre servidor e clientes, abaixo)."""
+    names = " ".join(manifest["files"].keys())
+    remote_cmd = (
+        f"ssh -i {campaign_key_remote_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"ec2-user@{target_ip} "
+        f"'cd ~/mock-service-os/certs && sha256sum {names}'"
+    )
+    proc = cli.run_ssh(control_ip, remote_cmd, key_path=operator_key_path)
+    if proc.returncode != 0:
+        raise RuntimeError(f"verify_delivered_certs({target_ip}): sha256sum remoto falhou: {cli.redact(proc.stderr)}")
+
+    got = {}
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        digest, name = parts
+        got[name.strip()] = digest
+
+    mismatches = {
+        name: {"expected": info["sha256"], "got": got.get(name)}
+        for name, info in manifest["files"].items()
+        if got.get(name) != info["sha256"]
+    }
+    if mismatches:
+        raise RuntimeError(
+            f"verify_delivered_certs({target_ip}): sha256 divergente do manifesto congelado "
+            f"(thesis/results/v9/campaign/certs_manifest.json) -- {mismatches}"
+        )
+    return got
+
+
+def _assert_certs_consistent_across_hosts(certs_by_target: dict) -> None:
+    """Decisao 166, item 3: alem de cada host bater com o manifesto
+    (ja fail-closed em `verify_delivered_certs`), confere que os
+    hosts batem ENTRE SI -- redundante em teoria (os dois lados ja
+    bateram com o mesmo manifesto), mas pega direto um manifesto
+    desatualizado que, por coincidencia, nenhum host individual
+    detectou (nunca deveria acontecer -- ver abaixo), sem depender
+    so da comparacao indireta via manifesto."""
+    if not certs_by_target:
+        return
+    targets = list(certs_by_target)
+    reference_target, reference = targets[0], certs_by_target[targets[0]]
+    for target in targets[1:]:
+        if certs_by_target[target] != reference:
+            raise RuntimeError(
+                f"_assert_certs_consistent_across_hosts: {target} diverge de {reference_target} -- "
+                f"{certs_by_target[target]} != {reference}"
+            )
+
+
 def install_client_requirements(control_ip, operator_key_path, campaign_key_remote_path, target_ip):
     """Decisao 69 (achado real, ao vivo, retomando a Fase A real):
     NENHUM passo deste pacote jamais instalava `thesis/scripts/
@@ -257,6 +321,8 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
     `inventory["server"]` existe; iterar sobre `inventory["servers"]`
     quando presente entrega pra CADA servidor da campanha, sem mudar
     nada do caminho do piloto."""
+    manifest = cert_manifest.load_manifest(repo_root / "thesis/results/v9/campaign/certs_manifest.json")
+    certs_by_target = {}
     report = []
     with tempfile.TemporaryDirectory(prefix="v9_deliver_source_") as tmp:
         server_tarball = build_tarball(COMMON_FILES + SERVER_ONLY_FILES, Path(tmp) / "server.tar.gz", repo_root=repo_root)
@@ -267,15 +333,22 @@ def deliver_source(control_ip, operator_key_path, campaign_key_remote_path, inve
             server_ip = server["public_ip"]
             staged = stage_on_control(control_ip, operator_key_path, server_tarball, f"{server_id}.tar.gz")
             relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, server_ip, staged)
-            report.append({"target": server_id, "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES)})
+            certs_by_target[server_id] = verify_delivered_certs(
+                control_ip, operator_key_path, campaign_key_remote_path, server_ip, manifest)
+            report.append({"target": server_id, "ip": server_ip, "files": list(COMMON_FILES) + list(SERVER_ONLY_FILES),
+                            "certs_verified": True})
 
         for route, client in inventory["clients"].items():
             client_ip = client["public_ip"]
             staged = stage_on_control(control_ip, operator_key_path, client_tarball, f"{route}.tar.gz")
             relay_and_extract(control_ip, operator_key_path, campaign_key_remote_path, client_ip, staged)
+            certs_by_target[route] = verify_delivered_certs(
+                control_ip, operator_key_path, campaign_key_remote_path, client_ip, manifest)
             install_client_requirements(control_ip, operator_key_path, campaign_key_remote_path, client_ip)
             report.append({"target": route, "ip": client_ip, "files": list(COMMON_FILES) + list(CLIENT_ONLY_FILES),
-                            "requirements_installed": True})
+                            "requirements_installed": True, "certs_verified": True})
+
+        _assert_certs_consistent_across_hosts(certs_by_target)
     return report
 
 

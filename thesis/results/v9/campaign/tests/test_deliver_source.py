@@ -3,6 +3,7 @@ SSH/SCP/tar stubados via cli._run, nenhuma chamada real, nenhum dado
 sensivel. Usa um repositorio FALSO (tmp_path) com os mesmos caminhos
 relativos de COMMON_FILES/CLIENT_ONLY_FILES -- nunca o repo real, pra
 nao depender do conteudo verdadeiro em disco."""
+import hashlib
 import sys
 import tarfile
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import cert_manifest  # noqa: E402
 import cli  # noqa: E402
 import deliver_source as ds  # noqa: E402
 
@@ -19,12 +21,41 @@ class FakeProc:
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
 
 
+# Decisao 166, item 3: manifesto FALSO (sha256 arbitrario, derivado so
+# do NOME -- nunca precisa ser um certificado PEM de verdade, ja que
+# verify_delivered_certs so compara texto de sha256sum contra o que o
+# manifesto fixa) -- compartilhado entre fake_repo (grava o manifesto)
+# e _fake_sha256sum_stdout (resposta do `sha256sum` remoto stubado),
+# pra sempre baterem entre si por construcao.
+_FAKE_CERT_HASHES = {name: hashlib.sha256(name.encode()).hexdigest() for name in cert_manifest.MANIFEST_FILENAMES}
+
+
+def _fake_sha256sum_stdout() -> str:
+    return "".join(f"{digest}  {name}\n" for name, digest in _FAKE_CERT_HASHES.items())
+
+
+def fake_run_with_certs_ok(argv, timeout=None):
+    """Stub de cli._run que sempre responde OK, inclusive ao
+    `sha256sum` remoto que verify_delivered_certs dispara -- usado por
+    todo teste que exercita deliver_source() mas nao esta testando a
+    verificacao de certificado em si (ela so teria que FALHAR num
+    teste dedicado, nunca de surpresa num teste generico)."""
+    if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+        return FakeProc(returncode=0, stdout=_fake_sha256sum_stdout())
+    return FakeProc(returncode=0)
+
+
 @pytest.fixture
 def fake_repo(tmp_path):
     """Monta, sob tmp_path, a MESMA arvore relativa que COMMON_FILES/
     CLIENT_ONLY_FILES/CONTROL_FILES referenciam -- arquivos com
     conteudo falso, `mock-service-os/certs` e `thesis/results/v9/
-    certs/generated` como diretorios com um arquivo falso dentro cada."""
+    certs/generated` como diretorios com um arquivo falso dentro cada.
+    Tambem grava certs_manifest.json FALSO (Decisao 166) no mesmo
+    caminho relativo que deliver_source() le de verdade -- sha256
+    casando com _FAKE_CERT_HASHES, nunca com o conteudo real do cert
+    falso (a verificacao real roda no HOST remoto via sha256sum
+    stubado, nunca relendo o arquivo local do tarball)."""
     repo = tmp_path / "fake_repo"
     for rel in ds.COMMON_FILES + ds.CONTROL_FILES + ds.SERVER_ONLY_FILES:
         if rel.endswith((".py", ".txt", ".json", ".sh", ".yml", ".conf")):
@@ -36,6 +67,14 @@ def fake_repo(tmp_path):
     (repo / "thesis" / "results" / "v9" / "certs" / "generated").mkdir(parents=True, exist_ok=True)
     (repo / "thesis" / "results" / "v9" / "certs" / "generated" / "classico_client.crt").write_text(
         "cert falso\n", encoding="utf-8")
+
+    manifest_path = repo / "thesis" / "results" / "v9" / "campaign" / "certs_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_manifest = {
+        "files": {name: {"sha256": digest, "pem_bytes": 1, "der_bytes": 1} for name, digest in _FAKE_CERT_HASHES.items()}
+    }
+    import json
+    manifest_path.write_text(json.dumps(fake_manifest), encoding="utf-8")
     return repo
 
 
@@ -104,7 +143,7 @@ def test_deliver_source_rele_de_2_saltos_pro_servidor_e_cada_cliente(monkeypatch
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return fake_run_with_certs_ok(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -165,7 +204,7 @@ def test_deliver_source_modo_campanha_entrega_para_cada_servidor(monkeypatch, fa
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return fake_run_with_certs_ok(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -199,7 +238,7 @@ def test_mutante_deliver_source_campanha_so_1_servidor_perderia_entrega(monkeypa
     servidor (comportamento ANTES da generalizacao) deixaria 2 dos 3
     servidores da campanha sem SERVER_ONLY_FILES nenhum -- prova que a
     iteracao sobre todos os servidores e necessaria, nao cosmetica."""
-    monkeypatch.setattr(cli, "_run", lambda argv, timeout=None: FakeProc(returncode=0))
+    monkeypatch.setattr(cli, "_run", fake_run_with_certs_ok)
     inventory = {
         "servers": {
             "sa-east-1": {"public_ip": "203.0.113.10"},
@@ -236,7 +275,7 @@ def test_deliver_source_instala_requirements_so_nos_clientes(monkeypatch, fake_r
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return fake_run_with_certs_ok(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {
@@ -264,7 +303,7 @@ def test_deliver_source_aborta_se_pip_install_falha_no_cliente(monkeypatch, fake
     def fake_run(argv, timeout=None):
         if argv and argv[0] == "ssh" and "pip3 install" in argv[-1]:
             return FakeProc(returncode=1, stderr="No matching distribution found for PyJWT==2.15.1")
-        return FakeProc(returncode=0)
+        return fake_run_with_certs_ok(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {"L0": {"public_ip": "203.0.113.60"}}}
@@ -284,7 +323,7 @@ def test_rele_extrai_antes_de_remover_o_tarball(monkeypatch, fake_repo):
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
-        return FakeProc(returncode=0)
+        return fake_run_with_certs_ok(argv, timeout)
 
     monkeypatch.setattr(cli, "_run", fake_run)
     inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
@@ -327,6 +366,93 @@ def test_falha_no_rele_e_reportada_nunca_engolida(monkeypatch, fake_repo):
             campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
             inventory=inventory, repo_root=fake_repo,
         )
+
+
+# --- Decisao 166, item 3 (pedido do Luciano): fail-closed sha256 dos
+# certificados do manifesto congelado, depois de cada entrega real.
+
+def test_deliver_source_verifica_certs_contra_manifesto_apos_entrega(monkeypatch, fake_repo):
+    calls = []
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        return fake_run_with_certs_ok(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {"L0": {"public_ip": "203.0.113.60"}}}
+    report = ds.deliver_source(
+        control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+        campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+        inventory=inventory, repo_root=fake_repo,
+    )
+    sha256sum_cmds = [c[-1] for c in calls if c and c[0] == "ssh" and "sha256sum" in c[-1]]
+    assert len(sha256sum_cmds) == 2, "um sha256sum por destino (servidor + 1 cliente) -- " + str(sha256sum_cmds)
+    assert any("@203.0.113.50" in c for c in sha256sum_cmds)
+    assert any("@203.0.113.60" in c for c in sha256sum_cmds)
+    assert all(r["certs_verified"] for r in report)
+
+
+def test_deliver_source_aborta_se_sha256_de_um_cert_diverge_do_manifesto(monkeypatch, fake_repo):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+            # ca.crt volta com um sha256 ERRADO -- qualquer outro arquivo bate.
+            bad = _fake_sha256sum_stdout().replace(_FAKE_CERT_HASHES["ca.crt"], "0" * 64)
+            return FakeProc(returncode=0, stdout=bad)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
+    with pytest.raises(RuntimeError, match="sha256 divergente do manifesto"):
+        ds.deliver_source(
+            control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+            campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+            inventory=inventory, repo_root=fake_repo,
+        )
+
+
+def test_deliver_source_aborta_se_sha256sum_remoto_falha(monkeypatch, fake_repo):
+    def fake_run(argv, timeout=None):
+        if argv and argv[0] == "ssh" and "sha256sum" in argv[-1]:
+            return FakeProc(returncode=1, stderr="No such file or directory")
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    inventory = {"server": {"public_ip": "203.0.113.50"}, "clients": {}}
+    with pytest.raises(RuntimeError, match="sha256sum remoto falhou"):
+        ds.deliver_source(
+            control_ip="203.0.113.5", operator_key_path="/fake/operator_key",
+            campaign_key_remote_path="/home/ec2-user/.ssh/campaign_key",
+            inventory=inventory, repo_root=fake_repo,
+        )
+
+
+def test_deliver_source_aborta_se_hosts_divergem_entre_si(monkeypatch, fake_repo):
+    """Mesmo se cada host, isoladamente, bater com o manifesto (nao
+    reproduzido aqui -- ver teste acima), _assert_certs_consistent_
+    across_hosts tem que pegar uma divergencia ENTRE hosts -- testada
+    direto (unidade), ja que simular 2 hosts com conjuntos diferentes
+    mas os DOIS batendo com o mesmo manifesto e impossivel por
+    construcao (o manifesto so tem 1 valor por arquivo)."""
+    with pytest.raises(RuntimeError, match="diverge de"):
+        ds._assert_certs_consistent_across_hosts({
+            "server": {"ca.crt": "aaaa"},
+            "L0": {"ca.crt": "bbbb"},
+        })
+
+
+def test_assert_certs_consistent_aceita_hosts_identicos():
+    ds._assert_certs_consistent_across_hosts({
+        "server": {"ca.crt": "aaaa"},
+        "L0": {"ca.crt": "aaaa"},
+    })  # nao levanta
+
+
+def test_verify_delivered_certs_devolve_o_sha256_obtido(monkeypatch, fake_repo):
+    monkeypatch.setattr(cli, "_run", fake_run_with_certs_ok)
+    manifest = cert_manifest.load_manifest(fake_repo / "thesis/results/v9/campaign/certs_manifest.json")
+    got = ds.verify_delivered_certs(
+        "203.0.113.5", "/fake/operator_key", "/home/ec2-user/.ssh/campaign_key", "203.0.113.50", manifest)
+    assert got == _FAKE_CERT_HASHES
 
 
 # --- Decisao 59: deliver_to_control -- UM SO salto (operador ->
