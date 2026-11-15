@@ -2018,11 +2018,34 @@ def _mode_provenance(executor) -> dict:
 def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PROFILE, smoke: bool = False,
               routes: list[str] | None = None, profiles: list[str] | None = None,
               skip_dedicated_captures: bool = False, n_warmup_per_profile: int = 0,
-              resume: bool = False, cost_tracker: "ct.CostTracker | None" = None) -> dict:
+              resume: bool = False, cost_tracker: "ct.CostTracker | None" = None,
+              cells: list[tuple[str, str]] | None = None) -> dict:
     """Roda `n_per_profile` execucoes por bloco (perfis x rotas,
     default os 4x3 reais) + as 12 capturas dedicadas, escreve todos
     os artefatos no formato que `evaluate_criteria.py --aws-dir`
     espera. Devolve um resumo (cardinalidade, ordem por rota, seed).
+
+    `cells` (pedido do Luciano -- piloto assimetrico da conta nova,
+    subconjunto de `--campaign` que NAO e um produto cartesiano
+    simetrico de `profiles` x `routes`, ex. 4 perfis numa rota + so 2
+    perfis numa segunda): lista de pares `(profile, route)` EXATOS a
+    executar. Default None -- comportamento BYTE A BYTE identico a
+    antes (produto cartesiano completo de `profiles` x `routes`,
+    nenhuma linha nova de codigo exercitada). Quando presente: (1)
+    `routes` e restrito as rotas que aparecem em algum par de `cells`
+    (nunca sobe/desce bloco de uma rota sem nenhuma celula
+    selecionada); (2) dentro do laco de cada rota, perfis cuja
+    combinacao com aquela rota nao esta em `cells` sao pulados -- a
+    ORDEM aleatoria (`profile_block_order`, com o `profiles` completo
+    passado pelo chamador) e o consumo do `rng` continuam EXATAMENTE
+    os mesmos de uma chamada sem `cells`, so a iteracao sobre `order`
+    e filtrada depois de gerada, nunca uma re-embaralhagem do
+    subconjunto. O mesmo filtro cobre as capturas dedicadas da rota
+    (mesma `order`). `expected_total`/`total_capturas` do manifesto
+    passam a refletir `len(cells)` em vez do produto cartesiano
+    completo. O manifesto grava `cells_filter` (lista ordenada dos
+    pares usados, ou None) para `organize_v9_results.py` nunca
+    confundir esta janela parcial com uma janela oficial da campanha.
 
     `smoke=True` (Decisao 48/Emenda 12 ao pre-registro v9-prereg):
     `n_per_profile` continua livre pro CHAMADOR escolher (a porta de
@@ -2082,7 +2105,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
     antes (sempre reexecuta, como sempre fez)."""
     routes = routes if routes is not None else ROUTES
     profiles = profiles if profiles is not None else PROFILES
-    expected_total = len(profiles) * len(routes) * n_per_profile
+    cells_set = set(cells) if cells is not None else None
+    if cells_set is not None:
+        _cells_routes = {r for (_p, r) in cells_set}
+        routes = [r for r in routes if r in _cells_routes]
+        expected_total = len(cells_set) * n_per_profile
+    else:
+        expected_total = len(profiles) * len(routes) * n_per_profile
     manifest_path = out_dir / "manifest.json"
     if resume and manifest_path.is_file():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -2203,6 +2232,8 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         for profile in order:
             if cost_stop_info is not None:
                 break
+            if cells_set is not None and (profile, route) not in cells_set:
+                continue
             combined_log_lines.append(f"== Perfil: {profile} ==")
             executor.start_block(profile, route)
             _renew_local_safety_timer()
@@ -2336,6 +2367,8 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         # Nenhuma rota e revisitada depois disso pro resto da janela.
         if not skip_dedicated_captures and cost_stop_info is None:
             for profile in order:
+                if cells_set is not None and (profile, route) not in cells_set:
+                    continue
                 try:
                     if hasattr(executor, "renew_safety_timers"):
                         executor.renew_safety_timers(route)
@@ -2388,7 +2421,7 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         aquecimento_calls_path = out_dir / "aquecimento_execucoes.json"
         aquecimento_calls_path.write_text(json.dumps(aquecimento_calls, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    expected_total = len(profiles) * len(routes) * n_per_profile
+    expected_total = len(cells_set) * n_per_profile if cells_set is not None else len(profiles) * len(routes) * n_per_profile
     manifest = {
         "seed": seed, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         # Decisao 161 (item 3): "mode"/"executor_class" SEMPRE presentes
@@ -2404,7 +2437,13 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
         "smoke": smoke, "n_per_profile": n_per_profile,
         "route_orders": route_orders,
         "total_execucoes": len(execucoes_calls), "expected_total": expected_total,
-        "total_capturas": len(profiles) * len(routes),
+        "total_capturas": len(cells_set) if cells_set is not None else len(profiles) * len(routes),
+        # Decisao do Luciano (piloto assimetrico, conta nova): None pra
+        # qualquer chamada sem `cells` (byte a byte igual a antes); a
+        # lista ordenada dos pares `profile:route` realmente usados
+        # quando presente -- `organize_v9_results.py` recusa tratar um
+        # manifesto com isto preenchido como janela oficial da campanha.
+        "cells_filter": sorted(f"{p}:{r}" for (p, r) in cells_set) if cells_set is not None else None,
         # Decisao 133, item 4: quantas capturas dedicadas realmente
         # saíram OK vs. falharam-e-foram-registradas (nunca derrubando
         # o processo) -- some os dois pra bater com `total_capturas`
@@ -2664,6 +2703,14 @@ def main():
     ap.add_argument("--n-warmup-per-profile", type=int, default=0,
                      help="Decisao 108 item 1: N aquecimentos full-flow por celula ANTES das "
                           "execucoes contadas (default 0 -- nenhum aquecimento, comportamento de sempre)")
+    ap.add_argument("--cells", default=None,
+                     help="Pedido do Luciano (piloto assimetrico, conta nova): lista separada por "
+                          "virgula de pares 'perfil:rota' EXATOS a rodar, em vez do produto cartesiano "
+                          "completo de --campaign (8 rotas x 4 perfis) -- so faz sentido com --campaign. "
+                          "Ex.: classico:L0-sa-east-1,pqc:L0-sa-east-1,hibrido-v8:L0-sa-east-1,"
+                          "hibrido-and:L0-sa-east-1,classico:L14,hibrido-and:L14 (as 6 celulas do piloto "
+                          "assimetrico x --n-per-profile execucoes). Default None -- comportamento "
+                          "byte a byte identico a antes (grade completa).")
     ap.add_argument("--resume", action="store_true",
                      help="Pedido do Luciano (Etapa 1 do piloto v9): se --out ja tem um manifest.json "
                           "de uma janela COMPLETA e identica (mesmo total esperado), devolve ele de novo "
@@ -2710,6 +2757,28 @@ def main():
         route_server = dict(campaign_topology.CAMPAIGN_ROUTE_SERVER)
         if args.n_per_profile is None:
             ap.error("--campaign exige --n-per-profile (depende da escala real, nunca assumido)")
+    elif args.cells:
+        ap.error("--cells so faz sentido com --campaign (piloto assimetrico e um subconjunto da "
+                  "topologia de campaign_topology.py, nunca da grade default do piloto antigo)")
+
+    cells = None
+    if args.cells:
+        cells = []
+        for _pair in args.cells.split(","):
+            _pair = _pair.strip()
+            if not _pair:
+                continue
+            if ":" not in _pair:
+                ap.error(f"--cells: par malformado {_pair!r} -- esperado 'perfil:rota'")
+            _profile, _route = _pair.split(":", 1)
+            if _profile not in campaign_profiles:
+                ap.error(f"--cells: perfil {_profile!r} nao esta em PROFILES ({campaign_profiles!r})")
+            if _route not in campaign_routes:
+                ap.error(f"--cells: rota {_route!r} nao esta em campaign_topology.CAMPAIGN_ROUTES "
+                          f"({campaign_routes!r})")
+            cells.append((_profile, _route))
+        if not cells:
+            ap.error("--cells foi passado mas nao resultou em nenhum par valido")
 
     cost_tracker_instance = None
     if args.mode == "simulate":
@@ -2756,7 +2825,7 @@ def main():
         manifest = run_pilot(executor, args.seed, Path(args.out), n_per_profile=n_per_profile,
                               routes=campaign_routes, profiles=campaign_profiles,
                               n_warmup_per_profile=args.n_warmup_per_profile, resume=args.resume,
-                              cost_tracker=cost_tracker_instance)
+                              cost_tracker=cost_tracker_instance, cells=cells)
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
     # Achado real/pedido do Luciano: criterios 2 (initcwnd) e 7 (RTT

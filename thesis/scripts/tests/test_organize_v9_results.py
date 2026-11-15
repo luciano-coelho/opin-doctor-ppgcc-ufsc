@@ -15,7 +15,7 @@ _MODE_OMITTED = object()  # sentinela: omite "mode" do manifesto (caso "ausente"
 
 
 def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_bytes_per_connection=None,
-                     manifest_mode="ssh", manifest_executor_class="SSHExecutor"):
+                     manifest_mode="ssh", manifest_executor_class="SSHExecutor", manifest_cells_filter=None):
     calls = [{
         "profile": "classico", "route": "L0", "run": 1,
         "start_utc": "2026-11-14T00:00:00+00:00", "end_utc": "2026-11-14T00:00:01+00:00",
@@ -31,6 +31,8 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_by
     }
     if manifest_mode is not _MODE_OMITTED:
         manifest["mode"] = manifest_mode
+    if manifest_cells_filter is not None:
+        manifest["cells_filter"] = manifest_cells_filter
     calls_json = tmp_path / "calls.json"
     criterio6_json = tmp_path / "criterio6.json"
     manifest_json = tmp_path / "manifest.json"
@@ -41,10 +43,10 @@ def _write_fixtures(tmp_path: Path, network_transport_retries=None, handshake_by
 
 
 def _run(tmp_path, out_dir, extra_args=(), network_transport_retries=None, handshake_bytes_per_connection=None,
-         manifest_mode="ssh", manifest_executor_class="SSHExecutor"):
+         manifest_mode="ssh", manifest_executor_class="SSHExecutor", manifest_cells_filter=None):
     calls_json, criterio6_json, manifest_json = _write_fixtures(
         tmp_path, network_transport_retries, handshake_bytes_per_connection,
-        manifest_mode, manifest_executor_class)
+        manifest_mode, manifest_executor_class, manifest_cells_filter)
     args = [
         sys.executable, "-I", str(SCRIPT),
         "--calls-json", str(calls_json),
@@ -183,6 +185,32 @@ def test_allows_simulated_data_with_label_piloto(tmp_path):
     out_dir = tmp_path / "out"
     result = _run(tmp_path, out_dir, extra_args=["--label-piloto"],
                    manifest_mode="simulate", manifest_executor_class="LocalExecutor")
+    assert result.returncode == 0, result.stderr
+    report_data = json.loads((out_dir / "report_data_v9.json").read_text(encoding="utf-8"))
+    assert report_data["piloto"] is True
+
+
+def test_refuses_cells_filter_data_without_label_piloto(tmp_path):
+    """Decisao do Luciano (piloto assimetrico, conta nova): manifest.json
+    com cells_filter preenchido (orchestrator.py run_pilot(cells=...))
+    e dado REAL (mode="ssh"), mas de um SUBCONJUNTO da grade -- nunca
+    pode ser organizado como campanha oficial, mesmo sendo real."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, manifest_mode="ssh", manifest_executor_class="SSHExecutor",
+                   manifest_cells_filter=["classico:L0-sa-east-1", "classico:L14"])
+    assert result.returncode != 0
+    assert "cells_filter" in result.stderr
+    assert not (out_dir / "report_data_v9.json").exists()
+
+
+def test_allows_cells_filter_data_with_label_piloto(tmp_path):
+    """Mesmo manifesto (cells_filter + mode="ssh"), agora com
+    --label-piloto: prossegue -- este e exatamente o caso legitimo
+    (piloto assimetrico real, nunca campanha oficial)."""
+    out_dir = tmp_path / "out"
+    result = _run(tmp_path, out_dir, extra_args=["--label-piloto"],
+                   manifest_mode="ssh", manifest_executor_class="SSHExecutor",
+                   manifest_cells_filter=["classico:L0-sa-east-1", "classico:L14"])
     assert result.returncode == 0, result.stderr
     report_data = json.loads((out_dir / "report_data_v9.json").read_text(encoding="utf-8"))
     assert report_data["piloto"] is True

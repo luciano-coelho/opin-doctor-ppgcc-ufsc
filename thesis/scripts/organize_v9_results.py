@@ -161,8 +161,33 @@ def _refuse_simulated_data_outside_piloto(manifest: dict, label_piloto: bool) ->
     "unknown", typo, etc.) e recusado SEMPRE, independente de
     --label-piloto -- nunca ha um "piloto com modo desconhecido"
     legitimo, so "piloto com dado simulado conhecido" ou "campanha real
-    com SSHExecutor"."""
+    com SSHExecutor".
+
+    Decisao do Luciano (piloto assimetrico, conta nova) amplia a trava
+    de novo: `orchestrator.py.run_pilot(cells=...)` grava
+    `"cells_filter"` (lista de pares "perfil:rota") no manifesto
+    sempre que a janela rodou um SUBCONJUNTO da grade completa de
+    --campaign, nunca o produto cartesiano inteiro -- por definicao,
+    essa janela NUNCA pode ser a campanha oficial (que exige a grade
+    completa), mesmo com `mode="ssh"` (dado real, SSHExecutor real,
+    so que de um subconjunto). Mesma logica do caso "simulate": aceito
+    SOMENTE com --label-piloto; sem o rotulo, recusa alto, antes de
+    qualquer escrita -- nunca deixa um piloto assimetrico real ser
+    confundido com (ou sobrescrever) a janela oficial."""
     mode = manifest.get("mode")
+    cells_filter = manifest.get("cells_filter")
+    if cells_filter and not label_piloto:
+        raise RuntimeError(
+            f"manifest.json tem cells_filter={cells_filter!r} -- esta janela rodou so um "
+            "SUBCONJUNTO da grade de --campaign (piloto assimetrico), nunca o produto cartesiano "
+            "completo, e por isso nunca pode ser organizada como campanha oficial. Passe "
+            "--label-piloto se a intencao e mesmo organizar este piloto, ou confirme que o "
+            "manifesto certo (sem cells_filter, grade completa) foi passado."
+        )
+    # Nenhum `return` acima -- um piloto assimetrico (cells_filter +
+    # --label-piloto, ja aceito) continua sujeito as MESMAS checagens
+    # de `mode` abaixo (nunca um atalho que deixe passar mode invalido
+    # so porque o rotulo de piloto ja foi dado por outro motivo).
     if mode == "simulate":
         if not label_piloto:
             raise RuntimeError(
