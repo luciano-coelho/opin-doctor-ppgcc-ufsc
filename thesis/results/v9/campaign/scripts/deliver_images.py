@@ -78,6 +78,43 @@ def docker_image_rootfs_layers(docker_image: str) -> list[str]:
     return json.loads(proc.stdout.strip())
 
 
+def _extract_file_sha256(docker_image: str, path_in_image: str, tmp_dir: Path) -> str:
+    container = f"v9-extract-{Path(path_in_image).name}-deliver-images"
+    cli._run(["docker", "rm", "-f", container], timeout=30)
+    create = cli._run(["docker", "create", "--name", container, docker_image], timeout=30)
+    if create.returncode != 0:
+        raise RuntimeError(f"_extract_file_sha256({docker_image}, {path_in_image}): docker create falhou: {create.stderr}")
+    dest = tmp_dir / Path(path_in_image).name
+    try:
+        cp = cli._run(["docker", "cp", f"{container}:{path_in_image}", str(dest)], timeout=30)
+    finally:
+        cli._run(["docker", "rm", "-f", container], timeout=30)
+    if cp.returncode != 0:
+        raise RuntimeError(f"_extract_file_sha256({docker_image}, {path_in_image}): docker cp falhou: {cp.stderr}")
+    return hashlib.sha256(dest.read_bytes()).hexdigest()
+
+
+def _measure_harness_equivalent_despite_layer_drift(pins: dict, workdir: Path) -> bool:
+    """Decisao 159 (ja registrada em PINS.json['images']['measure']['note'],
+    antes desta rodada): as camadas de COPY+build do gateway/proxy/bench
+    dentro da imagem 'measure' variam por metadado de timestamp do
+    BuildKit, mesmo com conteudo funcional identico -- a PROVA DE
+    EQUIVALENCIA ja documentada la e exatamente esta: os binarios
+    /usr/local/bin/gateway e /usr/local/bin/proxy embutidos tem que
+    bater com os MESMOS binary_sha256 ja pinados para as imagens
+    standalone gateway/proxy. So usado como FALLBACK quando
+    rootfs_layers diverge -- nunca a checagem primaria."""
+    docker_image = pins["images"]["measure"]["docker_image"]
+    for embedded_name, pin_key in (("gateway", "gateway"), ("proxy", "proxy")):
+        expected = pins["images"][pin_key]["binary_sha256"]
+        if not expected:
+            return False
+        actual = _extract_file_sha256(docker_image, f"/usr/local/bin/{embedded_name}", workdir)
+        if actual != expected:
+            return False
+    return True
+
+
 def extract_gateway_binary_info(workdir: Path) -> dict:
     """Mesma extracao que `orchestrator._local_gateway_binary_info`
     fazia (Decisao 54) antes desta rodada -- agora so roda aqui, na
@@ -233,7 +270,17 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
             docker_image = pins["images"][key]["docker_image"]
             actual_layers = docker_image_rootfs_layers(docker_image)
             expected_layers = pins["images"][key]["rootfs_layers"]
-            if actual_layers != expected_layers:
+            layers_match = actual_layers == expected_layers
+            # Decisao 159 (ja em PINS.json, antes desta rodada): a
+            # imagem 'measure' tem camadas de COPY+build QUE O PROPRIO
+            # PIN JA DOCUMENTA como volateis por timestamp do BuildKit
+            # -- rootfs_layers por si so e conhecido por dar falso
+            # negativo aqui. Fallback: equivalencia funcional pelos
+            # binarios gateway/proxy EMBUTIDOS, exatamente como o
+            # texto do pin ja prescreve.
+            if not layers_match and key == "measure":
+                layers_match = _measure_harness_equivalent_despite_layer_drift(pins, workdir)
+            if not layers_match:
                 raise RuntimeError(
                     f"deliver_images({key}): rootfs_layers da imagem local carregada ({actual_layers!r}) "
                     f"nao bate com rootfs_layers em PINS.json ({expected_layers!r}) -- abortando ANTES de "

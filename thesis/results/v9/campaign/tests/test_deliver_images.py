@@ -278,6 +278,64 @@ def test_deliver_images_aborta_se_sha256sum_c_falha_no_controle(monkeypatch):
         di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
 
 
+def test_deliver_images_measure_com_layers_diferentes_mas_binarios_identicos_entrega(monkeypatch):
+    """Decisao 159 (ja em PINS.json) + Decisao 179: measure tem
+    camadas de COPY+build volateis por timestamp do BuildKit --
+    rootfs_layers diferente NAO pode abortar a entrega se os
+    binarios gateway/proxy EMBUTIDOS baterem com o binary_sha256
+    pinado (a mesma prova de equivalencia que o texto do pin ja
+    descreve)."""
+    calls = []
+    gw_bytes = b"gateway embutido fake\n"
+    px_bytes = b"proxy embutido fake\n"
+    gw_sha = hashlib.sha256(gw_bytes).hexdigest()
+    px_sha = hashlib.sha256(px_bytes).hexdigest()
+
+    def fake_run(argv, timeout=None):
+        calls.append(argv)
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "inspect":
+            return FakeProc(stdout=json.dumps(["sha256:" + "z" * 64]))  # nunca bate com o pin
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "cp":
+            dest = Path(argv[-1])
+            if dest.name == "gateway":
+                dest.write_bytes(gw_bytes)
+            elif dest.name == "proxy":
+                dest.write_bytes(px_bytes)
+            return FakeProc()
+        return _run_factory([])(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(di, "load_pins", lambda: {"images": {
+        "measure": {"docker_image": "mockopin-v9-measure", "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": gw_sha},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "binary_sha256": px_sha},
+    }})
+    report = di.deliver_images("203.0.113.5", "/fake/operator_key", images=("measure",))
+    assert report["images"]["measure"]["sha256_ok"] is True
+
+
+def test_deliver_images_measure_aborta_se_binario_embutido_tambem_diverge(monkeypatch):
+    """Fallback do teste acima nao pode mascarar uma imagem de
+    verdade diferente -- se o binario embutido TAMBEM nao bater com
+    o pin, continua abortando."""
+    def fake_run(argv, timeout=None):
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "inspect":
+            return FakeProc(stdout=json.dumps(["sha256:" + "z" * 64]))
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "cp":
+            Path(argv[-1]).write_bytes(b"binario adulterado\n")
+            return FakeProc()
+        return _run_factory([])(argv, timeout)
+
+    monkeypatch.setattr(cli, "_run", fake_run)
+    monkeypatch.setattr(di, "load_pins", lambda: {"images": {
+        "measure": {"docker_image": "mockopin-v9-measure", "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": "1" * 64},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "binary_sha256": "2" * 64},
+    }})
+    with pytest.raises(RuntimeError, match="nao bate com rootfs_layers"):
+        di.deliver_images("203.0.113.5", "/fake/operator_key", images=("measure",))
+
+
 def test_deliver_images_entrega_gateway_binary_info_e_binario_so_se_gateway_estiver_na_lista(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "_run", _run_factory(calls))
