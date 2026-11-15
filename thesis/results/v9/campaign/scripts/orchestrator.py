@@ -827,15 +827,31 @@ class SSHExecutor:
         MESMO `.tar`, com conteudo comprovadamente identico
         (confirmado com `docker:25-dind` -- ver PINS.json,
         `_image_identity_note`). O fail-closed agora exige, nesta
-        ordem: (1) sha256 do `.tar` local igual a `tar_sha256`
-        pinado (ANTES de qualquer scp -- mais barato, pega corrupcao
-        antes de gastar a transferencia); (2) apos o load,
-        `RootFS.Layers` do host identicas a `rootfs_layers`; (3) o
-        subconjunto de `.Config` do host identico a `config_subset`;
-        (4) pra imagens com binario Go proprio (`gateway`/`proxy`),
-        o sha256 do binario DENTRO do container carregado, igual a
-        `binary_sha256`. Image ID continua lido/registrado, so como
-        campo INFORMATIVO -- nunca comparado, nunca motivo de aborto."""
+        ordem: (1) apos o load, `RootFS.Layers` do host identicas a
+        `rootfs_layers`; (2) o subconjunto de `.Config` do host
+        identico a `config_subset`; (3) pra imagens com binario Go
+        proprio (`gateway`/`proxy`), o sha256 do binario DENTRO do
+        container carregado, igual a `binary_sha256`. Image ID
+        continua lido/registrado, so como campo INFORMATIVO -- nunca
+        comparado, nunca motivo de aborto.
+
+        Decisao 183 (Emenda -- remove a checagem pre-scp de tar_sha256
+        contra PINS.json): achado real, mesma classe do gate irmao
+        `deliver_images.py` (Decisao 179, commit 00f2be14) -- `docker
+        save` do MESMO conteudo (mesmo `rootfs_layers`/`binary_sha256`)
+        produz um `tar_sha256` DIFERENTE a cada invocacao independente
+        (confirmado: 2 `docker save -o` seguidos da mesma imagem local
+        nunca reconstruida, sha256 de arquivo diferente nos dois). Isso
+        nunca foi identidade de conteudo estavel -- a checagem pre-scp
+        aqui so passava, em rodadas anteriores, pela COINCIDENCIA do
+        `.tar` nunca ter sido re-salvo desde que bateu com o pin por
+        acaso; causou aborto real, fail-closed mas FALSO, ao entregar
+        auth/mongo_seed/mockapi/measure nesta rodada (.tar legitimo,
+        rebaixado por um valor que nunca deveria ter sido comparado).
+        tar_sha256 continua calculado e LOGADO (abaixo), so como
+        informacao de diagnostico -- nunca mais um gate; a prova real
+        de identidade e so a verificacao pos-load (1)-(3) acima, que
+        nao mudou."""
         pins = load_pins()
         image_pins = pins["images"][image_key]
         docker_image = image_pins["docker_image"]
@@ -852,13 +868,9 @@ class SSHExecutor:
                 f"rode deliver_images.py primeiro (operador -> controle)"
             )
         tar_bytes = local_tar_path.stat().st_size
+        # Decisao 183: tar_sha256 so como informacao de diagnostico no
+        # log (nunca mais comparado contra PINS.json -- ver docstring).
         actual_tar_sha256 = hashlib.sha256(local_tar_path.read_bytes()).hexdigest()
-        if actual_tar_sha256 != expected_tar_sha256:
-            raise RuntimeError(
-                f"_deliver_image({image_key}, {host}): sha256 do .tar estagiado no controle "
-                f"({actual_tar_sha256!r}) nao bate com PINS.json ({expected_tar_sha256!r}) -- "
-                f"abortando ANTES de qualquer scp"
-            )
 
         # Decisao 60, item 4 (pedido independente): tempo real do 2o
         # salto (controle -> host) -- scp do .tar + docker load +
@@ -903,6 +915,8 @@ class SSHExecutor:
             "loaded_image_id": loaded_id, "ok": ok,
             "layers_ok": layers_ok, "config_ok": config_ok, "binary_ok": binary_ok,
             "actual_binary_sha256": actual_binary_sha256, "expected_binary_sha256": expected_binary_sha256,
+            # Decisao 183: informativo apenas, nunca comparado (ver docstring).
+            "actual_tar_sha256": actual_tar_sha256, "expected_tar_sha256": expected_tar_sha256,
             "tar_bytes": tar_bytes, "elapsed_seconds": round(elapsed_seconds, 1),
             "slow": elapsed_seconds > DELIVERY_SLOW_THRESHOLD_SECONDS,
             "verified_at_utc": datetime.now(timezone.utc).isoformat(),

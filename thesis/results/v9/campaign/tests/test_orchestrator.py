@@ -1212,25 +1212,35 @@ def test_campanha_oficial_com_os_pins_do_piloto_passa(monkeypatch):
 # correto passa. Image ID nunca mais e motivo de aborto (so
 # informativo).
 
-def test_deliver_image_aborta_se_tar_local_adulterado(monkeypatch):
-    """O .tar ja estagiado no controle foi adulterado (sha256 nao
-    bate com `tar_sha256` pinado) -- tem que abortar ANTES de
-    qualquer scp pro host, nunca so depois do load."""
+def test_deliver_image_tar_sha256_diferente_do_pin_nao_aborta_mais(monkeypatch):
+    """Decisao 183 (Emenda -- regressao, item 3a): o .tar local
+    estagiado tem um sha256 DIFERENTE do `tar_sha256` pinado (mesmo
+    cenario real da nao-determinacao do `docker save` -- Decisao 179,
+    mesmo conteudo/rootfs_layers/binario, tar_sha256 muda a cada
+    invocacao) -- isso NAO pode mais abortar a entrega. O conteudo
+    real (layers/config/binario, verificados pos-load) continua
+    correto, entao a imagem tem que ser entregue e passar normalmente,
+    exatamente como antes da Decisao 179 ter corrigido o mesmo
+    problema no gate irmao `deliver_images.py`."""
     calls = []
     monkeypatch.setattr(cli, "_run", _fake_run_factory(calls))
     executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
-    # adultera o .tar do gateway DEPOIS que a fixture autouse ja o
-    # escreveu certo -- simula corrupcao/adulteracao real.
-    (executor.images_staging_dir / "gateway.tar").write_bytes(b"tar ADULTERADO\n")
-    with pytest.raises(RuntimeError, match="sha256 do .tar"):
-        executor.start_block("classico", "L0")
+    # reescreve o .tar do gateway com bytes DIFERENTES dos que
+    # `_FAKE_TAR_SHA256`/`_fake_pins()` esperam -- simula um re-save
+    # legitimo do MESMO conteudo, nunca uma adulteracao real (que
+    # `test_deliver_image_aborta_se_camada_adulterada`/`_config_
+    # adulterada`/`_binario_na_imagem_adulterado`, abaixo, continuam
+    # cobrindo via a verificacao pos-load, que esta edicao nao toca).
+    (executor.images_staging_dir / "gateway.tar").write_bytes(b"tar re-salvo, mesmo conteudo, bytes diferentes\n")
+    executor.start_block("classico", "L0")
+    delivered = {v["image_key"]: v for v in executor.image_delivery_verifications}
+    assert delivered["gateway"]["ok"] is True
+    assert delivered["gateway"]["actual_tar_sha256"] != delivered["gateway"]["expected_tar_sha256"], (
+        "o teste so prova o que quer provar se o tar_sha256 realmente diverge do pin")
     flat = [" ".join(c) for c in calls]
-    # Decisao 83: start_block entrega o backend (6 imagens) ANTES do
-    # gateway -- esses scps sao esperados; so o scp do GATEWAY em si
-    # (adulterado) nunca pode acontecer.
-    assert not any(c[0] == "scp" and "gateway.tar" in " ".join(c) for c in calls), (
-        "nenhum scp do gateway.tar pode acontecer com ele adulterado -- " + str(flat))
-    assert not any("docker run -d --name v9-mtls" in c for c in flat), flat
+    assert any(c[0] == "scp" and "gateway.tar" in " ".join(c) for c in calls), (
+        "o scp do gateway.tar tem que acontecer -- a checagem pre-scp de tar_sha256 foi removida -- " + str(flat))
+    assert any("docker run -d --name v9-mtls" in c for c in flat), flat
 
 
 def test_deliver_image_aborta_se_camada_adulterada(monkeypatch):

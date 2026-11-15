@@ -13042,3 +13042,94 @@ A prova de identidade REAL ja existe, DEPOIS do `docker load` no host, no mesmo 
 **Estado exato no momento da parada:** `measure` entregue e verificada (sha256 de transporte) no controle; `auth`/`mongo_seed`/`mockapi` entregues e verificadas (sha256 de transporte) no controle. NENHUM byte de NENHUMA dessas 4 imagens chegou a nenhum dos hosts reais nesta rodada (o 2o salto nunca passou do pre-check de `auth`). gateway/proxy/pqc-signer permanecem entregues e verificados nos hosts desde a Decisao 179 (nunca re-tocados). 0/18 execucoes do piloto; nenhum criterio (a)-(n) avaliado; nenhum portao j/k/m acionado (nunca chegaram a rodar). `PINS.json` intocado. Infraestrutura (12 instancias `running`, dead-man's-switch, chave da campanha) intocada -- nenhuma acao de infraestrutura foi necessaria. Custo: frota no ar desde `2026-11-15T04:17:09Z` (confirmado via `aws ec2 describe-instances`, leitura real); estimativa local conservadora no momento desta parada, ~8,5h decorridas, **~US$11,60-12,60** -- bem abaixo do aviso de US$25 e do teto de US$30. Nenhum bloqueio de classificador de seguranca nesta rodada; nenhuma trava fixa violada; nenhum push, campanha completa, tag movida, IAM, ou `cleanup_campaign_key`.
 
 **Decisao pendente do Luciano:** autorizar explicitamente uma edicao minima e escopada em `orchestrator.py._deliver_image` -- remover a checagem pre-scp de `tar_sha256` contra `PINS.json` (linhas ~854-861), mantendo so a prova de identidade REAL que ja existe depois do `docker load` (`rootfs_layers`/`config_subset`/`binary_sha256`), exatamente o mesmo criterio ja validado e aplicado ao gate irmao de `deliver_images.py` na Decisao 179 -- ou (ii) outra abordagem (ex.: o proprio Luciano decidir se/como atualizar os campos `tar_sha256` em `PINS.json`, o que esta tela NAO pode fazer por conta propria, trava fixa 1); ou (iii) aguardar e nao prosseguir agora. Nenhuma tentativa de contornar foi feita.
+
+## Decisao 183 (resposta do Luciano a Decisao 182 -- autorizacao explicita e escopada pra editar `orchestrator.py._deliver_image`, removendo SOMENTE a checagem pre-scp de `tar_sha256`, precedida de inventario por imagem e seguida de pre-voo antes de qualquer entrega/piloto real)
+
+**Item 1 -- inventario de identidade por imagem (precondicao da autorizacao: nenhuma imagem pode ficar sem prova pos-load alem do tar_sha256).**
+
+| Imagem | Campos de identidade no `PINS.json` | O que `_deliver_image` compara DEPOIS do `docker load` (nunca mudou) | Binario Go/jar proprio pra hashear | Risco de falso-negativo pos-load |
+|---|---|---|---|---|
+| gateway | tar_sha256, rootfs_layers (3), config_subset, binary_sha256 | rootfs_layers + config_subset + binary_sha256 | sim (`/gateway`) | nenhum -- imagem ja entregue e verificada nos 12 hosts desde a Decisao 179, nunca re-salva nesta rodada |
+| proxy | idem (3 camadas) | idem | sim (`/proxy`) | nenhum, mesma razao |
+| pqc-signer | tar_sha256, rootfs_layers (8), config_subset | rootfs_layers + config_subset | nao (Node, sem binario proprio) | nenhum -- ja entregue/verificada nos 12 hosts, nunca re-salva |
+| measure | tar_sha256, rootfs_layers (6), config_subset | rootfs_layers + config_subset | nao (so tooling de captura) | **SIM, achado real confirmado nesta rodada** -- a imagem reconstruida na Decisao 181 tem `rootfs_layers[1,2,3]` DIFERENTES do pin (confirmado agora com `docker image inspect mockopin-v9-measure --format '{{json .RootFS.Layers}}'` local: `[0]`/`[4]` batem, `[1,2,3,5]` divergem) -- a MESMA volatilidade de timestamp do BuildKit que o proprio `PINS.json` ja documenta na nota da imagem measure (Decisao 159) e que so o gate irmao `deliver_images.py` ganhou fallback de equivalencia funcional pra ela (Decisao 179, commit `6dff7e8f`). `_deliver_image` NUNCA ganhou esse fallback -- `layers_ok` vai dar `False` pra measure mesmo com o conteudo comprovadamente correto. Ver item 4. |
+| auth | tar_sha256, rootfs_layers (9), config_subset | rootfs_layers + config_subset | nao (Node) | nenhum -- imagem entregue ao controle nesta sessao mas NUNCA reconstruida (so transportada); rootfs_layers deterministicos entre save/load do mesmo conteudo |
+| mongo_seed | tar_sha256, rootfs_layers (14), config_subset | rootfs_layers + config_subset | nao (Mongo) | nenhum, mesma razao |
+| mockapi | tar_sha256, rootfs_layers (9), config_subset, binary_sha256 (`binary_sha256_reproducible: false`, mas isso e sobre REBUILD, nunca sobre esta entrega -- a imagem ja pinada e so transportada) | rootfs_layers + config_subset + binary_sha256 | sim (`/home/app/application.jar`) | nenhum, mesma razao |
+
+Nenhuma imagem ficou sem prova pos-load alem de tar_sha256 (todas tem rootfs_layers+config_subset, 3 delas tambem binary_sha256) -- a precondicao estrita do item 1 da autorizacao (que exigiria parar sem editar) nao se aplicou literalmente. Mas o achado da `measure` acima e real e documentado aqui antes de qualquer edicao, exatamente como pedido.
+
+**Item 2 -- edicao, escopo exato.** Removida SOMENTE a checagem pre-scp de `tar_sha256` recalculado contra `PINS.json`, em `SSHExecutor._deliver_image` (`orchestrator.py`). `tar_sha256` continua calculado e passa a ser gravado em `image_delivery_verifications` como campo informativo (`actual_tar_sha256`/`expected_tar_sha256`), nunca mais comparado. Nenhuma outra linha de `orchestrator.py` tocada. Diff completo:
+
+```diff
+@@ -827,15 +827,31 @@ class SSHExecutor:
+         MESMO `.tar`, com conteudo comprovadamente identico
+         (confirmado com `docker:25-dind` -- ver PINS.json,
+         `_image_identity_note`). O fail-closed agora exige, nesta
+-        ordem: (1) sha256 do `.tar` local igual a `tar_sha256`
+-        pinado (ANTES de qualquer scp -- mais barato, pega corrupcao
+-        antes de gastar a transferencia); (2) apos o load,
+-        `RootFS.Layers` do host identicas a `rootfs_layers`; (3) o
+-        subconjunto de `.Config` do host identico a `config_subset`;
+-        (4) pra imagens com binario Go proprio (`gateway`/`proxy`),
+-        o sha256 do binario DENTRO do container carregado, igual a
+-        `binary_sha256`. Image ID continua lido/registrado, so como
+-        campo INFORMATIVO -- nunca comparado, nunca motivo de aborto."""
++        ordem: (1) apos o load, `RootFS.Layers` do host identicas a
++        `rootfs_layers`; (2) o subconjunto de `.Config` do host
++        identico a `config_subset`; (3) pra imagens com binario Go
++        proprio (`gateway`/`proxy`), o sha256 do binario DENTRO do
++        container carregado, igual a `binary_sha256`. Image ID
++        continua lido/registrado, so como campo INFORMATIVO -- nunca
++        comparado, nunca motivo de aborto.
++
++        Decisao 183 (Emenda -- remove a checagem pre-scp de tar_sha256
++        contra PINS.json): achado real, mesma classe do gate irmao
++        `deliver_images.py` (Decisao 179, commit 00f2be14) -- `docker
++        save` do MESMO conteudo (mesmo `rootfs_layers`/`binary_sha256`)
++        produz um `tar_sha256` DIFERENTE a cada invocacao independente
++        (confirmado: 2 `docker save -o` seguidos da mesma imagem local
++        nunca reconstruida, sha256 de arquivo diferente nos dois). Isso
++        nunca foi identidade de conteudo estavel -- a checagem pre-scp
++        aqui so passava, em rodadas anteriores, pela COINCIDENCIA do
++        `.tar` nunca ter sido re-salvo desde que bateu com o pin por
++        acaso; causou aborto real, fail-closed mas FALSO, ao entregar
++        auth/mongo_seed/mockapi/measure nesta rodada (.tar legitimo,
++        rebaixado por um valor que nunca deveria ter sido comparado).
++        tar_sha256 continua calculado e LOGADO (abaixo), so como
++        informacao de diagnostico -- nunca mais um gate; a prova real
++        de identidade e so a verificacao pos-load (1)-(3) acima, que
++        nao mudou."""
+         pins = load_pins()
+         image_pins = pins["images"][image_key]
+         docker_image = image_pins["docker_image"]
+@@ -852,13 +868,9 @@ class SSHExecutor:
+                 f"rode deliver_images.py primeiro (operador -> controle)"
+             )
+         tar_bytes = local_tar_path.stat().st_size
++        # Decisao 183: tar_sha256 so como informacao de diagnostico no
++        # log (nunca mais comparado contra PINS.json -- ver docstring).
+         actual_tar_sha256 = hashlib.sha256(local_tar_path.read_bytes()).hexdigest()
+-        if actual_tar_sha256 != expected_tar_sha256:
+-            raise RuntimeError(
+-                f"_deliver_image({image_key}, {host}): sha256 do .tar estagiado no controle "
+-                f"({actual_tar_sha256!r}) nao bate com PINS.json ({expected_tar_sha256!r}) -- "
+-                f"abortando ANTES de qualquer scp"
+-            )
+ 
+         # Decisao 60, item 4 (pedido independente): tempo real do 2o
+         # salto (controle -> host) -- scp do .tar + docker load +
+@@ -903,6 +915,8 @@ class SSHExecutor:
+             "loaded_image_id": loaded_id, "ok": ok,
+             "layers_ok": layers_ok, "config_ok": config_ok, "binary_ok": binary_ok,
+             "actual_binary_sha256": actual_binary_sha256, "expected_binary_sha256": expected_binary_sha256,
++            # Decisao 183: informativo apenas, nunca comparado (ver docstring).
++            "actual_tar_sha256": actual_tar_sha256, "expected_tar_sha256": expected_tar_sha256,
+             "tar_bytes": tar_bytes, "elapsed_seconds": round(elapsed_seconds, 1),
+             "slow": elapsed_seconds > DELIVERY_SLOW_THRESHOLD_SECONDS,
+             "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+```
+
+**Item 3 -- testes.** O teste antigo `test_deliver_image_aborta_se_tar_local_adulterado` testava exatamente o comportamento removido -- substituido por `test_deliver_image_tar_sha256_diferente_do_pin_nao_aborta_mais` (regressao, item 3a: `.tar` com sha256 diferente do pin mas conteudo real correto tem que ser entregue e passar normalmente). Os 3 testes negativos ja existentes (`test_deliver_image_aborta_se_camada_adulterada`, `_config_adulterada`, `_binario_na_imagem_adulterado`, item 3b) nao foram tocados -- continuam cobrindo adulteracao real via a verificacao pos-load, que esta edicao nunca mudou. Suite completa `campaign/tests/`: 451 passed + 1 failed na 1a rodada (`test_second_instance_same_name_rejected_while_first_runs`, `test_launch_persistent.py` -- flake de timing JA documentado desde a Decisao 172, nada a ver com este arquivo); re-executado isolado, passou em 6.47s -- confirmado flake, nao regressao.
+
+**Item 4 -- pre-voo (em andamento/continua nesta mesma rodada -- ver proxima entrada ou a continuacao desta).** Levantamento read-only via SSH (chave pessoal, SO controle) confirmou: todos os `CONTROL_FILES` + `PINS.json` + `certs/generated` + as 7 imagens (auth/gateway/measure/mockapi/mongo_seed/pqc-signer/proxy, cada uma com `.tar.sha256`) ja presentes no controle. Achado: o `orchestrator.py` no controle (datado de antes desta edicao) estava desatualizado -- a correcao do item 2 so teria efeito real apos re-entrega. `terraform output`/`terraform output -json inventory` usados SEMPRE com nome escopado (nunca `-json` sem filtro), conforme a regra permanente desde a Decisao 176.
