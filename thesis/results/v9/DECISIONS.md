@@ -12803,3 +12803,45 @@ Apply terminou (fim `2026-11-15T04:17:32Z`) sem nenhuma nova tentativa, conforme
 **Achado real e serio: as 12 instancias estao `running` (billable) mas SEM EIP, SEM a tag `Role` na ENI, e SEM a maioria das regras de ingress (gateway/criterio2/criterio2_reverso) -- apenas o controle tem a porta SSH aberta pro operador.** O cost_tracker e o dead-man's-switch (que dependem de material entregue na Fase 2, nunca alcancada) NAO estao ativos nestas instancias ainda. Copia de seguranca do state pos-apply-parcial feita em `~/v9_state_backup/terraform.tfstate.post_partial_apply_20261115T041909Z` (sha256 `020f78ae72e451c6974a1794333db80ea1b850ee78b6a797921173feac801575`).
 
 Itens 5-8 (verificacao pos-apply completa, entrega, piloto) **nao foram executados** -- o pedido so previa esses itens apos um apply bem-sucedido; o estado parcial atual nao e o "pos-apply" que eles descrevem. Nenhum recurso foi apagado, nenhuma tag movida, nenhum `cleanup_campaign_key` rodado, nenhuma mudanca de IAM real, nenhum push. A infraestrutura (incluindo as 12 instancias) continua ligada, aguardando decisao do Luciano: provavel correcao adicional de IAM (permissao `ec2:ModifyInstanceAttribute`, condicionada a tag como as demais) antes de uma nova tentativa -- que so deve ser feita por ordem explicita nova, nunca por iniciativa desta sessao.
+
+## Decisao 175 (pedido do Luciano -- retomada apos o apply parcial da Decisao 174: erro exato + estado real, dry-run das acoes pos-criacao, plano do delta, condicoes para o apply, verificacao pos-apply; autorizacao presente na sessao para o apply do delta SE as condicoes do item 4 fechassem): o usuario ja tinha colado o statement `ModificarAtributoInstanciaComTag` sugerido apos a Decisao 174. Item 1 confirmado por leitura real nas 7 regioes (`describe-instances`/`describe-addresses`/`describe-key-pairs`/`describe-security-group-rules`) e `terraform state list`: **zero divergencia** entre o state e a AWS real -- exatamente o que a Decisao 174 registrou continua: 12 instancias `running` (lancadas entre `04:17:09Z` e `04:17:22Z`), 0 EIP, 8 key pair (`-02` em todas as 7 regioes mais `-operator-02` em sa-east-1), 1 unica regra de ingress (SSH do controle, `/32` do operador, sem `0.0.0.0/0` em lugar nenhum). Tempo decorrido na leitura (`04:30:54Z`): ~14 minutos; custo estimado ~US$0,31 (14 min a ~US$1,35/h agregado das 12).
+
+**Item 2 (dry-run das acoes pos-criacao) achou NEGADO -- parou aqui, por forca da regra geral de parada do pedido, sem avancar pros itens 3-5:**
+
+| Acao testada | Instancia | Resultado |
+|---|---|---|
+| `ModifyInstanceAttribute` (InstanceInitiatedShutdownBehavior=stop) | t4g.micro (controle) e m7i-flex.large (sa-east-1 e us-east-1) | PERMITIDO nas 3 -- confirma que o fix da Decisao 174 funcionou |
+| `ModifyInstanceMetadataOptions` (http-tokens=required) | t4g.micro e m7i-flex.large | **NEGADO** -- `UnauthorizedOperation`, "no identity-based policy allows the ec2:ModifyInstanceMetadataOptions action" |
+| `ModifyInstanceCreditSpecification` (CpuCredits=standard) | t4g.micro (controle) | **NEGADO** -- mesmo padrao de erro |
+| `AssociateAddress` | t4g.micro e m7i-flex.large, contra um `allocation-id` fabricado (nenhum EIP real existe ainda) | NEGADO, mas **inconclusivo** -- a acao ja consta em `OperarSoNoQueJaTemATag` com a condicao `ec2:ResourceTag/Project` correta; sem um EIP real e tagueado pra testar contra, nao e possivel distinguir "gap real" de "a condicao de tag nao resolve pra um recurso que nao existe". Nenhuma mudanca de policy proposta pra esta acao; recomenda-se reconferir com um EIP real na proxima rodada antes do apply, nao key pairs.
+
+`CreateTags` com os valores reais dos 24 `aws_ec2_tag` (12 `primary_eni_project`, chave `Project`; 12 `primary_eni_role`, chave `Role`, valores `campaign-client`/`campaign-server`/`campaign-control`) foi reconfirmado por amostra ao vivo contra a ENI real do controle (as duas chamadas, Project e Role) -- **PERMITIDO nas duas**, confirmando que o fix `CriarTagsRoleSemProjectNaMesmaChamada` da Decisao 173 cobre os 24 por desenho (2 formatos de chamada, nao 24 casos distintos).
+
+JSON exato dos 2 statements que faltam (mesmo desenho de condicao por tag das demais; nenhum foi aplicado por esta sessao -- so leitura/dry-run, o usuario aplica no console):
+
+```json
+{
+  "Sid": "ModificarMetadataOptionsComTag",
+  "Effect": "Allow",
+  "Action": "ec2:ModifyInstanceMetadataOptions",
+  "Resource": "arn:aws:ec2:*:*:instance/*",
+  "Condition": {
+    "StringEquals": {
+      "ec2:ResourceTag/Project": "mockopin-pqc-campanha-oficial"
+    }
+  }
+},
+{
+  "Sid": "ModificarCreditSpecificationComTag",
+  "Effect": "Allow",
+  "Action": "ec2:ModifyInstanceCreditSpecification",
+  "Resource": "arn:aws:ec2:*:*:instance/*",
+  "Condition": {
+    "StringEquals": {
+      "ec2:ResourceTag/Project": "mockopin-pqc-campanha-oficial"
+    }
+  }
+}
+```
+
+Itens 3-5 (plano do delta, apply do delta, verificacao pos-apply/ativacao do cost_tracker e do dead-man's-switch) **nao foram executados**, conforme a regra geral de parada do pedido. Nenhum recurso foi criado, alterado ou apagado nesta rodada (so leitura e `--dry-run`, que nunca executam de verdade); nenhuma mudanca de IAM real; nenhuma tag movida; nenhum `cleanup_campaign_key`; nenhum `git push`. As 12 instancias continuam `running`, sem EIP/tags de ENI/cost_tracker/dead-man's-switch ativos, exatamente como a Decisao 174 deixou -- aguardando o usuario colar os 2 statements acima antes de uma nova tentativa, que so deve ocorrer por ordem explicita nova.
