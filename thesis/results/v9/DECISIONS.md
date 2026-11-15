@@ -12633,3 +12633,37 @@ O unico arquivo que diverge: `home/app/application.jar` (pin `956e860d...`, repr
 **Nota de achado fora do escopo desta rodada (nao corrigido, so registrado):** a Decisao 169 afirma "Tag anotada local `v9-campanha-oficial-congelada-v9` criada no commit `3c7e4b07`" -- esse hash e do commit do fix do `run_gate.py` (`3c7e4b07`), nao do commit onde a tag `v9` de fato foi gravada (`4b8e0b86`, confirmado por `git rev-parse v9-campanha-oficial-congelada-v9^{commit}`). E um erro de transcricao na propria Decisao 169, nao relacionado a reprodutibilidade de `auth`/`mockapi` -- fora do escopo literal desta rodada (item 1 pedia so a correcao da reprodutibilidade), reportado aqui para o autor decidir se corrige.
 
 **Nenhuma acao contra AWS, nenhum push, nenhum apply.**
+
+## Decisao 171 -- Fase 0 (errata + tag final) concluida; Fase 1 (plano/apply) interrompida no item 4(b) antes de qualquer apply real -- persistencia do orquestrador na sessao SSH do operador nunca implementada
+
+Autorizacao do Luciano, presente na sessao: terraform apply do plano revisado, entrega de imagens, piloto de 18 execucoes (perfil AWS `mockopin-pqc-campanha`, conta terminando em 5354). Execucao direta (sem subagente), seguindo os portoes de parada do proprio pedido.
+
+**Fase 0.** Emenda registrada na Decisao 169 (hash correto `4b8e0b86`, texto original preservado). `git ls-remote --tags origin` confirmado: `v9-campanha-oficial-final` nao existe no remoto. `git diff --stat` desde a tag v9: so `DECISIONS.md` (+2 linhas desta emenda). Tag local `v9-campanha-oficial-final` recriada no commit `4814c800` (working tree limpa confirmada antes).
+
+**Fase 1, item 1.** Confirmado: HEAD = `4814c800`, status limpo.
+
+**Fase 1, item 2.** Nenhum arquivo de plano salvo existia em disco -- `terraform plan` rodado do zero em `terraform_campanha_oficial_conta_nova/` (`TF_VAR_aws_profile=mockopin-pqc-campanha`, `TF_VAR_operator_ssh_public_key=$(cat ~/.ssh/id_ed25519.pub)`, `TF_VAR_operator_ip_cidr` via `checkip.amazonaws.com`, `TF_VAR_server_client_instance_type=m7i-flex.large`, confirmado contra o unico uso documentado desse valor no `PILOT_RUNBOOK.md`). Resultado real, batendo EXATAMENTE contra o resumo do pedido:
+
+| Tipo de recurso | Esperado | Real (plan) |
+|---|---|---|
+| `aws_vpc_security_group_ingress_rule` (ingress) | 33 | 33 |
+| `aws_ec2_tag` | 24 | 24 |
+| `aws_eip` | 12 | 12 |
+| `aws_instance` | 12 | 12 |
+| `aws_security_group` | 12 | 12 |
+| `aws_key_pair` | 8 | 8 |
+| `tls_private_key` | 1 | 1 |
+| **Total** | **102** | **102** |
+| destroy/replace | 0/0 | 0/0 |
+| ingress com `0.0.0.0/0` | 0 | 0 (os 12 `0.0.0.0/0` do plano sao todos `egress`, nunca `ingress`, confirmado por grep de contexto) |
+| SSH do operador | so no controle | confirmado por leitura de `main.tf`: so `module.control` tem `ssh_ingress_cidrs={"operator":...}`; os outros 11 usam `{"control": module.control.public_ip}` |
+
+12 instancias/24 vCPU: 1x `t4g.micro` (2 vCPU, controle) + 11x `m7i-flex.large` (2 vCPU cada) = 24. Plano salvo em `/tmp/v9_campanha_oficial.tfplan` (fora do repositorio, nunca comitado -- contem o IP do operador). Perfil AWS confirmado contra a conta certa via `aws sts get-caller-identity` -- ultimos 4 digitos `5354`, batendo com o informado (numero completo nunca impresso, por regra).
+
+**Fase 1, item 3.** sha256 dos 7 arquivos `.tf` (raiz + modulo) e do arquivo de plano registrados (tabela completa no relatorio desta rodada, fora deste arquivo por serem 8 hashes de 64 caracteres cada -- disponiveis no log da sessao). Diretorio do Terraform continua sem tracking; nenhum commit dele nesta rodada (so depois de uma campanha real, por pedido explicito).
+
+**Fase 1, item 4 -- PARADA ANTES DO APPLY.** (a) Chave privada da campanha: `pki_relay.py::deliver_campaign_key()` entrega num unico salto (operador -> controle via `scp`), `chmod 600` no destino, arquivo temporario local sempre dentro de `TemporaryDirectory` (removido mesmo em erro) -- design correto. Achado menor, nao bloqueante por si so: nenhum script committed (`cleanup.py`/`emergency_stop.py`) apaga/`shred` essa chave do controle ao final -- ela so deixa de existir quando a propria instancia de controle e terminada (o volume EBS e destruido junto), nunca antes disso por uma acao dedicada. **(b) BLOQUEIO REAL:** o procedimento documentado e committed (`PILOT_RUNBOOK.md`, Passos 10/11, unica fonte real de como `orchestrator.py` e invocado em campanha) roda o orquestrador DIRETO dentro de um `ssh ec2-user@"$CONTROL_IP" bash -s <<'REMOTE' ... python3 orchestrator.py ... REMOTE` -- um comando SSH BLOQUEANTE disparado do laptop do operador, sem `nohup`/`setsid`/`tmux`/`disown` em lugar nenhum envolvendo o PROPRIO processo do orquestrador (os `nohup`/`setsid` que existem em `orchestrator.py`, linhas ~993 e ~1726, protegem so os sub-processos internos do sampler de CPU/steal e do `tcpdump` disparados remotamente pelo orquestrador -- nunca o processo do orquestrador em si). Uma queda de internet do operador durante a janela de execucao (Passo 11, a MESMA categoria de risco que o item 4(b) deste pedido pede pra verificar) mataria a sessao SSH e, com ela, o processo remoto -- exatamente o cenario de desacordo que a propria autorizacao descreve como motivo de parar antes do apply. **Nenhum `terraform apply` foi executado.** Nenhum recurso de AWS foi criado, alterado ou destruido nesta Decisao -- so leitura, `terraform plan` (read-only por natureza) e o `sts get-caller-identity` de confirmacao de conta.
+
+**Precedente relevante, ja registrado na Decisao 111 e reconfirmado aqui por leitura (nao testado de novo nesta rodada, porque a parada no item 4(b) ocorreu antes de chegar ao passo de apply):** uma tentativa anterior de `terraform apply` para este mesmo tipo de infraestrutura foi bloqueada pelo classificador de seguranca do proprio Claude Code (`"[Protected-Scope IaC Apply]"`), categoricamente distinto de falta de autorizacao do Luciano. Isso significa que, mesmo depois de corrigido o item 4(b), um apply real pode encontrar esse mesmo bloqueio de ferramenta -- a decisao correta nesse caso, registrada e seguida na Decisao 111, e parar e reportar, nunca tentar contornar via API crua.
+
+Aguardando decisao do Luciano: (i) implementar persistencia real do processo do orquestrador no controle (`nohup`/`setsid` ou `tmux`, mesmo padrao ja comprovado para os sub-processos internos) antes de qualquer novo apply; e/ou (ii) aceitar o risco documentado e autorizar explicitamente o apply mesmo assim; e/ou (iii) adicionar um passo de remocao explicita da chave da campanha no controle ao final da campanha (achado menor do item (a)). Infraestrutura: nenhuma foi criada, nao ha nada pra desligar. Nenhuma acao contra AWS alem de leitura/plan/sts; nenhum push.
