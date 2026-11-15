@@ -12691,3 +12691,86 @@ Autorizacao do Luciano, presente na sessao: terraform apply do plano revisado, e
 **Nenhuma acao de rede nesta rodada alem de `git ls-remote --tags origin` (leitura).** Nenhum `terraform apply`, nenhum `git push`. Hash do commit final e sha256 no relatorio desta rodada.
 
 Aguardando decisao do Luciano: (i) implementar persistencia real do processo do orquestrador no controle (`nohup`/`setsid` ou `tmux`, mesmo padrao ja comprovado para os sub-processos internos) antes de qualquer novo apply; e/ou (ii) aceitar o risco documentado e autorizar explicitamente o apply mesmo assim; e/ou (iii) adicionar um passo de remocao explicita da chave da campanha no controle ao final da campanha (achado menor do item (a)). Infraestrutura: nenhuma foi criada, nao ha nada pra desligar. Nenhuma acao contra AWS alem de leitura/plan/sts; nenhum push.
+
+## Decisao 173 (pedido do Luciano -- rodada so-leitura/dry-run na AWS, mais edicao local do Terraform, apos a Decisao 172 ter implementado a persistencia e apos a 1a tentativa real de apply ter falhado em key pairs duplicados e permissao IAM de ingress): inventario das 7 regioes, matriz de dry-run encontra um segundo gap real de IAM (CreateTags so com Role), sufixo de key pair implementado, plano bate 89/89 com 0 change/0 destroy
+
+Execucao direta (sem subagente). Regras da rodada: somente leitura e dry-run na AWS (nenhum recurso criado/alterado/apagado), mais edicao local do `.tf` -- sem apply, sem IAM real (o usuario ja aplicou nesta conta o statement `CriarRegraIngressComTagObrigatoria` sugerido na Decisao 172), sem apagar nada, sem push.
+
+**Item 1 -- inventario das 7 regioes (leitura, `describe-*`).**
+
+| Recurso | Total encontrado | Observacao |
+|---|---|---|
+| `aws_key_pair` | 8 | TODOS orfaos de 2026-11-10 (mesmo lote que a Decisao 172 ja registrou) -- nenhum novo |
+| Security groups com `tag:Project` | **24** | 12 orfaos de 2026-11-10 (mesmo lote dos key pairs orfaos) + 12 do apply parcial de 2026-11-15 (que hoje estao no state deste Terraform, confirmado por `terraform state list`) -- achado novo: havia MAIS SGs vivos do que os 12 "esperados", porque `name_prefix` (nunca `name` fixo) faz a AWS gerar um sufixo unico a cada criacao, entao o SG nunca colide por nome e os 12 antigos nunca bloquearam os 12 novos -- mas tambem nunca foram limpos. Sem custo (security group e gratuito), nao e um recurso billable, nao aciona a parada do item 1 |
+| Instancias (qualquer estado) | 0 | Nenhuma instancia em nenhuma das 7 regioes |
+| EIPs | 0 | Nenhum IP elastico alocado |
+| Volumes | 0 | Nenhum volume EBS fora dos implicitos de uma instancia (que nao existem) |
+| ENIs com `tag:Project` | 0 | Nenhuma interface de rede tagueada |
+
+Nenhum recurso billable inesperado -- a rodada nao parou no item 1. Achado registrado (nao corrigido, fora do escopo pedido: o usuario decidiu nao importar nem apagar os key pairs orfaos, e os 24 SGs seguem a mesma logica -- toda limpeza fica para uma decisao futura do usuario sobre a conta).
+
+**Item 2 -- matriz de permissoes por `--dry-run` (nenhum recurso criado; `DryRunOperation` = permitido, `UnauthorizedOperation` = negado).**
+
+| Chamada | Regioes testadas | Resultado |
+|---|---|---|
+| (a) `AuthorizeSecurityGroupIngress`, regra tagueada (Project+Role) | sa-east-1, us-east-1, ap-northeast-1, ca-central-1, eu-north-1, ap-southeast-1, ap-northeast-2 | **PERMITIDO nas 7** -- o statement `CriarRegraIngressComTagObrigatoria` (Decisao 172) funciona em todas |
+| (b1) `CreateTags`, SO `Role` (sem `Project` na mesma chamada) | sa-east-1 | **NEGADO** -- achado real, ver abaixo |
+| (b2) `CreateTags`, SO `Project` | sa-east-1 | PERMITIDO |
+| (c) `AllocateAddress`, com `TagSpecifications` do modulo | sa-east-1 | PERMITIDO |
+| (d) `ImportKeyPair`, nome com o sufixo do item 3 + tags do modulo | sa-east-1 | PERMITIDO |
+| (e) `RunInstances`, exatamente como o `.tf` (AMI/tipo/subnet/SG/key/metadata_options/root_block_device/tags) | sa-east-1 (m7i-flex.large), us-east-1 (m7i-flex.large), sa-east-1 (t4g.micro, controle) | **PERMITIDO nas 3** |
+| (f) `AssociateAddress` | sa-east-1 | NAO TESTAVEL de forma significativa -- ver nota |
+| (f) `ModifyInstanceAttribute` | -- | N/A -- o `.tf` nao usa esta chamada em nenhum recurso |
+
+Nota sobre (f) `AssociateAddress`: a condicao que autoriza esta acao (`OperarSoNoQueJaTemATag`, `ec2:ResourceTag/Project`) so pode ser avaliada contra um recurso que JA EXISTE e JA tem a tag -- e nenhuma instancia nem EIP existe ainda nesta conta (item 1). Testar com IDs falsos (`i-000...`, `eipalloc-000...`) devolve `UnauthorizedOperation`, mas isso e um artefato do recurso falso nunca ter a tag, nao uma evidencia real de bloqueio -- o mesmo padrao de condicao ja funciona, confirmado, para `AuthorizeSecurityGroupIngress`/`DeleteSecurityGroup`/etc. nos 24 SGs reais que ja existem e ja tem a tag. Reportado como NAO TESTAVEL, nunca como NEGADO.
+
+**Tags dos 24 `aws_ec2_tag` (lidas de `modules/campaign_instance/main.tf:262-272`):**
+
+| Resource | Chave | Valor | Inclui `Project` na MESMA chamada? |
+|---|---|---|---|
+| `primary_eni_project` (12x, um por instancia) | `Project` | `mockopin-pqc-campanha-oficial` | Sim (e o proprio Project) |
+| `primary_eni_role` (12x, um por instancia) | `Role` | `campaign-control` (1x) / `campaign-server` (3x) / `campaign-client` (8x) | **Nao** -- chamada isolada, so esta tag |
+
+**Achado real (bloqueante se nao corrigido antes do apply): os 12 `aws_ec2_tag.primary_eni_role` falhariam com `UnauthorizedOperation` num apply real.** Cada `aws_ec2_tag` do provider AWS e uma chamada `CreateTags` PROPRIA e isolada (nunca agrupada com a chamada do `primary_eni_project` do mesmo modulo, confirmado pelo dry-run real do item (b1) acima) -- a condicao `aws:RequestTag/Project` da policy atual exige que ESSA MESMA chamada inclua a tag `Project`, o que a chamada de `Role` isolada nunca faz. O comentario do proprio `.tf` (linhas 260-261, "ja coberto pela politica sem condicao de tag") estava ERRADO -- nunca foi exercitado ao vivo antes desta rodada porque o apply anterior parou em key pairs/ingress, antes de chegar nas instancias/ENIs.
+
+**Correcao sugerida (so o JSON; IAM real NAO foi alterada por mim -- o usuario aplica no console):** novo statement, mesmo padrao de condicao por tag ja usado na policy, salvo em `thesis/results/v9/terraform_campanha_oficial_conta_nova/iam_policy_operador.json` (arquivo local, fora do git):
+
+```json
+{
+    "Sid": "CriarTagsRoleSemProjectNaMesmaChamada",
+    "Effect": "Allow",
+    "Action": "ec2:CreateTags",
+    "Resource": "*",
+    "Condition": {
+        "StringLike": {
+            "aws:RequestTag/Role": "campaign-*"
+        }
+    }
+}
+```
+
+JSON completo da politica resultante (todos os statements existentes + este) esta no relatorio desta rodada e no arquivo local `iam_policy_operador.json`.
+
+**Item 3 -- sufixo de key pair.** Variavel nova `key_name_suffix` em `variables.tf` (sem default, mesma politica de falha-alto de `aws_profile`/`operator_ip_cidr`/etc. do proprio arquivo) usada nos 8 `key_name` de `main.tf` (os 7 `campaign_*` + `operator_sa_east_1`), via `"mockopin-pqc-campanha-oficial${var.key_name_suffix}"` / `"mockopin-pqc-campanha-oficial-operator${var.key_name_suffix}"`. Nenhuma outra referencia precisou mudar -- os modulos ja apontam pro ATRIBUTO `aws_key_pair.X.key_name`, nunca pro literal. `terraform validate`/`fmt -check`: OK.
+
+**Item 4 -- `terraform plan` (read-only) com `TF_VAR_key_name_suffix=-02`.**
+
+| Metrica | Esperado | Real |
+|---|---|---|
+| `aws_vpc_security_group_ingress_rule` | 33 | 33 |
+| `aws_ec2_tag` | 24 | 24 |
+| `aws_eip` | 12 | 12 |
+| `aws_instance` | 12 | 12 |
+| `aws_key_pair` | 8 | 8 |
+| **Total a criar** | **89** | **89** |
+| A mudar / a destruir | 0 / 0 | 0 / 0 |
+| 12 `aws_security_group` + `tls_private_key` ja no state | 0 change | confirmado (so "Refreshing state", nunca aparecem em "will be created/changed") |
+| Ingress com `0.0.0.0/0` | 0 | 0 (nenhuma ocorrencia de `0.0.0.0/0` no plano inteiro -- o unico uso e o egress inline do `aws_security_group`, que nao muda) |
+
+Plano salvo fora do repositorio (fora de `thesis/`, path local da maquina, nao reproduzido aqui). sha256 dos 7 `.tf` (substituem os valores da Decisao 171, que eram de antes do item 3) e do plano: registrados no relatorio desta rodada (8 hashes de 64 caracteres, fora deste arquivo por tamanho).
+
+**Item 5 -- state.** `terraform.tfstate` em `thesis/results/v9/terraform_campanha_oficial_conta_nova/terraform.tfstate` (sem `.backup` ainda -- so existe depois de um segundo apply que modifique um state ja existente). Ambos os padroes (`*.tfstate`, `*.tfstate.*`) ja cobertos por `thesis/results/v9/.gitignore:16-17`; `git status` confirma o diretorio inteiro fora de tracking. Recomendacao (nao executada): copiar `terraform.tfstate` para um local privado FORA do repositorio e FORA desta maquina (ex. um gerenciador de senhas com anexo, ou um volume cifrado offline) depois de QUALQUER apply real -- o state contem `tls_private_key.campaign.private_key_openssh` em texto claro, e a perda do state da tentativa de 2026-11-10 e exatamente a causa dos 8 key pairs e 12 security groups orfaos que esta rodada precisou contornar.
+
+**Nenhum recurso foi criado, alterado ou apagado nesta rodada.** Nenhuma acao de rede alem de leitura (`describe-*`, `sts:GetCallerIdentity`, `checkip.amazonaws.com`) e dry-run (que nunca executa de verdade). Nenhum `terraform apply`, nenhuma mudanca de IAM real, nenhum `git push`.
+
+Aguardando decisao do Luciano: (i) aplicar o statement `CriarTagsRoleSemProjectNaMesmaChamada` na politica IAM real (sem isso, um apply real falharia nos 12 `aws_ec2_tag.primary_eni_role`, depois de ja ter criado instancias/EIPs -- pior do que a falha anterior, que parou antes de qualquer `aws_instance`); (ii) confirmar o valor de `key_name_suffix` a usar no apply real (esta rodada testou com `-02`, so como exemplo); (iii) decidir se/quando fazer a copia de seguranca do `terraform.tfstate` recomendada no item 5.
