@@ -12873,3 +12873,38 @@ Dead-man's-switch (`mockopin-safety-timer.timer`, via `user_data` desde o boot, 
 `cost_tracker.py` (`CostTracker`, `thesis/results/v9/campaign/scripts/`): e um modulo invocado PELO ORQUESTRADOR durante uma execucao real (piloto/campanha), nao um daemon independente por regiao -- nao ha "ativacao" separada antes da Fase 3. Confirmado funcional chamando-o diretamente com a frota real (12 instancias, 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIP, `window_start_utc=2026-11-15T04:17:09Z`): `elapsed_hours=0.616`, `total_usd=0.88` no momento desta leitura (`04:54:05Z`, ~37 min desde o lancamento original), `status="ok"` (limiar de alerta e US$10 por padrao do piloto -- a campanha oficial deve passar os seus proprios limiares ao orquestrador, nao os defaults).
 
 Nenhuma mudanca de IAM real; nenhuma tag movida; nenhum `cleanup_campaign_key`; nenhum `git push`. Parando apos o item 5, conforme a instrucao -- itens 6 (entrega) e 7 (piloto) ficam para uma continuacao separada.
+
+## Decisao 176 (pedido do Luciano -- decisao sobre o incidente de exposicao da chave da rodada anterior: "ACEITO O RISCO... trate a chave como queimada", mais autorizacao pra corrigir o `PILOT_RUNBOOK.md` sozinho, com a entrega/piloto condicionados a um mapeamento inequivoco e a nenhum valor fixo bloqueante nos scripts de orquestracao/entrega)
+
+**Incidente de processo, registrado (nao e achado em codigo medido/binario/PINS.json -- e um erro de comando, numa rodada anterior desta mesma sessao):** um fork rodou `terraform output -json` SEM filtro/escopo dentro do diretorio Terraform desta campanha, pra ler o output `inventory`. O Terraform, quando chamado assim por maquina (nunca quando truncado pra exibicao interativa), NAO redige outputs marcados `sensitive` -- o conteudo da `campaign_private_key` apareceu em texto plano no resultado da propria chamada de ferramenta daquele fork. A chave nunca foi escrita em arquivo nem repetida em nenhum relatorio.
+
+**Decisao do Luciano:** aceitar o risco. NAO regenerar `tls_private_key.campaign` (sem `terraform taint`/replace). A chave e tratada como "queimada" dali em diante: continua em uso pelo procedimento ja autorizado (pipe via stdin SSH direto ao controle, arquivo 600 so no controle, nunca em disco do operador, removida so por `cleanup_campaign_key.py` quando o Luciano mandar) durante o resto desta campanha, e e destruida junto com toda a infraestrutura ao final (nunca reutilizada numa campanha futura).
+
+**Regra nova, vigente a partir desta Decisao:** NUNCA rodar `terraform output -json` sem escopo/filtro, em nenhuma rodada futura desta ou de qualquer outra campanha AWS deste projeto. Inventario le-se SOMENTE por `terraform output -raw <nome>` (um output especifico, nao-sensivel) ou `terraform output <nome>`/`terraform output` plano (que redige valores sensiveis por padrao, confirmado nesta rodada: `campaign_private_key = <sensitive>`) -- nunca `-json` sem um nome de output explicito. Se algum dia for necessario ler varios outputs de uma vez em JSON, filtrar SEMPRE dentro do mesmo pipe antes de materializar qualquer coisa (ex. excluir por nome qualquer output cuja chave sugira segredo/credencial), nunca em duas etapas.
+
+**Item 1 -- inventario real desta conta, construido com a regra nova (nunca `-json` sem escopo):**
+
+| Host (endereco Terraform) | Papel | Regiao | Rota(s) servida(s) |
+|---|---|---|---|
+| `module.control` | controle | sa-east-1 | -- |
+| `module.server_sa_east_1` | servidor | sa-east-1 | L0-sa-east-1, L123, L219, L325 |
+| `module.client_l0_sa_east_1` | cliente (colocado) | sa-east-1 | L0-sa-east-1 |
+| `module.client_ca_central_1_a` | cliente | ca-central-1 | L123 |
+| `module.client_eu_north_1` | cliente | eu-north-1 | L219 |
+| `module.client_ap_southeast_1` | cliente | ap-southeast-1 | L325 |
+| `module.server_us_east_1` | servidor | us-east-1 | L0-us-east-1, **L14** |
+| `module.client_l0_us_east_1` | cliente (colocado) | us-east-1 | L0-us-east-1 |
+| `module.client_ca_central_1_b` | cliente | ca-central-1 | **L14** |
+| `module.server_ap_northeast_1` | servidor | ap-northeast-1 | L0-ap-northeast-1, L30 |
+| `module.client_l0_ap_northeast_1` | cliente (colocado) | ap-northeast-1 | L0-ap-northeast-1 |
+| `module.client_ap_northeast_2` | cliente | ap-northeast-2 | L30 |
+
+12 hosts, 7 regioes, 8 rotas -- confirmado identico entre `terraform state list` (12 `aws_instance.this`), `terraform output` (inventory, campos nao-sensiveis) e `campaign_topology.CAMPAIGN_ROUTES`/`CAMPAIGN_ROUTE_SERVER` (unica fonte de verdade de topologia do projeto, module `campaign_topology.py`). Mapeamento de `L0-sa-east-1` e `L14` (as 2 rotas do piloto pedido) e INEQUIVOCO: confirmado nos proprios comentarios do `main.tf` que `client_ca_central_1_a` (rota L123, atende `server_sa_east_1`) e `client_ca_central_1_b` (rota L14, atende `server_us_east_1`) sao 2 instancias distintas na mesma regiao, nunca a mesma maquina.
+
+**Item 2 -- `PILOT_RUNBOOK.md` atualizado** com um bloco novo no topo (`## Campanha oficial, conta nova`) documentando esta topologia e o gap do item 3 abaixo; o roteiro Passo 0-15 original (infraestrutura de 5 instancias/3 regioes de uma rodada de piloto anterior) foi preservado como referencia historica de procedimento/convencao, explicitamente rotulado como tal, nunca apagado. Commit local, sem push, sem mover tag.
+
+**Item 3 -- achado bloqueante real, exatamente onde a regra geral pedia pra parar e reportar (arquivo/linha):** `thesis/results/v9/campaign/scripts/orchestrator.py:220-221` define `PROFILES`/`ROUTES = ["L0", "L219", "L325"]` -- constantes hardcoded de uma campanha ANTERIOR, cujos nomes de rota nem existem nesta conta (aqui `L0` e, na verdade, `L0-sa-east-1`/`L0-us-east-1`/`L0-ap-northeast-1`, um por servidor). A unica outra via da CLI, a flag `--campaign` (`orchestrator.py:2657-2712`), troca pra `campaign_topology.CAMPAIGN_ROUTES` (as 8 rotas reais desta conta, confirmadas no item 1) -- mas roda TODAS as 8 rotas vezes TODOS os 4 perfis (`campaign_profiles = list(PROFILES)`), nunca um subconjunto: isso E a campanha completa, explicitamente fora do escopo autorizado ("NAO inicie a campanha completa"). Nao existe hoje nenhum caminho de CLI pra rodar exatamente o piloto assimetrico pedido (4 perfis em L0-sa-east-1 + classico/hibrido-and em L14, 3 execucoes cada, 18 no total) sem editar `orchestrator.py` (fora do escopo autorizado desta rodada -- "NAO altere scripts de medicao, de criticidade, de orquestracao ou de entrega") ou sem rodar a campanha completa (tambem fora do escopo).
+
+**Item 4 -- NAO executado.** Por forca do item 3 (achado bloqueante real num script de orquestracao, nao uma simples ambiguidade de mapeamento), a entrega aos 12 hosts e o piloto de 18 execucoes NAO foram iniciados -- nenhum `deliver_images.py`/`deliver_source.py` rodado nesta rodada, nenhum `launch_persistent.py start`.
+
+**Item 5 -- relatorio:** sem piloto executado, nao ha tabela de criterios (a)-(n)/OPINsize/retries pra reportar. Infraestrutura continua `running` (12 instancias, 12 EIP, dead-man's-switch ativo com prazo ja registrado na Decisao 175), sem nenhuma mudanca nesta rodada -- nenhum recurso criado/alterado/apagado, nenhuma mudanca de IAM real, nenhuma tag movida, nenhum `cleanup_campaign_key`, nenhum `git push`, nenhum classificador de seguranca acionado. Aguardando decisao do Luciano sobre como tratar o gap do item 3 antes de qualquer entrega/piloto: autorizar uma edicao pontual em `orchestrator.py` (ex. aceitar `--routes`/pares explicitos de perfil-rota pela CLI) nesta ou numa rodada futura, ou definir outro caminho de execucao pra este subconjunto assimetrico.

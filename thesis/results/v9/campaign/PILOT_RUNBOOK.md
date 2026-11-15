@@ -1,5 +1,77 @@
 # PILOT_RUNBOOK.md — Fase B, piloto real (60 execuções, 4 perfis × 3 rotas × N=5)
 
+## Campanha oficial, conta nova (Decisão 176) — inventário real e gap aberto
+
+**Este bloco descreve a conta/infraestrutura AWS da campanha oficial
+atual (12 instâncias, 7 regiões, apply concluído nas Decisões
+174/175) — o roteiro Passo 0-15 abaixo, incluindo os números "60
+execuções/5 instâncias/3 regiões" do título, descreve a infraestrutura
+MENOR de uma rodada de piloto anterior e permanece como referência
+histórica de procedimento, não como a topologia desta conta.**
+
+Topologia real desta conta (fonte: `campaign_topology.py`, confirmada
+contra `terraform output` filtrado — nunca `-json` sem escopo, ver
+Decisão 176 sobre o incidente de exposição da chave):
+
+| Host (endereço Terraform) | Papel | Região | Rota(s) servida(s) |
+|---|---|---|---|
+| `module.control` | controle | sa-east-1 | — |
+| `module.server_sa_east_1` | servidor | sa-east-1 | L0-sa-east-1, L123, L219, L325 |
+| `module.client_l0_sa_east_1` | cliente | sa-east-1 (colocado) | L0-sa-east-1 |
+| `module.client_ca_central_1_a` | cliente | ca-central-1 | L123 |
+| `module.client_eu_north_1` | cliente | eu-north-1 | L219 |
+| `module.client_ap_southeast_1` | cliente | ap-southeast-1 | L325 |
+| `module.server_us_east_1` | servidor | us-east-1 | L0-us-east-1, **L14** |
+| `module.client_l0_us_east_1` | cliente | us-east-1 (colocado) | L0-us-east-1 |
+| `module.client_ca_central_1_b` | cliente | ca-central-1 | **L14** |
+| `module.server_ap_northeast_1` | servidor | ap-northeast-1 | L0-ap-northeast-1, L30 |
+| `module.client_l0_ap_northeast_1` | cliente | ap-northeast-1 (colocado) | L0-ap-northeast-1 |
+| `module.client_ap_northeast_2` | cliente | ap-northeast-2 | L30 |
+
+12 hosts, 7 regiões, 8 rotas (`campaign_topology.CAMPAIGN_ROUTES`) —
+confirmado idêntico ao `main.tf` real desta conta. `L0-sa-east-1` e
+`L14` (os dois usados pelo piloto pedido nesta rodada) são servidos
+por `server_sa_east_1`+`client_l0_sa_east_1` e por
+`server_us_east_1`+`client_ca_central_1_b`, respectivamente — mapeamento
+inequívoco, confirmado nos comentários do próprio `main.tf`
+(`client_ca_central_1_a`/`_b` são instâncias distintas, nunca a mesma
+máquina).
+
+**Gap real encontrado (bloqueia a execução automática do piloto de 18
+execuções pedido — reportado, não corrigido, por instrução explícita
+desta rodada):** `orchestrator.py` só tem DOIS modos de seleção de
+rotas pela CLI:
+1. Sem `--campaign`: usa os globais `PROFILES`/`ROUTES` (`orchestrator.
+   py:220-221`), hardcoded pro piloto de 3 rotas de uma campanha
+   ANTERIOR (`["L0", "L219", "L325"]`) — nomes que nem existem nesta
+   conta (aqui a rota L0 é `L0-sa-east-1`/`L0-us-east-1`/
+   `L0-ap-northeast-1`, uma por servidor, nunca só `"L0"`).
+2. Com `--campaign`: usa `campaign_topology.CAMPAIGN_ROUTES` (as 8
+   rotas reais desta conta, confirmadas na tabela acima) — mas roda
+   TODAS as 8 rotas × TODOS os 4 perfis (`campaign_profiles =
+   list(PROFILES)`, `orchestrator.py:2709`), nunca um subconjunto. Isso
+   é a CAMPANHA COMPLETA, explicitamente fora do escopo autorizado
+   nesta rodada ("NÃO inicie a campanha completa").
+
+Não existe hoje um caminho de CLI pra rodar exatamente "4 perfis em
+L0-sa-east-1 + classico/hibrido-and em L14, 3 execuções cada" (18
+execuções, assimétrico por rota) sem: (a) editar `orchestrator.py`
+(fora do escopo autorizado — "NÃO altere scripts de medição, de
+criticidade, de orquestração ou de entrega"), ou (b) rodar `--campaign`
+de verdade (a campanha completa, 8 rotas × 4 perfis, também fora do
+escopo). **Por isso esta rodada para antes da entrega/piloto — ver
+Decisão 176.**
+
+---
+
+# PILOT_RUNBOOK.md — Fase B, piloto real (60 execuções, 4 perfis × 3 rotas × N=5)
+
+**[Procedimento histórico abaixo, Decisão 79 — descreve a infraestrutura
+MENOR (5 instâncias, 3 regiões) de uma rodada de piloto anterior a
+esta conta nova. Mantido como referência de nível de detalhe/
+convenção de roteiro, não como procedimento válido para os 12 hosts
+desta campanha.]**
+
 Decisão do Luciano, item 4 (DECISIONS.md, Decisão 79): "escreva o
 PILOT_RUNBOOK.md da Fase B... no mesmo nível de detalhe do
 INFRA_REHEARSAL.md, e siga-o." Mesma convenção de máquina/comando
