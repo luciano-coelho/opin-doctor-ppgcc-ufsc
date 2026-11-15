@@ -12774,3 +12774,32 @@ Plano salvo fora do repositorio (fora de `thesis/`, path local da maquina, nao r
 **Nenhum recurso foi criado, alterado ou apagado nesta rodada.** Nenhuma acao de rede alem de leitura (`describe-*`, `sts:GetCallerIdentity`, `checkip.amazonaws.com`) e dry-run (que nunca executa de verdade). Nenhum `terraform apply`, nenhuma mudanca de IAM real, nenhum `git push`.
 
 Aguardando decisao do Luciano: (i) aplicar o statement `CriarTagsRoleSemProjectNaMesmaChamada` na politica IAM real (sem isso, um apply real falharia nos 12 `aws_ec2_tag.primary_eni_role`, depois de ja ter criado instancias/EIPs -- pior do que a falha anterior, que parou antes de qualquer `aws_instance`); (ii) confirmar o valor de `key_name_suffix` a usar no apply real (esta rodada testou com `-02`, so como exemplo); (iii) decidir se/quando fazer a copia de seguranca do `terraform.tfstate` recomendada no item 5.
+
+## Decisao 174 (pedido do Luciano -- autorizacao presente na sessao para Fase 1 completa: portao de IAM, apply do plano de 89 recursos, entrega, piloto): apply real parou no meio, 12 instancias ja `running` (billable) sem EIP/tags de ENI/regras de ingress alem da SSH do controle -- nenhuma nova tentativa, por forca da regra geral de parada do pedido
+
+O usuario ja tinha aplicado o statement `CriarTagsRoleSemProjectNaMesmaChamada` sugerido na Decisao 173. Item 1 (portao de IAM): os 24 `CreateTags --dry-run` (chave e valor exatos de `primary_eni_project`/`primary_eni_role`, lidos de `modules/campaign_instance/main.tf:262-272`) deram **PERMITIDO nos 24**, contra um SG real por regiao. `sts get-caller-identity` confirmou a conta terminando em 5354. Item 2: plano regenerado agora (nao foi possivel comparar sha256 contra a Decisao 173 -- aqueles hashes so foram impressos no relatorio daquela rodada, nunca persistidos num arquivo; achado de higiene registrado, nao bloqueante) bateu exatamente 89 a criar (33 ingress/24 ec2_tag/12 eip/12 instance/8 key_pair), 0 change/0 destroy, os 12 security group + `tls_private_key` ja no state intocados, zero `0.0.0.0/0` em ingress -- confirmado via `terraform show -json` do plano salvo. Item 3: copia do state pre-apply em `~/v9_state_backup/terraform.tfstate.pre_apply_20261115T041653Z` (sha256 `74d3eafd22877f90d00854ddd2ceb3cbb09286635f1fe2b26417ca1e576b2006`), permissao 600/700 (melhor esforco em NTFS via git-bash), nada saiu da maquina.
+
+**Item 4 -- apply do plano salvo, inicio `2026-11-15T04:17:04Z`:** criou os 8 `aws_key_pair` e 1 `aws_vpc_security_group_ingress_rule` (SSH do operador no controle) com sucesso, iniciou os 12 `aws_instance.this` (`RunInstances` bem-sucedido nos 12), e entao ERROU nos 12 simultaneamente no passo seguinte do provider -- `ec2:ModifyInstanceAttribute` (`InstanceInitiatedShutdownBehavior`), que a politica IAM atual nao concede. Texto do erro (1 ocorrencia, as outras 11 identicas trocando so instance id/regiao -- numero de conta redigido mesmo aqui, pela mesma regra que vale pra qualquer texto desta sessao):
+
+```
+Error: modifying EC2 Instance (i-05f698d3d65b8181d) InstanceInitiatedShutdownBehavior attribute:
+operation error EC2: ModifyInstanceAttribute, https response error StatusCode: 403, ...
+api error UnauthorizedOperation: You are not authorized to perform this operation.
+User: arn:aws:iam::***5354:user/mockopin-campanha-operador is not authorized to perform:
+ec2:ModifyInstanceAttribute on resource: arn:aws:ec2:sa-east-1:***5354:instance/i-05f698d3d65b8181d
+because no identity-based policy allows the ec2:ModifyInstanceAttribute action.
+```
+
+Apply terminou (fim `2026-11-15T04:17:32Z`) sem nenhuma nova tentativa, conforme a regra geral de parada do pedido ("qualquer erro: pare, nao repita, nao tente reparar"). `terraform state list` + `describe-instances`/`describe-addresses` nas 7 regioes (leitura) confirmam o estado real:
+
+| Recurso | Criado | Nao criado (ainda no plano, nunca tentado) |
+|---|---|---|
+| `aws_key_pair` | 8/8 | -- |
+| `aws_vpc_security_group_ingress_rule` | 1/33 (so a SSH do controle) | 32 -- os outros dependem de atributos de instancia que o erro deixou pendentes |
+| `aws_instance` | **12/12, todos `running`** (1 `t4g.micro` + 11 `m7i-flex.large`, confirmado por regiao) | -- |
+| `aws_eip` | 0/12 | 12 -- dependem da instancia ter terminado de aplicar |
+| `aws_ec2_tag` | 0/24 | 24 -- dependem do `primary_network_interface_id`, mesmo motivo |
+
+**Achado real e serio: as 12 instancias estao `running` (billable) mas SEM EIP, SEM a tag `Role` na ENI, e SEM a maioria das regras de ingress (gateway/criterio2/criterio2_reverso) -- apenas o controle tem a porta SSH aberta pro operador.** O cost_tracker e o dead-man's-switch (que dependem de material entregue na Fase 2, nunca alcancada) NAO estao ativos nestas instancias ainda. Copia de seguranca do state pos-apply-parcial feita em `~/v9_state_backup/terraform.tfstate.post_partial_apply_20261115T041909Z` (sha256 `020f78ae72e451c6974a1794333db80ea1b850ee78b6a797921173feac801575`).
+
+Itens 5-8 (verificacao pos-apply completa, entrega, piloto) **nao foram executados** -- o pedido so previa esses itens apos um apply bem-sucedido; o estado parcial atual nao e o "pos-apply" que eles descrevem. Nenhum recurso foi apagado, nenhuma tag movida, nenhum `cleanup_campaign_key` rodado, nenhuma mudanca de IAM real, nenhum push. A infraestrutura (incluindo as 12 instancias) continua ligada, aguardando decisao do Luciano: provavel correcao adicional de IAM (permissao `ec2:ModifyInstanceAttribute`, condicionada a tag como as demais) antes de uma nova tentativa -- que so deve ser feita por ordem explicita nova, nunca por iniciativa desta sessao.
