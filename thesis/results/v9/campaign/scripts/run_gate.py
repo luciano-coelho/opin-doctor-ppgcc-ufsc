@@ -475,16 +475,28 @@ def main() -> int:
 
     matrix = []
     images_before = snapshot_local_images()
+    rebuild_check_error = None
     try:
         stop_legacy_mtls_alias_collision()
         for gateway_profile in args.profiles:
             print(f"== {gateway_profile} ==", file=sys.stderr)
             entry = run_gate_for_profile(executor, gateway_profile, run_pytest=not args.preflight_only)
             matrix.append(entry)
+        # Decisao 169: a checagem de nao-reconstrucao PRECISA rodar
+        # com o shim local ainda ativo (`cli.run_ssh` depende dele pra
+        # nao tentar SSH real) -- por isso fica DENTRO do mesmo try,
+        # antes do finally desarmar o shim (achado real desta mesma
+        # rodada: rodar depois do finally faz as 7 imagens parecerem
+        # "ausentes", nunca um falso-negativo de reconstrucao de
+        # verdade). Erro aqui nunca deve apagar a matriz ja coletada
+        # -- guardado e relancado so depois do JSON/tabela saírem.
+        try:
+            images_after = snapshot_local_images()
+            assert_local_images_unchanged(images_before, images_after)
+        except Exception as e:
+            rebuild_check_error = e
     finally:
         cli.disable_local_shell_shim()
-    images_after = snapshot_local_images()
-    assert_local_images_unchanged(images_before, images_after)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"run_gate_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
@@ -492,6 +504,9 @@ def main() -> int:
 
     print_table(matrix)
     print(f"\nmatriz completa: {out_path}")
+    if rebuild_check_error is not None:
+        print(f"\nPRECONDICAO DE NAO-RECONSTRUCAO FALHOU: {rebuild_check_error}", file=sys.stderr)
+        return 1
     return 0 if all(e["ok"] for e in matrix) else 1
 
 
