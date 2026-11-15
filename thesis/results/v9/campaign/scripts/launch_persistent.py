@@ -46,7 +46,7 @@ import time
 from pathlib import Path
 
 _ORCHESTRATOR_PATH = Path(__file__).resolve().parent / "orchestrator.py"
-_SUPERVISE_START_TIMEOUT_S = 5.0
+_SUPERVISE_START_TIMEOUT_S = 15.0
 _SUPERVISE_POLL_INTERVAL_S = 0.05
 
 
