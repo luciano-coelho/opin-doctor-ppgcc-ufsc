@@ -133,6 +133,102 @@ def _make_executor(images_staging_dir: Path) -> "orch.SSHExecutor":
     return executor
 
 
+# Decisao 169 (pedido do Luciano, item 4 -- "confirme... que o
+# docker compose e o run_gate.py sobem com as imagens ja carregadas,
+# sem reconstruir, falhando se o compose tentasse construir"):
+# `docker compose up` (chamado por `start_block`) so builda uma
+# imagem com `build:` no compose (auth/mongo_seed) se ela NAO
+# existir ainda, ou se `--build` for passado -- `start_block` nunca
+# passa `--build` (confirmado lendo orchestrator.py), entao o risco
+# real NUNCA e o compose builder sozinho; e um `docker build`/
+# `./gradlew optimizedDockerBuild` rodado por FORA deste script (por
+# um auditor, por exemplo -- achado real NESTA MESMA rodada: um
+# rebuild assim sobrescreveu `raidiam-insurance-lambdas:latest` ate
+# ser corrigido com `docker tag` de volta). A checagem abaixo
+# detecta exatamente isso: snapshot do Image Id de cada imagem
+# ANTES do gate inteiro, reconfirmado IDENTICO depois -- falha alto
+# se mudou, e falha alto tambem se a imagem simplesmente nao existe
+# (nunca deixa o compose criar uma nova silenciosamente).
+#
+# `tar_sha256` do PINS.json NAO e reusado aqui como criterio, de
+# proposito: e o mesmo campo que a Decisao 68 ja desqualificou como
+# identidade de CONTEUDO (so serve pra integridade de TRANSITO,
+# operador->host remoto) por causa da camada de certs efemera; e,
+# pra auth/mongo_seed/mockapi especificamente, o proprio PINS.json
+# atual reflete o estado PRE-normalizacao de LF (Decisao 166-169) --
+# comparar contra ele aqui reprovaria toda imagem carregada hoje,
+# mesmo as que a Decisao 169 ja provou equivalentes modulo fim de
+# linha/chave efemera. Pra `gateway`/`proxy` (que TEM binario Go
+# proprio, nao sujeito a CRLF), `binary_sha256` do PINS.json AINDA e
+# o criterio de conteudo -- continua comparado abaixo.
+_REQUIRED_LOCAL_IMAGES = {
+    "gateway": "mockopin-v9-gateway:latest",
+    "proxy": "mockopin-v9-proxy:latest",
+    "measure": "mockopin-v9-measure:latest",
+    "pqc-signer": "mockopin-pqc-signer:latest",
+    "auth": "insurance-server-lambdas-auth:latest",
+    "mongo_seed": "insurance-server-lambdas-mongo_seed:latest",
+    "mockapi": "raidiam-insurance-lambdas:latest",
+}
+
+
+def _docker_image_id(docker_image: str) -> str | None:
+    proc = cli.run_ssh("127.0.0.1", f"docker image inspect {docker_image} --format '{{{{.Id}}}}'", key_path=None)
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
+def snapshot_local_images() -> dict:
+    """Falha alto (nunca deixa passar silenciosamente) se alguma das
+    7 imagens que o stack local usa nao existir -- esse e o caso em
+    que `docker compose up`/`_launch_gateway` tentariam criar uma do
+    zero; preferimos abortar aqui, ANTES do gate, a deixar o compose
+    builder rodar sem supervisao."""
+    snapshot = {}
+    missing = []
+    for image_key, docker_image in _REQUIRED_LOCAL_IMAGES.items():
+        image_id = _docker_image_id(docker_image)
+        if image_id is None:
+            missing.append(docker_image)
+        snapshot[image_key] = {"docker_image": docker_image, "image_id": image_id}
+    if missing:
+        raise RuntimeError(
+            f"snapshot_local_images: {missing} nao estao carregadas localmente -- "
+            f"rode make/docker build manualmente primeiro; este gate NUNCA builda imagem nenhuma"
+        )
+
+    pins = orch.load_pins()
+    for image_key in ("gateway", "proxy"):
+        image_pins = pins["images"][image_key]
+        binary_path = image_pins["binary_path_in_image"]
+        expected_sha256 = image_pins["binary_sha256"]
+        docker_image = _REQUIRED_LOCAL_IMAGES[image_key]
+        bin_proc = cli.run_ssh(
+            "127.0.0.1", f"docker run --rm --entrypoint sha256sum {docker_image} {binary_path}", key_path=None,
+        )
+        actual_sha256 = bin_proc.stdout.split()[0] if bin_proc.returncode == 0 and bin_proc.stdout.strip() else None
+        snapshot[image_key]["binary_sha256_expected"] = expected_sha256
+        snapshot[image_key]["binary_sha256_actual"] = actual_sha256
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"snapshot_local_images: binary_sha256 de {image_key} carregado localmente "
+                f"({actual_sha256!r}) NAO bate com PINS.json ({expected_sha256!r})"
+            )
+    return snapshot
+
+
+def assert_local_images_unchanged(before: dict, after: dict) -> None:
+    changed = {
+        image_key: {"before": before[image_key]["image_id"], "after": after[image_key]["image_id"]}
+        for image_key in _REQUIRED_LOCAL_IMAGES
+        if before[image_key]["image_id"] != after[image_key]["image_id"]
+    }
+    if changed:
+        raise RuntimeError(
+            f"assert_local_images_unchanged: {changed} -- alguma imagem foi reconstruida/sobrescrita "
+            f"DURANTE o gate (nunca deveria, nem por compose nem por nada mais rodando nesta maquina)"
+        )
+
+
 # Decisao 166 (pedido do Luciano, diagnostico de classico/pqc
 # travando em start_block com "open /certs/<profile>_client.crt: no
 # such file or directory" apesar do arquivo existir no host com mtime
@@ -378,6 +474,7 @@ def main() -> int:
     executor = _make_executor(Path.home() / "images")
 
     matrix = []
+    images_before = snapshot_local_images()
     try:
         stop_legacy_mtls_alias_collision()
         for gateway_profile in args.profiles:
@@ -386,6 +483,8 @@ def main() -> int:
             matrix.append(entry)
     finally:
         cli.disable_local_shell_shim()
+    images_after = snapshot_local_images()
+    assert_local_images_unchanged(images_before, images_after)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"run_gate_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
