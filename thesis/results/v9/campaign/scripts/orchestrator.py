@@ -895,6 +895,30 @@ class SSHExecutor:
         layers_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{json .RootFS.Layers}}}}'", key_path=self.key_path)
         actual_layers = json.loads(layers_proc.stdout.strip()) if layers_proc.returncode == 0 and layers_proc.stdout.strip() else None
         layers_ok = actual_layers == expected_layers
+        measure_layer_drift_fallback_used = False
+        if not layers_ok and image_key == "measure":
+            # Decisao 184 (Emenda -- autorizacao explicita e escopada,
+            # SOMENTE measure): a mesma volatilidade de timestamp do
+            # BuildKit ja documentada em PINS.json (Decisao 159) e ja
+            # tratada no gate irmao `deliver_images.py` (Decisao 179,
+            # commit 6dff7e8f) -- aqui, no 2o salto remoto, extrai os
+            # binarios gateway/proxy EMBUTIDOS de dentro da imagem
+            # CARREGADA NESTE HOST (mesmo mecanismo ja usado abaixo
+            # pra binary_ok, `docker run --entrypoint sha256sum`,
+            # nunca `docker cp`/Docker local) e delega a decisao pro
+            # helper PURO compartilhado com deliver_images.py (nunca
+            # reimplementado aqui) -- so measure; as demais imagens
+            # continuam exigindo rootfs_layers identico.
+            embedded_binary_sha256 = {}
+            for embedded_name in ("gateway", "proxy"):
+                embed_proc = cli.run_ssh(
+                    host, f"docker run --rm --entrypoint sha256sum {docker_image} /usr/local/bin/{embedded_name}",
+                    key_path=self.key_path)
+                embedded_binary_sha256[embedded_name] = (
+                    embed_proc.stdout.split()[0] if embed_proc.returncode == 0 and embed_proc.stdout.strip() else None)
+            measure_layer_drift_fallback_used = deliver_images.measure_layer_drift_fallback_ok(
+                pins, actual_layers, embedded_binary_sha256)
+            layers_ok = measure_layer_drift_fallback_used
 
         config_proc = cli.run_ssh(host, f"docker image inspect {docker_image} --format '{{{{json .Config}}}}'", key_path=self.key_path)
         full_config = json.loads(config_proc.stdout.strip()) if config_proc.returncode == 0 and config_proc.stdout.strip() else {}
@@ -914,6 +938,10 @@ class SSHExecutor:
             "image_key": image_key, "docker_image": docker_image, "host": host,
             "loaded_image_id": loaded_id, "ok": ok,
             "layers_ok": layers_ok, "config_ok": config_ok, "binary_ok": binary_ok,
+            # Decisao 184: so True quando measure caiu no fallback de
+            # equivalencia (rootfs_layers divergiu, binarios embutidos
+            # bateram) -- False em toda entrega normal/outra imagem.
+            "measure_layer_drift_fallback_used": measure_layer_drift_fallback_used,
             "actual_binary_sha256": actual_binary_sha256, "expected_binary_sha256": expected_binary_sha256,
             # Decisao 183: informativo apenas, nunca comparado (ver docstring).
             "actual_tar_sha256": actual_tar_sha256, "expected_tar_sha256": expected_tar_sha256,

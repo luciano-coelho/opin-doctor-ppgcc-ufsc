@@ -115,6 +115,49 @@ def _measure_harness_equivalent_despite_layer_drift(pins: dict, workdir: Path) -
     return True
 
 
+# Decisao 184 (Emenda -- pedido do Luciano: o MESMO criterio de
+# equivalencia acima, reaproveitado pelo 2o salto REMOTO de
+# `orchestrator.py._deliver_image`, que roda contra um host carregado
+# via SSH, nunca Docker local -- a extracao dos binarios la usa
+# `docker run --entrypoint sha256sum` por SSH, nunca `docker cp` local
+# como a funcao acima; por isso a decisao (pura, sem IO) fica aqui,
+# compartilhada, e cada chamador faz SOMENTE a extracao do jeito que
+# sua propria maquina permite. Posicoes 0 e 4 de `rootfs_layers` sao
+# as camadas ESTAVEIS que a nota da Decisao 159 ja descreve (indice 0:
+# base, por digest imutavel; indice 4: apk install tcpdump/tshark +
+# COPY measure.sh, nenhum dos dois mexido pela rebuild do binario
+# gateway/proxy) -- nunca variam por timestamp do BuildKit, ao
+# contrario dos indices 1/2/3/5 (COPY+build do gateway/proxy/bench).
+MEASURE_STABLE_LAYER_INDICES = (0, 4)
+
+
+def measure_layer_drift_fallback_ok(pins: dict, actual_layers, embedded_binary_sha256: dict) -> bool:
+    """Decisao logica PURA (sem IO) -- `actual_layers` (RootFS.Layers
+    JA lido da imagem carregada, local ou remota) e
+    `embedded_binary_sha256` (dict {"gateway": sha, "proxy": sha},
+    JA extraido pelo chamador) sao dados de entrada; esta funcao so
+    decide se contam como equivalentes. So usado como FALLBACK quando
+    a comparacao direta de `rootfs_layers` diverge -- nunca a
+    checagem primaria. Mais estrita que `_measure_harness_equivalent_
+    despite_layer_drift` acima (que so confere os binarios): tambem
+    exige que as camadas ESTAVEIS (indices 0/4) batam, pedido
+    explicito do Luciano pro gate remoto novo -- nao retroaplicado ao
+    gate local acima, que fica como estava."""
+    expected_layers = pins["images"]["measure"]["rootfs_layers"]
+    if actual_layers is None:
+        return False
+    for idx in MEASURE_STABLE_LAYER_INDICES:
+        if idx >= len(actual_layers) or idx >= len(expected_layers):
+            return False
+        if actual_layers[idx] != expected_layers[idx]:
+            return False
+    for pin_key in ("gateway", "proxy"):
+        expected = pins["images"][pin_key]["binary_sha256"]
+        if not expected or embedded_binary_sha256.get(pin_key) != expected:
+            return False
+    return True
+
+
 def extract_gateway_binary_info(workdir: Path) -> dict:
     """Mesma extracao que `orchestrator._local_gateway_binary_info`
     fazia (Decisao 54) antes desta rodada -- agora so roda aqui, na

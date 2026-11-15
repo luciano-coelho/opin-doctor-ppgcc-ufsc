@@ -13132,4 +13132,55 @@ Nenhuma imagem ficou sem prova pos-load alem de tar_sha256 (todas tem rootfs_lay
 
 **Item 3 -- testes.** O teste antigo `test_deliver_image_aborta_se_tar_local_adulterado` testava exatamente o comportamento removido -- substituido por `test_deliver_image_tar_sha256_diferente_do_pin_nao_aborta_mais` (regressao, item 3a: `.tar` com sha256 diferente do pin mas conteudo real correto tem que ser entregue e passar normalmente). Os 3 testes negativos ja existentes (`test_deliver_image_aborta_se_camada_adulterada`, `_config_adulterada`, `_binario_na_imagem_adulterado`, item 3b) nao foram tocados -- continuam cobrindo adulteracao real via a verificacao pos-load, que esta edicao nunca mudou. Suite completa `campaign/tests/`: 451 passed + 1 failed na 1a rodada (`test_second_instance_same_name_rejected_while_first_runs`, `test_launch_persistent.py` -- flake de timing JA documentado desde a Decisao 172, nada a ver com este arquivo); re-executado isolado, passou em 6.47s -- confirmado flake, nao regressao.
 
-**Item 4 -- pre-voo (em andamento/continua nesta mesma rodada -- ver proxima entrada ou a continuacao desta).** Levantamento read-only via SSH (chave pessoal, SO controle) confirmou: todos os `CONTROL_FILES` + `PINS.json` + `certs/generated` + as 7 imagens (auth/gateway/measure/mockapi/mongo_seed/pqc-signer/proxy, cada uma com `.tar.sha256`) ja presentes no controle. Achado: o `orchestrator.py` no controle (datado de antes desta edicao) estava desatualizado -- a correcao do item 2 so teria efeito real apos re-entrega. `terraform output`/`terraform output -json inventory` usados SEMPRE com nome escopado (nunca `-json` sem filtro), conforme a regra permanente desde a Decisao 176.
+**Item 4 -- pre-voo (em andamento/continua nesta mesma rodada -- ver proxima entrada ou a continuacao desta).** Levantamento read-only via SSH (chave pessoal, SO controle) confirmou: todos os `CONTROL_FILES` + `PINS.json` + `certs/generated` + as 7 imagens (auth/gateway/measure/mockapi/mongo_seed/pqc-signer/proxy, cada uma com `.tar.sha256`) ja presentes no controle. Achado: o `orchestrator.py` no controle (datado de antes desta edicao) estava desatualizado -- a correcao do item 2 so teria efeito real apos re-entrega. `terraform output`/`terraform output -json inventory` usados SEMPRE com nome escopado (nunca `-json` sem filtro), conforme a regra permanente desde a Decisao 176. Re-entregue (`deliver_source.py --to-control`), sha256 confirmado contra o blob git da arvore inteira, e confirmado ao vivo no controle: `orchestrator.py --help` ok, `import orchestrator, cost_tracker, campaign_topology` sem erro, `inventory.json` com as chaves certas (`L0-sa-east-1`, `L14`, etc.).
+
+## Decisao 184 (resposta do Luciano ao achado do item 2 da Decisao 183 -- autorizacao explicita e escopada pra estender o fallback de equivalencia de `measure` [ja validado em `deliver_images.py`, Decisao 179/commit `6dff7e8f`] pro 2o salto remoto de `orchestrator.py._deliver_image`, SOMENTE measure)
+
+**Item 1 -- helper compartilhado (nunca reescrito/reinventado).** `deliver_images.py` ganhou `MEASURE_STABLE_LAYER_INDICES = (0, 4)` e `measure_layer_drift_fallback_ok(pins, actual_layers, embedded_binary_sha256)` -- funcao PURA (sem IO), que recebe os dados JA extraidos pelo chamador (nunca extrai nada ela mesma) e decide: (a) as camadas ESTAVEIS do pin (indices 0 e 4 -- base por digest imutavel, e apk install tcpdump/tshark + COPY measure.sh, nenhum dos dois tocado pelo rebuild do binario gateway/proxy, exatamente a descricao da Decisao 159) batem; (b) os binarios gateway/proxy embutidos batem com os `binary_sha256` ja pinados pras imagens standalone. A funcao local JA existente (`_measure_harness_equivalent_despite_layer_drift`, usada por `deliver_images.py` no 1o salto, local/`docker cp`) NAO foi tocada -- continua exatamente como estava, mesmo comportamento, mesmos testes (nao confere as camadas estaveis explicitamente, so os binarios; pedido do Luciano foi so pro gate novo, "nao retroaplicado"). `orchestrator.py._deliver_image` (que roda via SSH contra um host remoto, nunca Docker local) agora, SO para `image_key == "measure"` e SO quando a comparacao direta de `rootfs_layers` falha, extrai os binarios `/usr/local/bin/gateway` e `/usr/local/bin/proxy` de dentro da imagem carregada NO HOST (mesmo mecanismo ja usado pra `binary_ok`, `docker run --rm --entrypoint sha256sum`, nunca `docker cp`/Docker local) e delega a decisao pro helper importado -- nunca duplica a logica. Novo campo informativo `measure_layer_drift_fallback_used` em `image_delivery_verifications` (True so quando o fallback foi necessario e aceitou). Nenhuma outra imagem tocada -- gateway/proxy/pqc-signer/auth/mongo_seed/mockapi continuam exigindo `rootfs_layers` identico, sem excecao. Diffs completos:
+
+`deliver_images.py` (so adicoes, 0 remocoes):
+```diff
++MEASURE_STABLE_LAYER_INDICES = (0, 4)
++
++
++def measure_layer_drift_fallback_ok(pins: dict, actual_layers, embedded_binary_sha256: dict) -> bool:
++    expected_layers = pins["images"]["measure"]["rootfs_layers"]
++    if actual_layers is None:
++        return False
++    for idx in MEASURE_STABLE_LAYER_INDICES:
++        if idx >= len(actual_layers) or idx >= len(expected_layers):
++            return False
++        if actual_layers[idx] != expected_layers[idx]:
++            return False
++    for pin_key in ("gateway", "proxy"):
++        expected = pins["images"][pin_key]["binary_sha256"]
++        if not expected or embedded_binary_sha256.get(pin_key) != expected:
++            return False
++    return True
+```
+
+`orchestrator.py` (so adicoes, 0 remocoes, dentro de `_deliver_image`):
+```diff
+         layers_ok = actual_layers == expected_layers
++        measure_layer_drift_fallback_used = False
++        if not layers_ok and image_key == "measure":
++            embedded_binary_sha256 = {}
++            for embedded_name in ("gateway", "proxy"):
++                embed_proc = cli.run_ssh(
++                    host, f"docker run --rm --entrypoint sha256sum {docker_image} /usr/local/bin/{embedded_name}",
++                    key_path=self.key_path)
++                embedded_binary_sha256[embedded_name] = (
++                    embed_proc.stdout.split()[0] if embed_proc.returncode == 0 and embed_proc.stdout.strip() else None)
++            measure_layer_drift_fallback_used = deliver_images.measure_layer_drift_fallback_ok(
++                pins, actual_layers, embedded_binary_sha256)
++            layers_ok = measure_layer_drift_fallback_used
+```
+(+ campo `"measure_layer_drift_fallback_used"` no dict de `image_delivery_verifications`.)
+
+**Item 2 -- testes.** 3 testes novos em `test_orchestrator.py`, chamando `_deliver_image("measure", host)` diretamente: (a) regressao -- camadas 1/2/3/5 TODAS diferentes do pin (volatilidade), 0/4 identicas, binarios embutidos batem -- `ok=True`, `measure_layer_drift_fallback_used=True`; (b) negativo -- binario proxy embutido adulterado -- `RuntimeError("identidade nao confere")`, fallback nao mascara; (c) negativo -- camadas/binarios OK (fallback aceitaria `layers_ok`) mas `config_subset` diferente -- `config_ok` e independente do fallback, continua reprovando. Suite completa `campaign/tests/`: 454 passed + 1 failed (mesmo flake de timing de `test_launch_persistent.py`, ja documentado desde a Decisao 172, nada a ver com estes arquivos).
+
+**Item 3 -- re-entrega e tag.** `orchestrator.py`/`deliver_images.py` re-entregues ao controle via `deliver_source.py --to-control` (chave pessoal, SO controle), sha256 da arvore inteira reconferido contra o blob git -- `tree_verified: true`. Confirmado ao vivo no controle: grep do marcador "Decisao 184" presente, `orchestrator.py --help` ok, imports limpos. Commit local `[preenchido no commit real]`; tag local `v9-campanha-conta-nova-piloto-assimetrico-v3` (sufixo incrementado, codigo da campanha mudou de novo).
+
+**Item 4 -- pre-voo, conclusao.** Confirmado via SSH (chave pessoal no controle, chave da campanha do controle pros 4 hosts reais das 2 rotas do piloto -- servidor+cliente de `L0-sa-east-1`, servidor+cliente de `L14`): os 4 hosts respondem SSH normalmente; `certs/generated` presente nos 2 CLIENTES (33 arquivos cada) e corretamente AUSENTE nos 2 SERVIDORES (por desenho -- `deliver_source.py` so entrega certs pra cliente/controle, nunca servidor, `CLIENT_ONLY_FILES`/`CONTROL_FILES`, nunca um gap). Achado real, nao um bug: NENHUMA das 7 imagens pinadas (gateway/proxy/pqc-signer/measure/auth/mongo_seed/mockapi) esta carregada em NENHUM dos 4 hosts reais (`docker images` so mostra as imagens padrao do ECS da AMI) -- confirma que, apesar do texto de decisoes anteriores (179/182) ter dito "gateway/proxy/pqc-signer ja entregues aos 12 hosts", NENHUMA tentativa real de piloto nesta sessao chegou a completar essa entrega de fato: as 3 tentativas anteriores sempre crasharam DENTRO de `_deliver_backend_images`, que `start_block` chama ANTES de gateway/proxy -- entao gateway/proxy/pqc-signer nunca tinham, de fato, alcancado nenhum host real ainda. Isso NAO e um bloqueio -- e o estado NORMAL antes de qualquer execucao real do piloto; a entrega de cada imagem a cada host e feita LAZILY pelo proprio `orchestrator.py` (`_deliver_image`, dentro de `start_block`/`capture_ready_check`/`_deliver_backend_images`) durante a execucao real, nunca um passo manual separado. Custo real recalculado via `cost_tracker.CostTracker` com os tipos reais de instancia do state (`t4g.micro` pro controle, `m7i-flex.large` pros outros 11, confirmado via `terraform state show` em cada uma) e o horario real de lancamento da frota: **US$13,32** em 9,30h decorridas (`status: "ok"`, abaixo do aviso US$25/teto US$30). Dead-man's-switch reconfirmado: timer `mockopin-safety-timer.timer` ativo no controle, deadline real em `/etc/mockopin-campaign/deadline` = 2026-11-17T04:17:21Z (~38,7h restantes no momento desta checagem) -- nunca tocado.
+
+**Item 5 -- segue pra entrega+piloto (ver proxima entrada ou a continuacao desta Decisao).**

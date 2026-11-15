@@ -1333,6 +1333,120 @@ def test_deliver_image_correto_passa_com_nova_verificacao(monkeypatch):
     assert any("docker run -d --name v9-mtls" in c for c in flat), flat
 
 
+# --- Decisao 184 (Emenda -- autorizacao explicita e escopada, SOMENTE
+# measure): o 2o salto remoto (`_deliver_image`, controle->host) ganha
+# o MESMO fallback de equivalencia que `deliver_images.py` ja usa pro
+# 1o salto (Decisao 179, commit 6dff7e8f) -- rootfs_layers volatil por
+# timestamp do BuildKit (Decisao 159) nao pode abortar measure se as
+# camadas ESTAVEIS (indices 0/4) baterem E os binarios gateway/proxy
+# EMBUTIDOS, extraidos de dentro da imagem carregada NO HOST (`docker
+# run --entrypoint sha256sum`, nunca `docker cp` local), baterem com
+# os binary_sha256 ja pinados pras imagens standalone. Helper PURO
+# compartilhado com deliver_images.py (`measure_layer_drift_fallback_
+# ok`), nunca reimplementado aqui -- so measure; as demais imagens
+# continuam exigindo rootfs_layers identico (ja cobertas pelos testes
+# de camada/config/binario adulterados, acima).
+
+_MEASURE_EXPECTED_LAYERS = ["sha256:" + "e0" * 32, "sha256:" + "e1" * 32, "sha256:" + "e2" * 32,
+                            "sha256:" + "e3" * 32, "sha256:" + "e4" * 32, "sha256:" + "e5" * 32]
+
+
+def _fake_pins_com_measure_6_camadas():
+    layers = dict(_FAKE_LAYERS)
+    layers["measure"] = _MEASURE_EXPECTED_LAYERS
+    return _fake_pins(layers=layers)
+
+
+def _fake_run_measure_layer_drift(calls, actual_layers_measure, embedded_gateway_sha256, embedded_proxy_sha256,
+                                   measure_config=None):
+    def fake_run(argv, timeout=None):
+        base_result = _fake_run_factory(calls)(argv, timeout)
+        remote_cmd = argv[-1] if argv and argv[0] == "ssh" else ""
+        if "mockopin-v9-measure" not in remote_cmd:
+            return base_result
+        if "RootFS.Layers" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps(actual_layers_measure) + "\n")
+        if "entrypoint sha256sum" in remote_cmd and "/usr/local/bin/gateway" in remote_cmd:
+            return _SimpleProc(stdout=f"{embedded_gateway_sha256}  /usr/local/bin/gateway\n")
+        if "entrypoint sha256sum" in remote_cmd and "/usr/local/bin/proxy" in remote_cmd:
+            return _SimpleProc(stdout=f"{embedded_proxy_sha256}  /usr/local/bin/proxy\n")
+        if measure_config is not None and "json .Config}}" in remote_cmd:
+            return _SimpleProc(stdout=json.dumps(measure_config) + "\n")
+        return base_result
+    return fake_run
+
+
+def test_deliver_image_measure_camadas_volateis_mas_binarios_embutidos_batem_passa(monkeypatch):
+    """Regressao (item 2 da autorizacao da Decisao 184): rootfs_layers
+    diverge nas posicoes volateis (1/2/3/5, timestamp do BuildKit) mas
+    bate nas ESTAVEIS (0/4) -- e os binarios gateway/proxy embutidos,
+    extraidos de dentro da imagem carregada NO HOST, batem com o pin.
+    Tem que passar (fallback aceita), exatamente como o gate irmao
+    deliver_images.py ja aceita no 1o salto."""
+    calls = []
+    # posicoes 0/4 (ESTAVEIS) idênticas ao pin; 1/2/3/5 (volateis,
+    # timestamp do BuildKit) propositalmente TODAS diferentes, pra
+    # provar que nenhuma delas e exigida pelo fallback.
+    actual_layers = [
+        _MEASURE_EXPECTED_LAYERS[0],
+        "sha256:" + "volatil1" * 8,
+        "sha256:" + "volatil2" * 8,
+        "sha256:" + "volatil3" * 8,
+        _MEASURE_EXPECTED_LAYERS[4],
+        "sha256:" + "volatil5" * 8,
+    ]
+    monkeypatch.setattr(cli, "_run", _fake_run_measure_layer_drift(
+        calls, actual_layers, _FAKE_GATEWAY_SHA256, _FAKE_PROXY_BINARY_SHA256))
+    monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins_com_measure_6_camadas())
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    executor._deliver_image("measure", executor._server_ip())
+    v = executor.image_delivery_verifications[0]
+    assert v["ok"] is True, v
+    assert v["layers_ok"] is True, v
+    assert v["measure_layer_drift_fallback_used"] is True, v
+
+
+def test_deliver_image_measure_binario_embutido_adulterado_falha(monkeypatch):
+    """Negativo (item 2b): mesmas camadas volateis, mas o binario
+    proxy EMBUTIDO em measure nao bate com o pin -- o fallback NAO
+    pode mascarar uma imagem de verdade diferente."""
+    calls = []
+    actual_layers = list(_MEASURE_EXPECTED_LAYERS)
+    actual_layers[1] = "sha256:" + "volatil" * 9  # so uma camada volatil muda, resto bate
+    monkeypatch.setattr(cli, "_run", _fake_run_measure_layer_drift(
+        calls, actual_layers, _FAKE_GATEWAY_SHA256, "sha256adulterado" + "0" * 48))
+    monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins_com_measure_6_camadas())
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="identidade nao confere"):
+        executor._deliver_image("measure", executor._server_ip())
+    v = executor.image_delivery_verifications[0]
+    assert v["layers_ok"] is False, v
+    assert v["measure_layer_drift_fallback_used"] is False, v
+    assert v["ok"] is False, v
+
+
+def test_deliver_image_measure_config_diferente_falha_mesmo_com_fallback_de_camada_ok(monkeypatch):
+    """Negativo (item 2b): camadas volateis + binarios embutidos
+    batem (fallback aceitaria layers_ok), mas `.Config` do host
+    diverge do `config_subset` pinado -- `config_ok` e independente
+    do fallback de camada, continua reprovando a entrega."""
+    calls = []
+    actual_layers = list(_MEASURE_EXPECTED_LAYERS)
+    actual_layers[2] = "sha256:" + "volatil" * 9
+    config_adulterado = {"Entrypoint": ["/bin/sh"], "Cmd": None, "Env": [], "ExposedPorts": None}
+    monkeypatch.setattr(cli, "_run", _fake_run_measure_layer_drift(
+        calls, actual_layers, _FAKE_GATEWAY_SHA256, _FAKE_PROXY_BINARY_SHA256, measure_config=config_adulterado))
+    monkeypatch.setattr(orch, "load_pins", lambda pins_path=None: _fake_pins_com_measure_6_camadas())
+    executor = orch.SSHExecutor(_inventory_l0(), key_path="/fake/key")
+    with pytest.raises(RuntimeError, match="identidade nao confere"):
+        executor._deliver_image("measure", executor._server_ip())
+    v = executor.image_delivery_verifications[0]
+    assert v["layers_ok"] is True, v  # fallback aceitou a camada
+    assert v["measure_layer_drift_fallback_used"] is True, v
+    assert v["config_ok"] is False, v
+    assert v["ok"] is False, v
+
+
 def test_deliver_image_registra_tempo_e_tamanho_do_2o_salto(monkeypatch):
     """Decisao 60, item 4: cada entrega registra `elapsed_seconds`
     (real, medido -- nunca estimado) e `tar_bytes`, pro ensaio
