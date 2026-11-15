@@ -275,6 +275,91 @@ def test_imagem_measure_com_camadas_e_config_certos_passa(monkeypatch):
     assert result["missing"] == []
 
 
+# Decisao 187 (Emenda -- autorizacao explicita e escopada, SOMENTE
+# measure): mesmo fallback de equivalencia ja validado em
+# orchestrator.py (Decisao 184) e deliver_images.py (Decisao 179/
+# 6dff7e8f), agora tambem no gate de pre-voo -- so quando `pins`
+# (dict completo de PINS.json) e passado; sem ele (todos os testes
+# acima), comportamento INALTERADO, estrito, sem fallback.
+_FAKE_MEASURE_LAYERS_DRIFTED = [f"sha256:{d * 64}" for d in "234567"]
+_FAKE_PINS_FULL = {
+    "images": {
+        "measure": {"rootfs_layers": _FAKE_MEASURE_LAYERS_DRIFTED, "config_subset": _FAKE_MEASURE_CONFIG},
+        "gateway": {"binary_sha256": "a" * 64},
+        "proxy": {"binary_sha256": "b" * 64},
+    }
+}
+
+
+def _probe_with_drifted_layers_but_stable_0_and_4(gateway_sha="a" * 64, proxy_sha="b" * 64):
+    # Camadas 0/4 (indices ESTAVEIS, Decisao 159/184) iguais ao pin;
+    # 1/2/3/5 (volateis por timestamp do BuildKit) DIVERGEM de proposito.
+    actual = list(_FAKE_MEASURE_LAYERS_DRIFTED)
+    actual[1] = "sha256:" + "f" * 64
+    actual[2] = "sha256:" + "e" * 64
+    actual[3] = "sha256:" + "d" * 64
+    actual[5] = "sha256:" + "c" * 64
+    return (
+        "TCPDUMP_PATH=/usr/sbin/tcpdump\n"
+        "SUDO_NOPASSWD=1\n"
+        "MEASURE_IMAGE_ID=sha256:deadbeef\n"
+        f"MEASURE_LAYERS={json.dumps(actual)}\n"
+        f"MEASURE_CONFIG={json.dumps(_FAKE_MEASURE_CONFIG)}\n"
+        f"MEASURE_GATEWAY_SHA256={gateway_sha}\n"
+        f"MEASURE_PROXY_SHA256={proxy_sha}\n"
+        "TMP_WRITABLE=1\n"
+        "PRIMARY_IFACE=ens5\n"
+    )
+
+
+def test_imagem_measure_camadas_volateis_mas_binarios_e_camadas_estaveis_batem_passa_com_fallback(monkeypatch):
+    """Regressao: camadas 1/2/3/5 divergem (volatilidade de timestamp
+    do BuildKit, mesma ja documentada em PINS.json), mas as camadas
+    ESTAVEIS (0/4) e os binary_sha256 de gateway/proxy EMBUTIDOS batem
+    -- com `pins` fornecido, o fallback aceita, nunca reprova."""
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_probe_with_drifted_layers_but_stable_0_and_4()))
+    result = preflight.check_capture_prerequisites(
+        "203.0.113.9", expected_measure_layers=_FAKE_MEASURE_LAYERS_DRIFTED,
+        expected_measure_config=_FAKE_MEASURE_CONFIG, pins=_FAKE_PINS_FULL,
+    )
+    assert result["ok"] is True, result
+    assert result["layers_ok"] is True
+    assert result["layer_drift_fallback_used"] is True
+    assert result["missing"] == []
+
+
+def test_imagem_measure_binario_gateway_adulterado_reprova_mesmo_com_fallback(monkeypatch):
+    """NEGATIVO: binario gateway embutido NAO bate com o pin -- o
+    fallback nunca mascara isso, mesmo com as camadas estaveis
+    corretas."""
+    monkeypatch.setattr(
+        cli, "run_ssh",
+        lambda host, cmd, **kw: _FakeSSHProc(_probe_with_drifted_layers_but_stable_0_and_4(gateway_sha="0" * 64)),
+    )
+    result = preflight.check_capture_prerequisites(
+        "203.0.113.9", expected_measure_layers=_FAKE_MEASURE_LAYERS_DRIFTED,
+        expected_measure_config=_FAKE_MEASURE_CONFIG, pins=_FAKE_PINS_FULL,
+    )
+    assert result["ok"] is False, result
+    assert result["layer_drift_fallback_used"] is False
+    assert any("PINS.json" in m for m in result["missing"]), result
+
+
+def test_imagem_measure_config_errado_reprova_mesmo_com_fallback_de_camadas(monkeypatch):
+    """NEGATIVO: config_subset diferente do pin reprova de forma
+    INDEPENDENTE do fallback de camadas -- fallback nunca mascara
+    divergencia de Config."""
+    monkeypatch.setattr(cli, "run_ssh", lambda host, cmd, **kw: _FakeSSHProc(_probe_with_drifted_layers_but_stable_0_and_4()))
+    result = preflight.check_capture_prerequisites(
+        "203.0.113.9", expected_measure_layers=_FAKE_MEASURE_LAYERS_DRIFTED,
+        expected_measure_config={"Entrypoint": ["/bin/sh"], "Cmd": None, "Env": [], "ExposedPorts": None},
+        pins=_FAKE_PINS_FULL,
+    )
+    assert result["ok"] is False, result
+    assert result["layer_drift_fallback_used"] is True  # camadas OK, so o Config reprova
+    assert any("Config" in m for m in result["missing"]), result
+
+
 def test_interface_loopback_reprova():
     """`lo` NUNCA pode passar como interface primaria -- mesma regra
     de `_primary_iface` do orquestrador."""

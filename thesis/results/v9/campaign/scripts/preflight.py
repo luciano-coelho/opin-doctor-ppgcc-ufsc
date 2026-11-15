@@ -19,6 +19,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli  # noqa: E402
 import campaign_topology as ct  # noqa: E402  -- fonte unica das 7 regioes da campanha oficial, nunca duplicada
+import deliver_images  # noqa: E402  -- Decisao 187: helper puro compartilhado measure_layer_drift_fallback_ok
+                                      # (Decisao 184), nunca reimplementado aqui; sem import circular, pois
+                                      # deliver_images.py nunca importa preflight.py.
 
 VCPU_QUOTA_CODE = "L-1216C47A"  # Running On-Demand Standard (A,C,D,H,I,M,R,T,Z)
 
@@ -350,6 +353,8 @@ if sudo -n true 2>/dev/null; then echo "SUDO_NOPASSWD=1"; else echo "SUDO_NOPASS
 echo "MEASURE_IMAGE_ID=$(docker image inspect mockopin-v9-measure --format '{{.Id}}' 2>/dev/null || true)"
 echo "MEASURE_LAYERS=$(docker image inspect mockopin-v9-measure --format '{{json .RootFS.Layers}}' 2>/dev/null || true)"
 echo "MEASURE_CONFIG=$(docker image inspect mockopin-v9-measure --format '{{json .Config}}' 2>/dev/null || true)"
+echo "MEASURE_GATEWAY_SHA256=$(docker run --rm --entrypoint sha256sum mockopin-v9-measure /usr/local/bin/gateway 2>/dev/null | awk '{print $1}')"
+echo "MEASURE_PROXY_SHA256=$(docker run --rm --entrypoint sha256sum mockopin-v9-measure /usr/local/bin/proxy 2>/dev/null | awk '{print $1}')"
 if touch /tmp/.v9_keylog_preflight_check 2>/dev/null; then
   rm -f /tmp/.v9_keylog_preflight_check
   echo "TMP_WRITABLE=1"
@@ -361,7 +366,7 @@ echo "PRIMARY_IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $
 
 
 def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expected_measure_image_id=None,
-                                 expected_measure_layers=None, expected_measure_config=None) -> dict:
+                                 expected_measure_layers=None, expected_measure_config=None, pins=None) -> dict:
     """Decisao 53, item 4a (corrigido na Decisao 55, item 2; corrigido
     de novo na Decisao 68). Roda os probes combinados numa UNICA
     chamada SSH e reprova com mensagem clara se qualquer um faltar:
@@ -377,7 +382,19 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
     ID (que continua lido, so informativo). `expected_measure_layers`/
     `expected_measure_config` default `None` so pra chamada isolada/
     teste sem PINS -- `run_capture_preflight` sempre passa os valores
-    reais de PINS.json."""
+    reais de PINS.json.
+
+    `pins` (Decisao 187, Emenda -- autorizacao explicita e escopada,
+    SOMENTE measure): dict COMPLETO de PINS.json, default `None` (gate
+    primario inalterado, estrito, sem fallback). Quando fornecido E a
+    comparacao direta de RootFS.Layers falhar, aplica o MESMO fallback
+    de equivalencia ja validado em `orchestrator.py._deliver_image`
+    (Decisao 184) e `deliver_images.py` (Decisao 179/6dff7e8f) --
+    helper puro compartilhado `deliver_images.measure_layer_drift_
+    fallback_ok`, nunca reimplementado aqui: camadas ESTAVEIS
+    (indices 0/4) batendo + binary_sha256 de gateway/proxy EMBUTIDOS
+    (extraidos aqui pelo mesmo mecanismo `docker run --entrypoint
+    sha256sum`, nunca `docker cp`/Docker local) iguais ao pin."""
     try:
         proc = cli.run_ssh(host, _CAPTURE_PROBE_SCRIPT, key_path=key_path, connect_timeout=connect_timeout)
     except Exception as e:  # noqa: BLE001 -- rede de seguranca: SSH indisponivel nunca estoura, so reprova
@@ -406,6 +423,15 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
         if isinstance(measure_config, dict) else None
     )
     layers_ok = bool(measure_layers) and (expected_measure_layers is None or measure_layers == expected_measure_layers)
+    layer_drift_fallback_used = False
+    if measure_layers and not layers_ok and pins is not None:
+        embedded_binary_sha256 = {
+            "gateway": fields.get("MEASURE_GATEWAY_SHA256") or None,
+            "proxy": fields.get("MEASURE_PROXY_SHA256") or None,
+        }
+        layer_drift_fallback_used = deliver_images.measure_layer_drift_fallback_ok(
+            pins, measure_layers, embedded_binary_sha256)
+        layers_ok = layer_drift_fallback_used
     config_ok = bool(measure_config_subset) and (expected_measure_config is None or measure_config_subset == expected_measure_config)
     tmp_writable_ok = fields.get("TMP_WRITABLE") == "1"
     iface = fields.get("PRIMARY_IFACE", "")
@@ -418,7 +444,7 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
         missing.append("sudo sem senha indisponivel (exigido pelo tcpdump real de dedicated_capture)")
     if not measure_layers:
         missing.append("imagem docker mockopin-v9-measure ausente (entregue por docker save/load, Decisao 55 item 2 -- nunca docker build na instancia)")
-    elif expected_measure_layers is not None and measure_layers != expected_measure_layers:
+    elif expected_measure_layers is not None and measure_layers != expected_measure_layers and not layer_drift_fallback_used:
         missing.append(f"RootFS.Layers de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_layers!r}, achado {measure_layers!r}")
     if measure_layers and expected_measure_config is not None and measure_config_subset != expected_measure_config:
         missing.append(f"Config de mockopin-v9-measure nao bate com PINS.json -- esperado {expected_measure_config!r}, achado {measure_config_subset!r}")
@@ -433,6 +459,7 @@ def check_capture_prerequisites(host, key_path=None, connect_timeout=20, expecte
         "sudo_nopasswd": sudo_ok,
         "measure_image_id": measure_image_id, "measure_image_id_note": "informativo apenas, nunca verificado (Decisao 68)",
         "measure_layers": measure_layers, "expected_measure_layers": expected_measure_layers, "layers_ok": layers_ok,
+        "layer_drift_fallback_used": layer_drift_fallback_used,
         "measure_config_subset": measure_config_subset, "expected_measure_config": expected_measure_config, "config_ok": config_ok,
         "tmp_writable": tmp_writable_ok, "primary_iface": iface or None,
         "missing": missing,
@@ -461,16 +488,19 @@ def run_capture_preflight(hosts, key_path=None, pins_path=_PINS_PATH_DEFAULT) ->
     teste -- producao sempre usa o default real."""
     expected_measure_layers = None
     expected_measure_config = None
+    pins = None
     if pins_path.is_file():
         try:
-            measure_pins = json.loads(pins_path.read_text(encoding="utf-8"))["images"]["measure"]
+            pins = json.loads(pins_path.read_text(encoding="utf-8"))
+            measure_pins = pins["images"]["measure"]
             expected_measure_layers = measure_pins.get("rootfs_layers")
             expected_measure_config = measure_pins.get("config_subset")
         except (json.JSONDecodeError, KeyError):
+            pins = None
             expected_measure_layers = None
             expected_measure_config = None
     checks = [check_capture_prerequisites(h, key_path=key_path, expected_measure_layers=expected_measure_layers,
-                                           expected_measure_config=expected_measure_config) for h in hosts]
+                                           expected_measure_config=expected_measure_config, pins=pins) for h in hosts]
     go = all(c["ok"] for c in checks)
     return {"go": go, "checks": checks}
 

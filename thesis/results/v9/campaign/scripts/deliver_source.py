@@ -85,6 +85,15 @@ COMMON_FILES = [
     # `pcap` no SERVIDOR -- por isso vai em COMMON_FILES, nunca so
     # num dos dois.
     "thesis/results/v9/integration/producers/criterio7_rtt.py",
+    # Decisao 183 (achado real, piloto assimetrico conta nova): o
+    # criterio 2 (initcwnd) tambem roda nos dois lados -- `direction=
+    # "server-to-client"` (piloto, sempre) escuta no SERVIDOR, mas
+    # `direction="client-to-server"` (campanha, gap fechado) escuta no
+    # CLIENTE (dedicated_criteria.run_criterio2) -- por isso vai em
+    # COMMON_FILES, mesmo padrao do criterio7_rtt.py acima, nunca so
+    # em SERVER_ONLY_FILES (onde ficava desde a Decisao 85, quando so
+    # existia o sentido servidor->cliente).
+    "thesis/results/v9/integration/producers/criterio2_probe.py",
 ]
 CLIENT_ONLY_FILES = [
     "thesis/results/v9/certs/generated",
@@ -96,9 +105,6 @@ CLIENT_ONLY_FILES = [
 # source de build: as imagens ja chegam pinadas via deliver_images.py/
 # _deliver_backend_images, nunca `docker build` na instancia).
 SERVER_ONLY_FILES = [
-    # Decisao 85 (pedido do Luciano): produtor do criterio 2 (initcwnd
-    # real) roda SO no servidor (e quem aceita a conexao de teste).
-    "thesis/results/v9/integration/producers/criterio2_probe.py",
     "insurance-server-lambdas/docker-compose.yml",
     "insurance-server-lambdas/pg_hba.conf",
     "insurance-server-lambdas/mongod.conf",
