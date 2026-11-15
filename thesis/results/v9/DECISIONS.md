@@ -13179,8 +13179,45 @@ Nenhuma imagem ficou sem prova pos-load alem de tar_sha256 (todas tem rootfs_lay
 
 **Item 2 -- testes.** 3 testes novos em `test_orchestrator.py`, chamando `_deliver_image("measure", host)` diretamente: (a) regressao -- camadas 1/2/3/5 TODAS diferentes do pin (volatilidade), 0/4 identicas, binarios embutidos batem -- `ok=True`, `measure_layer_drift_fallback_used=True`; (b) negativo -- binario proxy embutido adulterado -- `RuntimeError("identidade nao confere")`, fallback nao mascara; (c) negativo -- camadas/binarios OK (fallback aceitaria `layers_ok`) mas `config_subset` diferente -- `config_ok` e independente do fallback, continua reprovando. Suite completa `campaign/tests/`: 454 passed + 1 failed (mesmo flake de timing de `test_launch_persistent.py`, ja documentado desde a Decisao 172, nada a ver com estes arquivos).
 
-**Item 3 -- re-entrega e tag.** `orchestrator.py`/`deliver_images.py` re-entregues ao controle via `deliver_source.py --to-control` (chave pessoal, SO controle), sha256 da arvore inteira reconferido contra o blob git -- `tree_verified: true`. Confirmado ao vivo no controle: grep do marcador "Decisao 184" presente, `orchestrator.py --help` ok, imports limpos. Commit local `[preenchido no commit real]`; tag local `v9-campanha-conta-nova-piloto-assimetrico-v3` (sufixo incrementado, codigo da campanha mudou de novo).
+**Item 3 -- re-entrega e tag.** `orchestrator.py`/`deliver_images.py` re-entregues ao controle via `deliver_source.py --to-control` (chave pessoal, SO controle), sha256 da arvore inteira reconferido contra o blob git -- `tree_verified: true`. Confirmado ao vivo no controle: grep do marcador "Decisao 184" presente, `orchestrator.py --help` ok, imports limpos. Commit local `66dcf92e`; tag local `v9-campanha-conta-nova-piloto-assimetrico-v3` (sufixo incrementado, codigo da campanha mudou de novo).
 
 **Item 4 -- pre-voo, conclusao.** Confirmado via SSH (chave pessoal no controle, chave da campanha do controle pros 4 hosts reais das 2 rotas do piloto -- servidor+cliente de `L0-sa-east-1`, servidor+cliente de `L14`): os 4 hosts respondem SSH normalmente; `certs/generated` presente nos 2 CLIENTES (33 arquivos cada) e corretamente AUSENTE nos 2 SERVIDORES (por desenho -- `deliver_source.py` so entrega certs pra cliente/controle, nunca servidor, `CLIENT_ONLY_FILES`/`CONTROL_FILES`, nunca um gap). Achado real, nao um bug: NENHUMA das 7 imagens pinadas (gateway/proxy/pqc-signer/measure/auth/mongo_seed/mockapi) esta carregada em NENHUM dos 4 hosts reais (`docker images` so mostra as imagens padrao do ECS da AMI) -- confirma que, apesar do texto de decisoes anteriores (179/182) ter dito "gateway/proxy/pqc-signer ja entregues aos 12 hosts", NENHUMA tentativa real de piloto nesta sessao chegou a completar essa entrega de fato: as 3 tentativas anteriores sempre crasharam DENTRO de `_deliver_backend_images`, que `start_block` chama ANTES de gateway/proxy -- entao gateway/proxy/pqc-signer nunca tinham, de fato, alcancado nenhum host real ainda. Isso NAO e um bloqueio -- e o estado NORMAL antes de qualquer execucao real do piloto; a entrega de cada imagem a cada host e feita LAZILY pelo proprio `orchestrator.py` (`_deliver_image`, dentro de `start_block`/`capture_ready_check`/`_deliver_backend_images`) durante a execucao real, nunca um passo manual separado. Custo real recalculado via `cost_tracker.CostTracker` com os tipos reais de instancia do state (`t4g.micro` pro controle, `m7i-flex.large` pros outros 11, confirmado via `terraform state show` em cada uma) e o horario real de lancamento da frota: **US$13,32** em 9,30h decorridas (`status: "ok"`, abaixo do aviso US$25/teto US$30). Dead-man's-switch reconfirmado: timer `mockopin-safety-timer.timer` ativo no controle, deadline real em `/etc/mockopin-campaign/deadline` = 2026-11-17T04:17:21Z (~38,7h restantes no momento desta checagem) -- nunca tocado.
 
-**Item 5 -- segue pra entrega+piloto (ver proxima entrada ou a continuacao desta Decisao).**
+**Item 5 -- entrega+piloto, resultado final.**
+
+Lancamento real via `launch_persistent.py start` (chave da CAMPANHA, nunca a pessoal, pros 11 hosts alem do controle), com `--mode ssh --campaign --cells "classico:L0-sa-east-1,pqc:L0-sa-east-1,hibrido-v8:L0-sa-east-1,hibrido-and:L0-sa-east-1,classico:L14,hibrido-and:L14" --n-per-profile 3`. 2 achados reais de pipeline (procedimento/entrega, nunca medicao/orchestrator.py), ambos corrigidos antes do lancamento que completou:
+
+| # | Achado | Causa | Correcao |
+|---|---|---|---|
+| 1 | 1a tentativa: `ValueError: Invalid isoformat string: '...Z'` em `--cost-window-start-utc` | Python 3.9 do controle (o operador testa em 3.13, que aceita o sufixo "Z" desde a 3.11 -- mascarou isso localmente) nao aceita o sufixo "Z" do ISO 8601 em `datetime.fromisoformat` | Formato do ARGUMENTO corrigido (`+00:00` em vez de `Z`), nenhum codigo editado |
+| 2 | 2a tentativa: `RuntimeError: gateway_binary_info.json nao encontrado` em `_verify_gateway_binary` | `~/images/gateway_binary_info.json` nunca tinha sido entregue ao controle (so `gateway.tar` existia) | `deliver_images.py --images gateway` (chave pessoal, so controle) re-executado -- gera e entrega os dois arquivos juntos |
+
+**3a tentativa: SUCESSO TOTAL.** `orchestrator.py` saiu com codigo 0. Manifesto final (`manifest.json`):
+
+| Métrica | Resultado |
+|---|---|
+| Execucoes cronometradas | **18/18** (`expected_total` bate) |
+| Capturas dedicadas (criterio 1) | **6/6**, `capturas_dedicadas_falhas: []` |
+| Verificacoes de binario do gateway (por bloco) | **12/12 `pin_matched: true`** |
+| `cost_stop` | `null` (nunca acionado) |
+| `dedicated_criteria` (criterios 2/3/7) | `ok: true` |
+
+**Avaliacao dos 7 criterios tecnicos (`evaluate_criteria.py`), ESCOPADA pro piloto assimetrico real (2 rotas, celulas assimetricas -- a chamada direta `--campaign` sem escopo reprova por desenho, porque exige as 8 rotas da campanha completa; as funcoes parametrizadas (`routes=`/`profiles=`/`expected_total=`) foram chamadas diretamente com o escopo real do piloto, nunca uma funcao nova escrita):**
+
+| Criterio | Escopo avaliado | Resultado |
+|---|---|---|
+| 1 (tamanhos por mensagem) | 6 combinacoes reais (4 perfis x L0-sa-east-1 + 2 perfis x L14) | **PASS**, 6/6, 0 faltando |
+| 2 (initcwnd real) | L14 server-to-client (L0-sa-east-1 e RTT=0, fora do escopo do criterio por desenho -- ver nota) | **PASS** pro sentido servidor->cliente (`cwnd:10`, MSS efetivo 1448B, os 2 canais concordam) |
+| 3 (zero erros, rota mais distante) | N/A -- o criterio de campanha usa por definicao a rota de MAIOR RTT nominal de TODA a topologia (L325), nunca uma das 2 rotas deste piloto assimetrico | nao avaliavel neste escopo, nao e uma falha |
+| 4 (contagens do fluxo) | 18/18 execucoes | **PASS**, 44 HTTP/28 JWT/4 jwks/4 CA/6 mTLS em TODAS, 0 divergencia |
+| 5 (zero erros) | log combinado completo | **PASS**, 0 erros |
+| 6 (instrumentacao -- CurveID/DualAuthenticated/keylog) | 18/18 execucoes | **PASS**, CurveID esperado por perfil em 100%, `DualAuthenticated=true` em 100% do hibrido-and, keylog presente em todas |
+| 7 (sanidade de latencia por rota) | L0-sa-east-1 + L14 | **PASS** nas 2 -- probe e pcap concordam (L0: 0,18ms/0,13ms; L14: 14,92ms/14,98ms, nominal 14ms) |
+
+**Achado real, nao corrigido (fora do escopo desta autorizacao -- infraestrutura de medicao/producer, nunca tocado sem autorizacao explicita): a direcao "client-to-server" do criterio 2 falha em TODAS as 5 rotas onde foi tentada nesta rodada (L123/L219/L325/L14/L30 -- nunca so nas 2 rotas deste piloto), sempre com `Connection refused` na porta 9876 do lado do cliente (`bash: connect: Connection refused`).** A direcao "server-to-client" (a ORIGINAL, pre-registrada -- "o servidor manda >=64KB") passa normalmente em todas. A causa mais provavel, por inspecao do erro (nunca confirmada em codigo nesta rodada): a regra de ingress reversa que a generalizacao de `run_criterio2_campaign` (docstring do proprio `dedicated_criteria.py`) diz precisar -- `criterio2_probe_reverse`, mencionada nos comentarios do `main.tf` -- pode nao estar de fato liberando a porta 9876 de entrada no CLIENTE. Isso e um gap PRE-EXISTENTE da infraestrutura de medicao de toda a campanha (nao algo introduzido nesta rodada, nem especifico as 2 rotas do piloto assimetrico) -- reportado para decisao do Luciano, nunca investigado/corrigido por conta propria (tocaria Terraform de medicao e/ou `dedicated_criteria.py`, fora do escopo desta autorizacao).
+
+**Custo final:** recalculado via `cost_tracker.CostTracker` com os tipos reais de instancia e o horario real de lancamento da frota: **US$14,58** em 10,17h decorridas, `status: "ok"` -- bem abaixo do aviso (US$25) e do teto (US$30).
+
+**Estado da infraestrutura:** 12 instancias confirmadas no `terraform state` (nenhuma destruida/recriada/parada); dead-man's-switch e chave da campanha intocados. Nenhum bloqueio de classificador de seguranca nesta etapa; nenhuma trava fixa violada; nenhum push, campanha completa, tag publicada movida, IAM, ou `cleanup_campaign_key`.
+
+**Commits/tags desta sequencia completa (183-185):** `c9cf67fa` (183, remocao do gate pre-scp de tar_sha256) + tag `v9-campanha-conta-nova-piloto-assimetrico-v2`; `66dcf92e` (184, fallback de equivalencia pra measure) + tag `v9-campanha-conta-nova-piloto-assimetrico-v3`; esta entrada (185) registra so o RESULTADO da execucao real -- nenhum codigo de campanha mudou nesta etapa, nenhuma tag nova necessaria.
