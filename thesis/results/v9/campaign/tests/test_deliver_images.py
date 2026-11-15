@@ -24,21 +24,32 @@ _FAKE_BIN_SHA256 = hashlib.sha256(_FAKE_BIN_BYTES).hexdigest()
 # serve pras 4 (`tar_sha256`, agora conferido ANTES de qualquer scp).
 _FAKE_TAR_BYTES = b"tar fake, so para teste\n" * 1000
 _FAKE_TAR_SHA256 = hashlib.sha256(_FAKE_TAR_BYTES).hexdigest()
+# Decisao 179: `docker save`/tar_sha256 provou NAO ser identidade de
+# conteudo estavel (mesma imagem, tar_sha256 diferente a cada
+# invocacao real) -- deliver_images.py agora confere `rootfs_layers`
+# (via `docker inspect`) ANTES de qualquer scp. Um unico conjunto fake
+# de camadas serve pras 4 imagens padrao destes testes.
+_FAKE_ROOTFS_LAYERS = ["sha256:" + "a" * 64, "sha256:" + "b" * 64]
 
 
 @pytest.fixture(autouse=True)
 def _fake_pins(monkeypatch):
     monkeypatch.setattr(di, "load_pins", lambda: {"images": {
-        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": _FAKE_BIN_SHA256, "tar_sha256": _FAKE_TAR_SHA256},
-        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": _FAKE_TAR_SHA256},
-        "pqc-signer": {"docker_image": "mockopin-pqc-signer", "tar_sha256": _FAKE_TAR_SHA256},
-        "measure": {"docker_image": "mockopin-v9-measure", "tar_sha256": _FAKE_TAR_SHA256},
+        "gateway": {"docker_image": "mockopin-v9-gateway", "binary_sha256": _FAKE_BIN_SHA256,
+                    "tar_sha256": _FAKE_TAR_SHA256, "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": _FAKE_TAR_SHA256, "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+        "pqc-signer": {"docker_image": "mockopin-pqc-signer", "tar_sha256": _FAKE_TAR_SHA256, "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+        "measure": {"docker_image": "mockopin-v9-measure", "tar_sha256": _FAKE_TAR_SHA256, "rootfs_layers": _FAKE_ROOTFS_LAYERS},
     }})
 
 
-def _run_factory(calls, df_avail_kb="999999999"):
+def _run_factory(calls, df_avail_kb="999999999", rootfs_layers=None):
+    rootfs_layers = _FAKE_ROOTFS_LAYERS if rootfs_layers is None else rootfs_layers
+
     def fake_run(argv, timeout=None):
         calls.append(argv)
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "inspect":
+            return FakeProc(stdout=json.dumps(rootfs_layers))
         if argv[0] == "docker" and len(argv) > 1 and argv[1] == "cp":
             # docker cp <container>:/gateway <dest> -- precisa escrever
             # um arquivo real (o codigo real faz read_bytes() depois).
@@ -96,6 +107,8 @@ def test_deliver_images_usa_timeout_proporcional_no_scp_do_tar(monkeypatch):
 
     def fake_run(argv, timeout=None):
         calls.append(argv)
+        if argv[0] == "docker" and len(argv) > 1 and argv[1] == "inspect":
+            return FakeProc(stdout=json.dumps(_FAKE_ROOTFS_LAYERS))
         if argv[0] == "docker" and len(argv) > 1 and argv[1] == "save":
             tar_path = argv[argv.index("-o") + 1]
             Path(tar_path).write_bytes(big_tar_bytes)
@@ -106,9 +119,8 @@ def test_deliver_images_usa_timeout_proporcional_no_scp_do_tar(monkeypatch):
             return FakeProc(stdout="OK\n")
         return FakeProc()
 
-    sha256_big = hashlib.sha256(big_tar_bytes).hexdigest()
     monkeypatch.setattr(di, "load_pins", lambda: {"images": {
-        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": sha256_big},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "rootfs_layers": _FAKE_ROOTFS_LAYERS},
     }})
     monkeypatch.setattr(cli, "_run", fake_run)
     di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
@@ -218,20 +230,37 @@ def test_deliver_images_checa_espaco_antes_de_enviar(monkeypatch):
     assert not any("scp" in c for c in flat), "nenhum scp pode acontecer se o espaco em disco for insuficiente"
 
 
-def test_deliver_images_aborta_se_tar_recem_construido_nao_bate_com_pin(monkeypatch):
-    """Decisao 68 (Emenda -- primeiro salto, ANTES do segundo que
-    `orchestrator._deliver_image` confere): a imagem local foi
-    reconstruida/e diferente da pinada -- o `.tar` recem-construido
-    NUNCA pode ser enviado pro controle sem bater com `tar_sha256`."""
+def test_deliver_images_aborta_se_rootfs_layers_local_nao_bate_com_pin(monkeypatch):
+    """Decisao 179 (achado real, piloto assimetrico conta nova): a
+    imagem local foi reconstruida/e diferente da pinada -- nenhum
+    .tar pode ser enviado pro controle se `rootfs_layers` (via
+    `docker inspect` na imagem CARREGADA, nunca no .tar) nao bater
+    com PINS.json. Substitui o check antigo por `tar_sha256`
+    (Decisao 68), que provou nao ser identidade de conteudo estavel."""
     calls = []
     monkeypatch.setattr(cli, "_run", _run_factory(calls))
     monkeypatch.setattr(di, "load_pins", lambda: {"images": {
-        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": "9" * 64},
+        "proxy": {"docker_image": "mockopin-v9-proxy", "rootfs_layers": ["sha256:" + "9" * 64]},
     }})
-    with pytest.raises(RuntimeError, match="nao bate com tar_sha256"):
+    with pytest.raises(RuntimeError, match="nao bate com rootfs_layers"):
         di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
     flat = [" ".join(c) for c in calls]
-    assert not any(c[0] == "scp" for c in calls), "nenhum scp pode acontecer com o .tar divergente do pin -- " + str(flat)
+    assert not any(c[0] == "scp" for c in calls), "nenhum scp pode acontecer com rootfs_layers divergente do pin -- " + str(flat)
+
+
+def test_deliver_images_tar_sha256_diferente_do_pin_nao_bloqueia_mais(monkeypatch):
+    """Decisao 179: tar_sha256 (do .tar recem-criado) pode divergir
+    livremente do PINS.json antigo -- so rootfs_layers (imagem
+    carregada) e identidade de conteudo agora. Prova que a imagem
+    certa, com um tar_sha256 pinado desatualizado/ausente, ainda
+    entrega com sucesso (nunca mais aborta por essa causa)."""
+    calls = []
+    monkeypatch.setattr(cli, "_run", _run_factory(calls))
+    monkeypatch.setattr(di, "load_pins", lambda: {"images": {
+        "proxy": {"docker_image": "mockopin-v9-proxy", "tar_sha256": "0" * 64, "rootfs_layers": _FAKE_ROOTFS_LAYERS},
+    }})
+    report = di.deliver_images("203.0.113.5", "/fake/operator_key", images=("proxy",))
+    assert report["images"]["proxy"]["sha256_ok"] is True
 
 
 def test_deliver_images_aborta_se_sha256sum_c_falha_no_controle(monkeypatch):

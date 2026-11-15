@@ -71,6 +71,13 @@ def load_pins():
     return json.loads(PINS_PATH.read_text(encoding="utf-8"))
 
 
+def docker_image_rootfs_layers(docker_image: str) -> list[str]:
+    proc = cli._run(["docker", "inspect", docker_image, "--format", "{{json .RootFS.Layers}}"], timeout=30)
+    if proc.returncode != 0:
+        raise RuntimeError(f"docker_image_rootfs_layers({docker_image}): docker inspect falhou: {proc.stderr}")
+    return json.loads(proc.stdout.strip())
+
+
 def extract_gateway_binary_info(workdir: Path) -> dict:
     """Mesma extracao que `orchestrator._local_gateway_binary_info`
     fazia (Decisao 54) antes desta rodada -- agora so roda aqui, na
@@ -209,20 +216,29 @@ def deliver_images(control_ip, operator_key_path, images=ALL_IMAGE_KEYS):
 
         for key, tar_path in tar_paths.items():
             sha256 = hashlib.sha256(tar_path.read_bytes()).hexdigest()
-            # Decisao 68 (Emenda -- substitui a verificacao por Image
-            # ID, que a Decisao 67 confirmou divergir entre versoes de
-            # Docker mesmo com conteudo identico): confere o .tar
-            # RECEM-CONSTRUIDO contra o `tar_sha256` pinado -- fail-
-            # closed ANTES de qualquer scp, pega tanto uma imagem
-            # local errada/reconstruida quanto corrupcao, nunca so
-            # confianca na propria consistencia interna do envio.
-            expected_tar_sha256 = pins["images"][key]["tar_sha256"]
-            if sha256 != expected_tar_sha256:
+            # Decisao 179 (achado real, piloto assimetrico conta nova):
+            # tar_sha256 provou NAO ser uma identidade de conteudo
+            # estavel pro proprio `docker save` (mesma imagem, mesmo
+            # rootfs/binario, tar_sha256 diferente a cada invocacao --
+            # Decisao 68 ja tinha desqualificado Image ID pelo mesmo
+            # motivo, mas trocou por outro campo igualmente instavel).
+            # `rootfs_layers` (via `docker inspect`, nunca `docker save`)
+            # e a identidade de conteudo que a Decisao 173/175/178 ja
+            # usava pra confirmar reprodutibilidade -- conferido AQUI,
+            # na imagem CARREGADA (nunca no .tar recem-criado), antes
+            # de qualquer scp. tar_sha256 continua calculado/escrito
+            # abaixo, mas so pra integridade de TRANSFERENCIA (o
+            # sha256sum -c no controle), nunca mais como prova de
+            # identidade contra PINS.json.
+            docker_image = pins["images"][key]["docker_image"]
+            actual_layers = docker_image_rootfs_layers(docker_image)
+            expected_layers = pins["images"][key]["rootfs_layers"]
+            if actual_layers != expected_layers:
                 raise RuntimeError(
-                    f"deliver_images({key}): sha256 do .tar recem-construido ({sha256!r}) nao bate com "
-                    f"tar_sha256 em PINS.json ({expected_tar_sha256!r}) -- abortando ANTES de qualquer scp. "
-                    f"A imagem local pode ter sido reconstruida -- regra do piloto: nunca reconstruir "
-                    f"imagens pinadas antes do fim (ver DECISIONS.md)."
+                    f"deliver_images({key}): rootfs_layers da imagem local carregada ({actual_layers!r}) "
+                    f"nao bate com rootfs_layers em PINS.json ({expected_layers!r}) -- abortando ANTES de "
+                    f"qualquer scp. A imagem local pode ter sido reconstruida -- regra do piloto: nunca "
+                    f"reconstruir imagens pinadas antes do fim (ver DECISIONS.md)."
                 )
             sha_path = tar_path.parent / f"{tar_path.name}.sha256"
             # Decisao 64 (achado real, ao vivo, na propria Fase A --
