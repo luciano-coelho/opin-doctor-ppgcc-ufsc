@@ -193,9 +193,10 @@ ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
 cd ~/thesis/results/v9/campaign/scripts
 python3 --version
 python3 orchestrator.py --help >/dev/null && echo "OK: orchestrator.py importa e roda"
+python3 launch_persistent.py --help >/dev/null && echo "OK: launch_persistent.py importa e roda"
 REMOTE
 ```
-**Saída esperada:** versão do Python 3, depois `OK: orchestrator.py importa e roda`.
+**Saída esperada:** versão do Python 3, depois `OK: orchestrator.py importa e roda`, depois `OK: launch_persistent.py importa e roda`.
 **Nota (Decisão 76):** `evaluate_criteria.py` não depende mais de `cryptography` pro diagnóstico de bytes (trocado por `ssl.PEM_cert_to_DER_cert`, stdlib) — nenhum pacote de terceiros é necessário pra este passo.
 **Critério de abortar:** qualquer traceback de import, ou `python3` ausente.
 
@@ -203,14 +204,39 @@ REMOTE
 
 ## Passo 10 — porta de fumaça: preflight de captura + 12 execuções (Decisão 48/53/55/76) **[CONTROLE]** 🔁
 
+**Decisão 172 (pedido do Luciano, item 4b da Decisão 171): este passo
+NUNCA MAIS roda `orchestrator.py` direto numa sessão SSH bloqueante**
+— uma queda de internet do operador durante a janela matava a
+execução real no meio. A partir desta Decisão, todo lançamento de
+`orchestrator.py` (smoke ou piloto) passa por `launch_persistent.py`
+(entregue ao controle no Passo 7, mesmo `CONTROL_FILES` de
+`deliver_source.py`): `start` desacopla o processo da sessão SSH
+(`setsid`/novo grupo de sessão + lock exclusivo + PID + log em
+arquivo) e retorna em segundos — a sessão SSH pode cair depois disso
+sem afetar a janela em andamento.
+
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
 cd ~/thesis/results/v9/campaign/scripts
 mkdir -p ~/campaign-data/v9/smoke
-python3 orchestrator.py --mode ssh --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
+python3 launch_persistent.py --name smoke start -- \
+  --mode ssh --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
   --images-staging-dir ~/images --smoke --out ~/campaign-data/v9/smoke
 REMOTE
 ```
+**Saída esperada deste comando (imediata, nunca o fim da janela):**
+`{"started": true, "pid": <N>, "log": "..."}`. Se `"started": false`
+(`"already_running"`/`"lock_busy"`), já existe uma janela em andamento
+com o mesmo `--name` — nunca uma segunda instância em paralelo.
+
+**Acompanhamento (repita quantas vezes quiser, inclusive de uma sessão
+SSH NOVA — nunca precisa ser a mesma que lançou):**
+```
+ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" \
+  "cd ~/thesis/results/v9/campaign/scripts && python3 launch_persistent.py --name smoke status"
+```
+`"alive": false` + `"progress": {"source": "manifest.json", "complete": true, ...}` = terminou de verdade. `"alive": true` + `"progress": {"source": "manifest_partial.json", ...}` = ainda rodando, progresso real (nunca inventado) lido do mesmo arquivo incremental que `orchestrator.py` já escreve por célula (Decisão 133). `python3 launch_persistent.py --name smoke tail -n 50` mostra as últimas linhas do log real.
+
 **O que roda, na ordem, automaticamente, dentro de UMA chamada**
 (`run_smoke_gate`, nunca passos separados): (1) `capture_ready_
 check()` — aborta ANTES de qualquer execução se tcpdump/sudo/imagem/
@@ -221,13 +247,14 @@ critério 1); (4) diagnóstico de bytes por perfil (Decisão 76 —
 NUNCA quebra mais o gate; qualquer desvio ou exceção só marca
 `bytes_diagnostic_needs_decision`, pausa, nunca derruba `smoke_ok`).
 
-**Saída esperada:** JSON com `"smoke_ok": true`, `"capture_preflight":
-{"go": true, ...}`, `"capture_proof_ok": true`, `"total_execucoes":
-12`. `"bytes_diagnostic_needs_decision"` pode vir `true` ou `false`
-— **nunca**, por si só, motivo de abortar (é diagnóstico, nunca o
-gate oficial).
-**Critério de abortar:** `"smoke_ok": false` — o script PAUSA e sai
-com código 1 por conta própria (nunca destrói nada automaticamente,
+**Saída esperada (dentro do `manifest.json`, via `status`):** JSON com
+`"smoke_ok": true`, `"capture_preflight": {"go": true, ...}`,
+`"capture_proof_ok": true`, `"total_execucoes": 12`.
+`"bytes_diagnostic_needs_decision"` pode vir `true` ou `false` —
+**nunca**, por si só, motivo de abortar (é diagnóstico, nunca o gate
+oficial).
+**Critério de abortar:** `"smoke_ok": false` dentro do manifesto (o
+processo sempre sai sozinho, nunca destrói nada automaticamente,
 Decisão 49/Emenda 12). Decisão do Luciano: corrigir e repetir dentro
 da janela de 4h, ou mandar destruir (Passo 14). Se o motivo for um
 critério pré-registrado falhando com o código já verificado correto
@@ -237,16 +264,29 @@ critério pré-registrado falhando com o código já verificado correto
 
 ## Passo 11 — piloto real: 60 execuções + 12 capturas dedicadas **[CONTROLE]** 🔁
 
+**Mesma mudança do Passo 10 (Decisão 172) — launcher, nunca SSH
+bloqueante direto:**
+
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
 cd ~/thesis/results/v9/campaign/scripts
 mkdir -p ~/campaign-data/v9/piloto
-python3 orchestrator.py --mode ssh --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
+python3 launch_persistent.py --name piloto start -- \
+  --mode ssh --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key \
   --images-staging-dir ~/images --out ~/campaign-data/v9/piloto
 REMOTE
 ```
-**Saída esperada:** JSON com `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 arquivos) escritos em `~/campaign-data/v9/piloto/` (saída FLAT, Decisão 75/78 — nunca dividida por perfil). **Emenda robustez-de-captura (item 0+3, pedido do Luciano):** `criterio1_capturas/capturas_brutas/` ganha o pcap+keylog BRUTOS de TODA tentativa de cada uma das 12 capturas dedicadas (sucesso ou falha, até 3 tentativas cada — retry só quando o modo de falha é decifragem incompleta, nunca divergência de tamanho); a tentativa vencedora de cada captura também fica em `criterio1_capturas/{perfil}_{rota}.pcap`/`.keylog` (sem sufixo de tentativa).
-**Critério de abortar:** qualquer exceção/`RuntimeError` (start_block, run_execution, dedicated_capture) — inclusive "decifragem incompleta em 3 tentativas" (as 3 tentativas ficam preservadas em `capturas_brutas/` mesmo assim, nunca perdidas) — nenhuma correção de código no meio desta janela sem registrar Decisão numerada; se a correção alterar o que é medido, regra 7(e), STOP.
+**Acompanhamento:** `python3 launch_persistent.py --name piloto status`/`tail -n 50`, de qualquer sessão SSH, a qualquer momento — ver Passo 10. **Critério NOVO (n), teste de persistência real (Decisão 172):** com o piloto em andamento, o operador derruba a própria sessão SSH de propósito UMA VEZ (ex. fecha o terminal/perde a conexão no meio da janela); o piloto DEVE continuar e terminar sozinho — confirme com `status` de uma sessão SSH NOVA que a janela seguiu progredindo e terminou completa. O relatório da campanha registra que este teste foi feito e o resultado.
+
+**Saída esperada (via `status`, apos `"alive": false`):** JSON com `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 arquivos) escritos em `~/campaign-data/v9/piloto/` (saída FLAT, Decisão 75/78 — nunca dividida por perfil). **Emenda robustez-de-captura (item 0+3, pedido do Luciano):** `criterio1_capturas/capturas_brutas/` ganha o pcap+keylog BRUTOS de TODA tentativa de cada uma das 12 capturas dedicadas (sucesso ou falha, até 3 tentativas cada — retry só quando o modo de falha é decifragem incompleta, nunca divergência de tamanho); a tentativa vencedora de cada captura também fica em `criterio1_capturas/{perfil}_{rota}.pcap`/`.keylog` (sem sufixo de tentativa).
+**Critério de abortar:** qualquer exceção/`RuntimeError` (start_block, run_execution, dedicated_capture), visível no log (`tail`) e refletido em `"alive": false` sem `manifest.json` completo (só `manifest_partial.json`, `"complete": false`) — inclusive "decifragem incompleta em 3 tentativas" (as 3 tentativas ficam preservadas em `capturas_brutas/` mesmo assim, nunca perdidas) — nenhuma correção de código no meio desta janela sem registrar Decisão numerada; se a correção alterar o que é medido, regra 7(e), STOP. **Nunca relance com `--resume` assumindo que os dados parciais contam** — a política fail-closed já existente em `orchestrator.py` (nunca alterada por este launcher) sempre refaz a janela inteira do zero quando `manifest.json` não existe; só pula a reexecução se `manifest.json` já existir COMPLETO e idêntico.
+
+**Fim de campanha (so por ordem explicita do usuario, DEPOIS dos
+resultados copiados pra fora do controle — Passo 12/13): remova a
+chave privada da campanha do controle com `python3
+cleanup_campaign_key.py --key-path ~/.ssh/campaign_key` (Decisão
+172) — confirma que o arquivo sumiu, nunca roda automaticamente em
+nenhum outro ponto deste roteiro.**
 
 ---
 

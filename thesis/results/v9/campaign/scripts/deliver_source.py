@@ -113,6 +113,12 @@ CONTROL_FILES = [
     "thesis/results/v9/campaign/scripts/cli.py",
     "thesis/results/v9/campaign/scripts/preflight.py",
     "thesis/results/v9/campaign/scripts/rehearsal_handshake.sh",
+    # Decisao 172 (pedido do Luciano, item 4b da Decisao 171): o
+    # piloto/campanha passam a ser lancados PELO LAUNCHER (desacoplado
+    # da sessao SSH do operador), nunca mais por orchestrator.py direto
+    # numa sessao bloqueante -- os dois precisam estar no controle.
+    "thesis/results/v9/campaign/scripts/launch_persistent.py",
+    "thesis/results/v9/campaign/scripts/cleanup_campaign_key.py",
     # Decisao 85 (pedido do Luciano): roda DO CONTROLE, igual a
     # orchestrator.py (so o controle alcanca servidor/clientes).
     "thesis/results/v9/campaign/scripts/dedicated_criteria.py",
