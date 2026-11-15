@@ -123,6 +123,18 @@ CONTROL_FILES = [
     # orchestrator.py (so o controle alcanca servidor/clientes).
     "thesis/results/v9/campaign/scripts/dedicated_criteria.py",
     "thesis/results/v9/campaign/scripts/deliver_images.py",
+    # Achado real (rodada da Decisao 182): orchestrator.py importa
+    # `cost_tracker` INCONDICIONALMENTE no topo do modulo (trava de
+    # custo, Etapa 1 do piloto v9) e `campaign_topology` quando
+    # --campaign/--cells e usado (Decisao 177) -- nenhum dos dois
+    # jamais esteve nesta lista. Sem cost_tracker.py, `orchestrator.py
+    # --help` no controle quebra com ModuleNotFoundError antes de
+    # imprimir qualquer coisa (mesma classe de bug da Decisao 65,
+    # achado em paridade, nunca corrigido junto por nao ter sido
+    # exercitado ao vivo antes desta rodada). dedicated_criteria.py
+    # tambem importa campaign_topology.
+    "thesis/results/v9/campaign/scripts/cost_tracker.py",
+    "thesis/results/v9/campaign/scripts/campaign_topology.py",
     "thesis/results/v9/campaign/PINS.json",
     "thesis/results/v9/integration/evaluate_criteria.py",
     # Decisao 75, item 2 (pedido do Luciano): run_smoke_gate roda no

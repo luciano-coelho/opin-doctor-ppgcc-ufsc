@@ -637,6 +637,16 @@ def test_control_files_inclui_certs_generated():
     assert "thesis/results/v9/certs/generated" in ds.CONTROL_FILES
 
 
+# --- Decisao 182 (achado real): orchestrator.py importa cost_tracker
+# incondicionalmente e campaign_topology quando --campaign/--cells e
+# usado -- nenhum dos dois estava em CONTROL_FILES, quebrando
+# `orchestrator.py --help` no controle com ModuleNotFoundError.
+
+def test_control_files_inclui_cost_tracker_e_campaign_topology():
+    assert "thesis/results/v9/campaign/scripts/cost_tracker.py" in ds.CONTROL_FILES
+    assert "thesis/results/v9/campaign/scripts/campaign_topology.py" in ds.CONTROL_FILES
+
+
 def test_deliver_to_control_tarball_inclui_certs_generated(fake_repo, tmp_path):
     out = ds.build_tarball(ds.CONTROL_FILES, tmp_path / "control.tar.gz", repo_root=fake_repo)
     with tarfile.open(out, "r:gz") as tar:
