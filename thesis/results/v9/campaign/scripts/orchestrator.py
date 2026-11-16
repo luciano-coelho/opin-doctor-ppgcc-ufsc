@@ -1538,6 +1538,13 @@ class SSHExecutor:
                 {**r, "route": route, "gateway_log_excerpt": self._gateway_log_excerpt_for_retry(r, route)}
                 for r in result.get("whole_run_retries", [])
             ],
+            # Degrau 2 (campanha suplementar, mudanca aditiva): preserva o
+            # T_fluxo fino e a decomposicao por fase que latency_automation.
+            # run_once_timed() ja calcula internamente mas que antes desta
+            # linha eram sempre descartados aqui. Nenhuma chave existente
+            # foi removida ou renomeada.
+            "t_fluxo_fino_seconds": result.get("t_fluxo_seconds"),
+            "phase_accounting": result.get("phase_accounting", {}),
         }
 
     def _gateway_log_excerpt_for_retry(self, retry_entry: dict, route) -> str | None:
