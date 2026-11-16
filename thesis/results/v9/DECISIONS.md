@@ -13304,3 +13304,60 @@ Autorizado pelo Luciano apos o achado do check 3 das verificacoes obrigatorias p
 **As 4 verificacoes obrigatorias, refeitas do ZERO apos a limpeza: TODAS PASSARAM.** Chave (600/ec2-user, confirmado de novo); disco (13-29% de uso, 22-27GB livres, 12 hosts, confirmado de novo); estado limpo (diretorio `~/campaign-data/v9/oficial` ainda inexistente, nenhum job do launcher vivo, nenhum lock -- confirmado de novo, consistente com a varredura do item 4 acima); semente/ordem de perfis no manifesto (`orchestrator.py:2468`/`:2480`, sem necessidade de parametro novo -- ja confirmado na Decisao 187, reconfirmado aqui sem mudanca).
 
 **LANCAMENTO REAL DA CAMPANHA OFICIAL.** Comando exato do item (f) do relatorio da Decisao 187 (`launch_persistent.py --name oficial start -- --mode ssh --inventory-json inventory.json --ssh-key ~/.ssh/campaign_key --images-staging-dir ~/images --campaign --n-per-profile 10 --n-warmup-per-profile 5 --cost-alert-usd 70 --cost-stop-usd 90 --cost-server-client-instance-type m7i-flex.large --cost-window-start-utc 2026-11-15T04:17:09+00:00 --out ~/campaign-data/v9/oficial`), SEM alterar nenhum parametro. Iniciado em `2026-11-15T17:37:27Z`, PID supervisor `740814`/processo `740832`, confirmado `alive:true` 10s depois -- passou do `check_no_orphans` sem abortar, confirmando que a limpeza funcionou de verdade (a mesma checagem tinha reprovado, com o MESMO motivo, antes da limpeza desta Decisao). Acompanhamento por `status`/`tail` a cada 30-40min em andamento, sem nenhuma intervencao na infraestrutura/scripts/campanha durante a janela. Resultado final (sucesso ou abortamento) registrado em Decisao separada, apos o fim da janela.
+
+---
+
+## Decisao 189 -- campanha oficial (conta nova) CONCLUIDA COM SUCESSO (N=10, 5 aquecimentos, janela unica) -- pos-processamento completo, OPINsize exato contra o gabarito, 1 achado real no criterio 7 (L30)
+
+A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durante o processo: `window_start_utc` real `2026-11-15T17:37:59Z`, `window_end_utc` real `2026-11-16T00:06:40Z` (6h29min de janela), depois mais ~17min pra coleta automatica dos criterios 2/3/7 (`dedicated_criteria.run_all_campaign`, disparada automaticamente por `--campaign --mode ssh` sem `--smoke`/`cost_stop`, como qualquer chamada real -- nunca um passo manual separado). Confirmado no `manifest.json` final: `complete: true`, `total_execucoes: 320/320`, `total_aquecimentos: 160/160`, `total_capturas: 32/32`, `capturas_dedicadas_falhas: []`, `cost_stop: null`, `dedicated_criteria.ok: true`, `cells_filter: null` (confirma janela OFICIAL, nunca filtrada/piloto).
+
+**Retries de transporte (distintos do retry de captura/decifragem ja documentado -- Decisao 188, mecanismo separado):** monitorados em tempo real durante toda a janela (varredura completa de `runs_raw/*.json` repetida a cada checagem) -- **0 (zero) retries de transporte reais em qualquer das 320 execucoes**, confirmado de novo agora por `retries_report.json` (gerado por `organize_v9_results.py`): `{"total_retries": 0, "por_celula": {}}`.
+
+**Copia pra maquina local, com verificacao de integridade (achado de ferramenta, nao de dados):** `collect_artifacts.py` (script existente) quebrou ao rodar via Python nativo do Windows ("cd: too many arguments" no comando SSH remoto -- causa exata nao investigada a fundo, possivel peculiaridade de quoting do `subprocess`/`CreateProcess` nesta plataforma especifica, nunca reproduzida manualmente via shell). Contornado reproduzindo manualmente a MESMA garantia que o script oferece (nunca pulando a verificacao): manifesto sha256 regenerado no controle (`find | xargs sha256sum`, 720 arquivos), `scp -r` completo, `sha256sum -c` local -- **720/720 arquivos verificados, 0 divergencias**. Destino: `thesis/results/v9/campaign_oficial_conta_nova_raw/` (dados brutos, ~206MB) e `thesis/results/v9/campaign_oficial_conta_nova_organized/` (saida de `organize_v9_results.py`, ~133MB) -- nomes deliberadamente distintos de `campaign/oficial_raw/` (conta/infraestrutura ANTERIOR, Decisao 140, nunca misturados).
+
+**`organize_v9_results.py` (`--expected-runs-per-cell 10`, sem `--label-piloto` -- dado OFICIAL):** `"ok": true`, `"divergencias": []`. `criterio_1_total_execucoes`: 320/320. `criterio_1_capturas_dedicadas`: 32/32, 0 falhas. `criterio_3_contagens_iguais_entre_perfis`: 3520 chamadas em CADA um dos 4 perfis (80 execucoes x 44 chamadas, constante, igual a convencao ja estabelecida). `criterio_1_tls_dual_assertado`: 0 divergencias.
+
+**`evaluate_criteria.py --campaign --campaign-n 10`: 6 de 7 criterios PASS, 1 achado real.**
+
+| Criterio | Resultado |
+|---|---|
+| 1 (tamanhos por mensagem, campanha) | PASS |
+| 2 (initcwnd real, campanha) | PASS |
+| 3 (zero erros na rota mais distante, campanha) | PASS |
+| 4 (contagens do fluxo, campanha) | PASS |
+| 5 (zero erros) | PASS |
+| 6 (instrumentacao completa + assercoes, campanha) | PASS |
+| 7 (sanidade de latencia por rota, campanha) | **FAIL -- achado real, L30** |
+
+**Achado real do criterio 7, NAO corrigido (fora do escopo de edicao de medicao autorizado nesta fase):** `L30` (`ap-northeast-1`<->`ap-northeast-2`) mede RTT real de **~33,4-34,1ms** (canal probe E canal pcap, os dois concordam entre si, `consistent: true`) contra o nominal cadastrado em `campaign_topology.CAMPAIGN_NOMINAL_RTT_MS["L30"] = 30`ms -- divergencia de ~11-14%, fora da tolerancia de +-10% que o criterio exige (`probe_ok: false`, `pcap_ok: false`). As outras 7 rotas passam com folga (ex. L123 medido 122,6ms vs nominal 123ms, L219 220,2ms vs 219ms, L325 333,5/323,4ms vs 325ms -- todas dentro de +-10%). Isso NAO foi tratado como bug de codigo nem como erro de medicao -- `campaign_topology.CAMPAIGN_NOMINAL_RTT_MS` e um valor de REFERENCIA (documentado como medido numa rodada anterior desta mesma sessao, Decisao 188/pre-voo, onde a mediana de `/dev/tcp` deu ~37ms pra L30 -- ja ACIMA do nominal de 30, mesmo sinal), e esta Decisao NAO tem autorizacao pra altera-lo (seria editar um artefato de medicao/baseline, trava fixa 1). Reportado como achado real, decisao do Luciano sobre se o nominal de L30 deve ser recalibrado contra a distancia geografica real `ap-northeast-1`<->`ap-northeast-2`, ou se o criterio 7 aceita essa rota como excecao documentada.
+
+**OPINsize (`opinsize_v9_oficial.py`, dados reais das 320 execucoes) contra o gabarito -- MATCH EXATO, 0 bytes de diferenca, nos 4 perfis:**
+
+| Perfil | Gabarito | Medido (320 execucoes reais) | Diferenca |
+|---|---:|---:|---:|
+| Classic | 34.071,88 | **34.071,88** | 0 bytes |
+| PQC | 256.429,92 | **256.429,92** | 0 bytes |
+| Controle (hibrido-v8) | 242.008,08 | **242.008,08** | 0 bytes |
+| Hybrid (hibrido-and) | 286.202,08 | **286.202,08** | 0 bytes |
+
+**Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= PQC), confirmado nos 4 termos com os valores reais:**
+
+| Termo | Classic | PQC | Hybrid | Ordem OK? |
+|---|---:|---:|---:|---|
+| mTLS | 18.750 | 129.636 | 144.474 | SIM |
+| JWT | 6.655,88 | 86.033,92 | 92.690,08 | SIM |
+| JWK raw | 1.536 | 8.320 | 9.856 | SIM |
+| PKI | 7.130,0 | 32.440,0 | 39.182,0 | SIM |
+
+**Persistencia real (n):** ja demonstrada nesta mesma rodada, ANTES do lancamento (Decisao 186, teste deliberado com SSH do operador morto de proposito, job sobreviveu, confirmado de sessao nova) -- nao repetido contra esta janela especifica (nao haveria como, sem interromper a janela real, o que violaria a regra "nenhuma intervencao durante a janela" desta mesma autorizacao).
+
+**Custo final:** recalculado pela formula real (`cost_tracker.py`) com o horario de lancamento real da frota (`2026-11-15T04:17:09Z`), no momento desta entrada (`2026-11-16T00:32:49Z`, ~20,26h decorridas): **~US$29,0** -- bem abaixo do aviso (US$70) e do teto (US$90) desta fase. Ultima leitura REAL do `cost_tracker.jsonl` (antes da coleta de criterios dedicados, que nao reabre o tracker): US$27,69 em 19,32h.
+
+**Estado da infraestrutura:** 12 instancias confirmadas no ar (nunca paradas/destruidas/recriadas); dead-man's-switch e chave da campanha intocados. Nenhum bloqueio de classificador em toda a janela; nenhuma trava fixa violada; nenhuma intervencao na infraestrutura/scripts/campanha durante a execucao real; nenhum push, tag publicada movida, IAM, ou `cleanup_campaign_key`.
+
+**Caminhos dos resultados:**
+- Dados brutos (copiados do controle, verificados): `thesis/results/v9/campaign_oficial_conta_nova_raw/` (manifesto `manifest.sha256`, marcador `.pull-verified`)
+- Saida organizada (`organize_v9_results.py`): `thesis/results/v9/campaign_oficial_conta_nova_organized/` (inclui `retries_report.json`)
+- Avaliacao dos 7 criterios: `thesis/results/v9/campaign_oficial_conta_nova_raw/opinsize_oficial_conta_nova.json` (OPINsize) e `thesis/results/v9/campaign_oficial_conta_nova_raw/evaluate_criteria_oficial_resultado.json` (saida completa de `evaluate_criteria.py`, 7 criterios).
+
+**PARADO aqui, aguardando decisao do Luciano sobre desmontar a frota -- nenhuma acao de teardown, `cleanup_campaign_key`, ou qualquer outra alteracao de infraestrutura foi tomada ou sera tomada sem instrucao explicita nova.**
