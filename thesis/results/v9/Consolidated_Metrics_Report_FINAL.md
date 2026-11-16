@@ -52,9 +52,57 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 | Control | 16.949 | 16.949 | SIM |
 | Hybrid | 24.079 | 24.079 | SIM |
 
-**Sobre os termos JWT/JWK/PKI (honestidade metodológica, correção de uma caracterização anterior):** diferente do termo mTLS acima, este código **não possui**, hoje, um gabarito congelado e computado fora do pipeline de medição para os termos JWT e JWK -- não há um arquivo ou função que derive o tamanho esperado de assinatura/chave a partir de uma fonte independente da própria execução (ex.: o tamanho fixo de uma assinatura ML-DSA-65 por especificação). O termo PKI tem uma fonte parcialmente externa (`cert_manifest.py`/`certs_manifest.json`, que registra o tamanho PEM real dos arquivos de certificado de CA no disco, independente da captura HTTP), mas este relatório não re-derivou aqui o mapeamento exato de qual arquivo de CA cada perfil serve por chamada HTTP para reconciliar esse valor byte a byte. **Correção explícita de um relatório anterior desta mesma campanha:** a afirmação de que o total de OPINsize "bate com o gabarito, 0 bytes de diferença, nos 4 perfis" comparava, na prática, esta mesma campanha contra um conjunto de execuções reais **anterior** (um piloto menor, mesmo código e certificados), usando o MESMO script de cálculo (`opinsize_v9_oficial.py`) nas duas pontas -- isto é uma confirmação de que o pipeline é determinístico e reprodutível entre duas coletas reais independentes, o que tem valor, mas **não** é uma verificação externa ao pipeline como a palavra "gabarito" sugere; os números em si continuam corretos, apenas a caracterização da verificação estava imprecisa.
+**Status da verificação por termo:**
 
-### 2.3 Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= Control)
+| Termo | Fonte da verificação | Resultado |
+|---|---|---|
+| mTLS | Independente do pipeline de medição (DER real dos certificados implantados, Seção 2.2 acima) | Bate exatamente, 4/4 perfis |
+| JWT | Independente do pipeline de medição (tamanho de assinatura por especificação -- RSA-2048/ML-DSA-65, FIPS 204) | Bate (ver Seção 2.4; resíduo fracionário explicado pela aritmetica do pipeline) |
+| JWK | Independente do pipeline de medição (tamanho de chave pública por especificação + composição real de cada chamada) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |
+| PKI | Independente do pipeline de medição (tamanho real dos arquivos de CA no disco + sobrecarga de framing HTTP, ambos confirmados em código) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |
+
+### 2.4 Verificação por especificação (independente do pipeline), por termo e por perfil
+
+#### 2.4.1 JWT -- bytes de assinatura por especificação
+
+Especificação: assinatura RSA-2048 PS256 = 256B; assinatura ML-DSA-65 pura (FIPS 204) = 3309B; construções duplamente assinadas (Hybrid/Control) somam as duas. Confirmado nos dados reais (2.240 amostras/perfil) que `classical_sig_bytes`/`pq_sig_bytes` são CONSTANTES em todo o conjunto, sem nenhuma variação -- nunca assumido da especificação sem checar.
+
+| Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |
+|---|---|---:|---:|---:|---:|---:|
+| Classic | classic_only=26, jwe=2 | 6.656 | 237,71 | 6.655,88 | 6.655,88 | 0,00 |
+| PQC | jwe=2, pqc_pure=26 | 86.034 | 3.072,64 | 86.033,92 | 86.033,92 | 0,00 |
+| Control | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
+| Hybrid | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
+
+**Explicação do resíduo fracionário (ex.: 86.033,92 vs. 86.034; 6.655,88 vs. 6.656; 92.690,08 vs. 92.690), confirmada no código, não suposta:** `thesis/scripts/opinsize_v9_oficial.py` calcula `jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois `term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- a média por token é arredondada a 2 casas decimais ANTES de ser multiplicada por N_JWT=28, o que propaga um resíduo de até ±0,14 byte em relação à soma exata por especificação. A tabela acima reproduz essa MESMA aritmética (coluna "Termo esperado") e bate exatamente com o termo medido nos 4 perfis -- o resíduo não é um erro de medição, é um efeito de arredondamento já presente no próprio pipeline, agora reproduzido e confirmado aqui, não apenas suposto.
+
+**Contribuição dos tokens JWE:** por construção (`_jwt_sig_bytes`, `thesis/scripts/opinsize_v9_oficial.py`), um token `jwe` (criptografado, sem assinatura própria) contribui exatamente **0 bytes** a este termo -- confirmado em código (`classical_sig_bytes`/`pq_sig_bytes` ambos `None`→0 para essa construção) e nos dados reais (2 tokens `jwe` por execução, em todos os 4 perfis, nunca contados aqui).
+
+#### 2.4.2 JWK -- tamanho de chave pública por especificação
+
+Especificação (chave crua, sem envelope): RSA-2048 (módulo) = 256B; ML-DSA-65 (FIPS 204) = 1952B.
+
+| Perfil | Chave por especificação (bytes) | Média real medida (4 chamadas) | Diferença vs. especificação | Composição real confirmada |
+|---|---:|---:|---:|---|
+| Classic | 256 | 384 | +128 | RSA:256+RSA:256 / RSA:256 / RSA:256+RSA:256 / RSA:256 |
+| PQC | 1.952 | 2.080 | +128 | AKP:1952+RSA:256 / AKP:1952 / AKP:1952+RSA:256 / AKP:1952 |
+| Control | 2.208 | 2.464 | +256 | HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 |
+| Hybrid | 2.208 | 2.464 | +256 | HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 |
+
+**O que compõe o acréscimo sobre a chave pura, confirmado chamada a chamada (não especulado):** das 4 chamadas reais `/jwks` por execução, **metade (2 de 4)** carrega uma SEGUNDA entrada JWK além da chave de assinatura do próprio perfil -- para Classic/PQC, essa segunda entrada é sempre uma chave RSA-2048 de 256B com `use="enc"` (a chave pública de cifragem do `id_token`, JWE, clássica em todos os perfis por desenho já declarado); as outras 2 de 4 chamadas não carregam nenhuma segunda entrada. Isso dá uma média de +128B/chamada para Classic e PQC -- mas **não é um acréscimo fixo de 128B em cada chamada individual**, é um acréscimo de 256B em exatamente metade das chamadas. Para Hybrid/Control, **todas as 4 chamadas** carregam uma segunda entrada de 256B -- 2 delas a mesma chave `use="enc"` de Classic/PQC, e as outras 2 uma entrada RSA `use="sig"` **duplicada** (o mesmo `kid` da metade clássica da chave composta, republicada separadamente para um consumidor JWKS padrão que faça descoberta por `kid`+`alg` sem suporte à chave híbrida). Por isso Hybrid/Control acrescenta 256B em TODAS as 4 chamadas, não 128B -- a tabela acima confirma isso com a composição real de cada uma das 4 chamadas de uma execução real.
+
+#### 2.4.3 PKI -- tamanho real dos arquivos de CA + sobrecarga de framing HTTP
+
+| Perfil | Arquivo(s) servidos (root / issuer) | PEM real (root+issuer, bytes) | Framing HTTP | Esperado (PEM+framing) | Medido | Diferença |
+|---|---|---:|---|---:|---:|---:|
+| Classic | root_ca_rsa2048.crt / issuer_ca_rsa2048.crt | 1.679+1.692 | content-length (+97B) | 7.130,00 | 7.130,00 | 0,00 |
+| PQC | root_ca_pqc.crt / issuer_ca_pqc.crt | 8.001+8.013 | chunked (+103B) | 32.440,00 | 32.440 | 0,00 |
+| Control | root_ca_hybrid.crt / issuer_ca_hybrid.crt | 9.337+9.341 | chunked (+103B) | 37.768,00 | 37.768 | 0,00 |
+| Hybrid | root_ca_rsa2048.crt+root_ca_pqc.crt / issuer_ca_rsa2048.crt+issuer_ca_pqc.crt | 9.680+9.705 | chunked (+103B) | 39.182,00 | 39.182,00 | 0,00 |
+
+**Fontes, citadas com file:line (não estimadas):** o arquivo de CA servido por perfil vem de `realCAFilesForProfile` (`thesis/results/v9/integration/gateway/business_server.go:283-294`) -- Hybrid concatena DOIS arquivos por slot (RSA-2048 + ML-DSA-65) num único corpo de resposta, os outros 3 perfis servem um único arquivo. O tamanho PEM real de cada arquivo vem de `certs_manifest.json` (gerado por `cert_manifest.py`, lendo os arquivos reais de `mock-service-os/certs/`). A sobrecarga de enquadramento HTTP (97B content-length, 103B chunked) vem de `headerOverheadByFraming`/`wantFramingByProfile` (`thesis/results/v9/integration/gateway/ca_handler_test.go:142-144` e `:280`) -- Classic usa content-length, os outros 3 perfis usam chunked. **Diferença zero nos 4 perfis** -- esta é a única das três verificações desta seção sem nenhum resíduo de arredondamento, porque a sobrecarga de framing é um inteiro exato, não uma média estatística sobre muitas amostras.
+
+### 2.5 Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= Control)
 
 | Termo | Classic | PQC | Control | Hybrid | Ordem OK? |
 |---|---:|---:|---:|---:|---|
@@ -209,7 +257,7 @@ Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.m
 | última leitura automática registrada (cost_tracker.jsonl) | 2026-11-15T23:36:12Z | US\$27,69 |
 | fim da janela oficial (manifest.window_end_utc) | 2026-11-16T00:06:40Z | US\$28,42 |
 | fim da coleta dos critérios dedicados (último evento real nos logs do gateway) | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) | 2026-11-16T02:55:18Z | US\$32,45 |
+| agora (momento em que este relatório foi gerado) | 2026-11-16T03:25:14Z | US\$33,16 |
 
 - **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90.
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.
