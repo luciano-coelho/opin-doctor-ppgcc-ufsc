@@ -1,0 +1,37 @@
+{
+  "note_correcao": "RSA-2048 e o tamanho REAL usado pela campanha oficial (confirmado via thesis/results/v9/DECISIONS.md, Decisao 113 -- rotacao 4096->2048 em 2026-11-10, ANTES da janela oficial 2026-11-15/16 -- nunca confirmado lendo o arquivo de chave privada real, que este script nao toca). RSA-4096 mantido abaixo so por transparencia -- era a premissa ERRADA da primeira versao desta analise.",
+  "hardware": "notebook do operador, Intel Core 7 150U (mesmo de data/microbench_hardware.txt)",
+  "n_repetitions": 30,
+  "from_jwk_duration_ms": {
+    "rsa_2048_REAL": {
+      "median": 27.08015003008768,
+      "mean": 27.240723340461653,
+      "min": 25.84219997515902,
+      "max": 29.77719996124506,
+      "stdev": 1.0221620544702614
+    },
+    "rsa_4096_premissa_anterior_incorreta": {
+      "median": 216.6869500069879,
+      "mean": 240.27639333119927,
+      "min": 195.26510004652664,
+      "max": 402.00359997106716,
+      "stdev": 52.51708015710874
+    }
+  },
+  "razao_4096_vs_2048": 8.001689420709843,
+  "campaign_documented_value_ms": {
+    "value": 252,
+    "key_size_assumed_in_comment": "nao especificado no comentario, mas calculado na era RSA-4096 (anterior a Decisao 113)",
+    "source": "Comentario em thesis/scripts/opin_flow.py, load_client_signing_key() (linhas ~574-594), citando 'Decision 99' e 'the diagnostic's own real setup_timings (median classic/hybrid ~252ms x2, pqc ~0ms x2)'. NENHUM outro documento (DECISIONS.md de v9 ou anteriores) contem o diagnostico original com data/hardware -- so esta referencia dentro do proprio comentario de codigo foi encontrada (busca feita, nao assumida). O comentario nunca foi atualizado apos a Decisao 113 (rotacao de chave) -- plausivelmente medido quando a chave ainda era RSA-4096."
+  },
+  "profile_dependence_confirmed_in_code": {
+    "classico": "SIM -- cai no ramo else de load_client_signing_key() (opin_flow.py:650-655), chama RSAAlgorithm.from_jwk()",
+    "hibrido-and": "SIM -- ramo elif explicito (opin_flow.py:628-649), chama RSAAlgorithm.from_jwk() pra classic_key (metade classica do par)",
+    "hibrido-v8": "SIM (por eliminacao de ramo -- nao tem elif proprio, cai no ramo else igual a classico, opin_flow.py:650-655)",
+    "pqc": "NAO -- ramo if crypto_profile=='pqc' (opin_flow.py:623-627) retorna o JWK bruto, nunca chama RSAAlgorithm.from_jwk()"
+  },
+  "node_signer_process_start_per_execution": {
+    "confirmed": false,
+    "evidence": "campaign_client_runner.py (docstring): 'Does NOT manage the TLS proxy / PQC signer service lifecycle -- that is scoped to the whole profile BLOCK (Decision 56), started once before round-robin begins and stopped once after'. Confirmado em orchestrator.py: start_block() (que chama of.start_pqc_signer_service()/of.start_tls_kem_proxy()) e invocado UMA VEZ por bloco perfil/rota (linha 2280), ANTES do loop de run_execution() (linha 2317-2319) -- NUNCA dentro da janela t0..t1 de uma execucao individual. O custo de start do processo Node/Go e amortizado sobre as N_PER_PROFILE execucoes do bloco, nao pago a cada execucao."
+  }
+}
