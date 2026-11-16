@@ -13446,3 +13446,62 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Entrega:** commit LOCAL (sem push) do script corrigido e do relatorio regenerado, mais este registro em `DECISIONS.md`. Nenhuma tag publicada movida. Nenhuma acao de teardown ou alteracao de infraestrutura -- frota de 12 instancias intocada.
 
 **PARADO aqui, aguardando aprovacao do Luciano sobre o relatorio final.**
+
+## Decisao 194 -- Tarefas A+B: (A) frota (conta nova, perfil `mockopin-pqc-campanha`, ...5354) ja estava parada por acao do proprio Luciano (confirmado por ele) -- documentacao do custo parado e do procedimento de religar, SEM nenhuma acao de escrita na frota; (B) push autorizado pela primeira vez nesta sessao
+
+**Achado, ja reportado e confirmado pelo Luciano:** ao investigar o dead-man's-switch pra decidir como pausar a frota, as 12 instancias ja estavam no estado `stopped` (`StateTransitionReason: "User initiated"` nas 12, via `describe-instances` nas 7 regioes, perfil AWS `mockopin-pqc-campanha` -- confirmado terminando em ...5354, nunca o perfil `mockopin-pqc` que termina em ...7472, conta antiga). O Luciano confirmou que foi ele mesmo (ou outra sessao dele). **Nenhum `stop-instances` foi executado por esta sessao** -- a frota ja estava parada antes de qualquer acao minha.
+
+**Mecanismo real do dead-man's-switch, confirmado em codigo (nao executado ao vivo -- SSH indisponivel com a instancia parada):**
+- `modules/campaign_instance/templates/safety_timer.sh.tftpl`: timer systemd (`mockopin-safety-timer.timer`, `OnBootSec=5min OnUnitActiveSec=5min`) roda `/usr/local/bin/mockopin-safety-check.sh` a cada 5 minutos dentro de CADA instancia; o script compara `date +%s` contra `/etc/mockopin-campaign/deadline` e executa `shutdown -h now` (comando do SO guest) se o prazo ja passou.
+- `instance_initiated_shutdown_behavior = "stop"` confirmado no Terraform (`main.tf`, as 12 instancias, nenhuma excecao) -- o switch, SE disparar, so pode parar a instancia (AWS state `stopped`), nunca terminar.
+- O prazo e escrito UMA VEZ no boot (`date -d "+${self_terminate_hours} hours"`) e renovado a cada 3h SOMENTE enquanto `orchestrator.py` estiver rodando e conectado via SSH (`_renew_local_safety_timer`/`SSHExecutor.renew_safety_timers`) -- sem o orquestrador ativo (como agora, campanha ja terminada ha horas), o prazo NAO e mais renovado e fica congelado no ultimo valor escrito.
+- **Nao foi possivel ler o valor real atual do arquivo** (SSH indisponivel com a instancia parada) -- o valor "2026-11-17T04:17Z" citado pelo Luciano e aceito como a referencia correta, nao reconfirmado ao vivo nesta rodada.
+- `cost_tracker.py`: a classe `CostTracker` NAO tem nenhum conceito de instancia parada -- `breakdown_usd()` sempre assume as instancias de `instance_types` rodando continuamente desde `window_start_utc`. Com a frota parada, rodar esse metodo sem ajuste SOBRESTIMARIA o custo real (ele continuaria contando custo de compute que nao esta mais sendo cobrado) -- qualquer leitura de custo futura precisa, OU usar um novo `window_start_utc`/formula so pro periodo realmente rodando, OU tratar o periodo parado separadamente (como feito abaixo).
+
+**Volumes EBS reais (12, confirmados via `describe-volumes`, nao assumido):** todos `gp3`, **30GB cada**, estado `in-use` (permanecem anexados com a instancia parada, nunca `available`) -- confirma que o Luciano estava certo em pedir a confirmacao real em vez de assumir uniformidade.
+
+**EIPs:** confirmados os 12 ainda associados (`describe-addresses`, 7 regioes) -- comportamento esperado de `stop` (nunca desassocia), diferente de `terminate`.
+
+**Custo diario da frota PARADA** (mesmas constantes reais de `cost_tracker.py`: `EBS_GP3_GB_HOUR_USD` = (US\$0,08/730h)×1,10 = US\$0,0001205/GB-h; `PUBLIC_IPV4_HOURLY_USD` = US\$0,005/h):
+- EBS: 12×30GB×US\$0,0001205/GB-h = US\$0,0434/h
+- EIP: 12×US\$0,005/h = US\$0,06/h
+- **Total parado: US\$0,1034/h ≈ US\$2,48/dia** (zero custo de compute).
+
+**Custo por hora quando LIGADA, pra comparacao** (11×`m7i-flex.large` US\$0,12/h + 1×`t4g.micro` US\$0,01/h = US\$1,33/h de compute, mais os mesmos US\$0,1034/h de EBS+EIP): **≈ US\$1,43/h ≈ US\$34,40/dia**.
+
+**Procedimento de RELIGAR -- documentado aqui, NAO executado nesta rodada:**
+1. `aws ec2 start-instances` (perfil `mockopin-pqc-campanha`, por regiao, os 12 instance-ids).
+2. Aguardar os 12 hosts responderem SSH (chave do operador pro controle, chave de campanha pros outros 11, mesma convencao de sempre).
+3. **ANTES de qualquer outra verificacao ou uso da frota** (passo OBRIGATORIO, nesta ordem exata): atualizar `/etc/mockopin-campaign/deadline` em CADA uma das 12 instancias pra um prazo NOVO no futuro (`date -d "+N hours" +%s > /etc/mockopin-campaign/deadline`, mesmo mecanismo que `safety_timer.sh.tftpl`/`_renew_local_safety_timer` ja usam) -- o prazo atual (`2026-11-17T04:17Z`, segundo o Luciano) estara vencido se a frota religar depois de um hiato maior que isso; religar sem atualizar esse arquivo primeiro deixa o timer systemd desligar a instancia de novo na primeira checagem, **5 minutos depois do boot**.
+4. Conferir `chronyc tracking` em todos os 12 (Leap status Normal, offset pequeno) -- o relogio real da instancia volta a sincronizar via o servidor de tempo da AWS (confirmado disponivel no boot, Decisao 190/host facts), mas confirmar antes de confiar em qualquer timestamp novo.
+5. Confirmar que `cost_tracker.py` volta a registrar corretamente -- exige um NOVO `window_start_utc` (o periodo parado nao deve ser contado como se a instancia estivesse rodando continuamente, ver achado acima sobre a limitacao real da formula).
+
+**Sugestao (APENAS sugestao, nao decisao desta sessao) sobre a data de destruicao definitiva:** entre 7 e 10 dias a partir de agora -- o Luciano decide a data real.
+
+**Nenhuma acao de escrita foi tomada na frota nesta Decisao** -- somente leitura (`describe-instances`/`describe-volumes`/`describe-addresses`) e documentacao. Frota permanece exatamente como o Luciano a deixou (parada, EIPs associados, volumes anexados).
+
+---
+
+**Tarefa B -- Push: escaneamento ANTES de qualquer envio. ACHADOS REAIS ENCONTRADOS -- PAROU, NADA FOI ENVIADO.**
+
+**Estado do repositorio:** `origin` = `https://github.com/luciano-coelho/opin-doctor-ppgcc-ufsc.git`; branch atual `v9/fase1-local`; `origin/v9/fase1-local` existe (commit `420e9400`), 0 commits atras, **103 commits a frente** (de `546f1472`, Decisao 147/148, a `dd9b8869`, Decisao 193). Tags locais ausentes de `origin` (confirmado via `git ls-remote --tags`): `v9-campanha-conta-nova-piloto-assimetrico{,-v2,-v3,-v4}`, `v9-campanha-oficial-congelada-v4` a `-v9`, **`v9-campanha-oficial-final`**. Ja publicadas em `origin` (nunca tocadas): `v9-campanha-oficial-congelada`, `-v2`, `-v3`, `v9-ferramentas-congeladas`, `v9-prereg`.
+
+**Escaneamento dos 103 commits a publicar -- 3 achados reais, nenhum deles um valor exatamente igual a um ID de conta conhecido, mas todos exigindo decisao do Luciano antes de qualquer push:**
+
+1. **132 arquivos `.keylog` (segredos de sessao TLS) JA COMMITADOS e presentes no HEAD atual**, todos sob `thesis/results/v9_pre_pki_fix/` (dados do piloto/campanha ANTERIOR a esta sessao, movidos pra esse diretorio na Decisao 150/`435b707b`, nunca excluidos do git). Mesma classe exata do achado da Decisao 192 (que excluiu os `.keylog` da campanha ATUAL do commit), mas estes sao mais antigos e **ja estao no historico publicavel** -- iriam pro GitHub se o push ocorrer.
+2. **O IP publico real do operador, em texto puro, dentro de `DECISIONS.md`** (formato `operator_ip_cidr=<IP real>/32`), na Decisao 175 (item 3, "plano do delta"). Confirmado tambem que esse MESMO ip aparece em pelo menos outra passagem como "`/32` do operador" (sem o valor numerico ali). Nao removido/redigido nesta rodada -- fica pra decisao do Luciano.
+3. **1 arquivo de ~59,3MB ja commitado duas vezes no historico** (`.../campaign/oficial_raw/oficial_out/piloto_calls.json`, e sua copia em `v9_pre_pki_fix/`) -- abaixo do limite de 100MB do GitHub, mas grande; nenhum arquivo passa de 50MB fora destes dois.
+
+**Nao encontrados:** `AKIA`/`ASIA` (0 ocorrencias); cabecalho de chave privada PEM ou arquivo `id_ed25519`/`id_rsa` sem `.pub` (0); `.tfstate`/`.tfstate.backup`/`.tfplan`/`.tfvars` em qualquer commit da faixa (0 cada); padroes genericos `password=`/`secret=`/`api_key=` com valor (0). **221 sequencias de 12 digitos** aparecem no diff completo (hashes sha256, timestamps, IDs de execucao, etc.) -- nenhuma delas bate com os 4 ultimos digitos conhecidos de nenhuma das duas contas reais (nem a nova, ...5354, nem a antiga, ...7472); nao confirmado dígito a dígito contra nenhum outro padrao, por desenho (nunca se imprime o candidato completo). **298 ocorrencias do nome de usuario local do Windows** nos caminhos citados dentro de `DECISIONS.md`/scripts (baixa sensibilidade -- e so o nome de usuario local da maquina do operador, nunca uma credencial) -- presente, mas nao removido.
+
+**Trechos de `DECISIONS.md` descrevendo incidentes de processo, pra decisao do Luciano sobre publicar ou nao (listados, nao decididos aqui):**
+- **Decisao 176** -- resposta a um **incidente real de exposicao de chave** na rodada anterior ("ACEITO O RISCO... trate a chave como queimada"). A mais sensivel das citadas aqui.
+- **Decisao 181** -- entrega bloqueada pelo classificador de seguranca (chave SSH incorreta usada antes da correcao).
+- **Decisao 182** -- autorizacao explicita e escopada pra usar a chave pessoal do operador, com a trava "proibido ler/imprimir/copiar/mover o conteudo da chave" documentada no proprio texto.
+- **Decisao 178** -- achado bloqueante real na entrega aos 12 hosts (pip3 ausente, corrida de rede no boot).
+- **Decisao 177** -- autorizacao de edicao escopada em `orchestrator.py` resolvendo o bloqueio da 176.
+- **Decisao 175** -- contem o IP real do operador (achado 2 acima) alem de detalhar o estado exato pos-apply-parcial da infraestrutura.
+
+**NADA FOI ENVIADO.** Por instrucao explicita do Luciano ("se o escaneamento encontrar QUALQUER achado... PARE e reporte sem enviar nada"), e por haver 3 achados reais (itens 1-3) mais 6 trechos de incidente pendentes de decisao, **nenhum `git push` foi executado, nenhuma tag foi movida ou publicada**. `v9-campanha-oficial-congelada` (e variantes) confirmadas intocadas em `origin` -- nenhuma leitura alem do necessario pra essa confirmacao.
+
+**PARADO aqui, aguardando decisao do Luciano sobre os achados 1-3 e os 6 trechos de incidente antes de qualquer tentativa nova de push.** Nenhuma acao de teardown na frota; nenhum IAM; nenhum `cleanup_campaign_key`.
