@@ -70,7 +70,7 @@ Comparação central desta tese: **Classic / PQC / Hybrid**. O perfil Control é
 
 **Perfil Control, separado:** esperado 16.949 bytes/conexão, medido 16.949 bytes/conexão -- bate? SIM.
 
-**Status da verificação por termo:**
+### 2.3 Status da verificação por termo
 
 | Termo | Fonte da verificação | Resultado |
 |---|---|---|
@@ -258,36 +258,40 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 
 ## 5. Significância estatística dos contrastes entre perfis (análise exploratória)
 
-**Declaração explícita de escopo:** esta é uma análise **EXPLORATÓRIA, não pré-registrada** -- os 16 contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram escolhidos DEPOIS de já ter visto a descrição dos dados nas Seções 4.1-4.4 desta mesma versão do relatório, não antes da coleta. Limitada a estes 16 contrastes pré-definidos; não tem o peso de uma análise confirmatória -- quantifica e testa o que já foi observado descritivamente, não valida uma hipótese fixada de antemão.
+**Declaração explícita de escopo:** esta é uma análise **EXPLORATÓRIA, não pré-registrada** -- os 16 contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram **escolhidos após a descrição dos dados** nas Seções 4.1-4.4 desta mesma versão do relatório, não antes da coleta. Não tem o peso de uma análise confirmatória -- quantifica e testa o que já foi observado descritivamente, não valida uma hipótese fixada de antemão.
 
 ### 5.1 Testes por rota -- Classic×PQC e PQC×Hybrid (16 testes principais)
 
 Mann-Whitney U exato, bilateral, n=10 por grupo (medição contínua, sem empates esperados). p-valor ajustado por Holm sobre o conjunto dos 16 testes principais abaixo -- família PRÓPRIA, separada dos 16 testes com Control (Seção 5.2). Hodges-Lehmann: mediana de todas as diferenças pareadas (não a diferença das medianas, reportada em separado); IC 95% via bootstrap, semente fixa, 10.000 reamostragens (ver nota de reprodutibilidade abaixo). Delta de Cliff escolhido como medida de magnitude de efeito (em vez de probabilidade de superioridade bruta) por ser a convenção mais padrão em comparações não-paramétricas de amostras pequenas -- é numericamente equivalente a 2×P(superioridade)-1, então a informação de probabilidade de superioridade continua recuperável a partir dele.
 
-| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
+*Nota: o menor p bruto matematicamente possível no Mann-Whitney exato bilateral com n=10 por grupo é 2/C(20,10) = 1.08e-05 -- confirmado rodando o próprio teste sobre dois grupos sem nenhuma sobreposição (separação total), não só calculado analiticamente. Por isso nenhuma célula de "p bruto" nas tabelas desta seção mostra "0,0000" (que sugeriria p=0 exato, impossível aqui) -- valores abaixo da resolução de 4 casas decimais aparecem como "<0,0001".*
+
+**Convenção de sinal, válida nas Seções 5.1 e 5.2:** "Dif" = Mediana B − Mediana A; Delta de Cliff positivo significa B sistematicamente maior que A, negativo significa o contrário. Consistente célula a célula com as linhas abaixo (ex.: L0-sa-east-1, PQC vs. Classic -- aqui B=PQC, A=Classic -- tem Dif negativo E Delta de Cliff negativo, ambos concordando que PQC ficou abaixo de Classic nesta rota).
+
+| Rota | Par | Mediana A (referência, ms) | Mediana B (comparado, ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | L0-sa-east-1 | PQC vs. Classic | 2.357,9 | 2.288,9 | -69,0 | -2,93% | 0,2176 | 0,2176 | -54,7 | [-105,9;11,9] | -0,340 | NÃO |
-| L123 | PQC vs. Classic | 10.879,8 | 11.143,3 | 263,4 | 2,42% | 0,0000 | 0,0002 | 253,9 | [198,3;319,2] | 1,000 | SIM |
-| L219 | PQC vs. Classic | 17.683,3 | 18.105,6 | 422,3 | 2,39% | 0,0000 | 0,0002 | 421,4 | [386,3;462,5] | 1,000 | SIM |
-| L325 | PQC vs. Classic | 25.559,2 | 26.136,5 | 577,3 | 2,26% | 0,0000 | 0,0002 | 622,3 | [454,9;800,5] | 1,000 | SIM |
-| L0-us-east-1 | PQC vs. Classic | 3.817,0 | 4.040,4 | 223,4 | 5,85% | 0,0000 | 0,0002 | 193,9 | [138,8;274,7] | 1,000 | SIM |
-| L14 | PQC vs. Classic | 4.744,6 | 5.032,4 | 287,9 | 6,07% | 0,0000 | 0,0002 | 275,0 | [222,7;311,9] | 1,000 | SIM |
-| L0-ap-northeast-1 | PQC vs. Classic | 5.786,2 | 6.248,6 | 462,4 | 7,99% | 0,0000 | 0,0002 | 471,5 | [410,8;544,6] | 1,000 | SIM |
-| L30 | PQC vs. Classic | 8.214,5 | 8.769,4 | 554,8 | 6,75% | 0,0000 | 0,0002 | 552,6 | [425,2;661,6] | 1,000 | SIM |
-| L0-sa-east-1 | Hybrid vs. PQC | 2.288,9 | 2.564,6 | 275,7 | 12,04% | 0,0000 | 0,0003 | 240,0 | [163,8;310,3] | 0,960 | SIM |
-| L123 | Hybrid vs. PQC | 11.143,3 | 11.349,1 | 205,9 | 1,85% | 0,0000 | 0,0002 | 204,1 | [146,1;282,0] | 1,000 | SIM |
-| L219 | Hybrid vs. PQC | 18.105,6 | 18.396,5 | 290,9 | 1,61% | 0,0000 | 0,0002 | 274,1 | [138,4;340,7] | 1,000 | SIM |
+| L123 | PQC vs. Classic | 10.879,8 | 11.143,3 | 263,4 | 2,42% | <0,0001 | 0,0002 | 253,9 | [198,3;319,2] | 1,000 | SIM |
+| L219 | PQC vs. Classic | 17.683,3 | 18.105,6 | 422,3 | 2,39% | <0,0001 | 0,0002 | 421,4 | [386,3;462,5] | 1,000 | SIM |
+| L325 | PQC vs. Classic | 25.559,2 | 26.136,5 | 577,3 | 2,26% | <0,0001 | 0,0002 | 622,3 | [454,9;800,5] | 1,000 | SIM |
+| L0-us-east-1 | PQC vs. Classic | 3.817,0 | 4.040,4 | 223,4 | 5,85% | <0,0001 | 0,0002 | 193,9 | [138,8;274,7] | 1,000 | SIM |
+| L14 | PQC vs. Classic | 4.744,6 | 5.032,4 | 287,9 | 6,07% | <0,0001 | 0,0002 | 275,0 | [222,7;311,9] | 1,000 | SIM |
+| L0-ap-northeast-1 | PQC vs. Classic | 5.786,2 | 6.248,6 | 462,4 | 7,99% | <0,0001 | 0,0002 | 471,5 | [410,8;544,6] | 1,000 | SIM |
+| L30 | PQC vs. Classic | 8.214,5 | 8.769,4 | 554,8 | 6,75% | <0,0001 | 0,0002 | 552,6 | [425,2;661,6] | 1,000 | SIM |
+| L0-sa-east-1 | Hybrid vs. PQC | 2.288,9 | 2.564,6 | 275,7 | 12,04% | <0,0001 | 0,0003 | 240,0 | [163,8;310,3] | 0,960 | SIM |
+| L123 | Hybrid vs. PQC | 11.143,3 | 11.349,1 | 205,9 | 1,85% | <0,0001 | 0,0002 | 204,1 | [146,1;282,0] | 1,000 | SIM |
+| L219 | Hybrid vs. PQC | 18.105,6 | 18.396,5 | 290,9 | 1,61% | <0,0001 | 0,0002 | 274,1 | [138,4;340,7] | 1,000 | SIM |
 | L325 | Hybrid vs. PQC | 26.136,5 | 26.531,6 | 395,1 | 1,51% | 0,0052 | 0,0104 | 395,4 | [149,4;655,2] | 0,720 | SIM |
 | L0-us-east-1 | Hybrid vs. PQC | 4.040,4 | 4.208,1 | 167,7 | 4,15% | 0,0005 | 0,0015 | 174,7 | [81,7;278,1] | 0,860 | SIM |
 | L14 | Hybrid vs. PQC | 5.032,4 | 5.202,5 | 170,1 | 3,38% | 0,0001 | 0,0006 | 189,9 | [114,4;255,8] | 0,920 | SIM |
 | L0-ap-northeast-1 | Hybrid vs. PQC | 6.248,6 | 6.616,3 | 367,7 | 5,88% | 0,0001 | 0,0006 | 332,5 | [178,3;425,9] | 0,920 | SIM |
-| L30 | Hybrid vs. PQC | 8.769,4 | 9.028,6 | 259,2 | 2,96% | 0,0000 | 0,0002 | 298,4 | [181,7;396,6] | 0,980 | SIM |
+| L30 | Hybrid vs. PQC | 8.769,4 | 9.028,6 | 259,2 | 2,96% | <0,0001 | 0,0002 | 298,4 | [181,7;396,6] | 0,980 | SIM |
 
 ### 5.2 Contrastes com Control -- Control×Hybrid e Control×PQC (16 testes, FORA DO ESCOPO da tese)
 
 **Fora do escopo central desta tese** -- consistente com a separação de Control das comparações principais (Seção 2). Reportados aqui só por completude metodológica, família de Holm PRÓPRIA (separada dos 16 testes principais da Seção 5.1 -- nunca misturada no mesmo ajuste).
 
-| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
+| Rota | Par | Mediana A (referência, ms) | Mediana B (comparado, ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | L0-sa-east-1 | Control vs. Hybrid | 2.564,6 | 2.472,1 | -92,5 | -3,61% | 0,0185 | 0,1483 | -78,0 | [-141,4;-19,2] | -0,620 | NÃO |
 | L123 | Control vs. Hybrid | 11.349,1 | 11.263,4 | -85,7 | -0,76% | 0,0288 | 0,2016 | -78,5 | [-143,4;-11,5] | -0,580 | NÃO |
@@ -297,9 +301,9 @@ Mann-Whitney U exato, bilateral, n=10 por grupo (medição contínua, sem empate
 | L14 | Control vs. Hybrid | 5.202,5 | 5.145,7 | -56,9 | -1,09% | 0,2799 | 1,0000 | -48,9 | [-126,5;43,9] | -0,300 | NÃO |
 | L0-ap-northeast-1 | Control vs. Hybrid | 6.616,3 | 6.634,2 | 17,9 | 0,27% | 0,9118 | 1,0000 | 8,7 | [-182,4;137,3] | 0,040 | NÃO |
 | L30 | Control vs. Hybrid | 9.028,6 | 9.018,1 | -10,4 | -0,12% | 0,6842 | 1,0000 | -18,0 | [-159,8;100,1] | -0,120 | NÃO |
-| L0-sa-east-1 | Control vs. PQC | 2.288,9 | 2.472,1 | 183,2 | 8,00% | 0,0000 | 0,0007 | 158,9 | [101,8;224,0] | 0,960 | SIM |
+| L0-sa-east-1 | Control vs. PQC | 2.288,9 | 2.472,1 | 183,2 | 8,00% | <0,0001 | 0,0007 | 158,9 | [101,8;224,0] | 0,960 | SIM |
 | L123 | Control vs. PQC | 11.143,3 | 11.263,4 | 120,2 | 1,08% | 0,0007 | 0,0094 | 126,7 | [58,1;196,1] | 0,840 | SIM |
-| L219 | Control vs. PQC | 18.105,6 | 18.302,0 | 196,4 | 1,08% | 0,0000 | 0,0007 | 194,0 | [116,6;313,9] | 0,960 | SIM |
+| L219 | Control vs. PQC | 18.105,6 | 18.302,0 | 196,4 | 1,08% | <0,0001 | 0,0007 | 194,0 | [116,6;313,9] | 0,960 | SIM |
 | L325 | Control vs. PQC | 26.136,5 | 26.523,1 | 386,6 | 1,48% | 0,0015 | 0,0150 | 372,3 | [195,8;583,8] | 0,800 | SIM |
 | L0-us-east-1 | Control vs. PQC | 4.040,4 | 4.247,7 | 207,2 | 5,13% | 0,0021 | 0,0188 | 175,9 | [93,1;291,9] | 0,780 | SIM |
 | L14 | Control vs. PQC | 5.032,4 | 5.145,7 | 113,2 | 2,25% | 0,0001 | 0,0018 | 125,6 | [65,2;218,9] | 0,920 | SIM |
@@ -328,9 +332,26 @@ Mann-Whitney U exato, bilateral, n=10 por grupo (medição contínua, sem empate
 
 **Inversão em L0-sa-east-1 (Seção 4.4, PQC com mediana abaixo de Classic):** pelo teste de Mann-Whitney exato com correção de Holm sobre os 16 testes principais, essa diferença **NÃO é** estatisticamente significativa (p bruto=0,2176, p Holm=0,2176, delta de Cliff=-0,340). Nenhuma afirmação de robustez é feita para nenhum contraste cujo p-valor ajustado por Holm não exclua a hipótese nula a α=0,05 -- as células marcadas "NÃO" nas tabelas acima permanecem lidas como não-significativas, não como "quase significativas" ou similar.
 
+**Leitura dos testes agregados (Seção 5.3), sem arredondar a interpretação:** para PQC vs. Classic, **NENHUM** dos dois testes agregados atinge α=0,05 -- teste do sinal p=0,0703, Wilcoxon signed-rank p=0,0547 (ambos acima de 0,05). Para Hybrid vs. PQC, os dois atingem α=0,05 -- sinal p=0,0078, Wilcoxon p=0,0078.
+
+**As 8 rotas NÃO são estatisticamente independentes entre si** -- compartilham apenas 3 instalações físicas (`sa-east-1`, `us-east-1`, `ap-northeast-1`), cada uma hospedando várias rotas simultaneamente (ex.: `L0-sa-east-1`, `L123`, `L219` e `L325` rodam todas a partir do mesmo servidor físico em `sa-east-1`). Por isso, os testes agregados entre rotas desta seção (teste do sinal, Wilcoxon) são **apenas INDICATIVOS** -- não constituem uma inferência formal válida sob a suposição de independência que esses testes exigem. Os 32 testes por rota (Seções 5.1/5.2) não dependem dessa suposição entre rotas (cada um compara só as 10 execuções de um perfil contra as 10 de outro, dentro da MESMA rota) -- a ressalva de independência se aplica apenas aos agregados desta seção, não aos testes por rota.
+
 ### 5.5 Ressalva de desenho (deriva de rede dentro do bloco sequencial de cada rota)
 
 Dentro de cada rota, os 4 blocos de perfil rodam **sequencialmente** (ordem sorteada por rota, semente `20261107`, já documentada na Seção 1 -- `route_orders`) -- então deriva de rede ao longo do tempo (ex.: variação de condições de rede entre o início e o fim da janela daquela rota específica) pode contribuir para parte das diferenças observadas entre perfis DENTRO da mesma rota. A aleatorização da ordem ENTRE rotas (cada rota tem uma ordem potencialmente diferente, Seção 1) reduz, mas **não elimina**, esse efeito -- não há controle por bloco dentro de uma única rota (os 4 perfis não rodam entrelaçados/alternados dentro da mesma rota, rodam em 4 blocos consecutivos).
+
+**Ordem real dos blocos de perfil, por rota** (`manifest.route_orders`, dado bruto, sem interpretação adicional):
+
+| Rota | Ordem dos blocos (1º -> 2º -> 3º -> 4º) |
+|---|---|
+| L0-sa-east-1 | Control -> Classic -> PQC -> Hybrid |
+| L123 | Classic -> Hybrid -> Control -> PQC |
+| L219 | Hybrid -> Control -> Classic -> PQC |
+| L325 | PQC -> Hybrid -> Classic -> Control |
+| L0-us-east-1 | Control -> Classic -> Hybrid -> PQC |
+| L14 | Hybrid -> PQC -> Classic -> Control |
+| L0-ap-northeast-1 | Hybrid -> Classic -> Control -> PQC |
+| L30 | PQC -> Classic -> Hybrid -> Control |
 
 **Nota de reprodutibilidade do bootstrap:** semente fixa `20261116`, 10.000 reamostragens, `numpy.random.default_rng` -- nunca semente de sistema/relógio. Rodar este mesmo script novamente reproduz exatamente os mesmos intervalos de confiança.
 
@@ -379,7 +400,7 @@ Dentro de cada rota, os 4 blocos de perfil rodam **sequencialmente** (ordem sort
 
 Fórmula de `cost_tracker.CostTracker` (frota real: 12 instâncias -- 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` (`2026-11-15T04:17:09Z`). **Todo valor abaixo é uma ESTIMATIVA POR FÓRMULA, nunca "custo final" nem um valor de fato cobrado -- o valor real e definitivo é o que aparece no AWS Billing/Cost Explorer da conta, nunca esta fórmula local.**
 
-**A frota foi parada via `StopInstances` ("User initiated") antes de `2026-11-16T04:26:00Z`** -- confirmado por `describe-instances` nas 7 regiões (estado `stopped` nas 12 instâncias, nunca `terminated`). **O horário exato de cada parada não pôde ser determinado por API:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram `AccessDeniedException` (a mesma política de privilégio mínimo já documentada nunca incluiu permissão de trilha/billing/métricas) -- `describe-instances` só devolve o estado atual, sem timestamp de transição. Usado aqui o limite superior conservador já confirmado -- se a parada real ocorreu antes disso (certo que ocorreu), usar este instante como corte superestima levemente o tempo de compute cobrado, nunca subestima.
+**A frota foi parada via `StopInstances` ("User initiated") antes de `2026-11-16T04:26:00Z`** -- confirmado por `describe-instances` nas 7 regiões (estado `stopped` nas 12 instâncias, nunca `terminated`). **O horário exato de cada parada não pôde ser determinado por API:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram `AccessDeniedException` (a mesma política de privilégio mínimo já documentada nunca incluiu permissão de trilha/billing/métricas) -- reconfirmado agora, de novo, lendo o campo BRUTO `StateTransitionReason` diretamente nas 12 instâncias (7 regiões): o valor é, literalmente e sem exceção, a string `"User initiated"` -- sem parênteses, sem data, sem hora embutida -- nas 12. `describe-instances` não traz timestamp de transição de estado em nenhum campo. Usado aqui o limite superior conservador já confirmado -- se a parada real ocorreu antes disso (certo que ocorreu), usar este instante como corte superestima levemente o tempo de compute cobrado, nunca subestima.
 
 **`cost_tracker.py` não modela parada de instância** -- foi desenhado assumindo a frota continuamente ligada desde `window_start_utc`; sem o ajuste abaixo, a fórmula pura continuaria contando custo de compute que já não está mais sendo cobrado desde a parada, superestimando o valor real a partir desse instante.
 
@@ -388,9 +409,9 @@ Fórmula de `cost_tracker.CostTracker` (frota real: 12 instâncias -- 1 `t4g.mic
 | última leitura automática registrada (cost_tracker.jsonl) -- fórmula contínua, frota ainda ligada | 2026-11-15T23:36:12Z | US\$27,69 |
 | fim da janela oficial (manifest.window_end_utc) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:06:40Z | US\$28,42 |
 | fim da coleta dos critérios dedicados (último evento real nos logs do gateway) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois | 2026-11-16T13:44:53Z | US\$35,58 |
+| agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois | 2026-11-16T14:07:20Z | US\$35,61 |
 
-**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\$1,04/dia + EIP US\$1,44/dia = **US\$2,48/dia** (US\$0,1034/h). Aplicada por 9,31h desde a parada até a leitura "agora" acima.
+**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\$1,04/dia + EIP US\$1,44/dia = **US\$2,48/dia** (US\$0,1034/h). Aplicada por 9,69h desde a parada até a leitura "agora" acima.
 
 - **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90 -- ambos já sem sentido prático agora que a frota está parada (não é mais a formula contínua que se aplica).
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.

@@ -555,6 +555,23 @@ def pct(a, b):
     return (a - b) / b * 100.0
 
 
+# Menor p-valor matematicamente possivel do Mann-Whitney EXATO bilateral
+# com n=10 por grupo: 2/C(20,10) = 2/184.756 -- confirmado rodando
+# `scipy.stats.mannwhitneyu` sobre dois grupos sem nenhuma sobreposicao
+# (separacao total), nunca so calculado na mao.
+from math import comb as _comb
+MANNWHITNEY_MIN_P_N10 = 2 / _comb(20, 10)
+
+
+def fmt_p(p, nd=4):
+    """p bruto formatado -- '<0,0001' quando o valor e tao pequeno que
+    arredondaria pra 0,0000 (abaixo da resolucao decimal escolhida),
+    nunca '0,0000' (que sugeriria p=0 exato, impossivel no teste exato)."""
+    if p < 10 ** (-nd):
+        return f"<{fmt(10 ** (-nd), nd)}"
+    return fmt(p, nd)
+
+
 def main():
     opinsize = load_json(RAW / "opinsize_oficial_conta_nova.json")["profiles"]
     criteria = load_criteria_result()
@@ -677,7 +694,7 @@ def main():
     w(f"**Perfil Control, separado:** esperado {fmt(control_expected)} bytes/conexão, medido {fmt(control_measured)} "
       f"bytes/conexão -- bate? {control_ok}.")
     w("")
-    w("**Status da verificação por termo:**")
+    w("### 2.3 Status da verificação por termo")
     w("")
     w("| Termo | Fonte da verificação | Resultado |")
     w("|---|---|---|")
@@ -978,10 +995,10 @@ def main():
     w("## 5. Significância estatística dos contrastes entre perfis (análise exploratória)")
     w("")
     w("**Declaração explícita de escopo:** esta é uma análise **EXPLORATÓRIA, não pré-registrada** -- os 16 "
-      "contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram escolhidos "
-      "DEPOIS de já ter visto a descrição dos dados nas Seções 4.1-4.4 desta mesma versão do relatório, não antes "
-      "da coleta. Limitada a estes 16 contrastes pré-definidos; não tem o peso de uma análise confirmatória -- "
-      "quantifica e testa o que já foi observado descritivamente, não valida uma hipótese fixada de antemão.")
+      "contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram **escolhidos "
+      "após a descrição dos dados** nas Seções 4.1-4.4 desta mesma versão do relatório, não antes da coleta. "
+      "Não tem o peso de uma análise confirmatória -- quantifica e testa o que já foi observado descritivamente, "
+      "não valida uma hipótese fixada de antemão.")
     w("")
 
     w("### 5.1 Testes por rota -- Classic×PQC e PQC×Hybrid (16 testes principais)")
@@ -1006,12 +1023,23 @@ def main():
     main_adj = holm_adjust([r["p_raw"] for r in main_results])
     for r, adj in zip(main_results, main_adj):
         r["p_holm"] = adj
-    w("| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
+    w(f"*Nota: o menor p bruto matematicamente possível no Mann-Whitney exato bilateral com n=10 por grupo é "
+      f"2/C(20,10) = {MANNWHITNEY_MIN_P_N10:.2e} -- confirmado rodando o próprio teste sobre dois grupos sem "
+      "nenhuma sobreposição (separação total), não só calculado analiticamente. Por isso nenhuma célula de "
+      "\"p bruto\" nas tabelas desta seção mostra \"0,0000\" (que sugeriria p=0 exato, impossível aqui) -- valores "
+      "abaixo da resolução de 4 casas decimais aparecem como \"<0,0001\".*")
+    w("")
+    w("**Convenção de sinal, válida nas Seções 5.1 e 5.2:** \"Dif\" = Mediana B − Mediana A; Delta de Cliff "
+      "positivo significa B sistematicamente maior que A, negativo significa o contrário. Consistente célula a "
+      "célula com as linhas abaixo (ex.: L0-sa-east-1, PQC vs. Classic -- aqui B=PQC, A=Classic -- tem Dif "
+      "negativo E Delta de Cliff negativo, ambos concordando que PQC ficou abaixo de Classic nesta rota).")
+    w("")
+    w("| Rota | Par | Mediana A (referência, ms) | Mediana B (comparado, ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
     w("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for r in main_results:
         sig = "SIM" if r["p_holm"] < 0.05 else "NÃO"
         w(f"| {r['route']} | {r['label']} | {fmt(r['median_a_ms'], 1)} | {fmt(r['median_b_ms'], 1)} | "
-          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt(r['p_raw'], 4)} | {fmt(r['p_holm'], 4)} | "
+          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt_p(r['p_raw'])} | {fmt_p(r['p_holm'])} | "
           f"{fmt(r['hl_ms'], 1)} | [{fmt(r['hl_ci_ms'][0], 1)};{fmt(r['hl_ci_ms'][1], 1)}] | "
           f"{fmt(r['cliffs_delta'], 3)} | {sig} |")
     w("")
@@ -1033,12 +1061,12 @@ def main():
     control_adj = holm_adjust([r["p_raw"] for r in control_results])
     for r, adj in zip(control_results, control_adj):
         r["p_holm"] = adj
-    w("| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
+    w("| Rota | Par | Mediana A (referência, ms) | Mediana B (comparado, ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
     w("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for r in control_results:
         sig = "SIM" if r["p_holm"] < 0.05 else "NÃO"
         w(f"| {r['route']} | {r['label']} | {fmt(r['median_a_ms'], 1)} | {fmt(r['median_b_ms'], 1)} | "
-          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt(r['p_raw'], 4)} | {fmt(r['p_holm'], 4)} | "
+          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt_p(r['p_raw'])} | {fmt_p(r['p_holm'])} | "
           f"{fmt(r['hl_ms'], 1)} | [{fmt(r['hl_ci_ms'][0], 1)};{fmt(r['hl_ci_ms'][1], 1)}] | "
           f"{fmt(r['cliffs_delta'], 3)} | {sig} |")
     w("")
@@ -1091,6 +1119,20 @@ def main():
       "contraste cujo p-valor ajustado por Holm não exclua a hipótese nula a α=0,05 -- as células marcadas \"NÃO\" "
       "nas tabelas acima permanecem lidas como não-significativas, não como \"quase significativas\" ou similar.")
     w("")
+    w(f"**Leitura dos testes agregados (Seção 5.3), sem arredondar a interpretação:** para PQC vs. Classic, "
+      f"**NENHUM** dos dois testes agregados atinge α=0,05 -- teste do sinal p={fmt(sign_pqc.pvalue, 4)}, Wilcoxon "
+      f"signed-rank p={fmt(w_pqc.pvalue, 4)} (ambos acima de 0,05). Para Hybrid vs. PQC, os dois atingem "
+      f"α=0,05 -- sinal p={fmt(sign_hyb.pvalue, 4)}, Wilcoxon p={fmt(w_hyb.pvalue, 4)}.")
+    w("")
+    w("**As 8 rotas NÃO são estatisticamente independentes entre si** -- compartilham apenas 3 instalações físicas "
+      "(`sa-east-1`, `us-east-1`, `ap-northeast-1`), cada uma hospedando várias rotas simultaneamente (ex.: "
+      "`L0-sa-east-1`, `L123`, `L219` e `L325` rodam todas a partir do mesmo servidor físico em `sa-east-1`). "
+      "Por isso, os testes agregados entre rotas desta seção (teste do sinal, Wilcoxon) são **apenas INDICATIVOS** "
+      "-- não constituem uma inferência formal válida sob a suposição de independência que esses testes exigem. "
+      "Os 32 testes por rota (Seções 5.1/5.2) não dependem dessa suposição entre rotas (cada um compara só as 10 "
+      "execuções de um perfil contra as 10 de outro, dentro da MESMA rota) -- a ressalva de independência se aplica "
+      "apenas aos agregados desta seção, não aos testes por rota.")
+    w("")
 
     w("### 5.5 Ressalva de desenho (deriva de rede dentro do bloco sequencial de cada rota)")
     w("")
@@ -1101,6 +1143,15 @@ def main():
       "ENTRE rotas (cada rota tem uma ordem potencialmente diferente, Seção 1) reduz, mas **não elimina**, esse "
       "efeito -- não há controle por bloco dentro de uma única rota (os 4 perfis não rodam entrelaçados/alternados "
       "dentro da mesma rota, rodam em 4 blocos consecutivos).")
+    w("")
+    w("**Ordem real dos blocos de perfil, por rota** (`manifest.route_orders`, dado bruto, sem interpretação adicional):")
+    w("")
+    w("| Rota | Ordem dos blocos (1º -> 2º -> 3º -> 4º) |")
+    w("|---|---|")
+    for route in ROUTES:
+        order_route = manifest["route_orders"][route]
+        order_route_labeled = " -> ".join(PROFILE_LABEL[p] for p in order_route)
+        w(f"| {route} | {order_route_labeled} |")
     w("")
     w(f"**Nota de reprodutibilidade do bootstrap:** semente fixa `{BOOTSTRAP_SEED}`, {fmt(BOOTSTRAP_ITERS)} "
       "reamostragens, `numpy.random.default_rng` -- nunca semente de sistema/relógio. Rodar este mesmo script "
@@ -1186,9 +1237,12 @@ def main():
       "(estado `stopped` nas 12 instâncias, nunca `terminated`). **O horário exato de cada parada não pôde ser "
       "determinado por API:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram "
       "`AccessDeniedException` (a mesma política de privilégio mínimo já documentada nunca incluiu permissão de "
-      "trilha/billing/métricas) -- `describe-instances` só devolve o estado atual, sem timestamp de transição. "
-      "Usado aqui o limite superior conservador já confirmado -- se a parada real ocorreu antes disso (certo que "
-      "ocorreu), usar este instante como corte superestima levemente o tempo de compute cobrado, nunca subestima.")
+      "trilha/billing/métricas) -- reconfirmado agora, de novo, lendo o campo BRUTO `StateTransitionReason` "
+      "diretamente nas 12 instâncias (7 regiões): o valor é, literalmente e sem exceção, a string `\"User initiated\"` "
+      "-- sem parênteses, sem data, sem hora embutida -- nas 12. `describe-instances` não traz timestamp de "
+      "transição de estado em nenhum campo. Usado aqui o limite superior conservador já confirmado -- se a parada "
+      "real ocorreu antes disso (certo que ocorreu), usar este instante como corte superestima levemente o tempo "
+      "de compute cobrado, nunca subestima.")
     w("")
     w("**`cost_tracker.py` não modela parada de instância** -- foi desenhado assumindo a frota continuamente "
       "ligada desde `window_start_utc`; sem o ajuste abaixo, a fórmula pura continuaria contando custo de compute "

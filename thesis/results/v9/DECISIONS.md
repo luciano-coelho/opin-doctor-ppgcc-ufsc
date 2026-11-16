@@ -13600,3 +13600,19 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Entrega:** commit LOCAL apenas (sem push desta correcao). Nenhuma acao de escrita na frota/AWS -- so `describe-instances`/`describe-volumes`/`describe-addresses` (ja feitos antes) e as 2 tentativas negadas de CloudTrail/CloudWatch, todas somente-leitura.
 
 **PARADO aqui, aguardando aprovacao do Luciano.**
+
+## Decisao 198 -- ajustes finais de texto/rotulos na Secao 5 e correcoes relacionadas (Secao 2.3 numerada, nota de rodape do p-minimo, convencao de sinal explicita, leitura dos agregados sem arredondar interpretacao, ressalva de independencia entre rotas, tabela de route_orders, reconfirmacao do StateTransitionReason bruto na Secao 8) -- SOMENTE texto/formatacao, auditoria independente confirmou 0 valor numerico alterado
+
+**Ajustes aplicados, todos SOMENTE no script gerador:**
+1. Secao 5.4: leitura factual dos agregados sem arredondar -- PQC vs. Classic NAO atinge α=0,05 em nenhum dos dois testes agregados (sinal p=0,0703, Wilcoxon p=0,0547); Hybrid vs. PQC atinge nos dois (p=0,0078). Declarado explicitamente que as 8 rotas NAO sao estatisticamente independentes (compartilham 3 instalacoes fisicas, cada uma hospedando varias rotas) -- os agregados entre rotas sao so INDICATIVOS, nunca inferencia formal valida; os 32 testes por rota (5.1/5.2) nao dependem dessa suposicao.
+2. Paragrafo de abertura da Secao 5: removida a contradicao ("limitada a estes 16 contrastes pre-definidos" vs. "escolhidos depois de ver a Secao 4") -- agora diz so "escolhidos apos a descricao dos dados".
+3. Tabelas 5.1/5.2: "0,0000" -> "<0,0001" (nunca sugerindo p=0 exato, impossivel no teste exato) -- nota de rodape confirma o menor p bruto matematicamente possivel (2/C(20,10)=1,0825e-05, rodado no proprio scipy, nao so calculado na mao). Colunas renomeadas "Mediana A (referencia)"/"Mediana B (comparado)"; convencao de sinal declarada explicitamente (Dif=B-A, Cliff positivo=B maior) e confirmada consistente celula a celula.
+4. Secao 5.5: tabela nova com a `route_orders` real das 8 rotas, dado bruto, sem interpretacao adicional.
+5. "Status da verificacao por termo" ganhou numero proprio (### 2.3) -- conteudo da tabela intocado.
+6. Secao 8: `describe-instances` rodado de novo (so leitura, perfil `mockopin-pqc-campanha`), campo `StateTransitionReason` BRUTO confirmado identico nas 12 instancias ("User initiated", sem timestamp embutido, nas 7 regioes) -- texto atualizado pra refletir essa reconfirmacao direta, corte conservador `2026-11-16T04:26:00Z` mantido (ja era o certo).
+
+**Auditoria independente (agente fresco, separado):** comparou a versao anterior (commit `57b79704`) celula a celula contra a atual -- **zero valor numerico de conteudo mudou** (a unica excecao, esperada e ja documentada, e o relogio/custo "agora" que avanca a cada regeracao do script); confirmou matematicamente o p-minimo (1,0825e-05), a tabela de `route_orders` contra o manifest real, a consistencia de sinal em 3 linhas, e a ausencia de ID de conta/IP real no documento. **Veredito: AUDITORIA PASSOU.**
+
+**sha256:** `generate_final_report_oficial_conta_nova.py` = `61d19b044945f171d26f71fa62bcddc5a953ccc83ab48e3e714a859630f35936`; `Consolidated_Metrics_Report_FINAL.md` = `a9ea463fb71b8f3edfe5c940bdf33c7abc2833d444387983fd87f37a6f47846b`.
+
+**Entrega:** commit LOCAL (Parte A desta rodada). Sem push ainda -- Parte B (escaneamento + publicacao de uma tag nova) e um passo separado, condicionado a esta Parte A ter passado sem falhas (passou).
