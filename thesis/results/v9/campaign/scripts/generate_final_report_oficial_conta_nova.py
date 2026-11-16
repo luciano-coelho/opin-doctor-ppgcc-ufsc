@@ -129,16 +129,56 @@ def load_latency():
     return out
 
 
+# Instante em que a frota (conta nova, perfil `mockopin-pqc-campanha`)
+# passou a estar INTEIRAMENTE parada (a ultima das 12 instancias a
+# transicionar para `stopped`, StateTransitionReason="User initiated" --
+# confirmado via `describe-instances` nas 7 regioes, nunca o perfil da
+# conta antiga). O timestamp EXATO de cada transicao nao e obtido por
+# API: `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics`
+# retornaram `AccessDeniedException` (mesma politica de minimo
+# privilegio ja documentada em `iam_policy_operador.json`/
+# `cost_tracker.py`, que nunca incluiu permissao de billing/trail/
+# metricas) -- `describe-instances` so devolve o ESTADO atual
+# (`stopped`) e uma `StateTransitionReason` sem timestamp embutido (os
+# 12, confirmados, dizem so "User initiated"). Usa-se aqui o limite
+# superior conservador que o Luciano ja confirmou ("antes de
+# 2026-11-16T04:26Z") -- conservador porque, se a parada real
+# aconteceu antes disso (o que e certo), usar este instante como corte
+# superestima levemente o tempo de compute cobrado, nunca subestima
+# (mesma convencao de arredondar pra cima que o proprio cost_tracker.py
+# ja declara pra precos).
+FLEET_STOPPED_SINCE_UTC = datetime.fromisoformat("2026-11-16T04:26:00+00:00")
+N_EBS_VOLUMES = 12
+EBS_GB_PER_VOLUME = 30  # confirmado real via `describe-volumes` nas 7 regioes, gp3, 12/12
+N_EIPS = 12
+
+
+def stopped_fleet_hourly_rate_usd(ct_mod):
+    """Taxa horaria real da frota PARADA: so EBS (12 volumes gp3, 30GB
+    cada, confirmados reais) + IPv4 publico dos 12 EIPs (ainda
+    associados, nao desassociados por `stop`) -- ZERO custo de
+    compute. Usa as MESMAS constantes de `cost_tracker.py`, nunca uma
+    copia digitada a mao."""
+    ebs_hourly = (N_EBS_VOLUMES * EBS_GB_PER_VOLUME) * ct_mod.EBS_GP3_GB_HOUR_USD
+    eip_hourly = N_EIPS * ct_mod.PUBLIC_IPV4_HOURLY_USD
+    return ebs_hourly + eip_hourly, ebs_hourly, eip_hourly
+
+
 def load_cost_readings(manifest, criteria_name_to_timestamp_hint):
     """Reconstroi a formula REAL de custo (cost_tracker.CostTracker) com
     a frota real (12 instancias: 1 t4g.micro + 11 m7i-flex.large, EIPs
     tambem 12) e o window_start_utc REAL, derivado da PRIMEIRA linha
     real de cost_tracker.jsonl (logged_at_utc - elapsed_hours), nunca de
-    um valor digitado. Calcula o custo em 3 momentos reais, nenhum
-    extrapolado: a ultima leitura automatica registrada, o fim da
-    janela oficial (manifest.window_end_utc), o fim da coleta dos
-    criterios dedicados (max dos ultimos timestamps reais dos 3 logs do
-    gateway), e agora (momento em que este script roda)."""
+    um valor digitado. Calcula o custo em 4 momentos reais: a ultima
+    leitura automatica registrada, o fim da janela oficial, o fim da
+    coleta dos criterios dedicados (todos os 3 ANTES da parada real,
+    formula continua de `cost_tracker.py` se aplica sem ajuste) -- e
+    "agora", que precisa de DUAS fases porque a frota foi parada no
+    meio do caminho: fase 1 (formula continua, do lancamento real da
+    frota at'e `FLEET_STOPPED_SINCE_UTC`) + fase 2 (so EBS+EIP, de
+    `FLEET_STOPPED_SINCE_UTC` at'e agora) -- nunca a formula continua
+    pura, que superestimaria o periodo parado contando compute que ja
+    nao esta mais sendo cobrado."""
     ct_mod = load_module(COST_TRACKER_PATH, "cost_tracker_v9")
     lines = [json.loads(l) for l in (RAW / "cost_tracker.jsonl").read_text(encoding="utf-8").strip().splitlines()]
     first, last = lines[0], lines[-1]
@@ -150,18 +190,28 @@ def load_cost_readings(manifest, criteria_name_to_timestamp_hint):
 
     readings = []
     last_logged = datetime.fromisoformat(last["logged_at_utc"])
-    readings.append(("última leitura automática registrada (cost_tracker.jsonl)", last_logged, last))
+    readings.append(("última leitura automática registrada (cost_tracker.jsonl) -- fórmula contínua, frota ainda ligada", last_logged, last, "continua"))
 
     window_end = datetime.fromisoformat(manifest["window_end_utc"])
-    readings.append(("fim da janela oficial (manifest.window_end_utc)", window_end, tracker.breakdown_usd(now=window_end)))
+    readings.append(("fim da janela oficial (manifest.window_end_utc) -- fórmula contínua, frota ainda ligada", window_end, tracker.breakdown_usd(now=window_end), "continua"))
 
     dedicated_end = criteria_name_to_timestamp_hint
-    readings.append(("fim da coleta dos critérios dedicados (último evento real nos logs do gateway)", dedicated_end, tracker.breakdown_usd(now=dedicated_end)))
+    readings.append(("fim da coleta dos critérios dedicados (último evento real nos logs do gateway) -- fórmula contínua, frota ainda ligada", dedicated_end, tracker.breakdown_usd(now=dedicated_end), "continua"))
 
     now = datetime.now(timezone.utc)
-    readings.append(("agora (momento em que este relatório foi gerado)", now, tracker.breakdown_usd(now=now)))
+    cost_at_stop = tracker.breakdown_usd(now=FLEET_STOPPED_SINCE_UTC)["total_usd"]
+    stopped_hourly, ebs_hourly, eip_hourly = stopped_fleet_hourly_rate_usd(ct_mod)
+    hours_stopped = max(0.0, (now - FLEET_STOPPED_SINCE_UTC).total_seconds() / 3600.0)
+    cost_now = cost_at_stop + stopped_hourly * hours_stopped
+    readings.append((
+        "agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois",
+        now, cost_now, "duas_fases",
+    ))
 
-    return readings, window_start
+    return readings, window_start, {
+        "cost_at_stop": cost_at_stop, "stopped_hourly": stopped_hourly,
+        "ebs_hourly": ebs_hourly, "eip_hourly": eip_hourly, "hours_stopped": hours_stopped,
+    }
 
 
 def dedicated_criteria_end_timestamp():
@@ -513,7 +563,7 @@ def main():
     handshake_alert = load_json(ORG / "handshake_bytes_alert.json")
     latency = load_latency()
     dedicated_end = dedicated_criteria_end_timestamp()
-    cost_readings, cost_window_start = load_cost_readings(manifest, dedicated_end)
+    cost_readings, cost_window_start, cost_stop_info = load_cost_readings(manifest, dedicated_end)
     internal_evidence = internal_channel_evidence()
     mtls_gabarito = external_mtls_gabarito()
 
@@ -1123,20 +1173,43 @@ def main():
     w("")
 
     # ---- 7. Custo -------------------------------------------------
-    w("## 8. Custo e duração (sem teardown -- nenhum valor aqui é \"final\")")
+    w("## 8. Custo (estimativa por fórmula -- NUNCA o valor real cobrado)")
     w("")
-    w(f"Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.micro` + 11 `m7i-flex.large`, "
+    w(f"Fórmula de `cost_tracker.CostTracker` (frota real: 12 instâncias -- 1 `t4g.micro` + 11 `m7i-flex.large`, "
       f"12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` "
-      f"(`{fmt_ts(cost_window_start)}`). **Nenhuma leitura abaixo é chamada de \"custo final\" -- isso só se aplica "
-      f"depois do teardown da frota, que ainda não aconteceu.**")
+      f"(`{fmt_ts(cost_window_start)}`). **Todo valor abaixo é uma ESTIMATIVA POR FÓRMULA, nunca \"custo final\" "
+      "nem um valor de fato cobrado -- o valor real e definitivo é o que aparece no AWS Billing/Cost Explorer da "
+      "conta, nunca esta fórmula local.**")
     w("")
-    w("| Momento | Timestamp (UTC) | Custo acumulado até este momento |")
+    w(f"**A frota foi parada via `StopInstances` (\"User initiated\") "
+      f"antes de `{fmt_ts(FLEET_STOPPED_SINCE_UTC)}`** -- confirmado por `describe-instances` nas 7 regiões "
+      "(estado `stopped` nas 12 instâncias, nunca `terminated`). **O horário exato de cada parada não pôde ser "
+      "determinado por API:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram "
+      "`AccessDeniedException` (a mesma política de privilégio mínimo já documentada nunca incluiu permissão de "
+      "trilha/billing/métricas) -- `describe-instances` só devolve o estado atual, sem timestamp de transição. "
+      "Usado aqui o limite superior conservador já confirmado -- se a parada real ocorreu antes disso (certo que "
+      "ocorreu), usar este instante como corte superestima levemente o tempo de compute cobrado, nunca subestima.")
+    w("")
+    w("**`cost_tracker.py` não modela parada de instância** -- foi desenhado assumindo a frota continuamente "
+      "ligada desde `window_start_utc`; sem o ajuste abaixo, a fórmula pura continuaria contando custo de compute "
+      "que já não está mais sendo cobrado desde a parada, superestimando o valor real a partir desse instante.")
+    w("")
+    w("| Momento | Timestamp (UTC) | Estimativa por fórmula acumulada |")
     w("|---|---|---:|")
-    for label, ts, reading in cost_readings:
+    for label, ts, reading, phase in cost_readings:
         total = reading["total_usd"] if isinstance(reading, dict) else reading
         w(f"| {label} | {fmt_ts(ts)} | US\\${fmt(total)} |")
     w("")
-    w(f"- **cost_stop:** nunca acionado (`{manifest['cost_stop']}`); teto desta fase: aviso US\\$70 / parada US\\$90.")
+    ebs_daily = cost_stop_info["ebs_hourly"] * 24
+    eip_daily = cost_stop_info["eip_hourly"] * 24
+    stopped_daily = cost_stop_info["stopped_hourly"] * 24
+    w(f"**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 "
+      f"de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\\${fmt(ebs_daily)}/dia + EIP "
+      f"US\\${fmt(eip_daily)}/dia = **US\\${fmt(stopped_daily)}/dia** (US\\${fmt(cost_stop_info['stopped_hourly'], 4)}/h). "
+      f"Aplicada por {fmt(cost_stop_info['hours_stopped'], 2)}h desde a parada até a leitura \"agora\" acima.")
+    w("")
+    w(f"- **cost_stop:** nunca acionado (`{manifest['cost_stop']}`); teto desta fase: aviso US\\$70 / parada US\\$90 -- "
+      "ambos já sem sentido prático agora que a frota está parada (não é mais a formula contínua que se aplica).")
     w("- **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.")
     w("")
 

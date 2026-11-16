@@ -375,18 +375,24 @@ Dentro de cada rota, os 4 blocos de perfil rodam **sequencialmente** (ordem sort
 
 **Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker desta campanha, rodado antes dela na mesma conta/infraestrutura):** **126 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, no mesmo conjunto central Classic/PQC/Hybrid: Classic=42, Hybrid=42, PQC=21. **Perfil Control, separado:** 21 conexões, mesma curva. Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.
 
-## 8. Custo e duração (sem teardown -- nenhum valor aqui é "final")
+## 8. Custo (estimativa por fórmula -- NUNCA o valor real cobrado)
 
-Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` (`2026-11-15T04:17:09Z`). **Nenhuma leitura abaixo é chamada de "custo final" -- isso só se aplica depois do teardown da frota, que ainda não aconteceu.**
+Fórmula de `cost_tracker.CostTracker` (frota real: 12 instâncias -- 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` (`2026-11-15T04:17:09Z`). **Todo valor abaixo é uma ESTIMATIVA POR FÓRMULA, nunca "custo final" nem um valor de fato cobrado -- o valor real e definitivo é o que aparece no AWS Billing/Cost Explorer da conta, nunca esta fórmula local.**
 
-| Momento | Timestamp (UTC) | Custo acumulado até este momento |
+**A frota foi parada via `StopInstances` ("User initiated") antes de `2026-11-16T04:26:00Z`** -- confirmado por `describe-instances` nas 7 regiões (estado `stopped` nas 12 instâncias, nunca `terminated`). **O horário exato de cada parada não pôde ser determinado por API:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram `AccessDeniedException` (a mesma política de privilégio mínimo já documentada nunca incluiu permissão de trilha/billing/métricas) -- `describe-instances` só devolve o estado atual, sem timestamp de transição. Usado aqui o limite superior conservador já confirmado -- se a parada real ocorreu antes disso (certo que ocorreu), usar este instante como corte superestima levemente o tempo de compute cobrado, nunca subestima.
+
+**`cost_tracker.py` não modela parada de instância** -- foi desenhado assumindo a frota continuamente ligada desde `window_start_utc`; sem o ajuste abaixo, a fórmula pura continuaria contando custo de compute que já não está mais sendo cobrado desde a parada, superestimando o valor real a partir desse instante.
+
+| Momento | Timestamp (UTC) | Estimativa por fórmula acumulada |
 |---|---|---:|
-| última leitura automática registrada (cost_tracker.jsonl) | 2026-11-15T23:36:12Z | US\$27,69 |
-| fim da janela oficial (manifest.window_end_utc) | 2026-11-16T00:06:40Z | US\$28,42 |
-| fim da coleta dos critérios dedicados (último evento real nos logs do gateway) | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) | 2026-11-16T13:32:04Z | US\$47,66 |
+| última leitura automática registrada (cost_tracker.jsonl) -- fórmula contínua, frota ainda ligada | 2026-11-15T23:36:12Z | US\$27,69 |
+| fim da janela oficial (manifest.window_end_utc) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:06:40Z | US\$28,42 |
+| fim da coleta dos critérios dedicados (último evento real nos logs do gateway) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:22:57Z | US\$28,81 |
+| agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois | 2026-11-16T13:44:53Z | US\$35,58 |
 
-- **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90.
+**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\$1,04/dia + EIP US\$1,44/dia = **US\$2,48/dia** (US\$0,1034/h). Aplicada por 9,31h desde a parada até a leitura "agora" acima.
+
+- **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90 -- ambos já sem sentido prático agora que a frota está parada (não é mais a formula contínua que se aplica).
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.
 
 ## 9. Transparência e limites de escopo

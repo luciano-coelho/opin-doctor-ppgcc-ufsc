@@ -13580,3 +13580,23 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Entrega:** commit LOCAL apenas (sem push desta correcao, igual a Decisao 195). Nenhuma tag movida, nenhuma acao na frota/AWS -- toda a analise usou dados ja locais (T_fluxo das 320 execucoes), nenhuma chamada nova a AWS/SSH.
 
 **PARADO aqui, aguardando aprovacao do Luciano.**
+
+## Decisao 197 -- Secao de custo (8) corrigida: cost_tracker.py nao modela frota parada, ajuste em DUAS FASES (formula continua at'e a parada real + so EBS/EIP depois), achado real de acesso (CloudTrail/CloudWatch negados) reportado honestamente, auditoria independente PASSOU
+
+**Achado real confirmado:** a frota (perfil `mockopin-pqc-campanha`, conta nova) estava parada (`StopInstances`, "User initiated") desde antes de `2026-11-16T04:26Z` -- `cost_tracker.py` assume a frota ligada continuamente e, sem ajuste, superestimaria o custo real a partir desse instante contando compute que ja nao e mais cobrado.
+
+**Tentativa de determinar o horario EXATO de parada de cada uma das 12 instancias, via API, reportada com honestidade:** `cloudtrail:LookupEvents` e `cloudwatch:GetMetricStatistics` retornaram `AccessDeniedException` nos dois casos (mesma politica de minimo privilegio ja documentada em `iam_policy_operador.json`, nunca incluiu permissao de trilha/metricas/billing) -- `describe-instances` confirma SOMENTE o estado atual (`stopped`, nas 12, nas 7 regioes) e uma `StateTransitionReason` sem timestamp embutido ("User initiated", sem parenteses de data/hora, nas 12). **Achado de processo, autorreportado:** a mensagem de erro do AWS CLI nos dois casos incluiu o ARN completo do usuario IAM, que contem o ID COMPLETO da conta -- nunca reproduzido em nenhum arquivo deste repositorio nem em nenhuma Decisao, reportado aqui so como "apareceu na saida de um comando AWS, nao foi registrado em lugar nenhum".
+
+**Resolucao:** usado o limite superior conservador ja confirmado pelo Luciano (`2026-11-16T04:26:00Z`) como o instante de corte -- conservador porque a parada real so pode ter sido ANTES disso, entao usar esse instante como corte da formula continua superestima levemente o compute cobrado, nunca subestima (mesma convencao de arredondar pra cima que `cost_tracker.py` ja declara pros precos).
+
+**Formula em duas fases, implementada no script (nunca digitada a mao):** fase 1 (formula continua de `cost_tracker.CostTracker`, do lancamento real da frota at'e `2026-11-16T04:26:00Z`) + fase 2 (so EBS+EIP, 0 compute, de la at'e "agora") -- taxa da fase 2 recalculada ao vivo a partir das MESMAS constantes de `cost_tracker.py` (`EBS_GP3_GB_HOUR_USD`, `PUBLIC_IPV4_HOURLY_USD`) e dos 12 volumes gp3 de 30GB + 12 EIPs ja confirmados reais (Decisao 194): **US\$1,04/dia (EBS) + US\$1,44/dia (EIP) = US\$2,48/dia** -- reconfirmado, nao copiado sem checar.
+
+**Secao 8 reescrita:** titulo mudou pra "Custo (estimativa por formula -- NUNCA o valor real cobrado)"; toda linha da tabela rotulada como estimativa por formula (nunca "custo final"); frase explicita de que o valor real/definitivo e o AWS Billing/Cost Explorer da conta; explicacao de que `cost_tracker.py` nao modela parada de instancia; a linha "agora" antiga (que assumia compute continuo, ~US\$46-47) removida e substituida pela versao em duas fases (~US\$35,57 na ultima geracao).
+
+**Auditoria independente (agente fresco, separado), recalculando TUDO do zero** (importou `cost_tracker.py` diretamente, reconstruiu a classe `CostTracker`, recalculou as 3 leituras continuas + o corte de parada + a taxa da frota parada + a leitura "agora" em duas fases, e conferiu os 4 requisitos textuais) -- **Veredito: AUDITORIA PASSOU**, os 14 itens numericos batem (1 diferenca de ~3×10⁻⁷ em microssegundos de `window_start_utc` reconstruido, sem efeito em nenhum valor exibido), confirmado que o valor antigo ~US\$46 nao aparece mais em lugar nenhum do documento.
+
+**sha256:** `generate_final_report_oficial_conta_nova.py` = `f4edfbe09065b49d86e0bad2544d62bb2ef05640011aa0df7a6fc1edb7975c4e`; `Consolidated_Metrics_Report_FINAL.md` = `431cb8490132cb1047520013ac15d9354feaaae664a361a1966d43514d11ec62`.
+
+**Entrega:** commit LOCAL apenas (sem push desta correcao). Nenhuma acao de escrita na frota/AWS -- so `describe-instances`/`describe-volumes`/`describe-addresses` (ja feitos antes) e as 2 tentativas negadas de CloudTrail/CloudWatch, todas somente-leitura.
+
+**PARADO aqui, aguardando aprovacao do Luciano.**
