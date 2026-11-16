@@ -5,3 +5,11 @@ __pycache__/
 
 # SegurosGPT is its own git repo (github.com/luciano-coelho/segurosGPT), nested here only for local dev access to the mock
 segurosGPT/
+
+# TLS session secrets (NSS keylog format: CLIENT_HANDSHAKE_TRAFFIC_SECRET etc.) -- decrypt the
+# paired .pcap captures in the same directories; never committed, local-only / offline package only.
+*.keylog
+
+# Campaign raw data (pcaps/logs) -- stays local, packaged offline as .tar.gz/.tar.zst outside the
+# repo; only its sha256+path+size is tracked in git (thesis/results/v9/campaign_oficial_conta_nova_raw_package.md).
+thesis/results/v9/campaign_oficial_conta_nova_raw/
