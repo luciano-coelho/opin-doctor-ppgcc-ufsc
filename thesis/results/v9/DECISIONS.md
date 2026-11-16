@@ -13632,3 +13632,14 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 - Arquivo >50MB novo: nenhum (so os 2 ja conhecidos e tratados, historico antigo).
 
 **PARADO aqui.** Prossegue pro push/tag SOMENTE porque o escaneamento acima deu limpo -- se tivesse achado algo novo, pararia sem publicar.
+
+**PUSH e TAG REALIZADOS, verificados via `git ls-remote origin`:**
+- `git push origin v9/fase1-local` (fast-forward confirmado antes de enviar, SEM force): `c05dcb36..6d1fe34e` -- sucesso.
+- Tag NOVA `v9-relatorio-consolidado-final` criada no commit final `6d1fe34e` e publicada -- confirmado em `origin` apontando exatamente pra `6d1fe34e`.
+- Tag `v9-campanha-oficial-final` **confirmada intocada** -- continua em `c05dcb36`, exatamente onde estava antes desta rodada (nunca movida).
+- Tag `v9-campanha-oficial-congelada` **confirmada intocada** -- continua em `ea855f8489bcebf2360c3d741c344dac8e24e0b5`, identica a antes.
+- Nenhuma tag com sufixo publicada; `main` nunca tocada.
+
+**Hash final:** `6d1fe34e7d8be36d23e7235f1f759d0a1eb531cb`.
+
+**PARADO aqui, aguardando nova instrucao.** Nenhuma acao de teardown/escrita na frota; nenhum IAM; nenhum `cleanup_campaign_key`.
