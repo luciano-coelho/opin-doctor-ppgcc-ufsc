@@ -13532,3 +13532,11 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 - IP real do operador em texto puro, na arvore de trabalho/tip atual: 0.
 - Nenhum arquivo novo >50MB nos commits desta rodada.
 - **Escaneamento limpo -- autorizado proceder ao push.**
+
+**PUSH REALIZADO:**
+- `git push origin v9/fase1-local` (sem force): `420e9400..c05dcb36`, sucesso. GitHub emitiu so um aviso informativo (nao bloqueante) sobre um arquivo pre-existente de 56,53MB no historico antigo (ja conhecido, item 3 do escaneamento anterior, abaixo do limite de 100MB).
+- Tag local `v9-campanha-oficial-final` MOVIDA de onde estava (um commit antigo, Decisao 172, de muito antes da campanha) pro commit final desta rodada (`c05dcb36`) -- reconfirmado ausente do `origin` antes de mover. Publicada: `git push origin v9-campanha-oficial-final` -- sucesso, unica tag publicada.
+- Nenhuma tag com sufixo publicada.
+- **Verificacao pos-push (`git ls-remote origin`):** branch `v9/fase1-local` = `c05dcb364192bc193e99704dea2aae5a33b8ae21`; tag `v9-campanha-oficial-final` = `c05dcb364192bc193e99704dea2aae5a33b8ae21` (mesmo commit, correto); tag `v9-campanha-oficial-congelada` = `ea855f8489bcebf2360c3d741c344dac8e24e0b5` -- **identica ao valor de antes do push, confirmado nao foi tocada.**
+
+**PARADO aqui, aguardando nova instrucao.** Nenhuma acao de teardown na frota; nenhum IAM; nenhum `cleanup_campaign_key`; nenhuma outra tag publicada; `main` nunca tocada.
