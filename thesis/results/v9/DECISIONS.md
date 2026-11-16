@@ -13767,3 +13767,22 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Observacao lateral da auditoria (fora do escopo desta investigacao, nao tocada):** arquivos nao rastreados pre-existentes (`thesis/results/v9/terraform_campanha_oficial_conta_nova/`, incluindo `.tfstate`/`.backup`/`iam_policy_operador.json`, e varios `.scratch_*.json`/`.log` na raiz) contem IPs publicos reais e estado Terraform -- trabalho exploratorio separado, nao editado nem commitado nesta investigacao. Serao verificados explicitamente no escaneamento da Parte B antes de qualquer push (nao serao incluidos no push, pois nao estao staged nem fazem parte de nenhum commit).
 
 **Entrega:** commit LOCAL (fecha a investigacao do vies RSA, Parte A da rodada). Prosseguindo pra Parte B (escaneamento + push da branch) por esta Parte A ter passado sem falhas.
+
+## Decisao 207 -- Parte B (publicacao) concluida: branch v9/fase1-local publicada (fast-forward, sem force) ate o commit 6b441b4a; nova tag anotada v9-relatorio-consolidado-final-rev2 criada e publicada no mesmo commit, substituindo v9-relatorio-consolidado-final como referencia ATUAL (a antiga permanece publicada, intocada, como historico); nenhuma outra tag tocada
+
+**Escaneamento completo da faixa publicada** (`git diff origin/v9/fase1-local..HEAD` antes do push + `git log` dos 7 commits inteiros) -- limpo, nenhum achado novo: 0 `.keylog`, 0 AKIA/ASIA, 0 cabecalho de chave privada (`BEGIN ... PRIVATE KEY`), 0 `.tfstate`/`.tfplan`/`.tfvars`, 0 ID de conta AWS/ARN com 12 digitos, 0 IP publico novo (scan de IPv4 excluindo faixas privadas/loopback, vazio), `<operator-ip>` (redacao ja aplicada em rodada anterior) nao revertido em nenhum arquivo desta faixa. 31 arquivos no total, todos pequenos (maior 20KB), todos da investigacao Degrau 1 + o relatorio oficial + seu script gerador -- nenhum dado bruto/organizado da campanha, nenhum arquivo de chave.
+
+**Push da branch:** fast-forward confirmado antes de enviar (`git merge-base --is-ancestor origin/v9/fase1-local HEAD`), SEM force -- `6d1fe34e..6b441b4a`.
+
+**Nova tag `v9-relatorio-consolidado-final-rev2`** (ANOTADA, pedido explicito do usuario, feito DEPOIS da Parte B ter concluido com sucesso): criada no commit final `6b441b4a` (confirmado nunca ter existido no remoto antes, via `git ls-remote`), publicada com `git push origin v9-relatorio-consolidado-final-rev2` (sem `-f`, tag nova). **Substitui `v9-relatorio-consolidado-final` como referencia ATUAL do relatorio consolidado** -- a tag antiga (`v9-relatorio-consolidado-final`, hash `6d1fe34e7d8be36d23e7235f1f759d0a1eb531cb`) **permanece publicada, intocada, nunca movida nem removida**, como historico da versao anterior (antes da ressalva de T_fluxo/vies RSA da investigacao Degrau 1).
+
+**Tags protegidas, confirmadas intocadas via `git ls-remote origin`:**
+- `v9-campanha-oficial-final` -> `c05dcb364192bc193e99704dea2aae5a33b8ae21` (inalterada)
+- `v9-campanha-oficial-congelada` -> `ea855f8489bcebf2360c3d741c344dac8e24e0b5` (inalterada)
+- `v9-relatorio-consolidado-final` (antiga) -> `6d1fe34e7d8be36d23e7235f1f759d0a1eb531cb` (inalterada, nunca movida)
+
+**Hashes finais confirmados via `git ls-remote origin`:**
+- `refs/heads/v9/fase1-local` -> `6b441b4aa0085f8a152793b732812ea972df95ef`
+- `refs/tags/v9-relatorio-consolidado-final-rev2` -> `6b441b4aa0085f8a152793b732812ea972df95ef` (mesmo commit da branch)
+
+Nenhuma tag com sufixo nova alem desta; `main` nunca tocada; nenhuma acao AWS/infra nesta rodada.
