@@ -13616,3 +13616,19 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **sha256:** `generate_final_report_oficial_conta_nova.py` = `61d19b044945f171d26f71fa62bcddc5a953ccc83ab48e3e714a859630f35936`; `Consolidated_Metrics_Report_FINAL.md` = `a9ea463fb71b8f3edfe5c940bdf33c7abc2833d444387983fd87f37a6f47846b`.
 
 **Entrega:** commit LOCAL (Parte A desta rodada). Sem push ainda -- Parte B (escaneamento + publicacao de uma tag nova) e um passo separado, condicionado a esta Parte A ter passado sem falhas (passou).
+
+## Decisao 199 -- Parte B: publicacao do relatorio final consolidado (Secao 5 inferencial + correcao de custo em duas fases + esta rodada de ajustes de texto/rotulos), nova tag `v9-relatorio-consolidado-final`
+
+**Resumo do que esta sendo publicado nesta rodada** (consolida as Decisoes 196/197/198, sem repetir o detalhe completo de cada uma):
+- **Secao 5 (significancia estatistica, inferencial, exploratoria)**: 16 testes principais Classic×PQC/Hybrid×PQC (Mann-Whitney exato + Holm + Hodges-Lehmann + IC bootstrap + Delta de Cliff) e 16 testes de Control em familia de Holm separada (fora do escopo da tese); teste do sinal e Wilcoxon agregados entre rotas, com ressalva explicita de que as 8 rotas NAO sao independentes (3 instalacoes fisicas compartilhadas) -- agregados sao so indicativos. Leitura factual sem arredondar: PQC vs. Classic nao atinge significancia nos agregados; Hybrid vs. PQC atinge. Inversao em L0-sa-east-1 confirmada NAO significativa.
+- **Correcao de custo (Secao 8)**: formula em duas fases (continua at'e a frota parar de verdade, so EBS+EIP depois) -- a frota foi parada (`StopInstances`) antes de `2026-11-16T04:26Z`; horario exato nao determinavel por API (CloudTrail/CloudWatch negados, reconfirmado nesta rodada lendo o campo bruto `StateTransitionReason` -- "User initiated", sem timestamp, nas 12 instancias). Todo valor rotulado "estimativa por formula", nunca "custo final".
+- **Esta rodada (Decisao 198)**: Secao 2.3 numerada, nota do p-minimo, convencao de sinal, leitura factual dos agregados, tabela de `route_orders`.
+
+**Escaneamento completo da faixa a publicar** (`git diff origin/v9/fase1-local..HEAD` + `git log` da faixa inteira, nao so o commit novo) -- **limpo, nenhum achado novo**:
+- `.keylog`: 0 novos (os 213 ja tratados como fato consumado na Decisao 194 continuam la, historico publico de antes, nao reaberto).
+- IP real do operador em texto puro: 0 ocorrencias em qualquer arquivo novo/modificado desta faixa (confirmado nao voltou a aparecer -- a substituicao por `<operator-ip>/32` da Decisao 194 continua valendo, nenhum commit novo a reverteu).
+- ID de conta AWS (12 digitos) ou ARN completo: 0 ocorrencias em qualquer arquivo do repositorio (o ARN que apareceu em mensagens de erro do AWS CLI durante a investigacao da Decisao 197 nunca foi escrito em nenhum arquivo, confirmado de novo agora).
+- Chaves privadas, AKIA/ASIA, `.tfstate`/`.tfplan`/`.tfvars`: 0.
+- Arquivo >50MB novo: nenhum (so os 2 ja conhecidos e tratados, historico antigo).
+
+**PARADO aqui.** Prossegue pro push/tag SOMENTE porque o escaneamento acima deu limpo -- se tivesse achado algo novo, pararia sem publicar.
