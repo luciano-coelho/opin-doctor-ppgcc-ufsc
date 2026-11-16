@@ -22,24 +22,41 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 
 ### 2.1 OPINsize total por perfil (variante assinatura+chave crua) e razão contra Classic
 
+Comparação central desta tese: **Classic / PQC / Hybrid**. O perfil Control é de apoio/diagnóstico -- reportado separadamente logo abaixo, nunca misturado nesta tabela.
+
 | Perfil | OPINsize (bytes) | Razão vs. Classic |
 |---|---:|---:|
 | Classic | 34.071,88 | 1,00x |
 | PQC | 256.429,92 | 7,53x |
-| Control | 242.008,08 | 7,10x |
 | Hybrid | 286.202,08 | 8,40x |
 
 **Hybrid menos PQC: 29.772,16 bytes** (11,61% a mais que PQC puro).
 
+**Perfil Control, separado (não entra na comparação central Classic/PQC/Hybrid acima):**
+
+| Perfil | OPINsize (bytes) | Razão vs. Classic |
+|---|---:|---:|
+| Control | 242.008,08 | 7,10x |
+
 ### 2.2 OPINsize por termo, por perfil, contagens N
 
-| Termo | N por execução | Classic | PQC | Control | Hybrid |
-|---|---:|---:|---:|---:|---:|
-| mTLS (handshake) | 6 | 18.750 | 129.636 | 101.694 | 144.474 |
-| JWT (apenas assinatura) | 28 | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 |
-| JWK (chave crua) | 4 | 1.536 | 8.320 | 9.856 | 9.856 |
-| PKI (certificados de CA) | 4 | 7.130,00 | 32.440 | 37.768 | 39.182,00 |
-| **OPINsize (total)** | 44 chamadas/execução | **34.071,88** | **256.429,92** | **242.008,08** | **286.202,08** |
+| Termo | N por execução | Classic | PQC | Hybrid |
+|---|---:|---:|---:|---:|
+| mTLS (handshake) | 6 | 18.750 | 129.636 | 144.474 |
+| JWT (apenas assinatura) | 28 | 6.655,88 | 86.033,92 | 92.690,08 |
+| JWK (chave crua) | 4 | 1.536 | 8.320 | 9.856 |
+| PKI (certificados de CA) | 4 | 7.130,00 | 32.440 | 39.182,00 |
+| **OPINsize (total)** | 44 chamadas/execução | **34.071,88** | **256.429,92** | **286.202,08** |
+
+**Perfil Control, por termo (separado):**
+
+| Termo | N por execução | Control |
+|---|---:|---:|
+| mTLS (handshake) | 6 | 101.694 |
+| JWT (apenas assinatura) | 28 | 92.690,08 |
+| JWK (chave crua) | 4 | 9.856 |
+| PKI (certificados de CA) | 4 | 37.768 |
+| **OPINsize (total)** | 44 chamadas/execução | **242.008,08** |
 
 **Sobre o rótulo "PKI":** as 4 chamadas deste termo são, confirmado em código (`thesis/scripts/opinsize_v9_oficial.py`, `PKI_ENDPOINTS = {"/root-ca.pem", "/issuer-ca.pem"}`), recuperação dos certificados de CA (raiz + emissora, uma vez por sub-fluxo) -- **nunca** uma lista de revogação (CRL). O campo interno do pipeline se chama `term_pki_crl` por uma convenção de nomenclatura herdada, não porque CRL seja de fato buscada; este relatório usa "PKI (certificados de CA)", que descreve o que a chamada real faz.
 
@@ -49,8 +66,9 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 |---|---:|---:|---|
 | Classic | 3.125 | 3.125 | SIM |
 | PQC | 21.606 | 21.606 | SIM |
-| Control | 16.949 | 16.949 | SIM |
 | Hybrid | 24.079 | 24.079 | SIM |
+
+**Perfil Control, separado:** esperado 16.949 bytes/conexão, medido 16.949 bytes/conexão -- bate? SIM.
 
 **Status da verificação por termo:**
 
@@ -71,8 +89,13 @@ Especificação: assinatura RSA-2048 PS256 = 256B; assinatura ML-DSA-65 pura (FI
 |---|---|---:|---:|---:|---:|---:|
 | Classic | classic_only=26, jwe=2 | 6.656 | 237,71 | 6.655,88 | 6.655,88 | 0,00 |
 | PQC | jwe=2, pqc_pure=26 | 86.034 | 3.072,64 | 86.033,92 | 86.033,92 | 0,00 |
-| Control | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
 | Hybrid | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
+
+**Perfil Control, separado:**
+
+| Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |
+|---|---|---:|---:|---:|---:|---:|
+| Control | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
 
 **Explicação do resíduo fracionário (ex.: 86.033,92 vs. 86.034; 6.655,88 vs. 6.656; 92.690,08 vs. 92.690), confirmada no código, não suposta:** `thesis/scripts/opinsize_v9_oficial.py` calcula `jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois `term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- a média por token é arredondada a 2 casas decimais ANTES de ser multiplicada por N_JWT=28, o que propaga um resíduo de até ±0,14 byte em relação à soma exata por especificação. A tabela acima reproduz essa MESMA aritmética (coluna "Termo esperado") e bate exatamente com o termo medido nos 4 perfis -- o resíduo não é um erro de medição, é um efeito de arredondamento já presente no próprio pipeline, agora reproduzido e confirmado aqui, não apenas suposto.
 
@@ -86,8 +109,13 @@ Especificação (chave crua, sem envelope): RSA-2048 (módulo) = 256B; ML-DSA-65
 |---|---:|---:|---:|---|
 | Classic | 256 | 384 | +128 | RSA:256+RSA:256 / RSA:256 / RSA:256+RSA:256 / RSA:256 |
 | PQC | 1.952 | 2.080 | +128 | AKP:1952+RSA:256 / AKP:1952 / AKP:1952+RSA:256 / AKP:1952 |
-| Control | 2.208 | 2.464 | +256 | HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 |
 | Hybrid | 2.208 | 2.464 | +256 | HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 |
+
+**Perfil Control, separado:**
+
+| Perfil | Chave por especificação (bytes) | Média real medida (4 chamadas) | Diferença vs. especificação | Composição real confirmada |
+|---|---:|---:|---:|---|
+| Control | 2.208 | 2.464 | +256 | HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 / HYBRID:2208+RSA:256 |
 
 **O que compõe o acréscimo sobre a chave pura, confirmado chamada a chamada (não especulado):** das 4 chamadas reais `/jwks` por execução, **metade (2 de 4)** carrega uma SEGUNDA entrada JWK além da chave de assinatura do próprio perfil -- para Classic/PQC, essa segunda entrada é sempre uma chave RSA-2048 de 256B com `use="enc"` (a chave pública de cifragem do `id_token`, JWE, clássica em todos os perfis por desenho já declarado); as outras 2 de 4 chamadas não carregam nenhuma segunda entrada. Isso dá uma média de +128B/chamada para Classic e PQC -- mas **não é um acréscimo fixo de 128B em cada chamada individual**, é um acréscimo de 256B em exatamente metade das chamadas. Para Hybrid/Control, **todas as 4 chamadas** carregam uma segunda entrada de 256B -- 2 delas a mesma chave `use="enc"` de Classic/PQC, e as outras 2 uma entrada RSA `use="sig"` **duplicada** (o mesmo `kid` da metade clássica da chave composta, republicada separadamente para um consumidor JWKS padrão que faça descoberta por `kid`+`alg` sem suporte à chave híbrida). Por isso Hybrid/Control acrescenta 256B em TODAS as 4 chamadas, não 128B -- a tabela acima confirma isso com a composição real de cada uma das 4 chamadas de uma execução real.
 
@@ -97,19 +125,33 @@ Especificação (chave crua, sem envelope): RSA-2048 (módulo) = 256B; ML-DSA-65
 |---|---|---:|---|---:|---:|---:|
 | Classic | root_ca_rsa2048.crt / issuer_ca_rsa2048.crt | 1.679+1.692 | content-length (+97B) | 7.130,00 | 7.130,00 | 0,00 |
 | PQC | root_ca_pqc.crt / issuer_ca_pqc.crt | 8.001+8.013 | chunked (+103B) | 32.440,00 | 32.440 | 0,00 |
-| Control | root_ca_hybrid.crt / issuer_ca_hybrid.crt | 9.337+9.341 | chunked (+103B) | 37.768,00 | 37.768 | 0,00 |
 | Hybrid | root_ca_rsa2048.crt+root_ca_pqc.crt / issuer_ca_rsa2048.crt+issuer_ca_pqc.crt | 9.680+9.705 | chunked (+103B) | 39.182,00 | 39.182,00 | 0,00 |
+
+**Perfil Control, separado:**
+
+| Perfil | Arquivo(s) servidos (root / issuer) | PEM real (root+issuer, bytes) | Framing HTTP | Esperado (PEM+framing) | Medido | Diferença |
+|---|---|---:|---|---:|---:|---:|
+| Control | root_ca_hybrid.crt / issuer_ca_hybrid.crt | 9.337+9.341 | chunked (+103B) | 37.768,00 | 37.768 | 0,00 |
 
 **Fontes, citadas com file:line (não estimadas):** o arquivo de CA servido por perfil vem de `realCAFilesForProfile` (`thesis/results/v9/integration/gateway/business_server.go:283-294`) -- Hybrid concatena DOIS arquivos por slot (RSA-2048 + ML-DSA-65) num único corpo de resposta, os outros 3 perfis servem um único arquivo. O tamanho PEM real de cada arquivo vem de `certs_manifest.json` (gerado por `cert_manifest.py`, lendo os arquivos reais de `mock-service-os/certs/`). A sobrecarga de enquadramento HTTP (97B content-length, 103B chunked) vem de `headerOverheadByFraming`/`wantFramingByProfile` (`thesis/results/v9/integration/gateway/ca_handler_test.go:142-144` e `:280`) -- Classic usa content-length, os outros 3 perfis usam chunked. **Diferença zero nos 4 perfis** -- esta é a única das três verificações desta seção sem nenhum resíduo de arredondamento, porque a sobrecarga de framing é um inteiro exato, não uma média estatística sobre muitas amostras.
 
-### 2.5 Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= Control)
+### 2.5 Invariantes estruturais por termo (Classic < PQC < Hybrid)
 
-| Termo | Classic | PQC | Control | Hybrid | Ordem OK? |
-|---|---:|---:|---:|---:|---|
-| mTLS (handshake) | 18.750 | 129.636 | 101.694 | 144.474 | SIM |
-| JWT (apenas assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 | SIM |
-| JWK (chave crua) | 1.536 | 8.320 | 9.856 | 9.856 | SIM |
-| PKI (certificados de CA) | 7.130,00 | 32.440 | 37.768 | 39.182,00 | SIM |
+| Termo | Classic | PQC | Hybrid | Classic<PQC<Hybrid? |
+|---|---:|---:|---:|---|
+| mTLS (handshake) | 18.750 | 129.636 | 144.474 | SIM |
+| JWT (apenas assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | SIM |
+| JWK (chave crua) | 1.536 | 8.320 | 9.856 | SIM |
+| PKI (certificados de CA) | 7.130,00 | 32.440 | 39.182,00 | SIM |
+
+**Checagem separada envolvendo Control (Hybrid >= Control, por termo):**
+
+| Termo | Hybrid | Control | Hybrid >= Control? |
+|---|---:|---:|---|
+| mTLS (handshake) | 144.474 | 101.694 | SIM |
+| JWT (apenas assinatura) | 92.690,08 | 92.690,08 | SIM |
+| JWK (chave crua) | 9.856 | 9.856 | SIM |
+| PKI (certificados de CA) | 39.182,00 | 37.768 | SIM |
 
 **Divergência de bytes de handshake por conexão -- confirmada zero.** `handshake_bytes_alert.json`: 2880 conexões mTLS auditadas, **0 divergentes**.
 
@@ -135,49 +177,56 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 |---|---|---|---:|---:|---:|---:|
 | sa-east-1 | L0-sa-east-1 | Classic | 2.357,9 ms | 50,96 ms | 2.270,3 ms | 2.439,9 ms |
 | sa-east-1 | L0-sa-east-1 | PQC | 2.288,9 ms | 142,19 ms | 1.919,2 ms | 2.425,9 ms |
-| sa-east-1 | L0-sa-east-1 | Control | 2.472,1 ms | 49,94 ms | 2.408,3 ms | 2.550,5 ms |
 | sa-east-1 | L0-sa-east-1 | Hybrid | 2.564,6 ms | 83,58 ms | 2.406,0 ms | 2.712,0 ms |
 | sa-east-1 | L123 | Classic | 10.879,8 ms | 59,92 ms | 10.811,9 ms | 11.021,8 ms |
 | sa-east-1 | L123 | PQC | 11.143,3 ms | 65,40 ms | 11.052,0 ms | 11.253,6 ms |
-| sa-east-1 | L123 | Control | 11.263,4 ms | 78,84 ms | 11.145,7 ms | 11.416,7 ms |
 | sa-east-1 | L123 | Hybrid | 11.349,1 ms | 77,24 ms | 11.255,7 ms | 11.502,8 ms |
 | sa-east-1 | L219 | Classic | 17.683,3 ms | 50,11 ms | 17.608,2 ms | 17.776,4 ms |
 | sa-east-1 | L219 | PQC | 18.105,6 ms | 46,77 ms | 18.050,1 ms | 18.197,8 ms |
-| sa-east-1 | L219 | Control | 18.302,0 ms | 117,71 ms | 18.153,5 ms | 18.513,0 ms |
 | sa-east-1 | L219 | Hybrid | 18.396,5 ms | 107,86 ms | 18.203,5 ms | 18.483,4 ms |
 | sa-east-1 | L325 | Classic | 25.559,2 ms | 178,49 ms | 25.311,2 ms | 25.801,6 ms |
 | sa-east-1 | L325 | PQC | 26.136,5 ms | 205,24 ms | 25.934,8 ms | 26.612,2 ms |
-| sa-east-1 | L325 | Control | 26.523,1 ms | 224,60 ms | 26.211,8 ms | 26.878,4 ms |
 | sa-east-1 | L325 | Hybrid | 26.531,6 ms | 305,82 ms | 26.064,8 ms | 27.131,4 ms |
 | us-east-1 | L0-us-east-1 | Classic | 3.817,0 ms | 60,52 ms | 3.790,9 ms | 3.935,3 ms |
 | us-east-1 | L0-us-east-1 | PQC | 4.040,4 ms | 81,17 ms | 3.943,0 ms | 4.165,9 ms |
-| us-east-1 | L0-us-east-1 | Control | 4.247,7 ms | 137,51 ms | 4.067,2 ms | 4.529,6 ms |
 | us-east-1 | L0-us-east-1 | Hybrid | 4.208,1 ms | 117,28 ms | 4.044,0 ms | 4.409,6 ms |
 | us-east-1 | L14 | Classic | 4.744,6 ms | 48,97 ms | 4.694,9 ms | 4.864,6 ms |
 | us-east-1 | L14 | PQC | 5.032,4 ms | 46,92 ms | 4.942,2 ms | 5.085,5 ms |
-| us-east-1 | L14 | Control | 5.145,7 ms | 90,21 ms | 5.067,7 ms | 5.316,7 ms |
 | us-east-1 | L14 | Hybrid | 5.202,5 ms | 93,31 ms | 5.053,9 ms | 5.363,9 ms |
 | ap-northeast-1 | L0-ap-northeast-1 | Classic | 5.786,2 ms | 52,76 ms | 5.688,1 ms | 5.857,5 ms |
 | ap-northeast-1 | L0-ap-northeast-1 | PQC | 6.248,6 ms | 82,15 ms | 6.141,1 ms | 6.394,4 ms |
-| ap-northeast-1 | L0-ap-northeast-1 | Control | 6.634,2 ms | 192,58 ms | 6.295,2 ms | 6.786,1 ms |
 | ap-northeast-1 | L0-ap-northeast-1 | Hybrid | 6.616,3 ms | 155,70 ms | 6.328,1 ms | 6.814,4 ms |
 | ap-northeast-1 | L30 | Classic | 8.214,5 ms | 151,14 ms | 8.003,7 ms | 8.518,7 ms |
 | ap-northeast-1 | L30 | PQC | 8.769,4 ms | 102,18 ms | 8.540,3 ms | 8.864,0 ms |
-| ap-northeast-1 | L30 | Control | 9.018,1 ms | 166,88 ms | 8.718,3 ms | 9.270,3 ms |
 | ap-northeast-1 | L30 | Hybrid | 9.028,6 ms | 125,66 ms | 8.859,3 ms | 9.233,5 ms |
+
+**Perfil Control, por rota (tabela separada):**
+
+| Instalação | Cenário | Mediana | Desvio padrão | Mínimo | Máximo |
+|---|---|---:|---:|---:|---:|
+| sa-east-1 | L0-sa-east-1 | 2.472,1 ms | 49,94 ms | 2.408,3 ms | 2.550,5 ms |
+| sa-east-1 | L123 | 11.263,4 ms | 78,84 ms | 11.145,7 ms | 11.416,7 ms |
+| sa-east-1 | L219 | 18.302,0 ms | 117,71 ms | 18.153,5 ms | 18.513,0 ms |
+| sa-east-1 | L325 | 26.523,1 ms | 224,60 ms | 26.211,8 ms | 26.878,4 ms |
+| us-east-1 | L0-us-east-1 | 4.247,7 ms | 137,51 ms | 4.067,2 ms | 4.529,6 ms |
+| us-east-1 | L14 | 5.145,7 ms | 90,21 ms | 5.067,7 ms | 5.316,7 ms |
+| ap-northeast-1 | L0-ap-northeast-1 | 6.634,2 ms | 192,58 ms | 6.295,2 ms | 6.786,1 ms |
+| ap-northeast-1 | L30 | 9.018,1 ms | 166,88 ms | 8.718,3 ms | 9.270,3 ms |
 
 ### 4.2 Ordem das medianas por rota e diferença percentual (PQC vs. Classic, Hybrid vs. PQC)
 
+*Nota de correção: a versão anterior desta tabela incluía Control na coluna "Ordem", misturado com a comparação central -- corrigido aqui para listar somente Classic/PQC/Hybrid, consistente com o restante desta seção (Control nunca fez parte do cálculo de diferença percentual, só da ordem exibida).*
+
 | Rota | Ordem (menor -> maior mediana) | PQC vs. Classic | Hybrid vs. PQC |
 |---|---|---:|---:|
-| L0-sa-east-1 | PQC < Classic < Control < Hybrid | -2,93% | +12,04% |
-| L123 | Classic < PQC < Control < Hybrid | +2,42% | +1,85% |
-| L219 | Classic < PQC < Control < Hybrid | +2,39% | +1,61% |
-| L325 | Classic < PQC < Control < Hybrid | +2,26% | +1,51% |
-| L0-us-east-1 | Classic < PQC < Hybrid < Control | +5,85% | +4,15% |
-| L14 | Classic < PQC < Control < Hybrid | +6,07% | +3,38% |
-| L0-ap-northeast-1 | Classic < PQC < Hybrid < Control | +7,99% | +5,88% |
-| L30 | Classic < PQC < Control < Hybrid | +6,75% | +2,96% |
+| L0-sa-east-1 | PQC < Classic < Hybrid | -2,93% | +12,04% |
+| L123 | Classic < PQC < Hybrid | +2,42% | +1,85% |
+| L219 | Classic < PQC < Hybrid | +2,39% | +1,61% |
+| L325 | Classic < PQC < Hybrid | +2,26% | +1,51% |
+| L0-us-east-1 | Classic < PQC < Hybrid | +5,85% | +4,15% |
+| L14 | Classic < PQC < Hybrid | +6,07% | +3,38% |
+| L0-ap-northeast-1 | Classic < PQC < Hybrid | +7,99% | +5,88% |
+| L30 | Classic < PQC < Hybrid | +6,75% | +2,96% |
 
 **Contagens agregadas (8 rotas):** Hybrid > PQC (mediana) em **8/8** rotas; PQC > Classic (mediana) em **7/8** rotas.
 
@@ -244,9 +293,9 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 
 **Mecanismo, confirmado por código (não assumido):** `thesis/results/v9/integration/gateway/business_server.go:246-250` -- `attachInternalCallerCarveOut` monta um `cfg.GetConfigForClient` cuja única condição é `hello.ServerName == internalCallerSNI` (`"matls-api.local"`, linha 164); quando verdadeira, retorna sempre o MESMO `internalCfg`, cujo `CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}` (linha 242) é um valor fixo, sem nenhum `if`/`switch` sobre `profile` dentro do próprio closure. `business_server.go:104` confirma o mesmo do lado do enforcement em runtime: só aplica a curva ESPERADA DO PERFIL a conexões que NÃO sejam a chamada interna -- por construção, válido para os 4 perfis.
 
-**Evidência real desta campanha (320 execuções), fonte completa (não apenas o último bloco de perfil):** `piloto_combined.log` é um log continuamente anexado durante toda a janela (sobrevive ao reinício de container entre blocos de perfil, ao contrário de `full_container_logs`) -- **2.240 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, nos 4 perfis: Classic=560, Hybrid=560, Control=560, PQC=560.
+**Evidência real desta campanha (320 execuções), fonte completa (não apenas o último bloco de perfil):** `piloto_combined.log` é um log continuamente anexado durante toda a janela (sobrevive ao reinício de container entre blocos de perfil, ao contrário de `full_container_logs`) -- **2.240 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, no conjunto central Classic/PQC/Hybrid: Classic=560, Hybrid=560, PQC=560. **Perfil Control, separado:** 560 conexões, mesma curva, mesmo resultado (100% conforme).
 
-**Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker desta campanha, rodado antes dela na mesma conta/infraestrutura):** **126 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, também nos 4 perfis: Classic=42, Hybrid=42, Control=21, PQC=21. Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.
+**Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker desta campanha, rodado antes dela na mesma conta/infraestrutura):** **126 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, no mesmo conjunto central Classic/PQC/Hybrid: Classic=42, Hybrid=42, PQC=21. **Perfil Control, separado:** 21 conexões, mesma curva. Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.
 
 ## 7. Custo e duração (sem teardown -- nenhum valor aqui é "final")
 
@@ -257,7 +306,7 @@ Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.m
 | última leitura automática registrada (cost_tracker.jsonl) | 2026-11-15T23:36:12Z | US\$27,69 |
 | fim da janela oficial (manifest.window_end_utc) | 2026-11-16T00:06:40Z | US\$28,42 |
 | fim da coleta dos critérios dedicados (último evento real nos logs do gateway) | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) | 2026-11-16T03:25:14Z | US\$33,16 |
+| agora (momento em que este relatório foi gerado) | 2026-11-16T12:57:12Z | US\$46,83 |
 
 - **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90.
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.

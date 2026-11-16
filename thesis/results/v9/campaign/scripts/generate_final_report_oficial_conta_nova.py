@@ -52,6 +52,12 @@ EVALUATE_CRITERIA_PATH = REPO_ROOT / "thesis/results/v9/integration/evaluate_cri
 COST_TRACKER_PATH = REPO_ROOT / "thesis/results/v9/campaign/scripts/cost_tracker.py"
 
 PROFILES = ["classico", "pqc", "hibrido-v8", "hibrido-and"]
+# A comparação CENTRAL desta tese é Classic/PQC/Hybrid (3 perfis). Control
+# (hibrido-v8) é um perfil de apoio/diagnóstico -- citado separadamente
+# (texto ou tabela própria) em vez de misturado nas tabelas de 3 colunas,
+# pedido explícito do Luciano, pra não "contaminar" a leitura da comparação
+# principal.
+PROFILES_3 = ["classico", "pqc", "hibrido-and"]
 PROFILE_LABEL = {
     "classico": "Classic",
     "pqc": "PQC",
@@ -466,10 +472,13 @@ def main():
     w("")
     w("### 2.1 OPINsize total por perfil (variante assinatura+chave crua) e razão contra Classic")
     w("")
+    w("Comparação central desta tese: **Classic / PQC / Hybrid**. O perfil Control é de apoio/diagnóstico -- reportado "
+      "separadamente logo abaixo, nunca misturado nesta tabela.")
+    w("")
     w("| Perfil | OPINsize (bytes) | Razão vs. Classic |")
     w("|---|---:|---:|")
     classic_total = opinsize["classico"]["opinsize_4_termos_assinatura_chave_crua"]
-    for prof in PROFILES:
+    for prof in PROFILES_3:
         total = opinsize[prof]["opinsize_4_termos_assinatura_chave_crua"]
         razao = total / classic_total
         w(f"| {PROFILE_LABEL[prof]} | {fmt(total)} | {fmt(razao)}x |")
@@ -479,10 +488,17 @@ def main():
     w("")
     w(f"**Hybrid menos PQC: {fmt(hybrid_total - pqc_total)} bytes** ({fmt((hybrid_total/pqc_total - 1)*100, 2)}% a mais que PQC puro).")
     w("")
+    w("**Perfil Control, separado (não entra na comparação central Classic/PQC/Hybrid acima):**")
+    w("")
+    w("| Perfil | OPINsize (bytes) | Razão vs. Classic |")
+    w("|---|---:|---:|")
+    control_razao = control_total / classic_total
+    w(f"| Control | {fmt(control_total)} | {fmt(control_razao)}x |")
+    w("")
     w("### 2.2 OPINsize por termo, por perfil, contagens N")
     w("")
-    w("| Termo | N por execução | Classic | PQC | Control | Hybrid |")
-    w("|---|---:|---:|---:|---:|---:|")
+    w("| Termo | N por execução | Classic | PQC | Hybrid |")
+    w("|---|---:|---:|---:|---:|")
     n_counts = {
         "term_mtls_handshake": "n_mtls",
         "term_jwt": "n_jwt",
@@ -491,9 +507,18 @@ def main():
     }
     for key, label in TERM_LABELS_4:
         n = opinsize["classico"][n_counts[key]]
-        row = " | ".join(fmt(opinsize[p][key]) for p in PROFILES)
+        row = " | ".join(fmt(opinsize[p][key]) for p in PROFILES_3)
         w(f"| {label} | {n} | {row} |")
-    w(f"| **OPINsize (total)** | 44 chamadas/execução | **{fmt(classic_total)}** | **{fmt(pqc_total)}** | **{fmt(control_total)}** | **{fmt(hybrid_total)}** |")
+    w(f"| **OPINsize (total)** | 44 chamadas/execução | **{fmt(classic_total)}** | **{fmt(pqc_total)}** | **{fmt(hybrid_total)}** |")
+    w("")
+    w("**Perfil Control, por termo (separado):**")
+    w("")
+    w("| Termo | N por execução | Control |")
+    w("|---|---:|---:|")
+    for key, label in TERM_LABELS_4:
+        n = opinsize["hibrido-v8"][n_counts[key]]
+        w(f"| {label} | {n} | {fmt(opinsize['hibrido-v8'][key])} |")
+    w(f"| **OPINsize (total)** | 44 chamadas/execução | **{fmt(control_total)}** |")
     w("")
     w("**Sobre o rótulo \"PKI\":** as 4 chamadas deste termo são, confirmado em código "
       "(`thesis/scripts/opinsize_v9_oficial.py`, `PKI_ENDPOINTS = {\"/root-ca.pem\", \"/issuer-ca.pem\"}`), "
@@ -509,11 +534,17 @@ def main():
     w("")
     w("| Perfil | Esperado (DER real dos certificados, bytes/conexão) | Medido (campanha, bytes/conexão) | Bate? |")
     w("|---|---:|---:|---|")
-    for prof in PROFILES:
+    for prof in PROFILES_3:
         measured = opinsize[prof]["handshake_bytes_per_connection"]
         expected = mtls_gabarito[prof]
         ok = "SIM" if measured == expected else "**NÃO**"
         w(f"| {PROFILE_LABEL[prof]} | {fmt(expected)} | {fmt(measured)} | {ok} |")
+    w("")
+    control_measured = opinsize["hibrido-v8"]["handshake_bytes_per_connection"]
+    control_expected = mtls_gabarito["hibrido-v8"]
+    control_ok = "SIM" if control_measured == control_expected else "**NÃO**"
+    w(f"**Perfil Control, separado:** esperado {fmt(control_expected)} bytes/conexão, medido {fmt(control_measured)} "
+      f"bytes/conexão -- bate? {control_ok}.")
     w("")
     w("**Status da verificação por termo:**")
     w("")
@@ -543,13 +574,24 @@ def main():
         jwt_results[prof] = external_jwt_term(piloto_calls, prof, opinsize[prof])
     w("| Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |")
     w("|---|---|---:|---:|---:|---:|---:|")
-    for prof in PROFILES:
+    for prof in PROFILES_3:
         r = jwt_results[prof]
         counts_str = ", ".join(f"{k}={v}" for k, v in sorted(r["counts_per_exec"].items()))
         diff = round(r["measured_term"] - r["expected_term_with_pipeline_rounding"], 2)
         w(f"| {PROFILE_LABEL[prof]} | {counts_str} | {fmt(r['expected_sum_per_exec'])} | "
           f"{fmt(r['expected_avg_rounded'])} | {fmt(r['expected_term_with_pipeline_rounding'])} | "
           f"{fmt(r['measured_term'])} | {fmt(diff)} |")
+    w("")
+    r_c = jwt_results["hibrido-v8"]
+    counts_str_c = ", ".join(f"{k}={v}" for k, v in sorted(r_c["counts_per_exec"].items()))
+    diff_c = round(r_c["measured_term"] - r_c["expected_term_with_pipeline_rounding"], 2)
+    w("**Perfil Control, separado:**")
+    w("")
+    w("| Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |")
+    w("|---|---|---:|---:|---:|---:|---:|")
+    w(f"| Control | {counts_str_c} | {fmt(r_c['expected_sum_per_exec'])} | "
+      f"{fmt(r_c['expected_avg_rounded'])} | {fmt(r_c['expected_term_with_pipeline_rounding'])} | "
+      f"{fmt(r_c['measured_term'])} | {fmt(diff_c)} |")
     w("")
     w("**Explicação do resíduo fracionário (ex.: 86.033,92 vs. 86.034; 6.655,88 vs. 6.656; 92.690,08 vs. 92.690), "
       "confirmada no código, não suposta:** `thesis/scripts/opinsize_v9_oficial.py` calcula "
@@ -576,13 +618,24 @@ def main():
         jwk_results[prof] = external_jwk_term(piloto_calls, prof, opinsize[prof])
     w("| Perfil | Chave por especificação (bytes) | Média real medida (4 chamadas) | Diferença vs. especificação | Composição real confirmada |")
     w("|---|---:|---:|---:|---|")
-    for prof in PROFILES:
+    for prof in PROFILES_3:
         r = jwk_results[prof]
         composicoes = " / ".join(
             "+".join(f"{kty}:{sz}" for kty, use, sz in c["entries"]) for c in r["per_call"]
         )
         w(f"| {PROFILE_LABEL[prof]} | {fmt(r['spec_only_pk_bytes'])} | {fmt(r['recomputed_avg'])} | "
           f"+{fmt(r['extra_vs_spec_only'])} | {composicoes} |")
+    w("")
+    r_c = jwk_results["hibrido-v8"]
+    composicoes_c = " / ".join(
+        "+".join(f"{kty}:{sz}" for kty, use, sz in c["entries"]) for c in r_c["per_call"]
+    )
+    w("**Perfil Control, separado:**")
+    w("")
+    w("| Perfil | Chave por especificação (bytes) | Média real medida (4 chamadas) | Diferença vs. especificação | Composição real confirmada |")
+    w("|---|---:|---:|---:|---|")
+    w(f"| Control | {fmt(r_c['spec_only_pk_bytes'])} | {fmt(r_c['recomputed_avg'])} | "
+      f"+{fmt(r_c['extra_vs_spec_only'])} | {composicoes_c} |")
     w("")
     w("**O que compõe o acréscimo sobre a chave pura, confirmado chamada a chamada (não especulado):** das 4 chamadas "
       "reais `/jwks` por execução, **metade (2 de 4)** carrega uma SEGUNDA entrada JWK além da chave de assinatura do "
@@ -605,12 +658,22 @@ def main():
         pki_results[prof] = external_pki_term(certs_manifest, prof, opinsize[prof])
     w("| Perfil | Arquivo(s) servidos (root / issuer) | PEM real (root+issuer, bytes) | Framing HTTP | Esperado (PEM+framing) | Medido | Diferença |")
     w("|---|---|---:|---|---:|---:|---:|")
-    for prof in PROFILES:
+    for prof in PROFILES_3:
         r = pki_results[prof]
         files_str = f"{'+'.join(r['root_files'])} / {'+'.join(r['issuer_files'])}"
         diff = round(r["measured_term"] - r["expected_term"], 2)
         w(f"| {PROFILE_LABEL[prof]} | {files_str} | {fmt(r['root_pem_bytes'])}+{fmt(r['issuer_pem_bytes'])} | "
           f"{r['framing']} (+{r['overhead']}B) | {fmt(r['expected_term'])} | {fmt(r['measured_term'])} | {fmt(diff)} |")
+    w("")
+    r_c = pki_results["hibrido-v8"]
+    files_str_c = f"{'+'.join(r_c['root_files'])} / {'+'.join(r_c['issuer_files'])}"
+    diff_c = round(r_c["measured_term"] - r_c["expected_term"], 2)
+    w("**Perfil Control, separado:**")
+    w("")
+    w("| Perfil | Arquivo(s) servidos (root / issuer) | PEM real (root+issuer, bytes) | Framing HTTP | Esperado (PEM+framing) | Medido | Diferença |")
+    w("|---|---|---:|---|---:|---:|---:|")
+    w(f"| Control | {files_str_c} | {fmt(r_c['root_pem_bytes'])}+{fmt(r_c['issuer_pem_bytes'])} | "
+      f"{r_c['framing']} (+{r_c['overhead']}B) | {fmt(r_c['expected_term'])} | {fmt(r_c['measured_term'])} | {fmt(diff_c)} |")
     w("")
     w("**Fontes, citadas com file:line (não estimadas):** o arquivo de CA servido por perfil vem de "
       "`realCAFilesForProfile` (`thesis/results/v9/integration/gateway/business_server.go:283-294`) -- Hybrid "
@@ -624,14 +687,23 @@ def main():
       "estatística sobre muitas amostras.")
     w("")
 
-    w("### 2.5 Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= Control)")
+    w("### 2.5 Invariantes estruturais por termo (Classic < PQC < Hybrid)")
     w("")
-    w("| Termo | Classic | PQC | Control | Hybrid | Ordem OK? |")
-    w("|---|---:|---:|---:|---:|---|")
+    w("| Termo | Classic | PQC | Hybrid | Classic<PQC<Hybrid? |")
+    w("|---|---:|---:|---:|---|")
     for key, label in TERM_LABELS_4:
         vals = {p: opinsize[p][key] for p in PROFILES}
-        ok = vals["classico"] < vals["pqc"] < vals["hibrido-and"] and vals["hibrido-and"] >= vals["hibrido-v8"]
-        w(f"| {label} | {fmt(vals['classico'])} | {fmt(vals['pqc'])} | {fmt(vals['hibrido-v8'])} | {fmt(vals['hibrido-and'])} | {'SIM' if ok else 'NÃO -- achado real'} |")
+        ok3 = vals["classico"] < vals["pqc"] < vals["hibrido-and"]
+        w(f"| {label} | {fmt(vals['classico'])} | {fmt(vals['pqc'])} | {fmt(vals['hibrido-and'])} | {'SIM' if ok3 else 'NÃO -- achado real'} |")
+    w("")
+    w("**Checagem separada envolvendo Control (Hybrid >= Control, por termo):**")
+    w("")
+    w("| Termo | Hybrid | Control | Hybrid >= Control? |")
+    w("|---|---:|---:|---|")
+    for key, label in TERM_LABELS_4:
+        vals = {p: opinsize[p][key] for p in PROFILES}
+        ok_c = vals["hibrido-and"] >= vals["hibrido-v8"]
+        w(f"| {label} | {fmt(vals['hibrido-and'])} | {fmt(vals['hibrido-v8'])} | {'SIM' if ok_c else 'NÃO -- achado real'} |")
     w("")
     w("**Divergência de bytes de handshake por conexão -- confirmada zero.** `handshake_bytes_alert.json`: "
       f"{handshake_alert['total_conexoes']} conexões mTLS auditadas, **{handshake_alert['total_divergentes']} divergentes**.")
@@ -670,14 +742,28 @@ def main():
     w("| Instalação | Cenário | Perfil | Mediana | Desvio padrão | Mínimo | Máximo |")
     w("|---|---|---|---:|---:|---:|---:|")
     for route in ROUTES:
-        for prof in PROFILES:
+        for prof in PROFILES_3:
             m = latency[(prof, route)]
             w(f"| {ROUTE_INSTALLATION[route]} | {route} | {PROFILE_LABEL[prof]} | "
               f"{fmt(m['median']*1000, 1)} ms | {fmt(m['stdev']*1000, 2)} ms | "
               f"{fmt(m['min']*1000, 1)} ms | {fmt(m['max']*1000, 1)} ms |")
     w("")
+    w("**Perfil Control, por rota (tabela separada):**")
+    w("")
+    w("| Instalação | Cenário | Mediana | Desvio padrão | Mínimo | Máximo |")
+    w("|---|---|---:|---:|---:|---:|")
+    for route in ROUTES:
+        m = latency[("hibrido-v8", route)]
+        w(f"| {ROUTE_INSTALLATION[route]} | {route} | "
+          f"{fmt(m['median']*1000, 1)} ms | {fmt(m['stdev']*1000, 2)} ms | "
+          f"{fmt(m['min']*1000, 1)} ms | {fmt(m['max']*1000, 1)} ms |")
+    w("")
 
     w("### 4.2 Ordem das medianas por rota e diferença percentual (PQC vs. Classic, Hybrid vs. PQC)")
+    w("")
+    w("*Nota de correção: a versão anterior desta tabela incluía Control na coluna \"Ordem\", misturado com a "
+      "comparação central -- corrigido aqui para listar somente Classic/PQC/Hybrid, consistente com o restante "
+      "desta seção (Control nunca fez parte do cálculo de diferença percentual, só da ordem exibida).*")
     w("")
     w("| Rota | Ordem (menor -> maior mediana) | PQC vs. Classic | Hybrid vs. PQC |")
     w("|---|---|---:|---:|")
@@ -685,7 +771,7 @@ def main():
     n_pqc_gt_classic = 0
     for route in ROUTES:
         medians = {prof: latency[(prof, route)]["median"] for prof in PROFILES}
-        order = sorted(PROFILES, key=lambda p: medians[p])
+        order = sorted(PROFILES_3, key=lambda p: medians[p])
         order_str = " < ".join(PROFILE_LABEL[p] for p in order)
         d_pqc = pct(medians["pqc"], medians["classico"])
         d_hyb = pct(medians["hibrido-and"], medians["pqc"])
@@ -803,17 +889,22 @@ def main():
       "por construção, válido para os 4 perfis.")
     w("")
     camp = internal_evidence["campaign"]
+    camp_3 = {k: v for k, v in camp["by_profile"].items() if k != "hibrido-v8"}
     w(f"**Evidência real desta campanha (320 execuções), fonte completa (não apenas o último bloco de perfil):** "
       f"`piloto_combined.log` é um log continuamente anexado durante toda a janela (sobrevive ao reinício de container "
       f"entre blocos de perfil, ao contrário de `full_container_logs`) -- **{fmt(camp['total'])} conexões reais** "
-      f"com `sni=\"matls-api.local\"`, **100% com curve={'/'.join(sorted(camp['curves']))}**, nos 4 perfis: "
-      f"{', '.join(f'{PROFILE_LABEL.get(k, k)}={fmt(v)}' for k, v in sorted(camp['by_profile'].items()))}.")
+      f"com `sni=\"matls-api.local\"`, **100% com curve={'/'.join(sorted(camp['curves']))}**, no conjunto central "
+      f"Classic/PQC/Hybrid: {', '.join(f'{PROFILE_LABEL.get(k, k)}={fmt(v)}' for k, v in sorted(camp_3.items()))}. "
+      f"**Perfil Control, separado:** {fmt(camp['by_profile'].get('hibrido-v8', 0))} conexões, mesma curva, mesmo "
+      "resultado (100% conforme).")
     w("")
     pil = internal_evidence["pilot"]
+    pil_3 = {k: v for k, v in pil["by_profile"].items() if k != "hibrido-v8"}
     w(f"**Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker "
       f"desta campanha, rodado antes dela na mesma conta/infraestrutura):** **{fmt(pil['total'])} conexões reais** "
-      f"com `sni=\"matls-api.local\"`, **100% com curve={'/'.join(sorted(pil['curves']))}**, também nos 4 perfis: "
-      f"{', '.join(f'{PROFILE_LABEL.get(k, k)}={fmt(v)}' for k, v in sorted(pil['by_profile'].items()))}. "
+      f"com `sni=\"matls-api.local\"`, **100% com curve={'/'.join(sorted(pil['curves']))}**, no mesmo conjunto "
+      f"central Classic/PQC/Hybrid: {', '.join(f'{PROFILE_LABEL.get(k, k)}={fmt(v)}' for k, v in sorted(pil_3.items()))}. "
+      f"**Perfil Control, separado:** {fmt(pil['by_profile'].get('hibrido-v8', 0))} conexões, mesma curva. "
       "Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.")
     w("")
 
