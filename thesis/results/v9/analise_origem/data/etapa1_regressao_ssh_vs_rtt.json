@@ -1,0 +1,82 @@
+{
+  "rows": [
+    {
+      "route": "L0-sa-east-1",
+      "residual_ms": 1882.6106094894408,
+      "rtt_control_client_ms": 0.129,
+      "rtt_control_client_kind": "real",
+      "rtt_client_server_ms": 0.129
+    },
+    {
+      "route": "L123",
+      "residual_ms": 5711.078442733765,
+      "rtt_control_client_ms": 122.642,
+      "rtt_control_client_kind": "real",
+      "rtt_client_server_ms": 122.642
+    },
+    {
+      "route": "L219",
+      "residual_ms": 8837.975614685056,
+      "rtt_control_client_ms": 220.151,
+      "rtt_control_client_kind": "real",
+      "rtt_client_server_ms": 220.151
+    },
+    {
+      "route": "L325",
+      "residual_ms": 12453.179509872434,
+      "rtt_control_client_ms": 323.406,
+      "rtt_control_client_kind": "real",
+      "rtt_client_server_ms": 323.406
+    },
+    {
+      "route": "L0-us-east-1",
+      "residual_ms": 3330.8901126556398,
+      "rtt_control_client_ms": 112.5,
+      "rtt_control_client_kind": "APROXIMACAO EXTERNA (ponto medio da faixa 105-120ms, nao medida)",
+      "rtt_client_server_ms": 0.287
+    },
+    {
+      "route": "L14",
+      "residual_ms": 3724.1988844146726,
+      "rtt_control_client_ms": 122.642,
+      "rtt_control_client_kind": "derivado (mesma regiao de cliente que L123, ca-central-1)",
+      "rtt_client_server_ms": 14.759
+    },
+    {
+      "route": "L0-ap-northeast-1",
+      "residual_ms": 5386.460392097473,
+      "rtt_control_client_ms": 285.0,
+      "rtt_control_client_kind": "APROXIMACAO EXTERNA (ponto medio da faixa 270-300ms, nao medida)",
+      "rtt_client_server_ms": 0.105
+    },
+    {
+      "route": "L30",
+      "residual_ms": 6448.549921852113,
+      "rtt_control_client_ms": 290.0,
+      "rtt_control_client_kind": "APROXIMACAO EXTERNA (ponto medio da faixa 275-305ms, nao medida)",
+      "rtt_client_server_ms": 33.423
+    }
+  ],
+  "design_matrix_note": "Para L0-sa-east-1/L123/L219/L325, RTT_controle_cliente == RTT_cliente_servidor EXATAMENTE (servidor dessas rotas e sa-east-1, co-localizado com o controle) -- colinearidade perfeita nesses 4 pontos; so os outros 4 (L0-us-east-1/L14/L0-ap-northeast-1/L30), onde as duas distancias divergem, separam de fato b de c.",
+  "fit_point_estimate": {
+    "a_ms": 1807.2726175485523,
+    "b_ms_per_ms_rtt_cc": 13.170127659407953,
+    "c_ms_per_ms_rtt_cs": 19.40330865227136
+  },
+  "fit_condition_number": 489.3127814421973,
+  "bootstrap_ci95": {
+    "a_ms": [
+      1553.7256596386162,
+      1924.8697873436454
+    ],
+    "b_ms_per_ms_rtt_cc": [
+      12.203646641945998,
+      15.288288672253923
+    ],
+    "c_ms_per_ms_rtt_cs": [
+      17.940332393351408,
+      20.431887992976826
+    ]
+  },
+  "b_compatible_with_13_round_trips": true
+}
