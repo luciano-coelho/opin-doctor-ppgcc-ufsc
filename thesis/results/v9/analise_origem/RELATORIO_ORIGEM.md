@@ -11,6 +11,8 @@ Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC. Investigação separada do relat�
 | H3 (custo de CPU das primitivas) | **REFUTADA** só para a reimplementação em Go testada; **INCONCLUSIVA** para a pilha real (Python+Go+Node.js) — custo real do cliente não medido (ver abaixo) |
 | H4 (heterogeneidade entre instalações) | **SUSTENTADA** (existência); **INCONCLUSIVA quanto à causa exata** |
 
+**Nota crítica sobre a própria medição (ver seção "Verificação crítica" abaixo):** "T_fluxo", usado em TODAS as seções acima e no relatório oficial, inclui a chamada SSH completa do host de controle até o cliente (confirmado no código), não só as 44 chamadas HTTP cliente-servidor. A maior parte do crescimento desse excesso entre rotas acompanha o RTT real cliente-servidor (não a distância do controle) — mas a métrica, como definida no pipeline, não separa os componentes.
+
 ## H1 — ordem do bloco / deriva temporal: REFUTADA
 
 **Previsão:** posição do bloco (1º-4º) correlaciona com T_fluxo mediano, na mesma direção na maioria das 8 rotas.
@@ -127,6 +129,113 @@ Em nenhum dos dois pares o IC inclui o K teórico junto com zero — a condiçã
 
 **Conclusão desta verificação:** nenhuma divergência de hardware/SO/rede documentada explica H4 — todas as variáveis auditadas são idênticas entre as 3 instalações. A única variável que de fato varia (`util_pct`) varia na direção OPOSTA a uma explicação "CPU mais lento/mais carregado", e `steal_pct` é zero. **A causa exata de H4 permanece INCONCLUSIVA** (nenhuma mudança no veredito), mas o espaço de hipóteses candidatas fica mais restrito: nem contenção de CPU (steal), nem configuração de SO/kernel/rede documentada, nem um cenário simples CPU-bound (pela leitura do `util_pct`) parecem explicar o resíduo — resta como lacuna real, não suposição, para um futuro "Degrau 2".
 
+## Verificação crítica — o que T_fluxo realmente mede (o próprio artefato de medição)
+
+**Motivação (observação real do usuário):** comparando o T_fluxo mediano de Classic em L0 contra a duração da captura dedicada do MESMO perfil/rota (seção H4 acima): `sa-east-1` 2,358s vs. 2,313-2,417s; `us-east-1` 3,817s vs. 3,538s; `ap-northeast-1` 5,786s vs. 3,493s. O excesso parece crescer com a distância física de `sa-east-1` — levantando a hipótese de que T_fluxo pode incluir overhead de ORQUESTRAÇÃO dependente da região (ex. SSH do controle até o cliente), não só as 44 chamadas HTTP cliente-servidor. As 5 perguntas abaixo foram verificadas direto no código e nos dados reais, nunca supostas.
+
+### Item 1 — exatamente o que está dentro da janela t0..t1: SUSTENTADO (confirmado no código, não é inferência estatística)
+
+Lendo `thesis/results/v9/campaign/scripts/orchestrator.py` linha a linha (método `run_execution`, linhas 1416-1522) e os dois arquivos que ele invoca remotamente:
+
+- **`orchestrator.py:1449`**: `t0 = datetime.now(timezone.utc)` — tomado no processo do CONTROLE, **antes mesmo de o subprocesso `ssh` ser disparado**.
+- **`orchestrator.py:1450`** → **`cli.py:133-153`** (`run_ssh`): dispara um processo `ssh` NOVO a cada chamada — **nenhuma opção `ControlMaster`/`ControlPersist`/multiplexação em lugar nenhum** do `argv` montado (confirmado lendo `cli.py:147-152`). Isso significa que cada uma das 320 execuções paga uma conexão SSH FRESCA (não reaproveitada): handshake TCP controle↔cliente (1 RTT), troca de versão do protocolo SSH, key exchange (KEX) + autenticação por chave pública (mais RTTs, mesma distância controle↔cliente) — tudo isso ANTES do comando remoto nem começar a rodar.
+- **Comando remoto disparado**: `cd ~/thesis/scripts && {env_prefix} python3 campaign_client_runner.py --label {label}` (`orchestrator.py:1430`) — no CLIENTE, isto inicia um **processo Python novo, do zero** (cold start, nenhum processo reaproveitado), que importa `argparse`, `json`, `os`, `sys`, `latency_automation`, `opin_flow` (`campaign_client_runner.py:23-29`) — custo real de CPU/disco no cliente, sem rede, mas dentro da janela.
+- **`latency_automation.py:257`**: `of.load_client_signing_key(crypto_profile)` — chamado **antes** de `t_start` ser marcado (linha 264) dentro de `run_once_timed()`. O comentário do próprio código (linhas 247-256) confirma um custo real e nomeado: "classic/hybrid's RSA-4096 key-object construction, **~252ms**" — fora da medição interna da lib, mas DENTRO da janela SSH do orquestrador.
+- **Achado central, nunca antes notado nesta investigação**: `latency_automation.run_once_timed()` (linhas 213-314) já computa, A CADA EXECUÇÃO, um T_fluxo PRÓPRIO, local ao cliente, com `time.monotonic()` (`t_start`/`t_end`, linhas 264/267) cercando SÓ `run_insurance_flow`+`run_person_flow` — e um `phase_accounting` completo (`http_calls_seconds`, `signing_seconds`, `verification_seconds`, `explicit_wait_seconds`, `setup_seconds`, e um `residual_seconds` residual explícito, documentado no código como "o hop do TLS-KEM-proxy e o handshake mTLS/KEM que ele faz... overhead do interpretador Python", por subtração). **Este dado rico é retornado por `campaign_client_runner.py` (via stdout JSON) mas `orchestrator.py` (linhas 1504-1522) DESCARTA `result["t_fluxo_seconds"]` e `result["phase_accounting"]` inteiramente** — só mantém `result.get("calls", [])` (renomeado `"insurance"`) e substitui a medição por SEU PRÓPRIO `t0`/`t1`, que cerca a chamada SSH inteira. **Confirmado por inspeção direta de `piloto_calls.json`: os campos `t_fluxo_seconds`/`phase_accounting` não existem em nenhuma execução.**
+- Depois do fluxo real (44 chamadas HTTP + assinatura + verificação + espera explícita, medidos mas descartados): `print(json.dumps(result))` no cliente, capturado via stdout do SSH no controle (mais tempo de rede controle↔cliente proporcional ao payload) + encerramento da sessão SSH (mais RTTs).
+- **`orchestrator.py:1472`**: `t1 = datetime.now(timezone.utc)` — só depois que TUDO isso (incluindo o encerramento da conexão SSH) terminou.
+
+**Conclusão do item 1:** SUSTENTADO, com certeza (não é estatística, é leitura direta do código): `start_utc`/`end_utc` (= "T_fluxo" usado em TODO este documento e no relatório oficial) cerca literalmente a chamada SSH inteira, não só as 44 chamadas HTTP — e a lib de medição já teria uma decomposição melhor (`t_fluxo_seconds`/`phase_accounting`) que o orquestrador descarta antes de persistir.
+
+### Item 2 — região do controle e caminho de rede: SUSTENTADO
+
+Confirmado em `thesis/results/v9/campaign_oficial_conta_nova_host_facts.md`: o host de controle está em **`sa-east-1`** (`control | control | sa-east-1 | 172.31.25.65 | ...`). Como `cli.run_ssh()` sempre disca o IP PÚBLICO do alvo (Decisão 43/45, citada no docstring de `run_ssh`), **para 7 das 8 rotas (todas exceto `L0-sa-east-1`, cujo cliente está co-localizado em `sa-east-1`), a chamada SSH de cada uma das 320 execuções atravessa a rede pública até uma região diferente da do controle** — exatamente o caminho que o usuário descreveu.
+
+### Item 3 — excesso (T_fluxo − captura dedicada) ÷ RTT: INCONCLUSIVO (indicador ruidoso) — mas ver item 5 abaixo, que resolve isso de forma mais robusta
+
+Recalculado para TODOS os perfis/rotas disponíveis (não só Classic/L0 como na Etapa 1 original), via `scripts/etapa1_verificacao_artefato_medicao.py` (scapy, offline, todas as capturas dedicadas em `criterio1_capturas/capturas_brutas/`, mediana quando há mais de uma tentativa):
+
+| Perfil/rota | T_fluxo mediano (s) | Captura dedicada (mediana, s) | Excesso (s) |
+|---|---:|---:|---:|
+| classico/L0-sa-east-1 | 2,358 | 2,417 (n=3) | -0,059 |
+| classico/L0-us-east-1 | 3,817 | 3,538 (n=2) | +0,279 |
+| classico/L0-ap-northeast-1 | 5,786 | 3,493 (n=2) | +2,293 |
+| pqc/L0-sa-east-1 | 2,289 | 3,730 (n=2) | **-1,441** |
+| hibrido-v8/L0-sa-east-1 | 2,472 | 4,062 (n=2) | **-1,590** |
+| hibrido-and/L0-sa-east-1 | 2,565 | 4,007 (n=2) | **-1,443** |
+
+**Achado honesto, não escondido:** para Classic, o padrão "excesso cresce com a distância de `sa-east-1`" aparece de forma fraca (quase zero em `sa-east-1`, crescente nas outras 2 instalações) — mas para PQC/Hybrid/Control, o excesso em `sa-east-1` é **FORTEMENTE NEGATIVO** (a captura dedicada durou MAIS que a mediana real de 10 execuções cronometradas). Isso significa que a captura dedicada (1-3 amostras não-cronometradas junto com as 320 execuções oficiais, já advertido como limitação na Etapa 1 original) é **ruim demais como comparador** — sinal inconsistente entre perfis, não serve pra estimar com confiança quanto da janela é overhead de SSH especificamente. **Veredito: INCONCLUSIVO por esta via** — não porque não exista overhead (o item 1 já prova que existe), mas porque este indicador específico não tem poder estatístico suficiente pra quantificá-lo. A pergunta é respondida de forma muito mais robusta no item 5.
+
+**RTT controle↔cliente usado como referência, por rota (transparência total sobre o que é real vs. aproximado):**
+
+| Rota | RTT controle↔cliente (ms) | Fonte |
+|---|---:|---|
+| L0-sa-east-1 | 0,129 | REAL (controle e cliente co-localizados em sa-east-1) |
+| L123 | 122,642 | REAL (servidor sa-east-1 co-localizado com o controle) |
+| L219 | 220,151 | REAL (idem) |
+| L325 | 323,406 | REAL (idem) |
+| L14 | 122,642 (derivado) | DERIVADO — cliente de L14 está na MESMA região de L123 (ca-central-1); usa o RTT real de L123 como proxy |
+| L0-us-east-1 | sem medição | **APROXIMAÇÃO EXTERNA, não medida nesta campanha**: faixa tipicamente citada publicamente para sa-east-1↔us-east-1, ~105-120ms |
+| L0-ap-northeast-1 | sem medição | **APROXIMAÇÃO EXTERNA**: faixa tipicamente citada para sa-east-1↔ap-northeast-1, ~270-300ms |
+| L30 | sem medição | **APROXIMAÇÃO EXTERNA**: faixa próxima de sa-east-1↔ap-northeast-1 + o RTT real medido ap-northeast-1↔ap-northeast-2 (33,423ms) |
+
+Como declarado explicitamente na tabela: para `L0-us-east-1`/`L0-ap-northeast-1`/`L30` **não existe nenhuma medição real ou derivável desta campanha** de RTT controle↔cliente (o RTT medido pela campanha é sempre cliente↔servidor; só é um proxy real de controle↔cliente nas rotas onde o SERVIDOR da rota coincide com a região do controle, `sa-east-1`). Nenhum número preciso foi inventado para as 3 rotas sem medição — só uma faixa, claramente rotulada como conhecimento externo.
+
+### Item 4 — a diferença ENTRE PERFIS mora nas chamadas ou no resíduo?
+
+Recalculado com precisão total (sem arredondar antes de subtrair), `scripts/etapa1_verificacao_artefato_medicao.py`:
+
+| Rota | Δ(soma chamadas) PQC−Classic (ms) | Δ(resíduo) PQC−Classic (ms) | Δ(soma chamadas) Hybrid−PQC (ms) | Δ(resíduo) Hybrid−PQC (ms) |
+|---|---:|---:|---:|---:|
+| L0-sa-east-1 | -27 | -42 | +113 | +163 |
+| L0-us-east-1 | -13 | +236 | +72 | +95 |
+| L0-ap-northeast-1 | +6 | +456 | +51 | +317 |
+| L123 | -12 | +276 | +49 | +157 |
+| L219 | -1 | +423 | +54 | +237 |
+| L325 | -6 | +584 | +19 | +376 |
+| L14 | +21 | +267 | +46 | +124 |
+| L30 | -43 | +597 | +107 | +152 |
+
+**Leitura honesta:** para **PQC−Classic**, Δ(soma das chamadas) fica sempre dentro de ±43ms (ruído) em TODAS as 8 rotas — a diferença real (até +597ms) mora **quase inteiramente no resíduo**. Para **Hybrid−PQC**, Δ(soma das chamadas) já é não-trivial (19-113ms, faz sentido: Hybrid literalmente faz mais trabalho criptográfico POR CHAMADA real), mas o resíduo ainda domina (95-376ms).
+
+**O resíduo NÃO é aproximadamente constante entre rotas** — pelo contrário: só nas 3 rotas L0 (RTT cliente-servidor~0 nas 3), Δresíduo(PQC−Classic) varia de -42ms a +456ms, mais de 10x de variação **mesmo com RTT real idêntico (~0) nas 3**. Isso é **inconsistente** com "overhead de orquestração fixo, independente de tudo" — o tamanho do resíduo (e de sua diferença entre perfis) depende claramente da **instalação** (o mesmo efeito já identificado e deixado inconclusivo em H4), não só do perfil.
+
+### Item 5 — resíduo das rotas não-L0 vs. L0 da mesma instalação, contra o RTT real: SUSTENTADO, com um resultado muito mais forte e limpo que os itens 1-3
+
+Para cada uma das 5 rotas não-L0, perfil Classic (mesma convenção de H4): `(resíduo da rota − resíduo do L0 da MESMA instalação)` dividido pelo **RTT real cliente-servidor** daquela rota (não o controle-cliente — este teste usa só dados reais, sem nenhuma aproximação):
+
+| Rota | Instalação | Δresíduo vs. L0 (s) | RTT real cliente-servidor (ms) | Δresíduo/RTT (ms de resíduo extra por ms de RTT) |
+|---|---|---:|---:|---:|
+| L123 | sa-east-1 | 3,828 | 122,642 | **31,2** |
+| L219 | sa-east-1 | 6,955 | 220,151 | **31,6** |
+| L325 | sa-east-1 | 10,571 | 323,406 | **32,7** |
+| L14 | us-east-1 | 0,393 | 14,759 | **26,6** |
+| L30 | ap-northeast-1 | 1,062 | 33,423 | **31,8** |
+
+**Este é o resultado mais importante desta verificação:** a razão Δresíduo/RTT fica **extremamente consistente, entre 26,6 e 32,7, nas 5 rotas** — mesmo que as rotas tenham RTTs reais completamente diferentes (14,8ms a 323,4ms) e distâncias controle↔cliente completamente diferentes (`L123`/`L219`/`L325` têm a MESMA distância controle↔cliente que cliente↔servidor, já que o servidor é sa-east-1 como o controle; `L14`/`L30` têm distância controle↔cliente GRANDE — ~123ms/~280-300ms aproximados — mas RTT cliente-servidor PEQUENO — 14,8ms/33,4ms — e MESMO ASSIM a razão fica no mesmo range, ~27-32).
+
+**Isso é uma evidência direta e forte de que o excesso de resíduo escala com o RTT REAL CLIENTE-SERVIDOR, não com a distância controle-cliente/overhead de SSH** — se fosse SSH, `L14` deveria ter um Δresíduo parecido com `L123` (mesma distância do controle, cliente na mesma região `ca-central-1`), mas `L14` tem Δresíduo quase 10x MENOR que `L123` (0,393s vs. 3,828s), acompanhando seu RTT real muito menor (14,8ms vs. 122,6ms), não a distância do controle. **O overhead de SSH do controle existe (item 1, confirmado no código) mas NÃO é o que domina este padrão específico.**
+
+**O que explica a razão ~27-32?** Com `N_mTLS=6` conexões client-facing reais por execução (confirmado, Decisão 140/opinsize), ~27-32 ÷ 6 ≈ **4,5 a 5,3 round-trips-equivalentes por conexão mTLS** — uma ordem de grandeza plausível para um handshake TLS 1.3 completo com autenticação mútua (ClientHello → ServerHello+cert+Finished → ClientCert+Finished, mais segmentos extras se as mensagens (certificados PQC maiores, grupos híbridos) excederem o `cwnd`/MSS inicial — a MESMA mecânica que H2 já testou, só que H2 testou a diferença ENTRE PERFIS por tamanho de bytes, e este item 5 testa a diferença ENTRE ROTAS por RTT, dentro do MESMO perfil Classic). **Isso não reabre o veredito de H2 (que ficou REFUTADA para a comparação entre perfis) — mas mostra que o mecanismo geral "round-trips reais entre cliente e servidor, fora das 44 chamadas medidas" É real e substancial, só que distribuído por ROTA/instalação, não por PERFIL.**
+
+### Resumo dos vereditos desta verificação
+
+| Item | Veredito |
+|---|---|
+| 1. T_fluxo inclui operações além das 44 chamadas HTTP | **SUSTENTADO** (confirmado no código: SSH completo + cold-start Python + ~252ms de aquecimento RSA + dados internos ricos descartados) |
+| 2. Controle contata outra região via rede (exceto L0-sa-east-1) | **SUSTENTADO** (controle em sa-east-1, confirmado) |
+| 3. Overhead de SSH escala com distância controle-cliente (via excesso/pcap) | **INCONCLUSIVO** (indicador ruidoso, sinal inconsistente entre perfis) |
+| 4. Resíduo é aprox. constante entre perfis (overhead fixo) | **REFUTADO** (resíduo varia >10x mesmo com RTT real ~0 nas 3 rotas L0; depende de perfil E instalação) |
+| 5. Excesso de resíduo (rotas não-L0 vs. L0) escala com RTT real cliente-servidor | **SUSTENTADO**, fortemente (razão consistente 26,6-32,7 nas 5 rotas, incluindo as 2 onde isso NÃO poderia ser confundido com distância do controle) |
+
+### Impacto sobre a interpretação do relatório oficial já publicado
+
+**T_fluxo, em TODO este documento e no `Consolidated_Metrics_Report_FINAL.md` (relatório oficial, já publicado), não é "tempo de fluxo cliente-servidor" no sentido estrito — é "tempo de execução ponta-a-ponta via SSH do controle", que inclui overhead de orquestração real (confirmado no item 1) além das 44 chamadas HTTP.** Isso não invalida nenhuma comparação ENTRE PERFIS dentro da MESMA rota (classic/PQC/Hybrid/Control são medidos com exatamente o mesmo procedimento de orquestração em cada rota — o overhead de SSH e cold-start, em princípio, não depende do perfil criptográfico, só da rota/instalação) — mas significa que **comparações de magnitude absoluta de T_fluxo entre ROTAS/instalações diferentes** (como a própria Seção 4/H4 já discute) **confundem rede real com overhead de medição**, e que a fração "resíduo" já reportada nas Seções 4/5/H4 do relatório oficial contém, pelo menos em parte, esse overhead de orquestração — embora o item 5 acima mostre que a maior parte do seu crescimento entre rotas acompanha o RTT real cliente-servidor, não a distância do controle.
+
+**NÃO EDITO o relatório oficial agora** (autorização separada seria necessária, documento já publicado com tag própria). Texto de ressalva PROPOSTO, pra consideração do usuário, caso decida adicioná-lo:
+
+> **Ressalva metodológica (adicionada após investigação exploratória "Degrau 1" — ver `thesis/results/v9/analise_origem/RELATORIO_ORIGEM.md`):** o campo "T_fluxo" usado neste relatório mede o tempo de execução ponta-a-ponta observado pelo processo orquestrador (via SSH, do host de controle até o host cliente), não apenas o tempo das chamadas HTTP entre cliente e servidor. Essa janela inclui, além das chamadas HTTP medidas individualmente: o estabelecimento e encerramento da conexão SSH entre o controle e o cliente (que cruza regiões AWS diferentes para 7 das 8 rotas), a inicialização do processo Python no cliente, e um aquecimento de ~252ms de construção de chave RSA (perfis Classic/Hybrid). Uma investigação exploratória posterior (Degrau 1, item 5) mostrou que a maior parte do crescimento desse overhead entre rotas acompanha o RTT real medido entre cliente e servidor (consistente com múltiplos round-trips de handshake TLS/mTLS reais não capturados pela métrica de latência por chamada), não a distância entre o controle e o cliente — mas a métrica T_fluxo, como definida, não separa esses componentes. Comparações entre perfis criptográficos na MESMA rota não são afetadas por este efeito (o procedimento de orquestração é idêntico entre perfis); comparações de magnitude absoluta entre rotas/instalações diferentes devem ser lidas com esta ressalva em mente.
+
 ## O que ainda fica sem explicação
 
 1. **A causa exata do resíduo que varia entre instalações** (item central de H4) — os dados disponíveis localizam ONDE a diferença mora (no resíduo, não nas chamadas) e a verificação adicional de hardware/ambiente (acima) descarta contenção de CPU (steal≈0) e qualquer divergência documentada de SO/kernel/rede (byte-a-byte idênticas), mas não há dado (`/proc/cpuinfo`/`lscpu`/`mpstat` nunca capturados) pra ir além disso — QUAL mecanismo exato dentro do resíduo (handshake TLS em si, setup/teardown do processo de medição, diferença de microarquitetura de CPU não documentada, agendamento do hypervisor, etc.) é responsável permanece sem resposta.
@@ -144,4 +253,4 @@ Descrito aqui apenas como lacuna identificada — **nada disto foi executado nes
 
 ## Reprodutibilidade
 
-Todo número deste documento vem de `scripts/etapa0_inventory.py`, `scripts/etapa1_h1_order.py`, `scripts/etapa1_decomp_h2_h4.py`, `scripts/etapa1_h3_cpu.py`, `scripts/etapa1_verificacoes_adicionais.py` (verificações suplementares de H2/H4 pedidas após a auditoria independente) e dos microbenchmarks Go em `thesis/results/v9/integration/bench/` (já existente no repositório) e `bench_chain/` (novo, criado nesta investigação) — saídas brutas em `data/`. Sementes fixas: permutação `20270101`, bootstrap `20270102`, ambas registradas no `PLANO.md` antes de qualquer análise rodar (a mesma semente de bootstrap foi reusada na verificação suplementar de H2, por consistência). A composição real da pilha de produção (Go para KEM via `tls_kem_proxy`, Node.js/`node:crypto` para ML-DSA-65 via `pqc-signer`, Python/`pyjwt`+`cryptography` para RSA/PS256) foi confirmada lendo `thesis/scripts/opin_flow.py`, `thesis/scripts/tls_kem_proxy/main.go` e `thesis/scripts/pqc-signer/signer_core.mjs` diretamente — nenhum desses arquivos foi modificado. Nenhum dado de aquecimento foi lido. Nenhum dado bruto/organizado da campanha oficial nem o `Consolidated_Metrics_Report_FINAL.md` foram alterados.
+Todo número deste documento vem de `scripts/etapa0_inventory.py`, `scripts/etapa1_h1_order.py`, `scripts/etapa1_decomp_h2_h4.py`, `scripts/etapa1_h3_cpu.py`, `scripts/etapa1_verificacoes_adicionais.py` (verificações suplementares de H2/H4 pedidas após a auditoria independente), `scripts/etapa1_verificacao_artefato_medicao.py` (verificação crítica sobre o que T_fluxo mede, usando `scapy` sobre as capturas dedicadas reais em `criterio1_capturas/capturas_brutas/`) e dos microbenchmarks Go em `thesis/results/v9/integration/bench/` (já existente no repositório) e `bench_chain/` (novo, criado nesta investigação) — saídas brutas em `data/`. A leitura do código que confirma a composição da janela t0/t1 (item 1 da verificação crítica) foi feita direto em `thesis/results/v9/campaign/scripts/orchestrator.py`, `thesis/results/v9/campaign/scripts/cli.py`, `thesis/scripts/campaign_client_runner.py` e `thesis/scripts/latency_automation.py` — nenhum desses arquivos foi modificado. Sementes fixas: permutação `20270101`, bootstrap `20270102`, ambas registradas no `PLANO.md` antes de qualquer análise rodar (a mesma semente de bootstrap foi reusada na verificação suplementar de H2, por consistência). A composição real da pilha de produção (Go para KEM via `tls_kem_proxy`, Node.js/`node:crypto` para ML-DSA-65 via `pqc-signer`, Python/`pyjwt`+`cryptography` para RSA/PS256) foi confirmada lendo `thesis/scripts/opin_flow.py`, `thesis/scripts/tls_kem_proxy/main.go` e `thesis/scripts/pqc-signer/signer_core.mjs` diretamente — nenhum desses arquivos foi modificado. Nenhum dado de aquecimento foi lido. Nenhum dado bruto/organizado da campanha oficial nem o `Consolidated_Metrics_Report_FINAL.md` foram alterados.
