@@ -1138,12 +1138,14 @@ def main():
       "tempo de execução ponta-a-ponta observado pelo processo orquestrador (via SSH, do host de controle até o "
       "host cliente), não apenas as chamadas HTTP entre cliente e servidor. A sobrecarga de SSH e o cold-start do "
       "processo cliente são comuns a todos os perfis (não introduzem viés entre perfis). Também inclui um custo de "
-      "preparação de chave de assinatura RSA (~27ms, medido localmente para o tamanho de chave RSA-2048 real da "
-      "campanha, Decisão 113) que depende do perfil: pago por Classic, Hybrid e Control, não pago por PQC, a cada "
-      "execução -- este custo específico está presente nas diferenças PQC vs. Classic e Hybrid vs. PQC reportadas "
-      "nesta seção e na Seção 4.2, mas sua magnitude é pequena em relação a todas as diferenças já reportadas (a "
-      "menor delas, 167,7ms, é ~6x maior que o viés) -- uma estimativa de sensibilidade (Degrau 1, Item 8) confirma "
-      "que nenhuma das 16 comparações publicadas troca de sinal ao remover este viés específico.")
+      "preparação de chave de assinatura RSA, pago exatamente 1 vez por execução por Classic, Hybrid e Control, "
+      "não pago por PQC -- medido localmente em ~26-30ms (chave RSA-2048, o tamanho real da campanha, Decisão 113), "
+      "com um fator de atenção de até 1,5x para uma possível diferença de desempenho de CPU entre o notebook de "
+      "medição e as instâncias reais m7i-flex.large (nunca medida diretamente). Mesmo no limite superior dessa "
+      "faixa (~45ms), uma estimativa de sensibilidade (Degrau 1, Item 8) confirma: nenhuma das 16 comparações "
+      "publicadas troca de sinal nas estimativas pontuais, e nenhum intervalo de confiança de Hodges-Lehmann já "
+      "publicado muda sua relação com zero ao ser deslocado por esse viés -- a significância estatística em si "
+      "não foi reavaliada.")
     w("")
 
     w("### 5.5 Ressalva de desenho (deriva de rede dentro do bloco sequencial de cada rota)")
