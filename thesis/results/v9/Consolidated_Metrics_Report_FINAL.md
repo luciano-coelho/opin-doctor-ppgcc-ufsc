@@ -1,6 +1,6 @@
-# Consolidated Experimental Metrics Report: v9, real multi-region AWS campaign (conta nova)
+# Consolidated Experimental Metrics Report: real multi-region AWS campaign
 
-**Post-quantum migration of the OPIN ecosystem: Classic, pure PQC, Hybrid-AND, and Control (Hybrid-v8) -- real network, single window, 320 executions**
+**Post-quantum migration of the OPIN ecosystem: Classic, pure PQC, Hybrid, and Control -- real network, single window, 320 executions**
 Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC
 
 ## 1. Parâmetros da campanha
@@ -8,19 +8,19 @@ Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC
 - **Perfis:** 4 (Classic, PQC, Control, Hybrid) x **8 rotas** reais (3 instalações: `sa-east-1`, `us-east-1`, `ap-northeast-1`).
 - **N por célula:** 10 execuções oficiais + 5 aquecimentos descartados (nunca lidos por nenhuma estatística abaixo).
 - **Total:** 320/320 execuções oficiais, 160 aquecimentos, 32/32 capturas dedicadas (0 falhas).
-- **Janela única (não 3 janelas como em v8):** `2026-11-15T17:37:59.293861+00:00` -> `2026-11-16T00:06:40.838058+00:00`.
+- **Janela única:** `2026-11-15T17:37:59.293861+00:00` -> `2026-11-16T00:06:40.838058+00:00`.
 - **Seed de randomização:** `20261107` (ordem dos perfis registrada por rota no próprio manifesto -- `route_orders`).
 - **cost_stop:** `None` (nunca acionado).
 
 ## 2. Resultados de tamanho: a equação OPINsize
 
-Mesma equação desta tese desde v5 (extensão de Schardong et al., Eq. 3.1, com o termo de PKI):
+Equação desta linha de pesquisa (extensão de Schardong et al., Eq. 3.1, com o termo de PKI):
 
 ```
 OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N_PKI x PKI_bytes
 ```
 
-### 2.1 OPINsize total por perfil (variante assinatura+chave crua, Decisão 147) e razão contra Classic
+### 2.1 OPINsize total por perfil (variante assinatura+chave crua) e razão contra Classic
 
 | Perfil | OPINsize (bytes) | Razão vs. Classic |
 |---|---:|---:|
@@ -35,28 +35,53 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 
 | Termo | N por execução | Classic | PQC | Control | Hybrid |
 |---|---:|---:|---:|---:|---:|
-| mTLS handshake | 6 | 18.750 | 129.636 | 101.694 | 144.474 |
-| JWT (assinatura+chave crua) | 28 | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 |
+| mTLS (handshake) | 6 | 18.750 | 129.636 | 101.694 | 144.474 |
+| JWT (apenas assinatura) | 28 | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 |
 | JWK (chave crua) | 4 | 1.536 | 8.320 | 9.856 | 9.856 |
-| PKI/CRL | 4 | 7.130,00 | 32.440 | 37.768 | 39.182,00 |
+| PKI (certificados de CA) | 4 | 7.130,00 | 32.440 | 37.768 | 39.182,00 |
 | **OPINsize (total)** | 44 chamadas/execução | **34.071,88** | **256.429,92** | **242.008,08** | **286.202,08** |
 
-**Comparação contra o gabarito (Decisão 189):** os 4 valores totais acima batem exatamente (0 bytes de diferença) com o gabarito registrado quando este mesmo pipeline de 320 execuções reais foi avaliado por `evaluate_criteria.py`/`opinsize_v9_oficial.py` -- MATCH EXATO, 0 bytes, nos 4 perfis. A auditoria independente do item 4 desta entrega recalcula estes mesmos totais do zero, a partir de `piloto_calls.json`, como segunda confirmação.
+**Sobre o rótulo "PKI":** as 4 chamadas deste termo são, confirmado em código (`thesis/scripts/opinsize_v9_oficial.py`, `PKI_ENDPOINTS = {"/root-ca.pem", "/issuer-ca.pem"}`), recuperação dos certificados de CA (raiz + emissora, uma vez por sub-fluxo) -- **nunca** uma lista de revogação (CRL). O campo interno do pipeline se chama `term_pki_crl` por uma convenção de nomenclatura herdada, não porque CRL seja de fato buscada; este relatório usa "PKI (certificados de CA)", que descreve o que a chamada real faz.
+
+**Verificação externa ao pipeline de medição (termo mTLS, não circular):** `evaluate_criteria.expected_handshake_bytes()` deriva o número esperado de bytes de handshake por conexão (entrada+saída) a partir do tamanho DER real dos certificados efetivamente implantados em `certs/generated/` -- uma fonte INDEPENDENTE da captura de tráfego da campanha. Rodado agora, ao vivo, por este script (não copiado de um relatório anterior):
+
+| Perfil | Esperado (DER real dos certificados, bytes/conexão) | Medido (campanha, bytes/conexão) | Bate? |
+|---|---:|---:|---|
+| Classic | 3.125 | 3.125 | SIM |
+| PQC | 21.606 | 21.606 | SIM |
+| Control | 16.949 | 16.949 | SIM |
+| Hybrid | 24.079 | 24.079 | SIM |
+
+**Sobre os termos JWT/JWK/PKI (honestidade metodológica, correção de uma caracterização anterior):** diferente do termo mTLS acima, este código **não possui**, hoje, um gabarito congelado e computado fora do pipeline de medição para os termos JWT e JWK -- não há um arquivo ou função que derive o tamanho esperado de assinatura/chave a partir de uma fonte independente da própria execução (ex.: o tamanho fixo de uma assinatura ML-DSA-65 por especificação). O termo PKI tem uma fonte parcialmente externa (`cert_manifest.py`/`certs_manifest.json`, que registra o tamanho PEM real dos arquivos de certificado de CA no disco, independente da captura HTTP), mas este relatório não re-derivou aqui o mapeamento exato de qual arquivo de CA cada perfil serve por chamada HTTP para reconciliar esse valor byte a byte. **Correção explícita de um relatório anterior desta mesma campanha:** a afirmação de que o total de OPINsize "bate com o gabarito, 0 bytes de diferença, nos 4 perfis" comparava, na prática, esta mesma campanha contra um conjunto de execuções reais **anterior** (um piloto menor, mesmo código e certificados), usando o MESMO script de cálculo (`opinsize_v9_oficial.py`) nas duas pontas -- isto é uma confirmação de que o pipeline é determinístico e reprodutível entre duas coletas reais independentes, o que tem valor, mas **não** é uma verificação externa ao pipeline como a palavra "gabarito" sugere; os números em si continuam corretos, apenas a caracterização da verificação estava imprecisa.
 
 ### 2.3 Invariantes estruturais por termo (Classic < PQC < Hybrid, Hybrid >= Control)
 
 | Termo | Classic | PQC | Control | Hybrid | Ordem OK? |
 |---|---:|---:|---:|---:|---|
-| mTLS handshake | 18.750 | 129.636 | 101.694 | 144.474 | SIM |
-| JWT (assinatura+chave crua) | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 | SIM |
+| mTLS (handshake) | 18.750 | 129.636 | 101.694 | 144.474 | SIM |
+| JWT (apenas assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | 92.690,08 | SIM |
 | JWK (chave crua) | 1.536 | 8.320 | 9.856 | 9.856 | SIM |
-| PKI/CRL | 7.130,00 | 32.440 | 37.768 | 39.182,00 | SIM |
+| PKI (certificados de CA) | 7.130,00 | 32.440 | 37.768 | 39.182,00 | SIM |
 
 **Divergência de bytes de handshake por conexão -- confirmada zero.** `handshake_bytes_alert.json`: 2880 conexões mTLS auditadas, **0 divergentes**.
 
-## 3. Resultados de latência
+## 3. Control por termo: onde fica abaixo e onde fica acima do PQC (sem contradição entre texto e tabela)
 
-### 3.1 T_fluxo por célula (mediana, desvio padrão, mínimo, máximo; n=10 por célula, janela única)
+O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas isso **não** é verdade termo a termo -- recalculado aqui diretamente dos 4 termos da Seção 2.2, sem copiar nenhum número pronto:
+
+| Termo | Control | PQC | Control − PQC |
+|---|---:|---:|---:|
+| mTLS (handshake) | 101.694 | 129.636 | -27.942 |
+| JWT (apenas assinatura) | 92.690,08 | 86.033,92 | +6.656,16 |
+| JWK (chave crua) | 9.856 | 8.320 | +1.536 |
+| PKI (certificados de CA) | 37.768 | 32.440 | +5.328 |
+| **Total** | **242.008,08** | **256.429,92** | **-14.421,84** |
+
+**Leitura correta, por termo:** Control fica **abaixo** do PQC somente no termo mTLS (cadeia de certificado ainda baseada em RSA no lado do Control contra a cadeia ML-DSA-65 pura do PQC) -- e fica **acima** do PQC nos 3 outros termos (JWT, JWK, PKI), onde ambos usam construção de assinatura equivalente mas Control carrega material adicional que o PQC puro não carrega. O saldo final negativo (Control abaixo do PQC no total) vem inteiramente da economia no termo mTLS, que é grande o suficiente para compensar os 3 acréscimos somados.
+
+## 4. Resultados de latência
+
+### 4.1 T_fluxo por célula (mediana, desvio padrão, mínimo, máximo; n=10 por célula, janela única)
 
 | Instalação | Cenário | Perfil | Mediana | Desvio padrão | Mínimo | Máximo |
 |---|---|---|---:|---:|---:|---:|
@@ -93,9 +118,48 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 | ap-northeast-1 | L30 | Control | 9.018,1 ms | 166,88 ms | 8.718,3 ms | 9.270,3 ms |
 | ap-northeast-1 | L30 | Hybrid | 9.028,6 ms | 125,66 ms | 8.859,3 ms | 9.233,5 ms |
 
-**Ordem observada entre perfis, por rota, e nota sobre sobreposição de intervalos:** com n=10/célula (vs. n=30 em v8), o intervalo [mínimo;máximo] de cada perfil é reportado explicitamente acima em vez de um intervalo de confiança bootstrap -- a amostra é pequena demais para um bootstrap de 8 pontos ser informativo por rota isolada. Comparação feita visualmente, célula a célula, a partir da tabela acima: onde os intervalos [mín;máx] de dois perfis se sobrepõem, a ordem entre eles nesta rota específica não pode ser lida como robusta só a partir desta tabela (nenhum teste de significância foi reaplicado nesta rodada -- fora do escopo desta entrega).
+### 4.2 Ordem das medianas por rota e diferença percentual (PQC vs. Classic, Hybrid vs. PQC)
 
-## 4. Critérios técnicos (1-7)
+| Rota | Ordem (menor -> maior mediana) | PQC vs. Classic | Hybrid vs. PQC |
+|---|---|---:|---:|
+| L0-sa-east-1 | PQC < Classic < Control < Hybrid | -2,93% | +12,04% |
+| L123 | Classic < PQC < Control < Hybrid | +2,42% | +1,85% |
+| L219 | Classic < PQC < Control < Hybrid | +2,39% | +1,61% |
+| L325 | Classic < PQC < Control < Hybrid | +2,26% | +1,51% |
+| L0-us-east-1 | Classic < PQC < Hybrid < Control | +5,85% | +4,15% |
+| L14 | Classic < PQC < Control < Hybrid | +6,07% | +3,38% |
+| L0-ap-northeast-1 | Classic < PQC < Hybrid < Control | +7,99% | +5,88% |
+| L30 | Classic < PQC < Control < Hybrid | +6,75% | +2,96% |
+
+**Contagens agregadas (8 rotas):** Hybrid > PQC (mediana) em **8/8** rotas; PQC > Classic (mediana) em **7/8** rotas.
+
+### 4.3 Sobreposição de intervalo [mínimo;máximo] por rota (Classic×PQC e PQC×Hybrid)
+
+| Rota | Classic×PQC sobrepõem? | PQC×Hybrid sobrepõem? |
+|---|---|---|
+| L0-sa-east-1 | SIM | SIM |
+| L123 | NÃO | NÃO |
+| L219 | NÃO | NÃO |
+| L325 | NÃO | SIM |
+| L0-us-east-1 | NÃO | SIM |
+| L14 | NÃO | SIM |
+| L0-ap-northeast-1 | NÃO | SIM |
+| L30 | NÃO | SIM |
+
+**Contagens agregadas:** Classic×PQC se sobrepõem em **1/8** rotas; PQC×Hybrid se sobrepõem em **6/8** rotas. Onde os intervalos se sobrepõem, a ordem das medianas naquela rota específica não é lida como robusta somente a partir desta tabela -- nenhum teste de significância foi reaplicado nesta rodada (fora do escopo desta entrega).
+
+### 4.4 Inversão em L0-sa-east-1 (PQC com mediana abaixo de Classic): os 10 valores reais, sem causa atribuída
+
+10 valores reais de T_fluxo (segundos), ordenados, nesta rota:
+
+- **Classic:** 2,270337, 2,320785, 2,327829, 2,341451, 2,353749, 2,362013, 2,362613, 2,401444, 2,425318, 2,439924
+- **PQC:** 1,919165, 2,271329, 2,274855, 2,279327, 2,282256, 2,295532, 2,342916, 2,367430, 2,418240, 2,425901
+
+**Mediana PQC com os 10 valores:** 2,288894s. **Mediana PQC excluindo o único valor mais baixo** (1,919165s): 2,295532s -- variação de 6,6ms ao remover esse valor. **Mediana Classic:** 2,357881s. A mediana de PQC permanece abaixo da de Classic mesmo excluindo o valor mais baixo -- a inversão não depende inteiramente de um único valor extremo; os demais 9 valores de PQC, no conjunto, também ficam no mesmo patamar ou abaixo do grosso da distribuição de Classic nesta rota específica.
+
+**Ordem de execução dos blocos de perfil nesta rota** (`manifest.route_orders["L0-sa-east-1"]`): Control -> Classic -> PQC -> Hybrid. PQC roda como o 3º dos 4 blocos nesta rota, depois de Classic -- os dados não mostram, por si só, nenhuma causa específica para a inversão além do que está listado acima; nenhuma causa é proposta além do que os valores e a ordem mostram diretamente.
+
+## 5. Critérios técnicos (1-7)
 
 | Critério | Resultado |
 |---|---|
@@ -107,7 +171,7 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 | 6 (instrumentacao completa + asserções (campanha)) | PASS |
 | 7 (sanidade de latencia por rota (campanha)) | **FAIL** |
 
-### 4.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)
+### 5.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)
 
 | Rota | RTT nominal (ms) | RTT medido, probe (ms) | RTT medido, pcap (ms) | Dentro de ±10%? |
 |---|---:|---:|---:|---|
@@ -122,34 +186,51 @@ OPINsize = N_mTLS x handshake_bytes + N_JWT x JWT_size + N_JWK x JWK_PK_size + N
 
 *Rotas `L0-*` são co-localizadas (RTT nominal cadastrado como 0); o avaliador real aplica a essas rotas uma checagem de tolerância diferente da percentual ±10% usada nas demais, nunca uma divisão por zero -- "SIM" ali reflete o resultado real de `evaluate_criteria.py`, não um cálculo percentual sobre um nominal de 0.*
 
-**Decisão do autor sobre L30 (não corrigida, não recalibrada):** aceita como exceção documentada. O RTT real de `L30` (`ap-northeast-1`<->`ap-northeast-2`) mede ~33,4-34,1ms (canal probe e canal pcap concordam entre si) contra 30ms nominais cadastrados em `campaign_topology.CAMPAIGN_NOMINAL_RTT_MS` -- 11-14% fora da tolerância de ±10% que o critério exige. O baseline de medição não foi alterado. A comparação entre perfis (Classic/PQC/Control/Hybrid, Seção 3) ocorre sempre DENTRO da mesma rota -- cada perfil roda sob o mesmo RTT real em L30, então esta exceção não compromete nenhuma comparação entre perfis, apenas o critério de sanidade absoluta desta rota específica contra seu valor nominal cadastrado.
+**Decisão sobre L30 (não corrigida, não recalibrada):** aceita como exceção documentada. O RTT real de `L30` mede ~33,4-34,1ms (canal probe e canal pcap concordam entre si) contra 30ms nominais cadastrados no baseline de topologia -- 11-14% fora da tolerância de ±10% que o critério exige. O baseline de medição não foi alterado. A comparação entre perfis (Classic/PQC/Control/Hybrid, Seção 4) ocorre sempre DENTRO da mesma rota -- cada perfil roda sob o mesmo RTT real em L30, então esta exceção não compromete nenhuma comparação entre perfis, apenas o critério de sanidade absoluta desta rota específica contra seu valor nominal cadastrado.
 
-### 4.2 Retries de transporte: 0 (zero)
+### 5.2 Retries de transporte: 0 (zero)
 
 `retries_report.json`: `total_retries=0`, `por_celula={}` -- nenhuma das 320 execuções oficiais precisou de retry de transporte HTTP/mTLS.
 
-## 5. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)
+## 6. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)
 
-**Mecanismo, confirmado por código (não assumido):** `thesis/results/v9/integration/gateway/business_server.go:246-250` -- `attachInternalCallerCarveOut` monta um `cfg.GetConfigForClient` cuja única condição é `hello.ServerName == internalCallerSNI` (`"matls-api.local"`, linha 164); quando verdadeira, retorna sempre o MESMO `internalCfg`, cujo `CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}` (linha 242) é um valor fixo, sem nenhum `if`/`switch` sobre `profile` dentro do próprio closure -- o parâmetro `profile` recebido por `attachInternalCallerCarveOut` escolhe apenas qual CA confiar, nunca a lista de curvas. `business_server.go:104` confirma a mesma exceção do lado do enforcement em runtime: `if cs.ServerName != internalCallerSNI && cs.CurveID != want` só aplica a curva ESPERADA DO PERFIL a conexões que NÃO sejam a chamada interna -- ou seja, por construção, válido para os 4 perfis, não apenas para o que ficou com evidência de log salva (abaixo).
+**Mecanismo, confirmado por código (não assumido):** `thesis/results/v9/integration/gateway/business_server.go:246-250` -- `attachInternalCallerCarveOut` monta um `cfg.GetConfigForClient` cuja única condição é `hello.ServerName == internalCallerSNI` (`"matls-api.local"`, linha 164); quando verdadeira, retorna sempre o MESMO `internalCfg`, cujo `CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}` (linha 242) é um valor fixo, sem nenhum `if`/`switch` sobre `profile` dentro do próprio closure. `business_server.go:104` confirma o mesmo do lado do enforcement em runtime: só aplica a curva ESPERADA DO PERFIL a conexões que NÃO sejam a chamada interna -- por construção, válido para os 4 perfis.
 
-**Evidência real nos logs desta campanha, com uma ressalva de cobertura:** varredura de `full_container_logs/*_v9-mtls.log` encontrou 21 linhas reais com `sni="matls-api.local"` nos 3 logs de servidor salvos, 100% com `curve=CurveP256` (0 violações). **Ressalva honesta:** esses 3 arquivos de log capturam apenas o ÚLTIMO bloco de perfil em execução no container no momento da coleta pós-janela (o container do gateway é reiniciado a cada troca de perfil) -- as linhas encontradas pertencem exclusivamente ao perfil `hibrido-v8`. Para os outros 3 perfis, a confirmação desta campanha específica fica no mecanismo de código acima (idêntico e sem branch por perfil), não em uma segunda evidência de log direta -- não foi possível recuperar os logs intermediários dos outros 3 blocos de perfil, já sobrescritos antes da coleta.
+**Evidência real desta campanha (320 execuções), fonte completa (não apenas o último bloco de perfil):** `piloto_combined.log` é um log continuamente anexado durante toda a janela (sobrevive ao reinício de container entre blocos de perfil, ao contrário de `full_container_logs`) -- **2.240 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, nos 4 perfis: Classic=560, Hybrid=560, Control=560, PQC=560.
 
-## 6. Custo, duração e integridade
+**Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker desta campanha, rodado antes dela na mesma conta/infraestrutura):** **126 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, também nos 4 perfis: Classic=42, Hybrid=42, Control=21, PQC=21. Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.
 
-- **Custo final real** (`cost_tracker.jsonl`, última leitura real antes da coleta de critérios dedicados não reabrir o tracker): **US\$27,69** em 19,32h (12 instâncias) -- muito abaixo do aviso (US\$70) e do teto (US\$90) desta fase.
-- **cost_stop:** nunca acionado (`None`).
-- **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências (já confirmado na Decisão 189, não repetido nesta entrega).
+## 7. Custo e duração (sem teardown -- nenhum valor aqui é "final")
 
-## 7. Transparência e limites de escopo
+Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` (`2026-11-15T04:17:09Z`). **Nenhuma leitura abaixo é chamada de "custo final" -- isso só se aplica depois do teardown da frota, que ainda não aconteceu.**
 
-- **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle (`hibrido-v8`) reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho (não é uma lacuna nova desta campanha).
-- **Bytes do perfil Controle ficam abaixo do PQC por desenho**, não por anomalia -- Controle combina assinatura dupla nas mensagens com uma cadeia de certificados ainda RSA, enquanto PQC é ML-DSA-65 puro de ponta a ponta; o termo de PKI de Controle por isso não precisa superar o do PQC puro para a hierarquia de invariantes (Seção 2.3) continuar válida.
-- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 4.1).
-- **Conexões internas AS->RS ficam fora da equação OPINsize** -- o termo mede apenas o que atravessa o canal client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho já documentado desde v6 (Seção 5).
-- **Ressalva de reprodutibilidade:** pacotes do sistema (AMI/apt) instalados no momento do provisionamento desta campanha não têm suas versões exatas re-fixadas por nenhum manifesto desta entrega além do que o documento de fatos dos hosts (auditoria somente-leitura, entregue separadamente) registrou -- uma reconstrução futura a partir de uma AMI mais nova pode obter versões de pacote diferentes das observadas aqui, sem que isso indique nenhuma mudança no código/binários desta tese (esses seguem pinados em `PINS.json`, verificados byte a byte na entrega desta campanha).
+| Momento | Timestamp (UTC) | Custo acumulado até este momento |
+|---|---|---:|
+| última leitura automática registrada (cost_tracker.jsonl) | 2026-11-15T23:36:12Z | US\$27,69 |
+| fim da janela oficial (manifest.window_end_utc) | 2026-11-16T00:06:40Z | US\$28,42 |
+| fim da coleta dos critérios dedicados (último evento real nos logs do gateway) | 2026-11-16T00:22:57Z | US\$28,81 |
+| agora (momento em que este relatório foi gerado) | 2026-11-16T02:55:18Z | US\$32,45 |
 
-## 8. Reprodutibilidade
+- **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90.
+- **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.
 
-- Todo número deste documento foi lido ou computado por `thesis/results/v9/campaign/scripts/generate_final_report_oficial_conta_nova.py`, a partir de `thesis/results/v9/campaign_oficial_conta_nova_raw/` e `thesis/results/v9/campaign_oficial_conta_nova_organized/` -- nenhum valor foi digitado manualmente.
+## 8. Transparência e limites de escopo
+
+- **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho.
+- **O total de Controle fica abaixo do total de PQC, mas não termo a termo** -- ver a reconciliação completa na Seção 3: Controle fica abaixo do PQC somente no termo mTLS, e acima nos outros 3 termos.
+- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 5.1).
+- **Conexões internas AS->RS ficam fora da equação OPINsize** -- o termo mede apenas o que atravessa o canal client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho (Seção 6).
+- **Ressalva de reprodutibilidade:** pacotes do sistema operacional (AMI e `dnf`) instalados no momento do provisionamento desta campanha não têm suas versões exatas re-fixadas por nenhum manifesto além do que o documento de fatos dos hosts (auditoria somente-leitura, entregue separadamente) registrou -- uma reconstrução futura a partir de uma AMI mais nova pode obter versões de pacote diferentes das observadas aqui, sem que isso indique nenhuma mudança no código/binários desta tese (esses seguem pinados, verificados conforme a Seção 9).
+
+## 9. Reprodutibilidade
+
+**Integridade das imagens Docker, por imagem, com a garantia real de cada uma (não uma frase genérica):**
+
+- **`gateway` e `proxy`:** binários **bit a bit idênticos** ao pin registrado -- sha256 do binário compilado confere exatamente contra o valor pinado, sem nenhuma tolerância.
+- **`measure`:** equivalência, **não** bit a bit -- os binários `gateway`/`proxy` embutidos dentro da imagem são idênticos ao pin, as camadas estáveis da imagem (posições 0 e 4 do `rootfs_layers`) e o `config_subset` são idênticos; as camadas voláteis (posições 1, 2 e 3) variam de build para build por um timestamp que o BuildKit embute, não por diferença de conteúdo -- documentado desde a Decisão 159.
+- **`auth`, `mongo_seed`, `mockapi`:** identidade por `rootfs_layers`+`config_subset`, reconstrução **equivalente**, não bit a bit -- as causas reais, já identificadas, de não-determinismo byte a byte entre builds/sistemas operacionais diferentes são: normalização de fim de linha (CRLF/LF), material de chave efêmera gerado pelo próprio AS a cada execução (nunca persistido, sempre de tamanho/tipo fixo), e resolução de dependências opcionais específicas de plataforma do `npm` (variantes de pacote por sistema operacional de build, nunca uma dependência de runtime real).
+- **Gate de entrega (todas as imagens):** verificado por conteúdo (`rootfs_layers`, `config_subset`, `binary_sha256` dos binários embutidos), nunca por `tar_sha256` -- dois `docker save` do EXATO mesmo conteúdo geram arquivos `.tar` com hashes SHA-256 diferentes entre si (instabilidade do próprio formato tar/metadados de empacotamento, não do conteúdo), então comparar por `tar_sha256` produziria falsos negativos.
+
+- Todo número deste documento foi lido ou computado por `thesis/results/v9/campaign/scripts/generate_final_report_oficial_conta_nova.py`, a partir de `thesis/results/v9/campaign_oficial_conta_nova_raw/`, `thesis/results/v9/campaign_oficial_conta_nova_organized/`, e de uma verificação externa ao pipeline rodada ao vivo (`evaluate_criteria.expected_handshake_bytes`, Seção 2.2) -- nenhum valor foi digitado manualmente.
 - Este relatório foi auditado de forma independente (agente separado, sem acesso ao texto deste documento como fonte, apenas aos dados organizados/manifesto) antes de sua entrega final -- tabela de conferência na Decisão correspondente em `DECISIONS.md`.
 
