@@ -243,7 +243,7 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 | L0-ap-northeast-1 | NÃO | SIM |
 | L30 | NÃO | SIM |
 
-**Contagens agregadas:** Classic×PQC se sobrepõem em **1/8** rotas; PQC×Hybrid se sobrepõem em **6/8** rotas. Onde os intervalos se sobrepõem, a ordem das medianas naquela rota específica não é lida como robusta somente a partir desta tabela -- nenhum teste de significância foi reaplicado nesta rodada (fora do escopo desta entrega).
+**Contagens agregadas:** Classic×PQC se sobrepõem em **1/8** rotas; PQC×Hybrid se sobrepõem em **6/8** rotas. Onde os intervalos se sobrepõem, a ordem das medianas naquela rota específica não é lida como robusta somente a partir desta tabela -- ver análise de significância na Seção 5.
 
 ### 4.4 Inversão em L0-sa-east-1 (PQC com mediana abaixo de Classic): os 10 valores reais, sem causa atribuída
 
@@ -256,7 +256,85 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 
 **Ordem de execução dos blocos de perfil nesta rota** (`manifest.route_orders["L0-sa-east-1"]`): Control -> Classic -> PQC -> Hybrid. PQC roda como o 3º dos 4 blocos nesta rota, depois de Classic -- os dados não mostram, por si só, nenhuma causa específica para a inversão além do que está listado acima; nenhuma causa é proposta além do que os valores e a ordem mostram diretamente.
 
-## 5. Critérios técnicos (1-7)
+## 5. Significância estatística dos contrastes entre perfis (análise exploratória)
+
+**Declaração explícita de escopo:** esta é uma análise **EXPLORATÓRIA, não pré-registrada** -- os 16 contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram escolhidos DEPOIS de já ter visto a descrição dos dados nas Seções 4.1-4.4 desta mesma versão do relatório, não antes da coleta. Limitada a estes 16 contrastes pré-definidos; não tem o peso de uma análise confirmatória -- quantifica e testa o que já foi observado descritivamente, não valida uma hipótese fixada de antemão.
+
+### 5.1 Testes por rota -- Classic×PQC e PQC×Hybrid (16 testes principais)
+
+Mann-Whitney U exato, bilateral, n=10 por grupo (medição contínua, sem empates esperados). p-valor ajustado por Holm sobre o conjunto dos 16 testes principais abaixo -- família PRÓPRIA, separada dos 16 testes com Control (Seção 5.2). Hodges-Lehmann: mediana de todas as diferenças pareadas (não a diferença das medianas, reportada em separado); IC 95% via bootstrap, semente fixa, 10.000 reamostragens (ver nota de reprodutibilidade abaixo). Delta de Cliff escolhido como medida de magnitude de efeito (em vez de probabilidade de superioridade bruta) por ser a convenção mais padrão em comparações não-paramétricas de amostras pequenas -- é numericamente equivalente a 2×P(superioridade)-1, então a informação de probabilidade de superioridade continua recuperável a partir dele.
+
+| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| L0-sa-east-1 | PQC vs. Classic | 2.357,9 | 2.288,9 | -69,0 | -2,93% | 0,2176 | 0,2176 | -54,7 | [-105,9;11,9] | -0,340 | NÃO |
+| L123 | PQC vs. Classic | 10.879,8 | 11.143,3 | 263,4 | 2,42% | 0,0000 | 0,0002 | 253,9 | [198,3;319,2] | 1,000 | SIM |
+| L219 | PQC vs. Classic | 17.683,3 | 18.105,6 | 422,3 | 2,39% | 0,0000 | 0,0002 | 421,4 | [386,3;462,5] | 1,000 | SIM |
+| L325 | PQC vs. Classic | 25.559,2 | 26.136,5 | 577,3 | 2,26% | 0,0000 | 0,0002 | 622,3 | [454,9;800,5] | 1,000 | SIM |
+| L0-us-east-1 | PQC vs. Classic | 3.817,0 | 4.040,4 | 223,4 | 5,85% | 0,0000 | 0,0002 | 193,9 | [138,8;274,7] | 1,000 | SIM |
+| L14 | PQC vs. Classic | 4.744,6 | 5.032,4 | 287,9 | 6,07% | 0,0000 | 0,0002 | 275,0 | [222,7;311,9] | 1,000 | SIM |
+| L0-ap-northeast-1 | PQC vs. Classic | 5.786,2 | 6.248,6 | 462,4 | 7,99% | 0,0000 | 0,0002 | 471,5 | [410,8;544,6] | 1,000 | SIM |
+| L30 | PQC vs. Classic | 8.214,5 | 8.769,4 | 554,8 | 6,75% | 0,0000 | 0,0002 | 552,6 | [425,2;661,6] | 1,000 | SIM |
+| L0-sa-east-1 | Hybrid vs. PQC | 2.288,9 | 2.564,6 | 275,7 | 12,04% | 0,0000 | 0,0003 | 240,0 | [163,8;310,3] | 0,960 | SIM |
+| L123 | Hybrid vs. PQC | 11.143,3 | 11.349,1 | 205,9 | 1,85% | 0,0000 | 0,0002 | 204,1 | [146,1;282,0] | 1,000 | SIM |
+| L219 | Hybrid vs. PQC | 18.105,6 | 18.396,5 | 290,9 | 1,61% | 0,0000 | 0,0002 | 274,1 | [138,4;340,7] | 1,000 | SIM |
+| L325 | Hybrid vs. PQC | 26.136,5 | 26.531,6 | 395,1 | 1,51% | 0,0052 | 0,0104 | 395,4 | [149,4;655,2] | 0,720 | SIM |
+| L0-us-east-1 | Hybrid vs. PQC | 4.040,4 | 4.208,1 | 167,7 | 4,15% | 0,0005 | 0,0015 | 174,7 | [81,7;278,1] | 0,860 | SIM |
+| L14 | Hybrid vs. PQC | 5.032,4 | 5.202,5 | 170,1 | 3,38% | 0,0001 | 0,0006 | 189,9 | [114,4;255,8] | 0,920 | SIM |
+| L0-ap-northeast-1 | Hybrid vs. PQC | 6.248,6 | 6.616,3 | 367,7 | 5,88% | 0,0001 | 0,0006 | 332,5 | [178,3;425,9] | 0,920 | SIM |
+| L30 | Hybrid vs. PQC | 8.769,4 | 9.028,6 | 259,2 | 2,96% | 0,0000 | 0,0002 | 298,4 | [181,7;396,6] | 0,980 | SIM |
+
+### 5.2 Contrastes com Control -- Control×Hybrid e Control×PQC (16 testes, FORA DO ESCOPO da tese)
+
+**Fora do escopo central desta tese** -- consistente com a separação de Control das comparações principais (Seção 2). Reportados aqui só por completude metodológica, família de Holm PRÓPRIA (separada dos 16 testes principais da Seção 5.1 -- nunca misturada no mesmo ajuste).
+
+| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| L0-sa-east-1 | Control vs. Hybrid | 2.564,6 | 2.472,1 | -92,5 | -3,61% | 0,0185 | 0,1483 | -78,0 | [-141,4;-19,2] | -0,620 | NÃO |
+| L123 | Control vs. Hybrid | 11.349,1 | 11.263,4 | -85,7 | -0,76% | 0,0288 | 0,2016 | -78,5 | [-143,4;-11,5] | -0,580 | NÃO |
+| L219 | Control vs. Hybrid | 18.396,5 | 18.302,0 | -94,5 | -0,51% | 0,5787 | 1,0000 | -32,8 | [-158,1;51,0] | -0,160 | NÃO |
+| L325 | Control vs. Hybrid | 26.531,6 | 26.523,1 | -8,5 | -0,03% | 0,9705 | 1,0000 | 7,1 | [-290,2;254,0] | 0,020 | NÃO |
+| L0-us-east-1 | Control vs. Hybrid | 4.208,1 | 4.247,7 | 39,5 | 0,94% | 0,9705 | 1,0000 | -6,2 | [-105,9;119,9] | -0,020 | NÃO |
+| L14 | Control vs. Hybrid | 5.202,5 | 5.145,7 | -56,9 | -1,09% | 0,2799 | 1,0000 | -48,9 | [-126,5;43,9] | -0,300 | NÃO |
+| L0-ap-northeast-1 | Control vs. Hybrid | 6.616,3 | 6.634,2 | 17,9 | 0,27% | 0,9118 | 1,0000 | 8,7 | [-182,4;137,3] | 0,040 | NÃO |
+| L30 | Control vs. Hybrid | 9.028,6 | 9.018,1 | -10,4 | -0,12% | 0,6842 | 1,0000 | -18,0 | [-159,8;100,1] | -0,120 | NÃO |
+| L0-sa-east-1 | Control vs. PQC | 2.288,9 | 2.472,1 | 183,2 | 8,00% | 0,0000 | 0,0007 | 158,9 | [101,8;224,0] | 0,960 | SIM |
+| L123 | Control vs. PQC | 11.143,3 | 11.263,4 | 120,2 | 1,08% | 0,0007 | 0,0094 | 126,7 | [58,1;196,1] | 0,840 | SIM |
+| L219 | Control vs. PQC | 18.105,6 | 18.302,0 | 196,4 | 1,08% | 0,0000 | 0,0007 | 194,0 | [116,6;313,9] | 0,960 | SIM |
+| L325 | Control vs. PQC | 26.136,5 | 26.523,1 | 386,6 | 1,48% | 0,0015 | 0,0150 | 372,3 | [195,8;583,8] | 0,800 | SIM |
+| L0-us-east-1 | Control vs. PQC | 4.040,4 | 4.247,7 | 207,2 | 5,13% | 0,0021 | 0,0188 | 175,9 | [93,1;291,9] | 0,780 | SIM |
+| L14 | Control vs. PQC | 5.032,4 | 5.145,7 | 113,2 | 2,25% | 0,0001 | 0,0018 | 125,6 | [65,2;218,9] | 0,920 | SIM |
+| L0-ap-northeast-1 | Control vs. PQC | 6.248,6 | 6.634,2 | 385,6 | 6,17% | 0,0007 | 0,0094 | 350,1 | [117,4;468,8] | 0,840 | SIM |
+| L30 | Control vs. PQC | 8.769,4 | 9.018,1 | 248,8 | 2,84% | 0,0007 | 0,0094 | 259,7 | [146,1;406,2] | 0,840 | SIM |
+
+### 5.3 Teste agregado entre rotas
+
+**Teste do sinal bilateral exato** (contagem de rotas, entre as 8, onde a mediana do 2º perfil supera a do 1º):
+
+| Comparação | Rotas onde supera | p-valor (sinal, exato) |
+|---|---:|---:|
+| PQC > Classic | 7/8 | 0,0703 |
+| Hybrid > PQC | 8/8 | 0,0078 |
+
+**Wilcoxon signed-rank sobre as 8 diferenças percentuais de mediana por rota** (não um teste por execução individual -- um valor por rota, 8 no total):
+
+| Comparação | p-valor (Wilcoxon signed-rank) |
+|---|---:|
+| PQC vs. Classic (8 diferenças %) | 0,0547 |
+| Hybrid vs. PQC (8 diferenças %) | 0,0078 |
+
+### 5.4 Leitura factual (sem afirmar robustez onde o teste não sustenta)
+
+**PQC vs. Classic:** significativo após Holm (α=0,05) em **7/8** rotas; não significativo nas outras 1/8. **Hybrid vs. PQC:** significativo após Holm em **8/8** rotas; não significativo nas outras 0/8.
+
+**Inversão em L0-sa-east-1 (Seção 4.4, PQC com mediana abaixo de Classic):** pelo teste de Mann-Whitney exato com correção de Holm sobre os 16 testes principais, essa diferença **NÃO é** estatisticamente significativa (p bruto=0,2176, p Holm=0,2176, delta de Cliff=-0,340). Nenhuma afirmação de robustez é feita para nenhum contraste cujo p-valor ajustado por Holm não exclua a hipótese nula a α=0,05 -- as células marcadas "NÃO" nas tabelas acima permanecem lidas como não-significativas, não como "quase significativas" ou similar.
+
+### 5.5 Ressalva de desenho (deriva de rede dentro do bloco sequencial de cada rota)
+
+Dentro de cada rota, os 4 blocos de perfil rodam **sequencialmente** (ordem sorteada por rota, semente `20261107`, já documentada na Seção 1 -- `route_orders`) -- então deriva de rede ao longo do tempo (ex.: variação de condições de rede entre o início e o fim da janela daquela rota específica) pode contribuir para parte das diferenças observadas entre perfis DENTRO da mesma rota. A aleatorização da ordem ENTRE rotas (cada rota tem uma ordem potencialmente diferente, Seção 1) reduz, mas **não elimina**, esse efeito -- não há controle por bloco dentro de uma única rota (os 4 perfis não rodam entrelaçados/alternados dentro da mesma rota, rodam em 4 blocos consecutivos).
+
+**Nota de reprodutibilidade do bootstrap:** semente fixa `20261116`, 10.000 reamostragens, `numpy.random.default_rng` -- nunca semente de sistema/relógio. Rodar este mesmo script novamente reproduz exatamente os mesmos intervalos de confiança.
+
+## 6. Critérios técnicos (1-7)
 
 | Critério | Resultado |
 |---|---|
@@ -268,7 +346,7 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 | 6 (instrumentacao completa + asserções (campanha)) | PASS |
 | 7 (sanidade de latencia por rota (campanha)) | **FAIL** |
 
-### 5.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)
+### 6.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)
 
 | Rota | RTT nominal (ms) | RTT medido, probe (ms) | RTT medido, pcap (ms) | Dentro de ±10%? |
 |---|---:|---:|---:|---|
@@ -285,11 +363,11 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 
 **Decisão sobre L30 (não corrigida, não recalibrada):** aceita como exceção documentada. O RTT real de `L30` mede ~33,4-34,1ms (canal probe e canal pcap concordam entre si) contra 30ms nominais cadastrados no baseline de topologia -- 11-14% fora da tolerância de ±10% que o critério exige. O baseline de medição não foi alterado. A comparação entre perfis (Classic/PQC/Control/Hybrid, Seção 4) ocorre sempre DENTRO da mesma rota -- cada perfil roda sob o mesmo RTT real em L30, então esta exceção não compromete nenhuma comparação entre perfis, apenas o critério de sanidade absoluta desta rota específica contra seu valor nominal cadastrado.
 
-### 5.2 Retries de transporte: 0 (zero)
+### 6.2 Retries de transporte: 0 (zero)
 
 `retries_report.json`: `total_retries=0`, `por_celula={}` -- nenhuma das 320 execuções oficiais precisou de retry de transporte HTTP/mTLS.
 
-## 6. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)
+## 7. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)
 
 **Mecanismo, confirmado por código (não assumido):** `thesis/results/v9/integration/gateway/business_server.go:246-250` -- `attachInternalCallerCarveOut` monta um `cfg.GetConfigForClient` cuja única condição é `hello.ServerName == internalCallerSNI` (`"matls-api.local"`, linha 164); quando verdadeira, retorna sempre o MESMO `internalCfg`, cujo `CurvePreferences = []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}` (linha 242) é um valor fixo, sem nenhum `if`/`switch` sobre `profile` dentro do próprio closure. `business_server.go:104` confirma o mesmo do lado do enforcement em runtime: só aplica a curva ESPERADA DO PERFIL a conexões que NÃO sejam a chamada interna -- por construção, válido para os 4 perfis.
 
@@ -297,7 +375,7 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 
 **Evidência corroborante de um piloto real anterior (18 execuções, MESMO código e MESMAS imagens Docker desta campanha, rodado antes dela na mesma conta/infraestrutura):** **126 conexões reais** com `sni="matls-api.local"`, **100% com curve=CurveP256**, no mesmo conjunto central Classic/PQC/Hybrid: Classic=42, Hybrid=42, PQC=21. **Perfil Control, separado:** 21 conexões, mesma curva. Duas coletas reais independentes, mesmo mecanismo de código, mesmo resultado -- 0 violações em qualquer das duas.
 
-## 7. Custo e duração (sem teardown -- nenhum valor aqui é "final")
+## 8. Custo e duração (sem teardown -- nenhum valor aqui é "final")
 
 Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.micro` + 11 `m7i-flex.large`, 12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` (`2026-11-15T04:17:09Z`). **Nenhuma leitura abaixo é chamada de "custo final" -- isso só se aplica depois do teardown da frota, que ainda não aconteceu.**
 
@@ -306,20 +384,20 @@ Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.m
 | última leitura automática registrada (cost_tracker.jsonl) | 2026-11-15T23:36:12Z | US\$27,69 |
 | fim da janela oficial (manifest.window_end_utc) | 2026-11-16T00:06:40Z | US\$28,42 |
 | fim da coleta dos critérios dedicados (último evento real nos logs do gateway) | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) | 2026-11-16T12:57:12Z | US\$46,83 |
+| agora (momento em que este relatório foi gerado) | 2026-11-16T13:32:04Z | US\$47,66 |
 
 - **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90.
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.
 
-## 8. Transparência e limites de escopo
+## 9. Transparência e limites de escopo
 
 - **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho.
 - **O total de Controle fica abaixo do total de PQC, mas não termo a termo** -- ver a reconciliação completa na Seção 3: Controle fica abaixo do PQC somente no termo mTLS, e acima nos outros 3 termos.
-- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 5.1).
-- **Conexões internas AS->RS ficam fora da equação OPINsize** -- o termo mede apenas o que atravessa o canal client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho (Seção 6).
-- **Ressalva de reprodutibilidade:** pacotes do sistema operacional (AMI e `dnf`) instalados no momento do provisionamento desta campanha não têm suas versões exatas re-fixadas por nenhum manifesto além do que o documento de fatos dos hosts (auditoria somente-leitura, entregue separadamente) registrou -- uma reconstrução futura a partir de uma AMI mais nova pode obter versões de pacote diferentes das observadas aqui, sem que isso indique nenhuma mudança no código/binários desta tese (esses seguem pinados, verificados conforme a Seção 9).
+- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 6.1).
+- **Conexões internas AS->RS ficam fora da equação OPINsize** -- o termo mede apenas o que atravessa o canal client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho (Seção 7).
+- **Ressalva de reprodutibilidade:** pacotes do sistema operacional (AMI e `dnf`) instalados no momento do provisionamento desta campanha não têm suas versões exatas re-fixadas por nenhum manifesto além do que o documento de fatos dos hosts (auditoria somente-leitura, entregue separadamente) registrou -- uma reconstrução futura a partir de uma AMI mais nova pode obter versões de pacote diferentes das observadas aqui, sem que isso indique nenhuma mudança no código/binários desta tese (esses seguem pinados, verificados conforme a Seção 10).
 
-## 9. Reprodutibilidade
+## 10. Reprodutibilidade
 
 **Integridade das imagens Docker, por imagem, com a garantia real de cada uma (não uma frase genérica):**
 

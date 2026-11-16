@@ -13558,3 +13558,25 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Entrega:** commit LOCAL apenas (sem push -- correcao de relatorio, nao pedida pra publicar imediatamente). Nenhuma tag movida, nenhuma acao na frota.
 
 **PARADO aqui, aguardando aprovacao do Luciano.**
+
+## Decisao 196 -- nova Secao 5 (significancia estatistica dos contrastes entre perfis): 16 testes principais (Classic×PQC/Hybrid×PQC, Mann-Whitney exato+Holm+Hodges-Lehmann+IC bootstrap+Cliff) + 16 testes de Control em familia de Holm separada (fora do escopo) + teste do sinal + Wilcoxon agregado -- analise EXPLORATORIA declarada, auditoria independente PASSOU sem ressalvas (32/32 testes + 2 agregados + 4 ICs bootstrap batem exatamente)
+
+**Pedido do Luciano:** nova secao de significancia estatistica, inserida apos a 4.4 (demais secoes renumeradas: 5->6 criterios, 6->7 canal interno, 7->8 custo, 8->9 transparencia, 9->10 reprodutibilidade). Implementado SOMENTE no script gerador.
+
+**Metodologia, toda calculada ao vivo pelo script a partir dos T_fluxo reais (10 valores/celula):**
+- **16 testes principais** (Classic×PQC, Hybrid×PQC, 8 rotas cada): Mann-Whitney U EXATO bilateral (`scipy.stats.mannwhitneyu`, `method="exact"`, n=10/grupo, sem empates). p-valor bruto + ajustado por Holm step-down SOBRE ESTES 16 JUNTOS (familia propria).
+- **16 testes de Control** (Control×Hybrid, Control×PQC, 8 rotas cada), explicitamente marcados **FORA DO ESCOPO da tese** (consistente com a Decisao 195) -- Holm em familia SEPARADA, nunca misturada com os 16 principais.
+- **Magnitude, pros 32 testes:** diferenca de medianas (ms e %); estimador de Hodges-Lehmann (mediana das 100 diferencas pareadas, nao a diferenca das medianas) com IC 95% bootstrap (semente fixa `20261116`, 10.000 reamostragens, `numpy.random.default_rng`, registrada e citada no proprio relatorio); delta de Cliff escolhido (em vez de probabilidade de superioridade bruta) por ser a convencao mais padrao em comparacoes nao-parametricas pequenas -- justificativa registrada no relatorio, com a equivalencia numerica (2×P(superioridade)-1) citada.
+- **Teste agregado entre rotas:** teste do sinal bilateral exato (`binomtest`, n=8, p=0,5) pra "PQC>Classic" e "Hybrid>PQC"; Wilcoxon signed-rank (`scipy.stats.wilcoxon`) sobre as 8 diferencas percentuais de mediana por rota, pros mesmos 2 pares -- scipy 1.16.0 permitiu rodar sem erro nos dois casos, reportado explicitamente (nunca forcado).
+- **Leitura factual, sem exagerar robustez:** PQC vs. Classic significativo (Holm, α=0,05) em 7/8 rotas; Hybrid vs. PQC em 8/8. A inversao em L0-sa-east-1 (Secao 4.4) **NAO** e estatisticamente significativa (p Holm=0,2176) -- declarado explicitamente, nenhuma linha "NAO" significativa e descrita como "quase significativa" ou similar.
+- **Declaracao explicita de escopo:** analise EXPLORATORIA, nao pre-registrada (os 16 contrastes escolhidos depois de ja ter visto a Secao 4.1-4.4 desta mesma versao do relatorio) -- texto proprio no relatorio avisa isso antes de qualquer tabela.
+- **Ressalva de desenho registrada:** dentro de cada rota os 4 blocos de perfil rodam sequencialmente (ordem sorteada por rota, semente `20261107`, Secao 1/`route_orders`) -- deriva de rede ao longo do tempo pode contribuir pras diferencas DENTRO da mesma rota; a aleatorizacao so acontece ENTRE rotas, reduz mas nao elimina esse efeito.
+- Secao 4.3: frase "nenhum teste de significancia foi reaplicado nesta rodada (fora do escopo desta entrega)" substituida por remissao direta "ver analise de significancia na Secao 5".
+
+**Auditoria independente (agente fresco, separado), recalculando TUDO do zero a partir dos `median_metrics.json` reais (nunca do relatorio nem de nenhum valor pronto):** os 32 testes individuais (16 principais + 16 de Control, cada um com p bruto/p Holm/Hodges-Lehmann/delta de Cliff), os 2 agregados (sinal + Wilcoxon), e 4 ICs bootstrap (2 principais incluindo o destaque L0-sa-east-1, 2 de Control) -- reproduzidos usando a MESMA semente/ordem de consumo do RNG descrita no proprio relatorio. **Veredito: AUDITORIA PASSOU, sem ressalvas -- os 32 testes, os 2 agregados e os 4 ICs bootstrap bateram EXATAMENTE.**
+
+**sha256 (apos a ultima regeracao, antes deste commit):** `generate_final_report_oficial_conta_nova.py` = `9deef307b59a3c3f1519c44352e7247bd43c4c4b5778a692b391c42155fd7151`; `Consolidated_Metrics_Report_FINAL.md` = `92b14844c2f0b6181f9e75f69d6369f0e056c20c3442cac3c35b5814216d8693`.
+
+**Entrega:** commit LOCAL apenas (sem push desta correcao, igual a Decisao 195). Nenhuma tag movida, nenhuma acao na frota/AWS -- toda a analise usou dados ja locais (T_fluxo das 320 execucoes), nenhuma chamada nova a AWS/SSH.
+
+**PARADO aqui, aguardando aprovacao do Luciano.**

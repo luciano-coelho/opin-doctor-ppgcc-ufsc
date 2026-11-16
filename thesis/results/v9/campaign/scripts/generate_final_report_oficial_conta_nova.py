@@ -409,6 +409,87 @@ def external_pki_term(certs_manifest, profile, opinsize_profile):
     }
 
 
+# Semente fixa do bootstrap (Hodges-Lehmann, IC 95%) -- registrada aqui e
+# citada no relatorio, nunca reamostrada com semente aleatoria/do sistema.
+BOOTSTRAP_SEED = 20261116
+BOOTSTRAP_ITERS = 10000
+
+
+def holm_adjust(pvalues):
+    """Correcao de Holm (step-down), algoritmo padrao: ordena os p-valores
+    crescentes, aplica o fator (n-rank), impoe monotonicidade (nunca um
+    p-valor ajustado menor que o anterior na ordem), devolve na MESMA ordem
+    de entrada."""
+    n = len(pvalues)
+    order = sorted(range(n), key=lambda i: pvalues[i])
+    adjusted = [0.0] * n
+    running_max = 0.0
+    for rank, idx in enumerate(order):
+        adj = (n - rank) * pvalues[idx]
+        running_max = max(running_max, adj)
+        adjusted[idx] = min(running_max, 1.0)
+    return adjusted
+
+
+def cliffs_delta(b, a):
+    """Delta de Cliff de B em relacao a A: P(B>A) - P(B<A), sobre todos os
+    pares (x em B, y em A). +1 = todo valor de B acima de todo valor de A;
+    -1 = o inverso; 0 = nenhuma tendencia. Calculado por contagem direta
+    (n*m pares, trivial pra n=m=10), nunca derivado de forma indireta."""
+    gt = sum(1 for x in b for y in a if x > y)
+    lt = sum(1 for x in b for y in a if x < y)
+    return (gt - lt) / (len(b) * len(a))
+
+
+def hodges_lehmann(b, a):
+    """Estimador de Hodges-Lehmann de B menos A: mediana de TODAS as
+    diferencas pareadas (x-y, x em B, y em A) -- nao a diferenca das
+    medianas (Secao 4.1/4.2 ja reporta essa, separadamente)."""
+    diffs = [x - y for x in b for y in a]
+    return st.median(diffs)
+
+
+def hodges_lehmann_bootstrap_ci(b, a, seed, iters):
+    """IC 95% bootstrap do estimador de Hodges-Lehmann: reamostra B e A
+    (com reposicao, tamanhos originais) `iters` vezes, semente FIXA (nunca
+    semente de sistema/relogio), recalcula HL a cada reamostragem, devolve
+    o percentil [2,5;97,5] das estimativas."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    b_arr = np.array(b)
+    a_arr = np.array(a)
+    estimates = np.empty(iters)
+    for i in range(iters):
+        rb = rng.choice(b_arr, size=len(b_arr), replace=True)
+        ra = rng.choice(a_arr, size=len(a_arr), replace=True)
+        estimates[i] = np.median(rb[:, None] - ra[None, :])
+    lo, hi = np.percentile(estimates, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def route_pair_test(latency, prof_b, prof_a, route):
+    """Testa e quantifica B vs. A (ex.: PQC vs. Classic -> prof_b=pqc,
+    prof_a=classico) numa rota: Mann-Whitney U EXATO bilateral (n=10 cada,
+    sem empates esperados em medicao continua), diferenca de medianas
+    (ms e %), Hodges-Lehmann com IC 95% bootstrap, e delta de Cliff."""
+    from scipy.stats import mannwhitneyu
+    b_vals = latency[(prof_b, route)]["values"]
+    a_vals = latency[(prof_a, route)]["values"]
+    res = mannwhitneyu(b_vals, a_vals, alternative="two-sided", method="exact")
+    median_a = st.median(a_vals)
+    median_b = st.median(b_vals)
+    hl = hodges_lehmann(b_vals, a_vals)
+    hl_lo, hl_hi = hodges_lehmann_bootstrap_ci(b_vals, a_vals, BOOTSTRAP_SEED, BOOTSTRAP_ITERS)
+    return {
+        "p_raw": res.pvalue,
+        "median_a_ms": median_a * 1000, "median_b_ms": median_b * 1000,
+        "diff_ms": (median_b - median_a) * 1000,
+        "diff_pct": pct(median_b, median_a),
+        "hl_ms": hl * 1000, "hl_ci_ms": (hl_lo * 1000, hl_hi * 1000),
+        "cliffs_delta": cliffs_delta(b_vals, a_vals),
+    }
+
+
 def fmt(n, nd=2):
     if isinstance(n, int):
         return f"{n:,}".replace(",", ".")
@@ -811,8 +892,8 @@ def main():
     w("")
     w(f"**Contagens agregadas:** Classic×PQC se sobrepõem em **{n_overlap_cp}/8** rotas; "
       f"PQC×Hybrid se sobrepõem em **{n_overlap_ph}/8** rotas. Onde os intervalos se sobrepõem, a ordem das "
-      "medianas naquela rota específica não é lida como robusta somente a partir desta tabela -- nenhum teste de "
-      "significância foi reaplicado nesta rodada (fora do escopo desta entrega).")
+      "medianas naquela rota específica não é lida como robusta somente a partir desta tabela -- "
+      "ver análise de significância na Seção 5.")
     w("")
 
     w("### 4.4 Inversão em L0-sa-east-1 (PQC com mediana abaixo de Classic): os 10 valores reais, sem causa atribuída")
@@ -843,8 +924,141 @@ def main():
       "e a ordem mostram diretamente.")
     w("")
 
-    # ---- 5. Critérios --------------------------------------------------
-    w("## 5. Critérios técnicos (1-7)")
+    # ---- 5. Significancia estatistica ----------------------------------
+    w("## 5. Significância estatística dos contrastes entre perfis (análise exploratória)")
+    w("")
+    w("**Declaração explícita de escopo:** esta é uma análise **EXPLORATÓRIA, não pré-registrada** -- os 16 "
+      "contrastes principais abaixo (Classic×PQC e PQC×Hybrid, por par adjacente, nas 8 rotas) foram escolhidos "
+      "DEPOIS de já ter visto a descrição dos dados nas Seções 4.1-4.4 desta mesma versão do relatório, não antes "
+      "da coleta. Limitada a estes 16 contrastes pré-definidos; não tem o peso de uma análise confirmatória -- "
+      "quantifica e testa o que já foi observado descritivamente, não valida uma hipótese fixada de antemão.")
+    w("")
+
+    w("### 5.1 Testes por rota -- Classic×PQC e PQC×Hybrid (16 testes principais)")
+    w("")
+    w("Mann-Whitney U exato, bilateral, n=10 por grupo (medição contínua, sem empates esperados). p-valor ajustado "
+      "por Holm sobre o conjunto dos 16 testes principais abaixo -- família PRÓPRIA, separada dos 16 testes com "
+      "Control (Seção 5.2). Hodges-Lehmann: mediana de todas as diferenças pareadas (não a diferença das medianas, "
+      "reportada em separado); IC 95% via bootstrap, semente fixa, 10.000 reamostragens (ver nota de reprodutibilidade "
+      "abaixo). Delta de Cliff escolhido como medida de magnitude de efeito (em vez de probabilidade de superioridade "
+      "bruta) por ser a convenção mais padrão em comparações não-paramétricas de amostras pequenas -- é "
+      "numericamente equivalente a 2×P(superioridade)-1, então a informação de probabilidade de superioridade "
+      "continua recuperável a partir dele.")
+    w("")
+    pairs_main = [("pqc", "classico", "PQC vs. Classic"), ("hibrido-and", "pqc", "Hybrid vs. PQC")]
+    main_results = []
+    for prof_b, prof_a, label in pairs_main:
+        for route in ROUTES:
+            r = route_pair_test(latency, prof_b, prof_a, route)
+            r["route"] = route
+            r["label"] = label
+            main_results.append(r)
+    main_adj = holm_adjust([r["p_raw"] for r in main_results])
+    for r, adj in zip(main_results, main_adj):
+        r["p_holm"] = adj
+    w("| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
+    w("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    for r in main_results:
+        sig = "SIM" if r["p_holm"] < 0.05 else "NÃO"
+        w(f"| {r['route']} | {r['label']} | {fmt(r['median_a_ms'], 1)} | {fmt(r['median_b_ms'], 1)} | "
+          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt(r['p_raw'], 4)} | {fmt(r['p_holm'], 4)} | "
+          f"{fmt(r['hl_ms'], 1)} | [{fmt(r['hl_ci_ms'][0], 1)};{fmt(r['hl_ci_ms'][1], 1)}] | "
+          f"{fmt(r['cliffs_delta'], 3)} | {sig} |")
+    w("")
+
+    w("### 5.2 Contrastes com Control -- Control×Hybrid e Control×PQC (16 testes, FORA DO ESCOPO da tese)")
+    w("")
+    w("**Fora do escopo central desta tese** -- consistente com a separação de Control das comparações principais "
+      "(Seção 2). Reportados aqui só por completude metodológica, família de Holm PRÓPRIA (separada dos 16 testes "
+      "principais da Seção 5.1 -- nunca misturada no mesmo ajuste).")
+    w("")
+    pairs_control = [("hibrido-v8", "hibrido-and", "Control vs. Hybrid"), ("hibrido-v8", "pqc", "Control vs. PQC")]
+    control_results = []
+    for prof_b, prof_a, label in pairs_control:
+        for route in ROUTES:
+            r = route_pair_test(latency, prof_b, prof_a, route)
+            r["route"] = route
+            r["label"] = label
+            control_results.append(r)
+    control_adj = holm_adjust([r["p_raw"] for r in control_results])
+    for r, adj in zip(control_results, control_adj):
+        r["p_holm"] = adj
+    w("| Rota | Par | Mediana A (ms) | Mediana B (ms) | Dif (ms) | Dif (%) | p bruto | p Holm (16) | Hodges-Lehmann (ms) | IC 95% bootstrap (ms) | Delta de Cliff | Significante (Holm, α=0,05)? |")
+    w("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    for r in control_results:
+        sig = "SIM" if r["p_holm"] < 0.05 else "NÃO"
+        w(f"| {r['route']} | {r['label']} | {fmt(r['median_a_ms'], 1)} | {fmt(r['median_b_ms'], 1)} | "
+          f"{fmt(r['diff_ms'], 1)} | {fmt(r['diff_pct'], 2)}% | {fmt(r['p_raw'], 4)} | {fmt(r['p_holm'], 4)} | "
+          f"{fmt(r['hl_ms'], 1)} | [{fmt(r['hl_ci_ms'][0], 1)};{fmt(r['hl_ci_ms'][1], 1)}] | "
+          f"{fmt(r['cliffs_delta'], 3)} | {sig} |")
+    w("")
+
+    w("### 5.3 Teste agregado entre rotas")
+    w("")
+    from scipy.stats import binomtest, wilcoxon
+    n_pqc_gt = sum(1 for route in ROUTES if latency[("pqc", route)]["median"] > latency[("classico", route)]["median"])
+    n_hyb_gt = sum(1 for route in ROUTES if latency[("hibrido-and", route)]["median"] > latency[("pqc", route)]["median"])
+    sign_pqc = binomtest(n_pqc_gt, 8, 0.5, alternative="two-sided")
+    sign_hyb = binomtest(n_hyb_gt, 8, 0.5, alternative="two-sided")
+    w("**Teste do sinal bilateral exato** (contagem de rotas, entre as 8, onde a mediana do 2º perfil supera a do 1º):")
+    w("")
+    w("| Comparação | Rotas onde supera | p-valor (sinal, exato) |")
+    w("|---|---:|---:|")
+    w(f"| PQC > Classic | {n_pqc_gt}/8 | {fmt(sign_pqc.pvalue, 4)} |")
+    w(f"| Hybrid > PQC | {n_hyb_gt}/8 | {fmt(sign_hyb.pvalue, 4)} |")
+    w("")
+    pqc_pct_diffs = [pct(latency[("pqc", route)]["median"], latency[("classico", route)]["median"]) for route in ROUTES]
+    hyb_pct_diffs = [pct(latency[("hibrido-and", route)]["median"], latency[("pqc", route)]["median"]) for route in ROUTES]
+    w("**Wilcoxon signed-rank sobre as 8 diferenças percentuais de mediana por rota** (não um teste por execução "
+      "individual -- um valor por rota, 8 no total):")
+    w("")
+    try:
+        w_pqc = wilcoxon(pqc_pct_diffs)
+        w_hyb = wilcoxon(hyb_pct_diffs)
+        w("| Comparação | p-valor (Wilcoxon signed-rank) |")
+        w("|---|---:|")
+        w(f"| PQC vs. Classic (8 diferenças %) | {fmt(w_pqc.pvalue, 4)} |")
+        w(f"| Hybrid vs. PQC (8 diferenças %) | {fmt(w_hyb.pvalue, 4)} |")
+    except Exception as e:
+        w(f"**Não aplicado** -- `scipy.stats.wilcoxon` não permitiu rodar sobre esta amostra (n=8): `{e}`. "
+          "Reportado explicitamente em vez de forçar um resultado.")
+    w("")
+
+    n_sig_pqc = sum(1 for r in main_results if r["label"] == "PQC vs. Classic" and r["p_holm"] < 0.05)
+    n_sig_hyb = sum(1 for r in main_results if r["label"] == "Hybrid vs. PQC" and r["p_holm"] < 0.05)
+    l0_inversion = next(r for r in main_results if r["label"] == "PQC vs. Classic" and r["route"] == "L0-sa-east-1")
+    l0_sig_text = "**É** estatisticamente significativa" if l0_inversion["p_holm"] < 0.05 else "**NÃO é** estatisticamente significativa"
+    w("### 5.4 Leitura factual (sem afirmar robustez onde o teste não sustenta)")
+    w("")
+    w(f"**PQC vs. Classic:** significativo após Holm (α=0,05) em **{n_sig_pqc}/8** rotas; não significativo nas "
+      f"outras {8 - n_sig_pqc}/8. **Hybrid vs. PQC:** significativo após Holm em **{n_sig_hyb}/8** rotas; não "
+      f"significativo nas outras {8 - n_sig_hyb}/8.")
+    w("")
+    w(f"**Inversão em L0-sa-east-1 (Seção 4.4, PQC com mediana abaixo de Classic):** pelo teste de Mann-Whitney "
+      f"exato com correção de Holm sobre os 16 testes principais, essa diferença {l0_sig_text} "
+      f"(p bruto={fmt(l0_inversion['p_raw'], 4)}, p Holm={fmt(l0_inversion['p_holm'], 4)}, "
+      f"delta de Cliff={fmt(l0_inversion['cliffs_delta'], 3)}). Nenhuma afirmação de robustez é feita para nenhum "
+      "contraste cujo p-valor ajustado por Holm não exclua a hipótese nula a α=0,05 -- as células marcadas \"NÃO\" "
+      "nas tabelas acima permanecem lidas como não-significativas, não como \"quase significativas\" ou similar.")
+    w("")
+
+    w("### 5.5 Ressalva de desenho (deriva de rede dentro do bloco sequencial de cada rota)")
+    w("")
+    w("Dentro de cada rota, os 4 blocos de perfil rodam **sequencialmente** (ordem sorteada por rota, semente "
+      f"`{manifest['seed']}`, já documentada na Seção 1 -- `route_orders`) -- então deriva de rede ao longo do "
+      "tempo (ex.: variação de condições de rede entre o início e o fim da janela daquela rota específica) pode "
+      "contribuir para parte das diferenças observadas entre perfis DENTRO da mesma rota. A aleatorização da ordem "
+      "ENTRE rotas (cada rota tem uma ordem potencialmente diferente, Seção 1) reduz, mas **não elimina**, esse "
+      "efeito -- não há controle por bloco dentro de uma única rota (os 4 perfis não rodam entrelaçados/alternados "
+      "dentro da mesma rota, rodam em 4 blocos consecutivos).")
+    w("")
+    w(f"**Nota de reprodutibilidade do bootstrap:** semente fixa `{BOOTSTRAP_SEED}`, {fmt(BOOTSTRAP_ITERS)} "
+      "reamostragens, `numpy.random.default_rng` -- nunca semente de sistema/relógio. Rodar este mesmo script "
+      "novamente reproduz exatamente os mesmos intervalos de confiança.")
+    w("")
+
+    # ---- 6. Critérios --------------------------------------------------
+    w("## 6. Critérios técnicos (1-7)")
     w("")
     w("| Critério | Resultado |")
     w("|---|---|")
@@ -852,7 +1066,7 @@ def main():
         res = "PASS" if pass_by_crit[cid] else "**FAIL**"
         w(f"| {cid} ({crit_names[cid]}) | {res} |")
     w("")
-    w("### 5.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)")
+    w("### 6.1 Critério 7 -- RTT nominal vs. medido, por rota (exceção documentada em L30)")
     w("")
     w("| Rota | RTT nominal (ms) | RTT medido, probe (ms) | RTT medido, pcap (ms) | Dentro de ±10%? |")
     w("|---|---:|---:|---:|---|")
@@ -871,14 +1085,14 @@ def main():
       "cada perfil roda sob o mesmo RTT real em L30, então esta exceção não compromete nenhuma comparação entre "
       "perfis, apenas o critério de sanidade absoluta desta rota específica contra seu valor nominal cadastrado.")
     w("")
-    w(f"### 5.2 Retries de transporte: {retries['total_retries']} (zero)")
+    w(f"### 6.2 Retries de transporte: {retries['total_retries']} (zero)")
     w("")
     w(f"`retries_report.json`: `total_retries={retries['total_retries']}`, `por_celula={retries['por_celula']}` -- "
       "nenhuma das 320 execuções oficiais precisou de retry de transporte HTTP/mTLS.")
     w("")
 
     # ---- 6. Canal interno AS->RS ---------------------------------------
-    w("## 6. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)")
+    w("## 7. Canal interno AS<->RS (permanece clássico em todos os 4 perfis)")
     w("")
     w("**Mecanismo, confirmado por código (não assumido):** `thesis/results/v9/integration/gateway/business_server.go:246-250` -- "
       "`attachInternalCallerCarveOut` monta um `cfg.GetConfigForClient` cuja única condição é `hello.ServerName == internalCallerSNI` "
@@ -909,7 +1123,7 @@ def main():
     w("")
 
     # ---- 7. Custo -------------------------------------------------
-    w("## 7. Custo e duração (sem teardown -- nenhum valor aqui é \"final\")")
+    w("## 8. Custo e duração (sem teardown -- nenhum valor aqui é \"final\")")
     w("")
     w(f"Fórmula real (`cost_tracker.CostTracker`), frota real (12 instâncias: 1 `t4g.micro` + 11 `m7i-flex.large`, "
       f"12 EIPs), `window_start_utc` derivado da primeira linha real de `cost_tracker.jsonl` "
@@ -927,24 +1141,24 @@ def main():
     w("")
 
     # ---- 8. Transparência -----------------------------------------------
-    w("## 8. Transparência e limites de escopo")
+    w("## 9. Transparência e limites de escopo")
     w("")
     w("- **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle "
       "reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho.")
     w("- **O total de Controle fica abaixo do total de PQC, mas não termo a termo** -- ver a reconciliação completa "
       "na Seção 3: Controle fica abaixo do PQC somente no termo mTLS, e acima nos outros 3 termos.")
-    w("- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 5.1).")
+    w("- **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 6.1).")
     w("- **Conexões internas AS->RS ficam fora da equação OPINsize** -- o termo mede apenas o que atravessa o canal "
-      "client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho (Seção 6).")
+      "client-facing (gateway mTLS); o canal interno permanece clássico e não migrado, por desenho (Seção 7).")
     w("- **Ressalva de reprodutibilidade:** pacotes do sistema operacional (AMI e `dnf`) instalados no momento do "
       "provisionamento desta campanha não têm suas versões exatas re-fixadas por nenhum manifesto além do que o "
       "documento de fatos dos hosts (auditoria somente-leitura, entregue separadamente) registrou -- uma reconstrução "
       "futura a partir de uma AMI mais nova pode obter versões de pacote diferentes das observadas aqui, sem que isso "
-      "indique nenhuma mudança no código/binários desta tese (esses seguem pinados, verificados conforme a Seção 9).")
+      "indique nenhuma mudança no código/binários desta tese (esses seguem pinados, verificados conforme a Seção 10).")
     w("")
 
     # ---- 9. Reprodutibilidade -----------------------------------------
-    w("## 9. Reprodutibilidade")
+    w("## 10. Reprodutibilidade")
     w("")
     w("**Integridade das imagens Docker, por imagem, com a garantia real de cada uma (não uma frase genérica):**")
     w("")
