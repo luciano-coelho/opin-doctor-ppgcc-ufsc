@@ -1,0 +1,17 @@
+operacao                              n          ns/op          ops/s
+RSA-2048 keygen                     100       58758779             17
+RSA-2048 sign (PSS-SHA256)         2000         902882           1108
+RSA-2048 verify (PSS-SHA256)       2000          30604          32675
+ML-DSA-65 keygen                    100         301615           3315
+ML-DSA-65 sign                     2000         535535           1867
+ML-DSA-65 verify                   2000         144189           6935
+ECDH P-384 keygen                  2000         108071           9253
+ECDH P-384 compute (KEX)           2000         494856           2021
+ML-KEM-1024 keygen                 2000          74711          13385
+ML-KEM-1024 encapsulate            2000          49449          20223
+ML-KEM-1024 decapsulate            2000          72132          13864
+
+Custo de KEX por perfil (soma das operacoes acima que o handshake realmente executa):
+  Classico     (CurveP384):            1x ECDH P-384 keygen + 1x ECDH P-384 compute
+  PQC          (MLKEM1024):             1x ML-KEM-1024 keygen (cliente) + 1x encapsulate (servidor) + 1x decapsulate (cliente)
+  Hibrido/AND  (SecP384r1MLKEM1024):    soma das duas linhas acima (combinador concatena os dois segredos)

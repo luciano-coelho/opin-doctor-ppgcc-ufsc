@@ -1,0 +1,9 @@
+operacao                                n              ns/op              ops/s
+Classic: client vs CA (RSA)          2000          30621 ns/op          32657 ops/s
+PQC: client vs CA (ML-DSA-65)        2000         151844 ns/op           6586 ops/s
+Control: client vs CA (RSA)          2000          27337 ns/op          36581 ops/s
+Hybrid: client vs CA (RSA, primaria)       2000          23191 ns/op          43120 ops/s
+
+LIMITACAO DE ESCOPO: a verificacao ADICIONAL do AltSignatureValue ML-DSA-65 do Hibrido-AND
+(callback customizado hybridVerifyPeerCertificateFunc, fora do x509.Verify padrao) NAO
+foi reproduzida neste microbenchmark -- so a cadeia RSA primaria foi medida.
