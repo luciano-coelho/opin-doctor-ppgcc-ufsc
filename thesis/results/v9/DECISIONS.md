@@ -13786,3 +13786,17 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 - `refs/tags/v9-relatorio-consolidado-final-rev2` -> `6b441b4aa0085f8a152793b732812ea972df95ef` (mesmo commit da branch)
 
 Nenhuma tag com sufixo nova alem desta; `main` nunca tocada; nenhuma acao AWS/infra nesta rodada.
+
+## Decisao 208 -- Degrau 2, Etapa 0 CONCLUIDA (so local, nenhum comando AWS): pre-registro commitado antes de qualquer analise, mudanca aditiva em orchestrator.py testada e commitada, scripts probe_overhead.py/collect_cpu_info.py escritos, inventario reduzido (8 hosts, sem IPs reais) preparado; tag local v9-degrau2-pre criada (nao publicada); PARADO aguardando autorizacao da Etapa 1
+
+**Item 1 -- `PLANO_DEGRAU2.md`** (commit `62f57326`, ANTES de qualquer analise): 5 hipoteses (D1-D5), cada uma com previsao numerica e criterio de decisao declarados antes de ver qualquer dado novo; sementes `20261117`/`20261118` registradas; Control fora de escopo explicito.
+
+**Item 2 -- mudanca aditiva em `orchestrator.py`** (commit `02b1fa9d`): 2 chaves novas (`t_fluxo_fino_seconds`, `phase_accounting`) no dict de retorno de `run_execution`, lendo do mesmo `result` ja disponivel -- nenhuma chave existente removida/renomeada, nenhum outro arquivo de medicao tocado. Testado com `result` SIMULADO (mock, nunca execucao real/SSH) -- 3 casos (campos presentes, ausentes/compatibilidade retroativa, conjunto de chaves do dict completo), todos passando. Suite existente (`test_orchestrator.py`, 143 testes) roda sem nenhuma falha apos a mudanca. Tag LOCAL `v9-degrau2-pre` criada neste commit, NAO publicada (confirmado, `git ls-remote` vazio pra essa tag).
+
+**Item 3 -- scripts novos** (commit `4598a2e7`): `probe_overhead.py` (TCP connect puro + handshake SSH + SSH+cold-start Python, 30 repeticoes cada, a partir do controle -- substitui as aproximacoes externas de RTT do Degrau 1 por medicao real) e `collect_cpu_info.py` (lscpu/cpuinfo/nproc/kernel, somente leitura, reusa `cli.run_ssh()` existente, nunca reimplementa SSH). Nenhum dos dois executado contra a AWS nesta rodada -- so sintaxe verificada localmente (`py_compile`) e logica testada com mocks onde aplicavel.
+
+**Item 4 -- inventario reduzido** (mesmo commit): 8 hosts (controle + 3 servidores + 4 clientes), reaproveitando a frota existente -- confirmado que o servidor de `L123` e o mesmo de `sa-east-1` (nenhuma instancia nova necessaria). Conta confirmada: 4 celulas x 3 perfis x 15 execucoes x 2 rodadas = 360 execucoes oficiais. **Nenhum IP real, ID de conta ou chave neste commit** -- `host`/`key_path` ficam como placeholder explicito, a resolver na Etapa 1 via `terraform output -json` ESCOPADO (nunca o output completo), gravado so num arquivo local fora do git.
+
+**Escaneamento final desta Etapa 0** (antes de cada commit): 0 IPs reais, 0 AKIA/ASIA, 0 cabecalho de chave privada, confirmado por grep nos diffs staged de cada commit.
+
+**PARADO aqui, conforme pedido.** Nenhum comando AWS executado em nenhum momento desta Etapa 0. Nenhum push feito (4 commits locais desde o ultimo push, incluindo a Decisao 207 anterior). Aguardando autorizacao explicita do usuario, sub-etapa por sub-etapa, pra iniciar a Etapa 1 -- a presenca confirmada do usuario hoje nao e autorizacao geral para todas as sub-etapas futuras da Etapa 1.
