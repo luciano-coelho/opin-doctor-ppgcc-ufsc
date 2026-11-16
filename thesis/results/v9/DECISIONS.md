@@ -13401,3 +13401,27 @@ A janela lancada na Decisao 188 terminou sozinha, sem nenhuma intervencao durant
 **Entrega:** commit LOCAL (sem push) de apenas 2 arquivos (o script corrigido e o relatorio regenerado) mais este registro em `DECISIONS.md` -- nenhum arquivo de dados brutos/organizados commitado nesta rodada (isso continua pendente, tarefa separada ja solicitada pelo Luciano). Nenhuma tag publicada movida.
 
 **PARADO aqui, aguardando a conferencia do Luciano sobre o relatorio corrigido.** Nenhuma acao de teardown foi tomada; a frota de 12 instancias permanece no ar, dead-man's-switch e chave da campanha intocados; sem push, sem IAM, sem `cleanup_campaign_key`.
+
+## Decisao 192 -- commit separado dos dados (organizados+manifesto+criterios+sha256 de tudo), achado real de seguranca (.keylog = segredo de sessao TLS, excluido do git), empacotamento verificado dos dados brutos (.tar.gz, zstd indisponivel) -- SEM teardown
+
+**Contexto:** o Luciano pediu que os dados fossem divididos em DOIS commits locais separados (relatorio+script de um lado, ja feito na Decisao 191; dados organizados+manifesto+criterios+sha256 do outro, feito agora) e que os dados brutos (pcaps/logs) fossem empacotados fora do git, com so o hash do pacote versionado.
+
+**Achado real de seguranca, ANTES de qualquer commit (varredura de segredos pedida explicitamente pelo Luciano antes de comitar):** `campaign_oficial_conta_nova_organized/artifacts/` contem **32 arquivos `.keylog`** (mais 78 no total entre `_raw`/`_organized` juntos) no formato NSS keylog (`CLIENT_HANDSHAKE_TRAFFIC_SECRET`, `SERVER_HANDSHAKE_TRAFFIC_SECRET`, etc.) -- segredos REAIS de sessao TLS 1.3. Nao sao credenciais AWS, mas sao material sensivel de verdade: combinados com os `.pcap` nas MESMAS pastas, decifram integralmente o trafego TLS capturado da campanha (JWTs, certificados, corpos HTTP em texto claro). PAREI antes de comitar e reportei ao Luciano, que confirmou: excluir `.keylog` do commit git (ficam so na copia local/no pacote offline), adicionar padrao ao `.gitignore`, reconferir segredos no que sobrou, e so entao prosseguir.
+
+**Acoes tomadas (nesta ordem):**
+1. `.gitignore`: adicionado `*.keylog` (qualquer lugar do repo) e `thesis/results/v9/campaign_oficial_conta_nova_raw/` completo (nunca entra por acidente num `git add` futuro).
+2. Gerado `thesis/results/v9/campaign_oficial_conta_nova_sha256_manifest.txt` -- sha256 de TODOS os 1.625 arquivos (724 em `_raw` + 1 em `_raw/pilot_evidence/` + 900 em `_organized`), incluindo os `.keylog` (so o HASH deles, nunca o conteudo) -- committed, serve de referencia de integridade mesmo pros arquivos que nao vao pro git.
+3. `git add` em `campaign_oficial_conta_nova_organized/` -- o `.gitignore` excluiu automaticamente os 32 `.keylog` desse diretorio (confirmado: 868 arquivos staged de 900 totais, diferenca exata de 32). `git add -f` nos 4 arquivos especificos de `_raw` que o pedido original listava como "manifestos"/"criterios avaliados": `manifest.json`, `manifest.sha256`, `opinsize_oficial_conta_nova.json`, `evaluate_criteria_oficial_resultado.json` (forcado porque o diretorio pai agora esta no `.gitignore`).
+4. Reconferida a varredura de segredos (padroes de chave privada, AKIA/ASIA, 12 digitos) em TODOS os 874 arquivos staged -- 0 ocorrencias. Confirmado tambem que nenhum arquivo staged passa de 100MB (maior arquivo real: pcaps de ~535KB).
+5. Commit LOCAL (sem push): 874 arquivos (`.gitignore` + os 4 arquivos de `_raw` + 868 de `_organized` + o manifesto sha256 novo).
+
+**Empacotamento dos dados brutos, verificado:**
+- zstd nao disponivel neste ambiente -- usado `.tar.gz` (registrado explicitamente, conforme a opcao de fallback do pedido original).
+- Pacote: `C:\Users\lucia_csx8nlz\mockopin-offline-data\campaign_oficial_conta_nova_raw.tar.gz` (fora do repositorio git, diretorio privado, nunca sob `MockOPIN\`). Tamanho: 100.340.836 bytes (~96MiB). sha256: `cdd10999aa19512c06cfdcd2b6fd825dc75b7bea325b4a31f57a532e55bf1228`.
+- Contem os 78 `.keylog` JUNTO com os `.pcap` correspondentes (os dois precisam estar juntos pra decifracao/depuracao offline, que e o proposito deste pacote local).
+- **Verificacao real feita antes de confiar no pacote:** extraido pra um diretorio temporario, os 725 arquivos resultantes conferidos um a um por sha256 contra o manifesto do item 2 -- **0 divergencias, 725/725 identicos**. Diretorio temporario removido depois. Registro completo: `thesis/results/v9/campaign_oficial_conta_nova_raw_package.md` (caminho+tamanho+sha256+metodo de verificacao, SEM o pacote em si).
+- A copia de trabalho local (`campaign_oficial_conta_nova_raw/`) nao foi alterada nem apagada -- o pacote e uma copia adicional.
+
+**Entrega:** dois commits locais DISTINTOS no total entre esta Decisao e a 191 -- (i) relatorio+script+Decisao 191 (commit `7df711de`); (ii) dados organizados+manifesto+criterios+sha256+`.gitignore` (commit `73a98551`, 874 arquivos). Mais este registro (Decisao 192) e `campaign_oficial_conta_nova_raw_package.md`, a serem commitados juntos. Sem push, sem mover tag publicada.
+
+**PARADO aqui, aguardando aprovacao do Luciano.** Nenhuma acao de teardown foi tomada ou sera tomada sem nova instrucao explicita; a frota de 12 instancias permanece no ar, dead-man's-switch e chave da campanha intocados; nenhum push, nenhum IAM, nenhum `cleanup_campaign_key`.
