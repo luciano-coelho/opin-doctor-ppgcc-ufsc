@@ -291,6 +291,20 @@ def external_mtls_gabarito():
 # `jwt_construction_counts_real`, zero variancia encontrada).
 RSA_2048_SIG_BYTES = 256       # assinatura RSA-2048 PS256 (= tamanho do modulo)
 MLDSA65_SIG_BYTES = 3309       # assinatura ML-DSA-65 pura, FIPS 204
+# Decisao 216 (DECISIONS.md) + sua Emenda -- corrige a Decisao 147.
+# MESMO dict de `thesis/scripts/opinsize_v9_oficial.py`'s
+# `ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE` (fonte real da correcao
+# aplicada a `opinsize_oficial_conta_nova.json`) -- duplicado aqui
+# porque este script nunca importa aquele modulo (so le o JSON ja
+# computado), mas usado SO pra reconferir a verificacao independente
+# por especificacao (Secao 2.4.1) contra o MESMO numero que o pipeline
+# real ja usa, nunca um numero novo inventado so pra bater.
+ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE = {
+    "classico": RSA_2048_SIG_BYTES,
+    "pqc": MLDSA65_SIG_BYTES,
+    "hibrido-v8": RSA_2048_SIG_BYTES + MLDSA65_SIG_BYTES,
+    "hibrido-and": RSA_2048_SIG_BYTES + MLDSA65_SIG_BYTES,
+}
 MLDSA65_PK_BYTES = 1952        # chave publica ML-DSA-65 crua, FIPS 204
 RSA_2048_PK_BYTES = 256        # modulo RSA-2048 cru
 
@@ -371,12 +385,21 @@ def external_jwt_term(calls, profile, opinsize_profile):
             raise RuntimeError(f"{profile}: contagem de construcao {k!r} nao e constante por execucao ({v})")
     counts_per_exec = {k: int(v) for k, v in counts_per_exec.items()}
 
+    # Decisao 216 (DECISIONS.md) + sua Emenda: corrige a Decisao 147 --
+    # "jwe" (id_token) deixa de ser 0B. Medido localmente de verdade
+    # (nunca a frota AWS, ver thesis/results/v9/
+    # opinsize_correction_id_token/), a assinatura interna do id_token
+    # segue a MESMA tabela de bytes por perfil que todo outro artefato
+    # emitido pelo AS -- por isso reusa ID_TOKEN_INNER_SIG_BYTES_BY_
+    # PROFILE[profile] aqui, nunca um numero novo inventado so pra esta
+    # verificacao independente (teria que bater com o pipeline real por
+    # construcao, nunca so com o termo agregado).
     sig_bytes_by_construction = {
         "classic_only": RSA_2048_SIG_BYTES,
         "pqc_pure": MLDSA65_SIG_BYTES,
         "payload_extension": RSA_2048_SIG_BYTES + MLDSA65_SIG_BYTES,
         "strong_nesting": RSA_2048_SIG_BYTES + MLDSA65_SIG_BYTES,
-        "jwe": 0,
+        "jwe": ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE[profile],
     }
     expected_sum_per_exec = sum(counts_per_exec.get(c, 0) * b for c, b in sig_bytes_by_construction.items())
     n_jwt = opinsize_profile["n_jwt"]
@@ -699,7 +722,7 @@ def main():
     w("| Termo | Fonte da verificação | Resultado |")
     w("|---|---|---|")
     w("| mTLS | Independente do pipeline de medição (DER real dos certificados implantados, Seção 2.2 acima) | Bate exatamente, 4/4 perfis |")
-    w("| JWT | Independente do pipeline de medição (tamanho de assinatura por especificação -- RSA-2048/ML-DSA-65, FIPS 204) | Bate (ver Seção 2.4; resíduo fracionário explicado pela aritmetica do pipeline) |")
+    w("| JWT | Independente do pipeline de medição (tamanho de assinatura por especificação -- RSA-2048/ML-DSA-65, FIPS 204) | Bate exatamente, 4/4 perfis, 0 resíduo (ver Seção 2.4) |")
     w("| JWK | Independente do pipeline de medição (tamanho de chave pública por especificação + composição real de cada chamada) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |")
     w("| PKI | Independente do pipeline de medição (tamanho real dos arquivos de CA no disco + sobrecarga de framing HTTP, ambos confirmados em código) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |")
     w("")
@@ -741,19 +764,26 @@ def main():
       f"{fmt(r_c['expected_avg_rounded'])} | {fmt(r_c['expected_term_with_pipeline_rounding'])} | "
       f"{fmt(r_c['measured_term'])} | {fmt(diff_c)} |")
     w("")
-    w("**Explicação do resíduo fracionário (ex.: 86.033,92 vs. 86.034; 6.655,88 vs. 6.656; 92.690,08 vs. 92.690), "
-      "confirmada no código, não suposta:** `thesis/scripts/opinsize_v9_oficial.py` calcula "
-      "`jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois `term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- "
-      "a média por token é arredondada a 2 casas decimais ANTES de ser multiplicada por N_JWT=28, o que propaga um "
-      "resíduo de até ±0,14 byte em relação à soma exata por especificação. A tabela acima reproduz essa MESMA "
-      "aritmética (coluna \"Termo esperado\") e bate exatamente com o termo medido nos 4 perfis -- o resíduo não é um "
-      "erro de medição, é um efeito de arredondamento já presente no próprio pipeline, agora reproduzido e confirmado "
-      "aqui, não apenas suposto.")
+    w("**Mecanismo de arredondamento, confirmado no código, não suposto:** `thesis/scripts/opinsize_v9_oficial.py` "
+      "calcula `jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois "
+      "`term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- a média por token é arredondada a 2 casas decimais ANTES de ser "
+      "multiplicada por N_JWT=28. Antes da correção do id_token (Seção 9), os 2 tokens `jwe`/execução entravam na "
+      "média com 0 byte, diluindo-a e produzindo um resíduo fracionário de até ±0,16 byte entre a soma exata por "
+      "especificação e o termo medido (ex.: revisões anteriores deste relatório). **Após a correção, esse resíduo "
+      "desaparece nos 4 perfis** -- a tabela acima confirma: com a assinatura interna do id_token igual à de todo "
+      "outro token do mesmo perfil, os 28 valores por execução ficam uniformes, a média é exata, e a coluna "
+      "\"Diferença\" fecha em 0,00 nos 4 perfis, sem nenhum resíduo a explicar.")
     w("")
-    w("**Contribuição dos tokens JWE:** por construção (`_jwt_sig_bytes`, `thesis/scripts/opinsize_v9_oficial.py`), "
-      "um token `jwe` (criptografado, sem assinatura própria) contribui exatamente **0 bytes** a este termo -- "
-      "confirmado em código (`classical_sig_bytes`/`pq_sig_bytes` ambos `None`→0 para essa construção) e nos dados "
-      "reais (2 tokens `jwe` por execução, em todos os 4 perfis, nunca contados aqui).")
+    w("**Contribuição dos tokens JWE -- correção da Decisão 147 (ver Decisão 216 e sua Emenda em `DECISIONS.md`):** "
+      "a Decisão 147 original presumia que um token `jwe` (o id_token, cifrado) contribuía **0 bytes** a este termo "
+      "porque \"nunca é assinado via JWS\". Essa premissa estava errada: o id_token tem uma assinatura interna real, "
+      "que o cliente verifica após decifrar o JWE (`opin_flow.py`) -- o pipeline de captura em tempo real só nunca a "
+      "extraía, porque nunca decifra o JWE durante a execução real da campanha. Medida agora de verdade, numa "
+      "execução local real (nunca a frota AWS -- `thesis/results/v9/opinsize_correction_id_token/`), essa assinatura "
+      f"interna vale {RSA_2048_SIG_BYTES}B no Classic, {MLDSA65_SIG_BYTES}B no PQC e "
+      f"{RSA_2048_SIG_BYTES + MLDSA65_SIG_BYTES}B no Hybrid/Control -- os mesmos 2 tokens `jwe` por execução, em todos "
+      "os 4 perfis, agora contribuem esse valor ao termo JWT em vez de 0, e todos os números de OPINsize deste "
+      "relatório já refletem essa correção.")
     w("")
 
     w("#### 2.4.2 JWK -- tamanho de chave pública por especificação")
@@ -1284,6 +1314,16 @@ def main():
     # ---- 8. Transparência -----------------------------------------------
     w("## 9. Transparência e limites de escopo")
     w("")
+    w("- **Esta revisão corrige a Decisão 147 (`DECISIONS.md`): o termo JWT agora inclui a assinatura interna real "
+      "dos 2 id_tokens (JWE) por execução, antes contada como 0 byte.** A justificativa original (\"o id_token nunca "
+      "é assinado via JWS\") estava errada -- o id_token tem uma assinatura interna real, verificada pelo cliente "
+      "após decifrar o JWE; o pipeline de captura em tempo real só nunca a extraía (gap de instrumentação, não "
+      "ausência real da assinatura). Medida localmente (nunca a frota AWS), a correção está registrada, com toda a "
+      "prova e os dados brutos, na Decisão 216 e em sua Emenda (`DECISIONS.md`) -- ver também "
+      "`thesis/results/v9/opinsize_correction_id_token/`. Todos os números de OPINsize deste documento (Seções 2.1-2.5) "
+      "já refletem essa correção; o valor pré-correção fica preservado só para auditoria em "
+      "`opinsize_oficial_conta_nova.json` (`term_jwt_sem_correcao_id_token`), nunca somado em nenhuma variante de "
+      "OPINsize.")
     w("- **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle "
       "reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho.")
     w("- **O total de Controle fica abaixo do total de PQC, mas não termo a termo** -- ver a reconciliação completa "

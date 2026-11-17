@@ -4,6 +4,24 @@ BRUTO das 320 execucoes oficiais reais -- script NOVO, versionado,
 separado do orchestrator.py (etapa de analise independente, nunca
 roda durante a campanha, nunca e importado por ela).
 
+Decisao 216 (DECISIONS.md) + sua Emenda (mesmo dia): CORRIGE a
+Decisao 147 -- o token `jwe` (id_token) nao contribui mais 0 byte ao
+termo JWT. A Decisao 147 original presumia que o id_token "nunca e
+assinado via JWS, entao nao ha assinatura pra contar"; achado real
+(opin_flow.py:2476-2481,2487,837-838): o id_token TEM uma assinatura
+interna real, verificada pelo cliente apos decifrar o JWE -- o
+pipeline de captura em tempo real so nunca a EXTRAI (gap de
+instrumentacao, nunca ausencia real da assinatura). Medida localmente
+de verdade (nunca a frota AWS -- ver
+thesis/results/v9/opinsize_correction_id_token/
+measure_id_token_signature_local.py e
+id_token_signature_measurements.json), a correcao (`_jwt_sig_bytes`/
+`ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE`, abaixo) agora alimenta
+diretamente `term_jwt` e toda variante de OPINsize que o soma -- o
+valor PRE-correcao e preservado em paralelo, so pra auditoria, em
+`term_jwt_sem_correcao_id_token`/`jwt_sig_bytes_avg_sem_correcao_id_
+token`, nunca usado em nenhuma soma de OPINsize.
+
 Fontes de cada insumo, TODAS medidas nos dados reais desta campanha,
 nunca estimadas:
   - N_mTLS=6: contagem real de streams TCP distintos com SNI "mtls"
@@ -115,12 +133,47 @@ def _handshake_bytes_from_gateway_log(combined_log_path: Path, profile: str) -> 
     return round(statistics.mean(totals)), len(totals)
 
 
-def _jwt_sig_bytes(entry: dict) -> int:
-    """Bytes de assinatura de UM JWT (classical+pq somados, 0 se for
-    `jwe` -- encriptado, sem assinatura propria). Nunca usa o token
-    bruto (nao persistido por desenho, Decisao 139/140) -- so os
-    campos ja calculados por `baseline_automation.jwt_sig_breakdown`
-    na hora da execucao real."""
+# Decisao 216 (DECISIONS.md) + sua Emenda (mesmo dia): a Decisao 147
+# original afirmava que o token `jwe` (id_token) "nunca e assinado via
+# JWS, entao nao ha assinatura pra contar" -- achado confirmado no
+# codigo (opin_flow.py:2476-2481,2487,837-838) de que isso estava
+# ERRADO: o id_token TEM uma assinatura interna real, verificada pelo
+# proprio cliente apos decifrar o JWE (RSA-OAEP+A256GCM) com sua chave
+# "enc" real -- o pipeline de captura em tempo real
+# (baseline_automation.jwt_sig_breakdown) so nunca a EXTRAI, porque
+# nunca decifra o JWE (gap de instrumentacao, nao ausencia real da
+# assinatura). A Emenda a Decisao 216 mediu essa assinatura de verdade,
+# numa execucao LOCAL real (nunca a frota AWS, docker compose local,
+# ver thesis/results/v9/opinsize_correction_id_token/
+# measure_id_token_signature_local.py e
+# id_token_signature_measurements.json) -- confirmou que a assinatura
+# interna do id_token segue EXATAMENTE a mesma tabela de bytes por
+# construcao que todo outro artefato emitido pelo AS (JARM, Strong
+# Nesting) ja documentada nesta mesma Decisao 147: RSA-2048 PS256 puro
+# pro Classico, ML-DSA-65 pura pro PQC, a soma das duas (Strong
+# Nesting) pro Hybrid/Control -- byte a byte identica a uma estimativa
+# por analogia feita ANTES da medicao real, confirmando a premissa.
+ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE = {
+    "classico": 256,        # RSA-2048 PS256 (medido real, Emenda a Decisao 216)
+    "pqc": 3309,             # ML-DSA-65 pura, FIPS 204 (medido real, idem)
+    "hibrido-v8": 3309 + 256,  # Strong Nesting = sigma1(256)+sigma2(3309) (medido real, idem)
+    "hibrido-and": 3309 + 256,  # idem -- identico ao hibrido-v8 (mesma camada de aplicacao, so o TLS difere)
+}
+
+
+def _jwt_sig_bytes(entry: dict, profile: str | None = None) -> int:
+    """Bytes de assinatura de UM JWT (classical+pq somados). Para a
+    construcao `jwe` (id_token, encriptado -- o pipeline de captura em
+    tempo real nunca extrai sua assinatura interna, ver Decisao 216 +
+    Emenda acima), usa a correcao medida em `ID_TOKEN_INNER_SIG_BYTES_
+    BY_PROFILE` quando um `profile` e passado -- 0 (comportamento
+    ANTIGO, pre-Decisao 216) se nenhum perfil for passado, nunca
+    assumido silenciosamente. Nunca usa o token bruto (nao persistido
+    por desenho, Decisao 139/140) -- so os campos ja calculados por
+    `baseline_automation.jwt_sig_breakdown` na hora da execucao real,
+    mais a correcao medida localmente para `jwe` especificamente."""
+    if entry.get("construction") == "jwe" and profile is not None:
+        return ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE[profile]
     c = entry.get("classical_sig_bytes") or 0
     p = entry.get("pq_sig_bytes") or 0
     return c + p
@@ -157,6 +210,7 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
         n_jwk_per_exec = []
         n_pki_per_exec = []
         jwt_sig_sizes_all = []
+        jwt_sig_sizes_all_sem_correcao_id_token = []  # Decisao 216: preservado so pra transparencia/auditoria, nunca usado no termo oficial abaixo
         jwt_full_sizes_all = []
         jwk_response_sizes_all = []
         jwk_raw_sizes_all = []
@@ -186,7 +240,8 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
                 # convencao propria desta tese, "Variante A").
                 for i, b in enumerate(breakdown):
                     construction_counts[b["construction"]] += 1
-                    jwt_sig_sizes_all.append(_jwt_sig_bytes(b))
+                    jwt_sig_sizes_all.append(_jwt_sig_bytes(b, profile))
+                    jwt_sig_sizes_all_sem_correcao_id_token.append(_jwt_sig_bytes(b))
                     jwt_full_sizes_all.append(full_sizes[i])
                 if c["endpoint"] == "/jwks":
                     jwk_count += 1
@@ -219,6 +274,7 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
         handshake_bytes, n_connections_gateway_log = _handshake_bytes_from_gateway_log(combined_log, profile)
         handshake_bytes_capture_informativo, capture_source = _handshake_bytes_from_capture(capturas_dir, profile)
         jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)
+        jwt_sig_avg_sem_correcao_id_token = round(statistics.mean(jwt_sig_sizes_all_sem_correcao_id_token), 2)
         jwt_full_avg = round(statistics.mean(jwt_full_sizes_all), 2)
         jwk_avg = round(statistics.mean(jwk_response_sizes_all), 2)
         jwk_raw_avg = round(statistics.mean(jwk_raw_sizes_all), 2)
@@ -226,6 +282,12 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
 
         term_mtls = n_mtls * handshake_bytes
         term_jwt = round(n_jwt * jwt_sig_avg, 2)
+        # Decisao 216 + Emenda: preservado so pra transparencia/auditoria
+        # (o termo PRE-correcao, exatamente como a Decisao 147 original
+        # calculava -- "jwe" contribuindo 0) -- NUNCA usado em nenhuma
+        # soma/variante de OPINsize abaixo, so exposto no JSON pra quem
+        # quiser reconferir o delta exato desta correcao.
+        term_jwt_sem_correcao_id_token = round(n_jwt * jwt_sig_avg_sem_correcao_id_token, 2)
         term_jwt_full = round(n_jwt * jwt_full_avg, 2)
         term_jwk = round(n_jwk * jwk_avg, 2)
         term_jwk_raw = round(n_jwk * jwk_raw_avg, 2)
@@ -241,6 +303,7 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
             "handshake_bytes_capture_derived_informativo": handshake_bytes_capture_informativo,
             "handshake_bytes_capture_source_informativo": capture_source,
             "jwt_sig_bytes_avg": jwt_sig_avg,
+            "jwt_sig_bytes_avg_sem_correcao_id_token": jwt_sig_avg_sem_correcao_id_token,
             "jwt_full_token_bytes_avg": jwt_full_avg,
             "jwt_construction_counts_per_execution": dict(construction_counts),
             "jwk_response_bytes_avg": jwk_avg,
@@ -248,6 +311,15 @@ def analyze(calls_json: Path, capturas_dir: Path, combined_log: Path) -> dict:
             "pki_response_bytes_avg": pki_avg,
             "term_mtls_handshake": term_mtls,
             "term_jwt": term_jwt,
+            "term_jwt_sem_correcao_id_token": term_jwt_sem_correcao_id_token,
+            "id_token_inner_sig_bytes_correction": {
+                "applied": True,
+                "value_per_token": ID_TOKEN_INNER_SIG_BYTES_BY_PROFILE[profile],
+                "n_jwe_tokens_per_execution": construction_counts.get("jwe", 0) // len(execs) if execs else 0,
+                "source": "Decisao 216 (DECISIONS.md) + sua Emenda -- medicao local real, "
+                          "thesis/results/v9/opinsize_correction_id_token/id_token_signature_measurements.json",
+                "corrects": "Decisao 147 (justificativa original de que o jwe contribui 0 byte, SUPERADA)",
+            },
             "term_jwt_full_token": term_jwt_full,
             "term_jwk": term_jwk,
             "term_jwk_raw": term_jwk_raw,

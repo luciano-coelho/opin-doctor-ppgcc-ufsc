@@ -26,37 +26,37 @@ Comparação central desta tese: **Classic / PQC / Hybrid**. O perfil Control é
 
 | Perfil | OPINsize (bytes) | Razão vs. Classic |
 |---|---:|---:|
-| Classic | 34.071,88 | 1,00x |
-| PQC | 256.429,92 | 7,53x |
-| Hybrid | 286.202,08 | 8,40x |
+| Classic | 34.584,00 | 1,00x |
+| PQC | 263.048 | 7,61x |
+| Hybrid | 293.332,00 | 8,48x |
 
-**Hybrid menos PQC: 29.772,16 bytes** (11,61% a mais que PQC puro).
+**Hybrid menos PQC: 30.284,00 bytes** (11,51% a mais que PQC puro).
 
 **Perfil Control, separado (não entra na comparação central Classic/PQC/Hybrid acima):**
 
 | Perfil | OPINsize (bytes) | Razão vs. Classic |
 |---|---:|---:|
-| Control | 242.008,08 | 7,10x |
+| Control | 249.138 | 7,20x |
 
 ### 2.2 OPINsize por termo, por perfil, contagens N
 
 | Termo | N por execução | Classic | PQC | Hybrid |
 |---|---:|---:|---:|---:|
 | mTLS (handshake) | 6 | 18.750 | 129.636 | 144.474 |
-| JWT (apenas assinatura) | 28 | 6.655,88 | 86.033,92 | 92.690,08 |
+| JWT (apenas assinatura) | 28 | 7.168 | 92.652 | 99.820 |
 | JWK (chave crua) | 4 | 1.536 | 8.320 | 9.856 |
 | PKI (certificados de CA) | 4 | 7.130,00 | 32.440 | 39.182,00 |
-| **OPINsize (total)** | 44 chamadas/execução | **34.071,88** | **256.429,92** | **286.202,08** |
+| **OPINsize (total)** | 44 chamadas/execução | **34.584,00** | **263.048** | **293.332,00** |
 
 **Perfil Control, por termo (separado):**
 
 | Termo | N por execução | Control |
 |---|---:|---:|
 | mTLS (handshake) | 6 | 101.694 |
-| JWT (apenas assinatura) | 28 | 92.690,08 |
+| JWT (apenas assinatura) | 28 | 99.820 |
 | JWK (chave crua) | 4 | 9.856 |
 | PKI (certificados de CA) | 4 | 37.768 |
-| **OPINsize (total)** | 44 chamadas/execução | **242.008,08** |
+| **OPINsize (total)** | 44 chamadas/execução | **249.138** |
 
 **Sobre o rótulo "PKI":** as 4 chamadas deste termo são, confirmado em código (`thesis/scripts/opinsize_v9_oficial.py`, `PKI_ENDPOINTS = {"/root-ca.pem", "/issuer-ca.pem"}`), recuperação dos certificados de CA (raiz + emissora, uma vez por sub-fluxo) -- **nunca** uma lista de revogação (CRL). O campo interno do pipeline se chama `term_pki_crl` por uma convenção de nomenclatura herdada, não porque CRL seja de fato buscada; este relatório usa "PKI (certificados de CA)", que descreve o que a chamada real faz.
 
@@ -75,7 +75,7 @@ Comparação central desta tese: **Classic / PQC / Hybrid**. O perfil Control é
 | Termo | Fonte da verificação | Resultado |
 |---|---|---|
 | mTLS | Independente do pipeline de medição (DER real dos certificados implantados, Seção 2.2 acima) | Bate exatamente, 4/4 perfis |
-| JWT | Independente do pipeline de medição (tamanho de assinatura por especificação -- RSA-2048/ML-DSA-65, FIPS 204) | Bate (ver Seção 2.4; resíduo fracionário explicado pela aritmetica do pipeline) |
+| JWT | Independente do pipeline de medição (tamanho de assinatura por especificação -- RSA-2048/ML-DSA-65, FIPS 204) | Bate exatamente, 4/4 perfis, 0 resíduo (ver Seção 2.4) |
 | JWK | Independente do pipeline de medição (tamanho de chave pública por especificação + composição real de cada chamada) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |
 | PKI | Independente do pipeline de medição (tamanho real dos arquivos de CA no disco + sobrecarga de framing HTTP, ambos confirmados em código) | Bate exatamente, 4/4 perfis (ver Seção 2.4) |
 
@@ -87,19 +87,19 @@ Especificação: assinatura RSA-2048 PS256 = 256B; assinatura ML-DSA-65 pura (FI
 
 | Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |
 |---|---|---:|---:|---:|---:|---:|
-| Classic | classic_only=26, jwe=2 | 6.656 | 237,71 | 6.655,88 | 6.655,88 | 0,00 |
-| PQC | jwe=2, pqc_pure=26 | 86.034 | 3.072,64 | 86.033,92 | 86.033,92 | 0,00 |
-| Hybrid | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
+| Classic | classic_only=26, jwe=2 | 7.168 | 256,00 | 7.168,00 | 7.168 | 0,00 |
+| PQC | jwe=2, pqc_pure=26 | 92.652 | 3.309,00 | 92.652,00 | 92.652 | 0,00 |
+| Hybrid | jwe=2, payload_extension=24, strong_nesting=2 | 99.820 | 3.565,00 | 99.820,00 | 99.820 | 0,00 |
 
 **Perfil Control, separado:**
 
 | Perfil | Construções por execução (contagem real) | Soma esperada/execução (especificação) | Média esperada (c/ arredondamento do pipeline) | Termo esperado | Termo medido | Diferença |
 |---|---|---:|---:|---:|---:|---:|
-| Control | jwe=2, payload_extension=24, strong_nesting=2 | 92.690 | 3.310,36 | 92.690,08 | 92.690,08 | 0,00 |
+| Control | jwe=2, payload_extension=24, strong_nesting=2 | 99.820 | 3.565,00 | 99.820,00 | 99.820 | 0,00 |
 
-**Explicação do resíduo fracionário (ex.: 86.033,92 vs. 86.034; 6.655,88 vs. 6.656; 92.690,08 vs. 92.690), confirmada no código, não suposta:** `thesis/scripts/opinsize_v9_oficial.py` calcula `jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois `term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- a média por token é arredondada a 2 casas decimais ANTES de ser multiplicada por N_JWT=28, o que propaga um resíduo de até ±0,14 byte em relação à soma exata por especificação. A tabela acima reproduz essa MESMA aritmética (coluna "Termo esperado") e bate exatamente com o termo medido nos 4 perfis -- o resíduo não é um erro de medição, é um efeito de arredondamento já presente no próprio pipeline, agora reproduzido e confirmado aqui, não apenas suposto.
+**Mecanismo de arredondamento, confirmado no código, não suposto:** `thesis/scripts/opinsize_v9_oficial.py` calcula `jwt_sig_avg = round(statistics.mean(jwt_sig_sizes_all), 2)` e só depois `term_jwt = round(n_jwt * jwt_sig_avg, 2)` -- a média por token é arredondada a 2 casas decimais ANTES de ser multiplicada por N_JWT=28. Antes da correção do id_token (Seção 9), os 2 tokens `jwe`/execução entravam na média com 0 byte, diluindo-a e produzindo um resíduo fracionário de até ±0,16 byte entre a soma exata por especificação e o termo medido (ex.: revisões anteriores deste relatório). **Após a correção, esse resíduo desaparece nos 4 perfis** -- a tabela acima confirma: com a assinatura interna do id_token igual à de todo outro token do mesmo perfil, os 28 valores por execução ficam uniformes, a média é exata, e a coluna "Diferença" fecha em 0,00 nos 4 perfis, sem nenhum resíduo a explicar.
 
-**Contribuição dos tokens JWE:** por construção (`_jwt_sig_bytes`, `thesis/scripts/opinsize_v9_oficial.py`), um token `jwe` (criptografado, sem assinatura própria) contribui exatamente **0 bytes** a este termo -- confirmado em código (`classical_sig_bytes`/`pq_sig_bytes` ambos `None`→0 para essa construção) e nos dados reais (2 tokens `jwe` por execução, em todos os 4 perfis, nunca contados aqui).
+**Contribuição dos tokens JWE -- correção da Decisão 147 (ver Decisão 216 e sua Emenda em `DECISIONS.md`):** a Decisão 147 original presumia que um token `jwe` (o id_token, cifrado) contribuía **0 bytes** a este termo porque "nunca é assinado via JWS". Essa premissa estava errada: o id_token tem uma assinatura interna real, que o cliente verifica após decifrar o JWE (`opin_flow.py`) -- o pipeline de captura em tempo real só nunca a extraía, porque nunca decifra o JWE durante a execução real da campanha. Medida agora de verdade, numa execução local real (nunca a frota AWS -- `thesis/results/v9/opinsize_correction_id_token/`), essa assinatura interna vale 256B no Classic, 3309B no PQC e 3565B no Hybrid/Control -- os mesmos 2 tokens `jwe` por execução, em todos os 4 perfis, agora contribuem esse valor ao termo JWT em vez de 0, e todos os números de OPINsize deste relatório já refletem essa correção.
 
 #### 2.4.2 JWK -- tamanho de chave pública por especificação
 
@@ -140,7 +140,7 @@ Especificação (chave crua, sem envelope): RSA-2048 (módulo) = 256B; ML-DSA-65
 | Termo | Classic | PQC | Hybrid | Classic<PQC<Hybrid? |
 |---|---:|---:|---:|---|
 | mTLS (handshake) | 18.750 | 129.636 | 144.474 | SIM |
-| JWT (apenas assinatura) | 6.655,88 | 86.033,92 | 92.690,08 | SIM |
+| JWT (apenas assinatura) | 7.168 | 92.652 | 99.820 | SIM |
 | JWK (chave crua) | 1.536 | 8.320 | 9.856 | SIM |
 | PKI (certificados de CA) | 7.130,00 | 32.440 | 39.182,00 | SIM |
 
@@ -149,7 +149,7 @@ Especificação (chave crua, sem envelope): RSA-2048 (módulo) = 256B; ML-DSA-65
 | Termo | Hybrid | Control | Hybrid >= Control? |
 |---|---:|---:|---|
 | mTLS (handshake) | 144.474 | 101.694 | SIM |
-| JWT (apenas assinatura) | 92.690,08 | 92.690,08 | SIM |
+| JWT (apenas assinatura) | 99.820 | 99.820 | SIM |
 | JWK (chave crua) | 9.856 | 9.856 | SIM |
 | PKI (certificados de CA) | 39.182,00 | 37.768 | SIM |
 
@@ -162,10 +162,10 @@ O total de Control fica abaixo do total de PQC (razões da Seção 2.1), mas iss
 | Termo | Control | PQC | Control − PQC |
 |---|---:|---:|---:|
 | mTLS (handshake) | 101.694 | 129.636 | -27.942 |
-| JWT (apenas assinatura) | 92.690,08 | 86.033,92 | +6.656,16 |
+| JWT (apenas assinatura) | 99.820 | 92.652 | +7.168 |
 | JWK (chave crua) | 9.856 | 8.320 | +1.536 |
 | PKI (certificados de CA) | 37.768 | 32.440 | +5.328 |
-| **Total** | **242.008,08** | **256.429,92** | **-14.421,84** |
+| **Total** | **249.138** | **263.048** | **-13.910,00** |
 
 **Leitura correta, por termo:** Control fica **abaixo** do PQC somente no termo mTLS (cadeia de certificado ainda baseada em RSA no lado do Control contra a cadeia ML-DSA-65 pura do PQC) -- e fica **acima** do PQC nos 3 outros termos (JWT, JWK, PKI), onde ambos usam construção de assinatura equivalente mas Control carrega material adicional que o PQC puro não carrega. O saldo final negativo (Control abaixo do PQC no total) vem inteiramente da economia no termo mTLS, que é grande o suficiente para compensar os 3 acréscimos somados.
 
@@ -411,15 +411,16 @@ Fórmula de `cost_tracker.CostTracker` (frota real: 12 instâncias -- 1 `t4g.mic
 | última leitura automática registrada (cost_tracker.jsonl) -- fórmula contínua, frota ainda ligada | 2026-11-15T23:36:12Z | US\$27,69 |
 | fim da janela oficial (manifest.window_end_utc) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:06:40Z | US\$28,42 |
 | fim da coleta dos critérios dedicados (último evento real nos logs do gateway) -- fórmula contínua, frota ainda ligada | 2026-11-16T00:22:57Z | US\$28,81 |
-| agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois | 2026-11-16T17:07:36Z | US\$35,93 |
+| agora (momento em que este relatório foi gerado) -- fórmula EM DUAS FASES: contínua até a frota parar, só EBS+EIP depois | 2026-11-17T15:32:11Z | US\$38,24 |
 
-**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\$1,04/dia + EIP US\$1,44/dia = **US\$2,48/dia** (US\$0,1034/h). Aplicada por 12,69h desde a parada até a leitura "agora" acima.
+**Taxa real da frota PARADA, reconfirmada aqui** (mesmas constantes de `cost_tracker.py`, 12 volumes gp3 de 30GB cada + 12 EIPs ainda associados, 0 compute): EBS US\$1,04/dia + EIP US\$1,44/dia = **US\$2,48/dia** (US\$0,1034/h). Aplicada por 35,10h desde a parada até a leitura "agora" acima.
 
 - **cost_stop:** nunca acionado (`None`); teto desta fase: aviso US\$70 / parada US\$90 -- ambos já sem sentido prático agora que a frota está parada (não é mais a formula contínua que se aplica).
 - **Integridade dos dados brutos:** 720/720 arquivos copiados do controle, verificados por sha256 local, 0 divergências.
 
 ## 9. Transparência e limites de escopo
 
+- **Esta revisão corrige a Decisão 147 (`DECISIONS.md`): o termo JWT agora inclui a assinatura interna real dos 2 id_tokens (JWE) por execução, antes contada como 0 byte.** A justificativa original ("o id_token nunca é assinado via JWS") estava errada -- o id_token tem uma assinatura interna real, verificada pelo cliente após decifrar o JWE; o pipeline de captura em tempo real só nunca a extraía (gap de instrumentação, não ausência real da assinatura). Medida localmente (nunca a frota AWS), a correção está registrada, com toda a prova e os dados brutos, na Decisão 216 e em sua Emenda (`DECISIONS.md`) -- ver também `thesis/results/v9/opinsize_correction_id_token/`. Todos os números de OPINsize deste documento (Seções 2.1-2.5) já refletem essa correção; o valor pré-correção fica preservado só para auditoria em `opinsize_oficial_conta_nova.json` (`term_jwt_sem_correcao_id_token`), nunca somado em nenhuma variante de OPINsize.
 - **Arquivos catalisadores RSA-4096 da CA do perfil Controle não foram migrados** -- o perfil Controle reutiliza a raiz/emissora RSA clássica para sua cadeia de certificados, por desenho.
 - **O total de Controle fica abaixo do total de PQC, mas não termo a termo** -- ver a reconciliação completa na Seção 3: Controle fica abaixo do PQC somente no termo mTLS, e acima nos outros 3 termos.
 - **Exceção do critério 7 em L30**, documentada e aceita sem recalibração do baseline (Seção 6.1).
