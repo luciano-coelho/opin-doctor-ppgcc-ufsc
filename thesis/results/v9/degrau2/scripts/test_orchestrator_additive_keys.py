@@ -76,8 +76,43 @@ def test_chaves_existentes_do_dict_completo_nao_mudam():
     print("OK: todas as chaves existentes preservadas; so 2 chaves novas adicionadas.")
 
 
+def build_execucao_entry_fragment(result: dict) -> dict:
+    """Replica EXATA da fatia nova de `execucao_entry`/`aquecimento_entry`
+    dentro de run_pilot() -- a segunda camada de serializacao, SEPARADA
+    do dict de retorno de run_execution(), que e a que de fato grava em
+    disco (runs_raw/*.json, piloto_calls.json, aquecimento_execucoes.json).
+    Achado real (pos-campanha, 2026-11-17): a mudanca original da Etapa 0
+    tocou SO em run_execution() -- o teste acima (`test_*_presentes` etc.)
+    cobria so essa camada. Esta camada aqui e distinta e tinha, antes
+    desta correcao, sua PROPRIA lista fixa de chaves que nunca incluia as
+    2 novas -- por isso os dois campos nunca apareceram em nenhum arquivo
+    das 2 rodadas reais ja coletadas (ver relato ao usuario)."""
+    return {
+        "t_fluxo_fino_seconds": result.get("t_fluxo_fino_seconds"),
+        "phase_accounting": result.get("phase_accounting", {}),
+    }
+
+
+def test_execucao_entry_tambem_preserva_campos_novos():
+    """Regressao direta do achado real: `result` aqui simula o que
+    run_execution() JA DEVOLVE (apos a correcao da Etapa 0, incluindo as
+    2 chaves novas) -- confirma que a camada de persistencia
+    (execucao_entry/aquecimento_entry) tambem as repassa, em vez de
+    descarta-las silenciosamente como acontecia antes desta correcao."""
+    run_execution_return_mock = {
+        "insurance": [], "person": [], "gateway_log_lines": [],
+        "t_fluxo_fino_seconds": 2.357881,
+        "phase_accounting": {"signing_seconds": 0.0012, "residual_seconds": 1.878},
+    }
+    extra = build_execucao_entry_fragment(run_execution_return_mock)
+    assert extra["t_fluxo_fino_seconds"] == 2.357881, extra
+    assert extra["phase_accounting"]["residual_seconds"] == 1.878, extra
+    print("OK: execucao_entry/aquecimento_entry tambem preservam os campos novos.")
+
+
 if __name__ == "__main__":
     test_com_campos_novos_presentes()
     test_sem_campos_novos_nunca_quebra()
     test_chaves_existentes_do_dict_completo_nao_mudam()
+    test_execucao_entry_tambem_preserva_campos_novos()
     print("TODOS OS TESTES PASSARAM (mock local, nenhuma execucao real/SSH).")

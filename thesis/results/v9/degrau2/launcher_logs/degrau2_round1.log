@@ -1,0 +1,2565 @@
+
+=== launch_persistent: iniciando /usr/bin/python3 /home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py --mode ssh --seed 20261117 --out /home/ec2-user/campaign-data/v9/degrau2/round1 --inventory-json /home/ec2-user/thesis/results/v9/campaign/scripts/inventory.json --ssh-key /home/ec2-user/.ssh/campaign_key --campaign --cells classico:L0-sa-east-1,pqc:L0-sa-east-1,hibrido-and:L0-sa-east-1,classico:L0-us-east-1,pqc:L0-us-east-1,hibrido-and:L0-us-east-1,classico:L0-ap-northeast-1,pqc:L0-ap-northeast-1,hibrido-and:L0-ap-northeast-1,classico:L123,pqc:L123,hibrido-and:L123 --n-per-profile 15 --n-warmup-per-profile 5 --cost-alert-usd 8 --cost-stop-usd 12 --cost-server-client-instance-type m7i-flex.large em 2026-11-16T21:59:49Z ===
+Traceback (most recent call last):
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 2946, in <module>
+    main()
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 2874, in main
+    manifest = run_pilot(executor, args.seed, Path(args.out), n_per_profile=n_per_profile,
+  File "/home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py", line 2190, in run_pilot
+    raise RuntimeError(
+RuntimeError: run_pilot: containers/redes orfaos encontrados antes da janela -- abortando sem rodar nenhuma execucao (Decisao 125): [{'check': 'containers/redes orfaos do projeto', 'ok': False, 'containers_found': ['v9-mtls'], 'networks_found': [], 'note': "ABORTAR: resquicio de rodada anterior encontrado -- limpe manualmente ('docker rm -f <nome>'/'docker network rm <nome>') antes de abrir uma nova janela; nunca prosseguir com isso presente (causa raiz real, Decisao 125: resolucao de nome de rede fica nao-deterministica com alias duplicado).", 'host': '54.232.25.30'}, {'check': 'containers/redes orfaos do projeto', 'ok': False, 'containers_found': ['v9-mtls'], 'networks_found': [], 'note': "ABORTAR: resquicio de rodada anterior encontrado -- limpe manualmente ('docker rm -f <nome>'/'docker network rm <nome>') antes de abrir uma nova janela; nunca prosseguir com isso presente (causa raiz real, Decisao 125: resolucao de nome de rede fica nao-deterministica com alias duplicado).", 'host': '54.92.142.57'}, {'check': 'containers/redes orfaos do projeto', 'ok': False, 'containers_found': ['v9-mtls'], 'networks_found': [], 'note': "ABORTAR: resquicio de rodada anterior encontrado -- limpe manualmente ('docker rm -f <nome>'/'docker network rm <nome>') antes de abrir uma nova janela; nunca prosseguir com isso presente (causa raiz real, Decisao 125: resolucao de nome de rede fica nao-deterministica com alias duplicado).", 'host': '13.192.136.211'}]
+=== launch_persistent: orchestrator.py saiu com codigo 1 em 2026-11-16T21:59:54Z ===
+
+=== launch_persistent: iniciando /usr/bin/python3 /home/ec2-user/thesis/results/v9/campaign/scripts/orchestrator.py --mode ssh --seed 20261117 --out /home/ec2-user/campaign-data/v9/degrau2/round1 --inventory-json /home/ec2-user/thesis/results/v9/campaign/scripts/inventory.json --ssh-key /home/ec2-user/.ssh/campaign_key --campaign --cells classico:L0-sa-east-1,pqc:L0-sa-east-1,hibrido-and:L0-sa-east-1,classico:L0-us-east-1,pqc:L0-us-east-1,hibrido-and:L0-us-east-1,classico:L0-ap-northeast-1,pqc:L0-ap-northeast-1,hibrido-and:L0-ap-northeast-1,classico:L123,pqc:L123,hibrido-and:L123 --n-per-profile 15 --n-warmup-per-profile 5 --cost-alert-usd 8 --cost-stop-usd 12 --cost-server-client-instance-type m7i-flex.large em 2026-11-16T22:02:15Z ===
+{
+  "seed": 20261117,
+  "generated_at_utc": "2026-11-17T00:17:42.152008+00:00",
+  "mode": "ssh",
+  "executor_class": "SSHExecutor",
+  "window_start_utc": "2026-11-16T22:03:14.040333+00:00",
+  "window_end_utc": "2026-11-17T00:17:42.152038+00:00",
+  "smoke": false,
+  "n_per_profile": 15,
+  "route_orders": {
+    "L0-sa-east-1": [
+      "hibrido-and",
+      "hibrido-v8",
+      "classico",
+      "pqc"
+    ],
+    "L123": [
+      "hibrido-v8",
+      "hibrido-and",
+      "classico",
+      "pqc"
+    ],
+    "L0-us-east-1": [
+      "hibrido-and",
+      "pqc",
+      "classico",
+      "hibrido-v8"
+    ],
+    "L0-ap-northeast-1": [
+      "pqc",
+      "hibrido-v8",
+      "classico",
+      "hibrido-and"
+    ]
+  },
+  "total_execucoes": 180,
+  "expected_total": 180,
+  "total_capturas": 12,
+  "cells_filter": [
+    "classico:L0-ap-northeast-1",
+    "classico:L0-sa-east-1",
+    "classico:L0-us-east-1",
+    "classico:L123",
+    "hibrido-and:L0-ap-northeast-1",
+    "hibrido-and:L0-sa-east-1",
+    "hibrido-and:L0-us-east-1",
+    "hibrido-and:L123",
+    "pqc:L0-ap-northeast-1",
+    "pqc:L0-sa-east-1",
+    "pqc:L0-us-east-1",
+    "pqc:L123"
+  ],
+  "capturas_dedicadas_feitas": 12,
+  "capturas_dedicadas_falhas": [],
+  "combined_log": "/home/ec2-user/campaign-data/v9/degrau2/round1/piloto_combined.log",
+  "calls_json": "/home/ec2-user/campaign-data/v9/degrau2/round1/piloto_calls.json",
+  "criterio6_json": "/home/ec2-user/campaign-data/v9/degrau2/round1/criterio6_execucoes.json",
+  "capturas_dir": "/home/ec2-user/campaign-data/v9/degrau2/round1/criterio1_capturas",
+  "runs_raw_dir": "/home/ec2-user/campaign-data/v9/degrau2/round1/runs_raw",
+  "n_warmup_per_profile": 5,
+  "total_aquecimentos": 60,
+  "aquecimento_log": "/home/ec2-user/campaign-data/v9/degrau2/round1/piloto_aquecimento.log",
+  "aquecimento_calls_json": "/home/ec2-user/campaign-data/v9/degrau2/round1/aquecimento_execucoes.json",
+  "gateway_binary_verifications": [
+    {
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:04:02.533165+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:06:58.821805+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:09:29.342587+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:12:01.002010+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:13:24.441701+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:14:48.761442+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:16:12.111718+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:23:47.251915+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:31:12.741706+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:38:46.942017+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:40:53.303064+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L123",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:42:58.841583+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.232.25.30' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:46:47.060577+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T22:54:00.916723+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:01:11.168931+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:08:21.118178+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:11:59.796699+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:15:16.987908+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '54.92.142.57' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:21:51.466896+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:35:05.217321+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-16T23:48:09.335307+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-17T00:01:37.594068+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-17T00:07:33.015821+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    },
+    {
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sha256_expected": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618",
+      "go_version_m": "/verify/gateway: go1.27.3\n\tpath\tmockopin-v9-gateway\n\tmod\tmockopin-v9-gateway\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1",
+      "go_build_version": "go1.27.3",
+      "toolchain_build_metadata": {
+        "go_tag": "go1.27.3",
+        "go_commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+        "bootstrap_image": "golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb",
+        "builder_base_image": "alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+        "and_patch_sha256": "1865eb2a99f0cc6029495a77f0d1a73b9da705a405b46fc051743fae25b4eb4b",
+        "built_at_utc": "2026-11-07T19:44:25Z"
+      },
+      "pin_matched": true,
+      "pins_path": "/home/ec2-user/thesis/results/v9/campaign/PINS.json",
+      "verified_at_utc": "2026-11-17T00:13:25.071427+00:00",
+      "transfer_sha256sum_c_ok": true,
+      "transfer_sha256sum_c_output": "gateway: OK\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts.",
+      "running_container_sha256_ok": true,
+      "running_container_sha256_output": "9d21b901eae18c2b4533ddc64bc3227851894b78ed5d973c4b61ea333f906618  /gateway\nWarning: Permanently added '13.192.136.211' (ED25519) to the list of known hosts."
+    }
+  ],
+  "cpu_mem_samples": [
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:03:31.754652+00:00",
+      "proc_stat_line": "cpu  13092 0 29848 2264554 5037 0 324 74 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         6810288 kB\nMemAvailable:    7477180 kB\nBuffers:            2168 kB\nCached:           869060 kB\nSwapCached:            0 kB\nActive:           516752 kB\nInactive:         479768 kB\nActive(anon):        528 kB\nInactive(anon):   125412 kB\nActive(file):     516224 kB\nInactive(file):   354356 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              3488 kB\nWriteback:           112 kB\nAnonPages:        125252 kB\nMapped:           195072 kB\nShmem:               708 kB\nKReclaimable:      32808 kB\nSlab:              86240 kB\nSReclaimable:      32808 kB\nSUnreclaim:        53432 kB\nKernelStack:        2992 kB\nPageTables:         3228 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:     895256 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       14908 kB\nVmallocChunk:          0 kB\nPercpu:             3832 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:03:58.725564+00:00",
+      "proc_stat_line": "cpu  16270 0 30299 2265514 5786 0 326 74 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5002964 kB\nMemAvailable:    6397116 kB\nBuffers:            2168 kB\nCached:          1597244 kB\nSwapCached:            0 kB\nActive:           848780 kB\nInactive:        1835508 kB\nActive(anon):       4624 kB\nInactive(anon):  1101696 kB\nActive(file):     844156 kB\nInactive(file):   733812 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              5504 kB\nWriteback:             0 kB\nAnonPages:       1084764 kB\nMapped:           448740 kB\nShmem:             21444 kB\nKReclaimable:      72552 kB\nSlab:             142008 kB\nSReclaimable:      72552 kB\nSUnreclaim:        69456 kB\nKernelStack:        6832 kB\nPageTables:        12572 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    4911904 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19064 kB\nVmallocChunk:          0 kB\nPercpu:             3928 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:06:29.751346+00:00",
+      "proc_stat_line": "cpu  19686 0 31445 2290576 5915 0 415 77 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5556188 kB\nMemAvailable:    7007448 kB\nBuffers:            2168 kB\nCached:          1656884 kB\nSwapCached:            0 kB\nActive:          1000088 kB\nInactive:        1131404 kB\nActive(anon):      13344 kB\nInactive(anon):   482920 kB\nActive(file):     986744 kB\nInactive(file):   648484 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              3720 kB\nWriteback:             0 kB\nAnonPages:        472560 kB\nMapped:           346168 kB\nShmem:             23824 kB\nKReclaimable:      72248 kB\nSlab:             142972 kB\nSReclaimable:      72248 kB\nSUnreclaim:        70724 kB\nKernelStack:        6128 kB\nPageTables:         7408 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    4020752 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18332 kB\nVmallocChunk:          0 kB\nPercpu:             4000 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:06:55.225599+00:00",
+      "proc_stat_line": "cpu  23162 0 31816 2291591 6118 0 419 77 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4929208 kB\nMemAvailable:    6379212 kB\nBuffers:            2168 kB\nCached:          1653776 kB\nSwapCached:            0 kB\nActive:          1093500 kB\nInactive:        1657144 kB\nActive(anon):      13488 kB\nInactive(anon):  1105200 kB\nActive(file):    1080012 kB\nInactive(file):   551944 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              5752 kB\nWriteback:             0 kB\nAnonPages:       1094760 kB\nMapped:           415692 kB\nShmem:             23988 kB\nKReclaimable:      76276 kB\nSlab:             149180 kB\nSReclaimable:      76276 kB\nSUnreclaim:        72904 kB\nKernelStack:        7328 kB\nPageTables:        11040 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5346328 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19356 kB\nVmallocChunk:          0 kB\nPercpu:             4048 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:09:01.140326+00:00",
+      "proc_stat_line": "cpu  26178 0 32801 2312284 6189 0 492 80 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5561104 kB\nMemAvailable:    7019912 kB\nBuffers:            2168 kB\nCached:          1663180 kB\nSwapCached:            0 kB\nActive:          1137860 kB\nInactive:         990532 kB\nActive(anon):      16932 kB\nInactive(anon):   469952 kB\nActive(file):    1120928 kB\nInactive(file):   520580 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6664 kB\nWriteback:             0 kB\nAnonPages:        463052 kB\nMapped:           325864 kB\nShmem:             23836 kB\nKReclaimable:      74780 kB\nSlab:             146444 kB\nSReclaimable:      74780 kB\nSUnreclaim:        71664 kB\nKernelStack:        5984 kB\nPageTables:         7160 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3824864 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18100 kB\nVmallocChunk:          0 kB\nPercpu:             4072 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:09:25.715319+00:00",
+      "proc_stat_line": "cpu  29495 0 33163 2313300 6367 0 494 80 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4747472 kB\nMemAvailable:    6205084 kB\nBuffers:            2168 kB\nCached:          1660012 kB\nSwapCached:            0 kB\nActive:          1143384 kB\nInactive:        1779396 kB\nActive(anon):      17080 kB\nInactive(anon):  1267528 kB\nActive(file):    1126304 kB\nInactive(file):   511868 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6492 kB\nWriteback:             0 kB\nAnonPages:       1260648 kB\nMapped:           419500 kB\nShmem:             24008 kB\nKReclaimable:      79060 kB\nSlab:             154844 kB\nSReclaimable:      79060 kB\nSUnreclaim:        75784 kB\nKernelStack:        7392 kB\nPageTables:        13420 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5591044 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19436 kB\nVmallocChunk:          0 kB\nPercpu:             4096 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:11:34.054833+00:00",
+      "proc_stat_line": "cpu  32681 0 34179 2334214 6456 0 560 82 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5548804 kB\nMemAvailable:    7015840 kB\nBuffers:            2168 kB\nCached:          1671000 kB\nSwapCached:            0 kB\nActive:          1146840 kB\nInactive:         989280 kB\nActive(anon):      19200 kB\nInactive(anon):   467604 kB\nActive(file):    1127640 kB\nInactive(file):   521676 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             10268 kB\nWriteback:             0 kB\nAnonPages:        463004 kB\nMapped:           329076 kB\nShmem:             23852 kB\nKReclaimable:      75624 kB\nSlab:             147640 kB\nSReclaimable:      75624 kB\nSUnreclaim:        72016 kB\nKernelStack:        5920 kB\nPageTables:         7020 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3817364 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       17892 kB\nVmallocChunk:          0 kB\nPercpu:             4120 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:11:57.325019+00:00",
+      "proc_stat_line": "cpu  35819 0 34515 2335139 6666 0 560 82 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4885228 kB\nMemAvailable:    6349872 kB\nBuffers:            2168 kB\nCached:          1667100 kB\nSwapCached:            0 kB\nActive:          1148028 kB\nInactive:        1640508 kB\nActive(anon):      19340 kB\nInactive(anon):  1123944 kB\nActive(file):    1128688 kB\nInactive(file):   516564 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6956 kB\nWriteback:             0 kB\nAnonPages:       1119312 kB\nMapped:           422496 kB\nShmem:             24016 kB\nKReclaimable:      78964 kB\nSlab:             153540 kB\nSReclaimable:      78964 kB\nSUnreclaim:        74576 kB\nKernelStack:        7392 kB\nPageTables:        13100 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5454244 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19436 kB\nVmallocChunk:          0 kB\nPercpu:             4168 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     6000640 kB\nDirectMap1G:     2097152 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:12:56.274250+00:00",
+      "proc_stat_line": "cpu  36954 0 35055 2344784 6871 0 576 83 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5432680 kB\nMemAvailable:    6996356 kB\nBuffers:            2168 kB\nCached:          1767636 kB\nSwapCached:            0 kB\nActive:          1202628 kB\nInactive:        1030516 kB\nActive(anon):      20996 kB\nInactive(anon):   467260 kB\nActive(file):    1181632 kB\nInactive(file):   563256 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             10828 kB\nWriteback:             0 kB\nAnonPages:        463360 kB\nMapped:           330652 kB\nShmem:             24916 kB\nKReclaimable:      77760 kB\nSlab:             150316 kB\nSReclaimable:      77760 kB\nSUnreclaim:        72556 kB\nKernelStack:        6032 kB\nPageTables:         7044 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3842916 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18452 kB\nVmallocChunk:          0 kB\nPercpu:             4192 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:13:20.719029+00:00",
+      "proc_stat_line": "cpu  40327 0 35400 2345746 7026 0 579 84 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4875188 kB\nMemAvailable:    6441636 kB\nBuffers:            2168 kB\nCached:          1768500 kB\nSwapCached:            0 kB\nActive:          1203444 kB\nInactive:        1598220 kB\nActive(anon):      21144 kB\nInactive(anon):  1034936 kB\nActive(file):    1182300 kB\nInactive(file):   563284 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              4236 kB\nWriteback:          3416 kB\nAnonPages:       1031016 kB\nMapped:           423916 kB\nShmem:             25084 kB\nKReclaimable:      81908 kB\nSlab:             157368 kB\nSReclaimable:      81908 kB\nSUnreclaim:        75460 kB\nKernelStack:        7552 kB\nPageTables:        13068 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5522744 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19964 kB\nVmallocChunk:          0 kB\nPercpu:             4216 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:14:21.283750+00:00",
+      "proc_stat_line": "cpu  41404 0 35946 2355936 7096 0 601 85 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5431652 kB\nMemAvailable:    6999072 kB\nBuffers:            2168 kB\nCached:          1770428 kB\nSwapCached:            0 kB\nActive:          1223148 kB\nInactive:        1013072 kB\nActive(anon):      21408 kB\nInactive(anon):   467500 kB\nActive(file):    1201740 kB\nInactive(file):   545572 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             11468 kB\nWriteback:             0 kB\nAnonPages:        463564 kB\nMapped:           332768 kB\nShmem:             25284 kB\nKReclaimable:      80396 kB\nSlab:             154456 kB\nSReclaimable:      80396 kB\nSUnreclaim:        74060 kB\nKernelStack:        5968 kB\nPageTables:         6984 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3804304 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18388 kB\nVmallocChunk:          0 kB\nPercpu:             4240 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-sa-east-1",
+      "sampled_at_utc": "2026-11-16T22:14:45.170677+00:00",
+      "proc_stat_line": "cpu  44732 0 36349 2356798 7247 0 604 85 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4825704 kB\nMemAvailable:    6394984 kB\nBuffers:            2168 kB\nCached:          1772328 kB\nSwapCached:            0 kB\nActive:          1224092 kB\nInactive:        1620476 kB\nActive(anon):      21552 kB\nInactive(anon):  1073968 kB\nActive(file):    1202540 kB\nInactive(file):   546508 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6764 kB\nWriteback:             0 kB\nAnonPages:       1070076 kB\nMapped:           425964 kB\nShmem:             25448 kB\nKReclaimable:      80648 kB\nSlab:             155164 kB\nSReclaimable:      80648 kB\nSUnreclaim:        74516 kB\nKernelStack:        7504 kB\nPageTables:        11104 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5409716 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19980 kB\nVmallocChunk:          0 kB\nPercpu:             4264 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:15:44.874520+00:00",
+      "proc_stat_line": "cpu  45824 0 36809 2366895 7301 0 629 86 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5444416 kB\nMemAvailable:    7015436 kB\nBuffers:            2168 kB\nCached:          1775596 kB\nSwapCached:            0 kB\nActive:          1226268 kB\nInactive:        1013656 kB\nActive(anon):      22332 kB\nInactive(anon):   466036 kB\nActive(file):    1203936 kB\nInactive(file):   547620 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             10320 kB\nWriteback:             0 kB\nAnonPages:        462164 kB\nMapped:           334088 kB\nShmem:             26208 kB\nKReclaimable:      79108 kB\nSlab:             151560 kB\nSReclaimable:      79108 kB\nSUnreclaim:        72452 kB\nKernelStack:        5968 kB\nPageTables:         6936 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3807264 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18372 kB\nVmallocChunk:          0 kB\nPercpu:             4288 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:16:08.515526+00:00",
+      "proc_stat_line": "cpu  49161 0 37210 2367675 7462 0 629 86 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4854560 kB\nMemAvailable:    6428316 kB\nBuffers:            2168 kB\nCached:          1776508 kB\nSwapCached:            0 kB\nActive:          1226860 kB\nInactive:        1593352 kB\nActive(anon):      22484 kB\nInactive(anon):  1045432 kB\nActive(file):    1204376 kB\nInactive(file):   547920 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8164 kB\nWriteback:             0 kB\nAnonPages:       1041436 kB\nMapped:           427372 kB\nShmem:             26380 kB\nKReclaimable:      83104 kB\nSlab:             158204 kB\nSReclaimable:      83104 kB\nSUnreclaim:        75100 kB\nKernelStack:        7488 kB\nPageTables:        11052 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5368196 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19932 kB\nVmallocChunk:          0 kB\nPercpu:             4312 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:23:19.683856+00:00",
+      "proc_stat_line": "cpu  53800 0 39423 2445813 7698 0 754 94 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5421584 kB\nMemAvailable:    7007932 kB\nBuffers:            2168 kB\nCached:          1790404 kB\nSwapCached:            0 kB\nActive:          1227272 kB\nInactive:        1027276 kB\nActive(anon):      22336 kB\nInactive(anon):   465864 kB\nActive(file):    1204936 kB\nInactive(file):   561412 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             11300 kB\nWriteback:             0 kB\nAnonPages:        461880 kB\nMapped:           338364 kB\nShmem:             26224 kB\nKReclaimable:      80184 kB\nSlab:             153212 kB\nSReclaimable:      80184 kB\nSUnreclaim:        73028 kB\nKernelStack:        6000 kB\nPageTables:         7016 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3827612 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18404 kB\nVmallocChunk:          0 kB\nPercpu:             4408 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:23:43.490852+00:00",
+      "proc_stat_line": "cpu  57028 0 39863 2446663 7897 0 754 94 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4851404 kB\nMemAvailable:    6435204 kB\nBuffers:            2168 kB\nCached:          1786432 kB\nSwapCached:            0 kB\nActive:          1227652 kB\nInactive:        1606680 kB\nActive(anon):      22484 kB\nInactive(anon):  1049644 kB\nActive(file):    1205168 kB\nInactive(file):   557036 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8800 kB\nWriteback:             0 kB\nAnonPages:       1045672 kB\nMapped:           440016 kB\nShmem:             26396 kB\nKReclaimable:      83372 kB\nSlab:             159024 kB\nSReclaimable:      83372 kB\nSUnreclaim:        75652 kB\nKernelStack:        7776 kB\nPageTables:        11640 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5680588 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20172 kB\nVmallocChunk:          0 kB\nPercpu:             4432 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:30:44.957594+00:00",
+      "proc_stat_line": "cpu  61318 0 41974 2523396 8137 0 907 102 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5414588 kB\nMemAvailable:    7008548 kB\nBuffers:            2168 kB\nCached:          1797704 kB\nSwapCached:            0 kB\nActive:          1227608 kB\nInactive:        1042388 kB\nActive(anon):      22352 kB\nInactive(anon):   473996 kB\nActive(file):    1205256 kB\nInactive(file):   568392 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             12548 kB\nWriteback:             0 kB\nAnonPages:        470128 kB\nMapped:           352488 kB\nShmem:             26224 kB\nKReclaimable:      80804 kB\nSlab:             154808 kB\nSReclaimable:      80804 kB\nSUnreclaim:        74004 kB\nKernelStack:        6288 kB\nPageTables:         7716 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    4122256 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       18756 kB\nVmallocChunk:          0 kB\nPercpu:             4528 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:31:09.045706+00:00",
+      "proc_stat_line": "cpu  64613 0 42346 2524286 8337 0 908 102 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4796412 kB\nMemAvailable:    6388744 kB\nBuffers:            2168 kB\nCached:          1794404 kB\nSwapCached:            0 kB\nActive:          1228064 kB\nInactive:        1640420 kB\nActive(anon):      22496 kB\nInactive(anon):  1075812 kB\nActive(file):    1205568 kB\nInactive(file):   564608 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              9064 kB\nWriteback:             0 kB\nAnonPages:       1071916 kB\nMapped:           435844 kB\nShmem:             26396 kB\nKReclaimable:      84492 kB\nSlab:             160200 kB\nSReclaimable:      84492 kB\nSUnreclaim:        75708 kB\nKernelStack:        7472 kB\nPageTables:        11316 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5403884 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19932 kB\nVmallocChunk:          0 kB\nPercpu:             4552 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:38:18.714081+00:00",
+      "proc_stat_line": "cpu  69409 0 44566 2602350 8571 0 1110 110 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5397536 kB\nMemAvailable:    7001724 kB\nBuffers:            2168 kB\nCached:          1806904 kB\nSwapCached:            0 kB\nActive:          1228116 kB\nInactive:        1043660 kB\nActive(anon):      22352 kB\nInactive(anon):   466576 kB\nActive(file):    1205764 kB\nInactive(file):   577084 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             11156 kB\nWriteback:             0 kB\nAnonPages:        462780 kB\nMapped:           346416 kB\nShmem:             26224 kB\nKReclaimable:      82860 kB\nSlab:             156648 kB\nSReclaimable:      82860 kB\nSUnreclaim:        73788 kB\nKernelStack:        6000 kB\nPageTables:         7056 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3834740 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20528 kB\nVmallocChunk:          0 kB\nPercpu:             4648 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:38:43.255060+00:00",
+      "proc_stat_line": "cpu  72730 0 44935 2603333 8779 0 1113 110 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4782160 kB\nMemAvailable:    6384016 kB\nBuffers:            2168 kB\nCached:          1803300 kB\nSwapCached:            0 kB\nActive:          1228472 kB\nInactive:        1655068 kB\nActive(anon):      22488 kB\nInactive(anon):  1081980 kB\nActive(file):    1205984 kB\nInactive(file):   573088 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8680 kB\nWriteback:             0 kB\nAnonPages:       1078100 kB\nMapped:           439256 kB\nShmem:             26396 kB\nKReclaimable:      85748 kB\nSlab:             162120 kB\nSReclaimable:      85748 kB\nSUnreclaim:        76372 kB\nKernelStack:        7472 kB\nPageTables:        13240 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5476928 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22040 kB\nVmallocChunk:          0 kB\nPercpu:             4672 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:40:27.223860+00:00",
+      "proc_stat_line": "cpu  74232 0 45731 2621638 8867 0 1151 112 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5409712 kB\nMemAvailable:    7013460 kB\nBuffers:            2168 kB\nCached:          1806828 kB\nSwapCached:            0 kB\nActive:          1229936 kB\nInactive:        1040832 kB\nActive(anon):      23432 kB\nInactive(anon):   465640 kB\nActive(file):    1206504 kB\nInactive(file):   575192 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              5760 kB\nWriteback:             0 kB\nAnonPages:        461736 kB\nMapped:           348024 kB\nShmem:             27300 kB\nKReclaimable:      84284 kB\nSlab:             158356 kB\nSReclaimable:      84284 kB\nSUnreclaim:        74072 kB\nKernelStack:        5920 kB\nPageTables:         7184 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3807328 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20496 kB\nVmallocChunk:          0 kB\nPercpu:             4696 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:40:49.654914+00:00",
+      "proc_stat_line": "cpu  77393 0 46100 2622377 9055 0 1153 112 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4670172 kB\nMemAvailable:    6276960 kB\nBuffers:            2168 kB\nCached:          1807896 kB\nSwapCached:            0 kB\nActive:          1230296 kB\nInactive:        1746536 kB\nActive(anon):      23576 kB\nInactive(anon):  1170664 kB\nActive(file):    1206720 kB\nInactive(file):   575872 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8476 kB\nWriteback:             0 kB\nAnonPages:       1166796 kB\nMapped:           441140 kB\nShmem:             27472 kB\nKReclaimable:      88572 kB\nSlab:             165972 kB\nSReclaimable:      88572 kB\nSUnreclaim:        77400 kB\nKernelStack:        7472 kB\nPageTables:        11492 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5502508 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22072 kB\nVmallocChunk:          0 kB\nPercpu:             4720 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:42:31.274999+00:00",
+      "proc_stat_line": "cpu  78705 0 46872 2640085 9443 0 1180 114 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5398936 kB\nMemAvailable:    7007004 kB\nBuffers:            2168 kB\nCached:          1810216 kB\nSwapCached:            0 kB\nActive:          1230640 kB\nInactive:        1043656 kB\nActive(anon):      23800 kB\nInactive(anon):   465784 kB\nActive(file):    1206840 kB\nInactive(file):   577872 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             10916 kB\nWriteback:             0 kB\nAnonPages:        462012 kB\nMapped:           349664 kB\nShmem:             27672 kB\nKReclaimable:      86892 kB\nSlab:             162372 kB\nSReclaimable:      86892 kB\nSUnreclaim:        75480 kB\nKernelStack:        5984 kB\nPageTables:         7172 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3839944 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20560 kB\nVmallocChunk:          0 kB\nPercpu:             4768 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L123",
+      "sampled_at_utc": "2026-11-16T22:42:55.161248+00:00",
+      "proc_stat_line": "cpu  82054 0 47232 2640913 9638 0 1183 114 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4791888 kB\nMemAvailable:    6402896 kB\nBuffers:            2168 kB\nCached:          1811336 kB\nSwapCached:            0 kB\nActive:          1230876 kB\nInactive:        1634352 kB\nActive(anon):      23968 kB\nInactive(anon):  1055636 kB\nActive(file):    1206908 kB\nInactive(file):   578716 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8792 kB\nWriteback:             0 kB\nAnonPages:       1050104 kB\nMapped:           472968 kB\nShmem:             27880 kB\nKReclaimable:      90952 kB\nSlab:             170368 kB\nSReclaimable:      90952 kB\nSUnreclaim:        79416 kB\nKernelStack:        7824 kB\nPageTables:        11744 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5855036 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22704 kB\nVmallocChunk:          0 kB\nPercpu:             4768 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      184752 kB\nDirectMap2M:     6987776 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T22:45:52.718947+00:00",
+      "proc_stat_line": "cpu  19047 0 41480 2749202 5904 0 533 93 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         6760764 kB\nMemAvailable:    7459416 kB\nBuffers:            2168 kB\nCached:           900304 kB\nSwapCached:            0 kB\nActive:           575784 kB\nInactive:         452484 kB\nActive(anon):        480 kB\nInactive(anon):   125976 kB\nActive(file):     575304 kB\nInactive(file):   326508 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6240 kB\nWriteback:             0 kB\nAnonPages:        125692 kB\nMapped:           162980 kB\nShmem:               660 kB\nKReclaimable:      33860 kB\nSlab:              88356 kB\nSReclaimable:      33860 kB\nSUnreclaim:        54496 kB\nKernelStack:        2960 kB\nPageTables:         3180 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:     913668 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       15328 kB\nVmallocChunk:          0 kB\nPercpu:             4456 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T22:46:24.989983+00:00",
+      "proc_stat_line": "cpu  22782 0 41962 2750624 6654 0 540 93 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5021616 kB\nMemAvailable:    6447996 kB\nBuffers:            2168 kB\nCached:          1628816 kB\nSwapCached:            0 kB\nActive:           908036 kB\nInactive:        1749940 kB\nActive(anon):       4716 kB\nInactive(anon):  1043624 kB\nActive(file):     903320 kB\nInactive(file):   706316 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6856 kB\nWriteback:             0 kB\nAnonPages:       1027048 kB\nMapped:           416988 kB\nShmem:             21348 kB\nKReclaimable:      73668 kB\nSlab:             145776 kB\nSReclaimable:      73668 kB\nSUnreclaim:        72108 kB\nKernelStack:        6928 kB\nPageTables:        12312 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    4892732 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19364 kB\nVmallocChunk:          0 kB\nPercpu:             4552 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T22:53:08.708678+00:00",
+      "proc_stat_line": "cpu  28180 0 44157 2822905 6921 0 743 97 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5551300 kB\nMemAvailable:    7023372 kB\nBuffers:            2168 kB\nCached:          1677504 kB\nSwapCached:            0 kB\nActive:          1003808 kB\nInactive:        1132992 kB\nActive(anon):      12880 kB\nInactive(anon):   467996 kB\nActive(file):     990928 kB\nInactive(file):   664996 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7548 kB\nWriteback:             0 kB\nAnonPages:        457268 kB\nMapped:           339244 kB\nShmem:             23748 kB\nKReclaimable:      72480 kB\nSlab:             144140 kB\nSReclaimable:      72480 kB\nSUnreclaim:        71660 kB\nKernelStack:        5904 kB\nPageTables:         7040 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3816264 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20492 kB\nVmallocChunk:          0 kB\nPercpu:             4696 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T22:53:39.070093+00:00",
+      "proc_stat_line": "cpu  32086 0 44602 2824364 7150 0 747 98 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4919560 kB\nMemAvailable:    6389644 kB\nBuffers:            2168 kB\nCached:          1673864 kB\nSwapCached:            0 kB\nActive:          1096552 kB\nInactive:        1658972 kB\nActive(anon):      13100 kB\nInactive(anon):  1090300 kB\nActive(file):    1083452 kB\nInactive(file):   568672 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7644 kB\nWriteback:             0 kB\nAnonPages:       1079556 kB\nMapped:           432300 kB\nShmem:             23908 kB\nKReclaimable:      76104 kB\nSlab:             151312 kB\nSReclaimable:      76104 kB\nSUnreclaim:        75208 kB\nKernelStack:        7392 kB\nPageTables:        13208 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5399212 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21988 kB\nVmallocChunk:          0 kB\nPercpu:             4720 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:00:18.231526+00:00",
+      "proc_stat_line": "cpu  37205 0 46869 2895965 7387 0 938 102 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5528736 kB\nMemAvailable:    7009768 kB\nBuffers:            2168 kB\nCached:          1685600 kB\nSwapCached:            0 kB\nActive:          1141372 kB\nInactive:        1006740 kB\nActive(anon):      17568 kB\nInactive(anon):   466516 kB\nActive(file):    1123804 kB\nInactive(file):   540224 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7308 kB\nWriteback:             0 kB\nAnonPages:        460288 kB\nMapped:           342788 kB\nShmem:             23740 kB\nKReclaimable:      74188 kB\nSlab:             146900 kB\nSReclaimable:      74188 kB\nSUnreclaim:        72712 kB\nKernelStack:        5872 kB\nPageTables:         7092 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3793644 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20428 kB\nVmallocChunk:          0 kB\nPercpu:             4816 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:00:49.270007+00:00",
+      "proc_stat_line": "cpu  41244 0 47333 2897439 7616 0 941 102 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4972152 kB\nMemAvailable:    6450804 kB\nBuffers:            2168 kB\nCached:          1681716 kB\nSwapCached:            0 kB\nActive:          1147100 kB\nInactive:        1545068 kB\nActive(anon):      17700 kB\nInactive(anon):  1014488 kB\nActive(file):    1129400 kB\nInactive(file):   530580 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7008 kB\nWriteback:             0 kB\nAnonPages:       1008388 kB\nMapped:           435636 kB\nShmem:             23904 kB\nKReclaimable:      77524 kB\nSlab:             152872 kB\nSReclaimable:      77524 kB\nSUnreclaim:        75348 kB\nKernelStack:        7344 kB\nPageTables:        11128 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5409500 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21940 kB\nVmallocChunk:          0 kB\nPercpu:             4864 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:07:27.379806+00:00",
+      "proc_stat_line": "cpu  46355 0 49609 2968845 7864 0 1144 107 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5533384 kB\nMemAvailable:    7021604 kB\nBuffers:            2168 kB\nCached:          1692432 kB\nSwapCached:            0 kB\nActive:          1150384 kB\nInactive:        1002924 kB\nActive(anon):      19728 kB\nInactive(anon):   462720 kB\nActive(file):    1130656 kB\nInactive(file):   540204 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7988 kB\nWriteback:             0 kB\nAnonPages:        458620 kB\nMapped:           346476 kB\nShmem:             23740 kB\nKReclaimable:      74900 kB\nSlab:             148432 kB\nSReclaimable:      74900 kB\nSUnreclaim:        73532 kB\nKernelStack:        5840 kB\nPageTables:         7088 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3801472 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20428 kB\nVmallocChunk:          0 kB\nPercpu:             4960 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:07:58.670345+00:00",
+      "proc_stat_line": "cpu  50231 0 50053 2970507 8095 0 1151 107 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4931424 kB\nMemAvailable:    6418784 kB\nBuffers:            2168 kB\nCached:          1689820 kB\nSwapCached:            0 kB\nActive:          1151884 kB\nInactive:        1592352 kB\nActive(anon):      19864 kB\nInactive(anon):  1056296 kB\nActive(file):    1132020 kB\nInactive(file):   536056 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7328 kB\nWriteback:             0 kB\nAnonPages:       1052136 kB\nMapped:           439036 kB\nShmem:             23912 kB\nKReclaimable:      78752 kB\nSlab:             154856 kB\nSReclaimable:      78752 kB\nSUnreclaim:        76104 kB\nKernelStack:        7312 kB\nPageTables:        11104 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5369588 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21940 kB\nVmallocChunk:          0 kB\nPercpu:             4984 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      123312 kB\nDirectMap2M:     4952064 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:10:49.242552+00:00",
+      "proc_stat_line": "cpu  52024 0 51089 3001285 8322 0 1237 109 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5423620 kB\nMemAvailable:    7010572 kB\nBuffers:            2168 kB\nCached:          1790836 kB\nSwapCached:            0 kB\nActive:          1205680 kB\nInactive:        1047632 kB\nActive(anon):      20800 kB\nInactive(anon):   464316 kB\nActive(file):    1184880 kB\nInactive(file):   583316 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             10128 kB\nWriteback:             0 kB\nAnonPages:        460232 kB\nMapped:           348192 kB\nShmem:             24808 kB\nKReclaimable:      77696 kB\nSlab:             152592 kB\nSReclaimable:      77696 kB\nSUnreclaim:        74896 kB\nKernelStack:        5920 kB\nPageTables:         7100 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3782112 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21100 kB\nVmallocChunk:          0 kB\nPercpu:             5056 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      190896 kB\nDirectMap2M:     6981632 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:11:18.430797+00:00",
+      "proc_stat_line": "cpu  55717 0 51516 3002771 8521 0 1243 109 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4751704 kB\nMemAvailable:    6341968 kB\nBuffers:            2168 kB\nCached:          1792208 kB\nSwapCached:            0 kB\nActive:          1206520 kB\nInactive:        1708680 kB\nActive(anon):      20944 kB\nInactive(anon):  1124852 kB\nActive(file):    1185576 kB\nInactive(file):   583828 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7540 kB\nWriteback:             0 kB\nAnonPages:       1120736 kB\nMapped:           440784 kB\nShmem:             24972 kB\nKReclaimable:      81904 kB\nSlab:             159696 kB\nSReclaimable:      81904 kB\nSUnreclaim:        77792 kB\nKernelStack:        7504 kB\nPageTables:        13236 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5499820 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22580 kB\nVmallocChunk:          0 kB\nPercpu:             5080 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      190896 kB\nDirectMap2M:     6981632 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:14:26.078842+00:00",
+      "proc_stat_line": "cpu  57499 0 52549 3036999 8735 0 1348 111 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         5418120 kB\nMemAvailable:    7010284 kB\nBuffers:            2168 kB\nCached:          1795928 kB\nSwapCached:            0 kB\nActive:          1226992 kB\nInactive:        1030380 kB\nActive(anon):      21720 kB\nInactive(anon):   463296 kB\nActive(file):    1205272 kB\nInactive(file):   567084 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              9704 kB\nWriteback:             0 kB\nAnonPages:        459408 kB\nMapped:           350052 kB\nShmem:             25740 kB\nKReclaimable:      79800 kB\nSlab:             155472 kB\nSReclaimable:      79800 kB\nSUnreclaim:        75672 kB\nKernelStack:        5904 kB\nPageTables:         7028 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    3786064 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20924 kB\nVmallocChunk:          0 kB\nPercpu:             5152 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      190896 kB\nDirectMap2M:     6981632 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-us-east-1",
+      "sampled_at_utc": "2026-11-16T23:14:55.009662+00:00",
+      "proc_stat_line": "cpu  61056 0 52999 3038551 8938 0 1351 111 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970440 kB\nMemFree:         4730672 kB\nMemAvailable:    6325304 kB\nBuffers:            2168 kB\nCached:          1796756 kB\nSwapCached:            0 kB\nActive:          1227484 kB\nInactive:        1696516 kB\nActive(anon):      21864 kB\nInactive(anon):  1129108 kB\nActive(file):    1205620 kB\nInactive(file):   567408 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7244 kB\nWriteback:             0 kB\nAnonPages:       1124996 kB\nMapped:           442864 kB\nShmem:             25896 kB\nKReclaimable:      83388 kB\nSlab:             161648 kB\nSReclaimable:      83388 kB\nSUnreclaim:        78260 kB\nKernelStack:        7488 kB\nPageTables:        13244 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985220 kB\nCommitted_AS:    5441228 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22532 kB\nVmallocChunk:          0 kB\nPercpu:             5176 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      190896 kB\nDirectMap2M:     6981632 kB\nDirectMap1G:     1048576 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:20:28.098112+00:00",
+      "proc_stat_line": "cpu  19053 0 42509 3161367 6913 0 439 55 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         6756932 kB\nMemAvailable:    7449100 kB\nBuffers:            2168 kB\nCached:           893916 kB\nSwapCached:            0 kB\nActive:           570620 kB\nInactive:         452540 kB\nActive(anon):        484 kB\nInactive(anon):   127252 kB\nActive(file):     570136 kB\nInactive(file):   325288 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              6852 kB\nWriteback:             0 kB\nAnonPages:        126996 kB\nMapped:           163748 kB\nShmem:               660 kB\nKReclaimable:      34040 kB\nSlab:              90516 kB\nSReclaimable:      34040 kB\nSUnreclaim:        56476 kB\nKernelStack:        3024 kB\nPageTables:         3244 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:     920524 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       17024 kB\nVmallocChunk:          0 kB\nPercpu:             4984 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:21:04.107518+00:00",
+      "proc_stat_line": "cpu  22633 0 43040 3163647 7633 0 445 56 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4912640 kB\nMemAvailable:    6332492 kB\nBuffers:            2168 kB\nCached:          1622416 kB\nSwapCached:            0 kB\nActive:           903676 kB\nInactive:        1852912 kB\nActive(anon):       4500 kB\nInactive(anon):  1148836 kB\nActive(file):     899176 kB\nInactive(file):   704076 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              7820 kB\nWriteback:             0 kB\nAnonPages:       1132028 kB\nMapped:           417388 kB\nShmem:             21332 kB\nKReclaimable:      73748 kB\nSlab:             147852 kB\nSReclaimable:      73748 kB\nSUnreclaim:        74104 kB\nKernelStack:        6912 kB\nPageTables:        12616 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    4995732 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21060 kB\nVmallocChunk:          0 kB\nPercpu:             5056 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:33:48.438078+00:00",
+      "proc_stat_line": "cpu  28346 0 46701 3305342 8063 0 595 64 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         5545540 kB\nMemAvailable:    7011776 kB\nBuffers:            2168 kB\nCached:          1671324 kB\nSwapCached:            0 kB\nActive:          1000164 kB\nInactive:        1130256 kB\nActive(anon):      13480 kB\nInactive(anon):   466904 kB\nActive(file):     986684 kB\nInactive(file):   663352 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              5828 kB\nWriteback:             0 kB\nAnonPages:        456932 kB\nMapped:           340516 kB\nShmem:             23456 kB\nKReclaimable:      72952 kB\nSlab:             146656 kB\nSReclaimable:      72952 kB\nSUnreclaim:        73704 kB\nKernelStack:        5888 kB\nPageTables:         7004 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    3757208 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       19984 kB\nVmallocChunk:          0 kB\nPercpu:             5296 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:34:19.180753+00:00",
+      "proc_stat_line": "cpu  31845 0 47058 3307384 8269 0 597 64 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4919460 kB\nMemAvailable:    6383972 kB\nBuffers:            2168 kB\nCached:          1668044 kB\nSwapCached:            0 kB\nActive:          1093620 kB\nInactive:        1655856 kB\nActive(anon):      13720 kB\nInactive(anon):  1089164 kB\nActive(file):    1079900 kB\nInactive(file):   566692 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              4632 kB\nWriteback:             0 kB\nAnonPages:       1079276 kB\nMapped:           472164 kB\nShmem:             23620 kB\nKReclaimable:      76388 kB\nSlab:             154268 kB\nSReclaimable:      76388 kB\nSUnreclaim:        77880 kB\nKernelStack:        7824 kB\nPageTables:        11876 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    5804532 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22112 kB\nVmallocChunk:          0 kB\nPercpu:             5344 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:46:51.873667+00:00",
+      "proc_stat_line": "cpu  37501 0 50524 3446880 8701 0 757 73 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         5543980 kB\nMemAvailable:    7020248 kB\nBuffers:            2168 kB\nCached:          1680596 kB\nSwapCached:            0 kB\nActive:          1137800 kB\nInactive:        1003996 kB\nActive(anon):      17228 kB\nInactive(anon):   465260 kB\nActive(file):    1120572 kB\nInactive(file):   538736 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              4820 kB\nWriteback:             0 kB\nAnonPages:        458940 kB\nMapped:           345808 kB\nShmem:             23456 kB\nKReclaimable:      74472 kB\nSlab:             149756 kB\nSReclaimable:      74472 kB\nSUnreclaim:        75284 kB\nKernelStack:        5920 kB\nPageTables:         7024 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    3806564 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20016 kB\nVmallocChunk:          0 kB\nPercpu:             5512 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-16T23:47:22.457971+00:00",
+      "proc_stat_line": "cpu  40967 0 50907 3448906 8911 0 760 73 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4892224 kB\nMemAvailable:    6366880 kB\nBuffers:            2168 kB\nCached:          1677484 kB\nSwapCached:            0 kB\nActive:          1143356 kB\nInactive:        1618284 kB\nActive(anon):      17484 kB\nInactive(anon):  1088128 kB\nActive(file):    1125872 kB\nInactive(file):   530156 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8248 kB\nWriteback:             0 kB\nAnonPages:       1082012 kB\nMapped:           438340 kB\nShmem:             23620 kB\nKReclaimable:      77808 kB\nSlab:             156152 kB\nSReclaimable:      77808 kB\nSUnreclaim:        78344 kB\nKernelStack:        7440 kB\nPageTables:        13176 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    5436244 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21608 kB\nVmallocChunk:          0 kB\nPercpu:             5560 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:00:18.894426+00:00",
+      "proc_stat_line": "cpu  47133 5 54531 3592509 9377 0 934 82 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         5523676 kB\nMemAvailable:    7010904 kB\nBuffers:            2168 kB\nCached:          1691388 kB\nSwapCached:            0 kB\nActive:          1147240 kB\nInactive:        1006008 kB\nActive(anon):      19744 kB\nInactive(anon):   463720 kB\nActive(file):    1127496 kB\nInactive(file):   542288 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              5300 kB\nWriteback:             0 kB\nAnonPages:        459596 kB\nMapped:           350088 kB\nShmem:             23768 kB\nKReclaimable:      75436 kB\nSlab:             151656 kB\nSReclaimable:      75436 kB\nSUnreclaim:        76220 kB\nKernelStack:        5904 kB\nPageTables:         7036 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    3801148 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20000 kB\nVmallocChunk:          0 kB\nPercpu:             5752 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "pqc",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:00:51.030615+00:00",
+      "proc_stat_line": "cpu  50818 5 54973 3594573 9584 0 937 82 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4929056 kB\nMemAvailable:    6414664 kB\nBuffers:            2168 kB\nCached:          1688052 kB\nSwapCached:            0 kB\nActive:          1148760 kB\nInactive:        1573772 kB\nActive(anon):      19884 kB\nInactive(anon):  1036360 kB\nActive(file):    1128876 kB\nInactive(file):   537412 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8440 kB\nWriteback:             0 kB\nAnonPages:       1032224 kB\nMapped:           443000 kB\nShmem:             23932 kB\nKReclaimable:      79192 kB\nSlab:             158484 kB\nSReclaimable:      79192 kB\nSUnreclaim:        79292 kB\nKernelStack:        7504 kB\nPageTables:        13128 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    5436628 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21640 kB\nVmallocChunk:          0 kB\nPercpu:             5776 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      115120 kB\nDirectMap2M:     4960256 kB\nDirectMap1G:     3145728 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:06:13.830706+00:00",
+      "proc_stat_line": "cpu  53046 5 56590 3654439 9877 0 998 85 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         5409788 kB\nMemAvailable:    6994652 kB\nBuffers:            2168 kB\nCached:          1788620 kB\nSwapCached:            0 kB\nActive:          1201744 kB\nInactive:        1062620 kB\nActive(anon):      20752 kB\nInactive(anon):   477596 kB\nActive(file):    1180992 kB\nInactive(file):   585024 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              3756 kB\nWriteback:             0 kB\nAnonPages:        473616 kB\nMapped:           383616 kB\nShmem:             24772 kB\nKReclaimable:      78244 kB\nSlab:             156636 kB\nSReclaimable:      78244 kB\nSUnreclaim:        78392 kB\nKernelStack:        6240 kB\nPageTables:         7636 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    4114568 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       21080 kB\nVmallocChunk:          0 kB\nPercpu:             5872 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      207280 kB\nDirectMap2M:     8013824 kB\nDirectMap1G:           0 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "classico",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:06:45.866442+00:00",
+      "proc_stat_line": "cpu  56732 5 57042 3656478 10052 0 1002 85 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4800976 kB\nMemAvailable:    6388460 kB\nBuffers:            2168 kB\nCached:          1789944 kB\nSwapCached:            0 kB\nActive:          1202540 kB\nInactive:        1646052 kB\nActive(anon):      20824 kB\nInactive(anon):  1060512 kB\nActive(file):    1181716 kB\nInactive(file):   585540 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8024 kB\nWriteback:             0 kB\nAnonPages:       1056600 kB\nMapped:           445424 kB\nShmem:             24856 kB\nKReclaimable:      81004 kB\nSlab:             161812 kB\nSReclaimable:      81004 kB\nSUnreclaim:        80808 kB\nKernelStack:        7584 kB\nPageTables:        11252 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    5432912 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22168 kB\nVmallocChunk:          0 kB\nPercpu:             5920 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      207280 kB\nDirectMap2M:     8013824 kB\nDirectMap1G:           0 kB"
+    },
+    {
+      "label": "antes_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:12:04.696834+00:00",
+      "proc_stat_line": "cpu  58977 5 58621 3715577 10296 0 1067 89 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         5412776 kB\nMemAvailable:    7002744 kB\nBuffers:            2168 kB\nCached:          1793644 kB\nSwapCached:            0 kB\nActive:          1222612 kB\nInactive:        1032040 kB\nActive(anon):      21056 kB\nInactive(anon):   462848 kB\nActive(file):    1201556 kB\nInactive(file):   569192 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              9044 kB\nWriteback:             0 kB\nAnonPages:        458976 kB\nMapped:           354752 kB\nShmem:             25064 kB\nKReclaimable:      78992 kB\nSlab:             157496 kB\nSReclaimable:      78992 kB\nSUnreclaim:        78504 kB\nKernelStack:        5984 kB\nPageTables:         7068 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    3800616 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       20528 kB\nVmallocChunk:          0 kB\nPercpu:             5992 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      207280 kB\nDirectMap2M:     8013824 kB\nDirectMap1G:           0 kB"
+    },
+    {
+      "label": "depois_do_backend",
+      "profile": "hibrido-and",
+      "route": "L0-ap-northeast-1",
+      "sampled_at_utc": "2026-11-17T00:12:37.821042+00:00",
+      "proc_stat_line": "cpu  62770 5 59060 3717720 10493 0 1070 89 0 0",
+      "proc_meminfo_raw": "MemTotal:        7970432 kB\nMemFree:         4828760 kB\nMemAvailable:    6421628 kB\nBuffers:            2168 kB\nCached:          1794920 kB\nSwapCached:            0 kB\nActive:          1223000 kB\nInactive:        1597628 kB\nActive(anon):      21196 kB\nInactive(anon):  1027576 kB\nActive(file):    1201804 kB\nInactive(file):   570052 kB\nUnevictable:           4 kB\nMlocked:               4 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              8200 kB\nWriteback:             0 kB\nAnonPages:       1023560 kB\nMapped:           446964 kB\nShmem:             25232 kB\nKReclaimable:      82572 kB\nSlab:             163660 kB\nSReclaimable:      82572 kB\nSUnreclaim:        81088 kB\nKernelStack:        7584 kB\nPageTables:        13016 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     3985216 kB\nCommitted_AS:    5440504 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       22184 kB\nVmallocChunk:          0 kB\nPercpu:             6040 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      207280 kB\nDirectMap2M:     8013824 kB\nDirectMap1G:           0 kB"
+    }
+  ],
+  "cost_stop": null
+}
+{
+  "dedicated_criteria": {
+    "criterio1": {
+      "criterion": 1,
+      "name": "tamanhos por mensagem (campanha)",
+      "rows": [
+        {
+          "profile": "classico",
+          "certificate_bytes": 913,
+          "certificate_baseline": 913,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 308,
+          "clienthello_baseline": 308,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 187,
+              "baseline": 187,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 109,
+              "baseline": 109,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 800,
+              "baseline": 800,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            }
+          ],
+          "route": "L0-sa-east-1"
+        },
+        {
+          "profile": "classico",
+          "certificate_bytes": 913,
+          "certificate_baseline": 913,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 308,
+          "clienthello_baseline": 308,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 187,
+              "baseline": 187,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 109,
+              "baseline": 109,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 800,
+              "baseline": 800,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            }
+          ],
+          "route": "L123"
+        },
+        {
+          "profile": "classico",
+          "certificate_bytes": 913,
+          "certificate_baseline": 913,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 308,
+          "clienthello_baseline": 308,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 187,
+              "baseline": 187,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 109,
+              "baseline": 109,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 800,
+              "baseline": 800,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            }
+          ],
+          "route": "L0-us-east-1"
+        },
+        {
+          "profile": "classico",
+          "certificate_bytes": 913,
+          "certificate_baseline": 913,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 308,
+          "clienthello_baseline": 308,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 187,
+              "baseline": 187,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 109,
+              "baseline": 109,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 800,
+              "baseline": 800,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 264,
+              "baseline": 264,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 1485,
+              "raw_out": 1640,
+              "gateway_in": 1485,
+              "gateway_out": 1640,
+              "ok": true
+            }
+          ],
+          "route": "L0-ap-northeast-1"
+        },
+        {
+          "profile": "pqc",
+          "certificate_bytes": 5632,
+          "certificate_baseline": 5632,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1779,
+          "clienthello_baseline": 1779,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1658,
+              "baseline": 1658,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 104,
+              "baseline": 104,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 5519,
+              "baseline": 5519,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            }
+          ],
+          "route": "L0-sa-east-1"
+        },
+        {
+          "profile": "pqc",
+          "certificate_bytes": 5632,
+          "certificate_baseline": 5632,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1779,
+          "clienthello_baseline": 1779,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1658,
+              "baseline": 1658,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 104,
+              "baseline": 104,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 5519,
+              "baseline": 5519,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            }
+          ],
+          "route": "L123"
+        },
+        {
+          "profile": "pqc",
+          "certificate_bytes": 5632,
+          "certificate_baseline": 5632,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1779,
+          "clienthello_baseline": 1779,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1658,
+              "baseline": 1658,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 104,
+              "baseline": 104,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 5519,
+              "baseline": 5519,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            }
+          ],
+          "route": "L0-us-east-1"
+        },
+        {
+          "profile": "pqc",
+          "certificate_bytes": 5632,
+          "certificate_baseline": 5632,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1779,
+          "clienthello_baseline": 1779,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1658,
+              "baseline": 1658,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 104,
+              "baseline": 104,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 5519,
+              "baseline": 5519,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3317,
+              "baseline": 3317,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 10728,
+              "raw_out": 10878,
+              "gateway_in": 10728,
+              "gateway_out": 10878,
+              "ok": true
+            }
+          ],
+          "route": "L0-ap-northeast-1"
+        },
+        {
+          "profile": "hibrido-and",
+          "certificate_bytes": 6582,
+          "certificate_baseline": 6582,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1858,
+          "clienthello_baseline": 1858,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1755,
+              "baseline": 1755,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 98,
+              "baseline": 98,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 6356,
+              "baseline": 6356,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            }
+          ],
+          "route": "L0-sa-east-1"
+        },
+        {
+          "profile": "hibrido-and",
+          "certificate_bytes": 6582,
+          "certificate_baseline": 6582,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1858,
+          "clienthello_baseline": 1858,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1755,
+              "baseline": 1755,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 98,
+              "baseline": 98,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 6356,
+              "baseline": 6356,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            }
+          ],
+          "route": "L123"
+        },
+        {
+          "profile": "hibrido-and",
+          "certificate_bytes": 6582,
+          "certificate_baseline": 6582,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1858,
+          "clienthello_baseline": 1858,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1755,
+              "baseline": 1755,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 98,
+              "baseline": 98,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 6356,
+              "baseline": 6356,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            }
+          ],
+          "route": "L0-us-east-1"
+        },
+        {
+          "profile": "hibrido-and",
+          "certificate_bytes": 6582,
+          "certificate_baseline": 6582,
+          "certificate_tolerance": 4,
+          "certificate_ok": true,
+          "clienthello_bytes": 1858,
+          "clienthello_baseline": 1858,
+          "clienthello_tolerance": 0,
+          "clienthello_ok": true,
+          "other_messages": {
+            "ServerHello": {
+              "bytes": 1755,
+              "baseline": 1755,
+              "ok": true
+            },
+            "EncryptedExtensions": {
+              "bytes": 10,
+              "baseline": 10,
+              "ok": true
+            },
+            "CertificateRequest": {
+              "bytes": 98,
+              "baseline": 98,
+              "ok": true
+            },
+            "Certificate_cliente": {
+              "bytes": 6356,
+              "baseline": 6356,
+              "ok": true
+            },
+            "CertificateVerify_servidor": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "CertificateVerify_cliente": {
+              "bytes": 3575,
+              "baseline": 3575,
+              "ok": true
+            },
+            "Finished_servidor": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            },
+            "Finished_cliente": {
+              "bytes": 36,
+              "baseline": 36,
+              "ok": true
+            }
+          },
+          "ok": true,
+          "format": "stream_aware",
+          "n_streams": 6,
+          "stream_errors": [],
+          "ignored_streams": [],
+          "stream_divergences": [],
+          "consistency": [
+            {
+              "stream": "0",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "1",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "2",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "3",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "4",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            },
+            {
+              "stream": "5",
+              "raw_in": 11902,
+              "raw_out": 12177,
+              "gateway_in": 11902,
+              "gateway_out": 12177,
+              "ok": true
+            }
+          ],
+          "route": "L0-ap-northeast-1"
+        }
+      ],
+      "missing_captures": [
+        "classico_L219",
+        "classico_L325",
+        "classico_L14",
+        "classico_L30",
+        "pqc_L219",
+        "pqc_L325",
+        "pqc_L14",
+        "pqc_L30",
+        "hibrido-v8_L0-sa-east-1",
+        "hibrido-v8_L123",
+        "hibrido-v8_L219",
+        "hibrido-v8_L325",
+        "hibrido-v8_L0-us-east-1",
+        "hibrido-v8_L14",
+        "hibrido-v8_L0-ap-northeast-1",
+        "hibrido-v8_L30",
+        "hibrido-and_L219",
+        "hibrido-and_L325",
+        "hibrido-and_L14",
+        "hibrido-and_L30"
+      ],
+      "expected_captures": 32,
+      "profiles": [
+        "classico",
+        "pqc",
+        "hibrido-v8",
+        "hibrido-and"
+      ],
+      "routes": [
+        "L0-sa-east-1",
+        "L123",
+        "L219",
+        "L325",
+        "L0-us-east-1",
+        "L14",
+        "L0-ap-northeast-1",
+        "L30"
+      ],
+      "pass": false,
+      "note": "modo campanha -- exige 32 capturas (4 perfis x 8 rotas); 20 faltando ou reprovada(s)"
+    },
+    "criterio3": {
+      "execucoes": [],
+      "route": "L325"
+    },
+    "criterio2": {
+      "L123_server-to-client": {
+        "ok": true,
+        "data": {
+          "route": "L123",
+          "instance_type": "m7i-flex.large",
+          "profile": "classico",
+          "bytes_sent_total": 71680,
+          "bytes_sent_within_first_rtt_window": 14480,
+          "rtt_ms_used_for_window": 122.985,
+          "mss_synack_announced_bytes": 8961,
+          "mss_pcap_max_payload_bytes": 1448,
+          "ss_ti_mss": 1448,
+          "mss_channels_agree": true,
+          "mss_bytes": 1448,
+          "ss_ti_cwnd": 10,
+          "ss_ti_raw_snapshot": "State Recv-Q Send-Q Local Address:Port  Peer Address:Port \nESTAB 0      0       172.31.5.195:sd   15.222.120.76:34982\n\t cubic wscale:7,7 rto:370 rtt:123.032/61.516 mss:1448 pmtu:9001 rcvmss:536 advmss:8949 cwnd:10 segs_in:2 send 942kbps lastsnd:20 lastrcv:20 lastack:20 pacing_rate 1.88Mbps delivered:1 app_limited rcv_space:56587 rcv_ssthresh:56587 minrtt:123.032 snd_wnd:62848",
+          "offloads": {
+            "tso": "indisponivel",
+            "gso": "indisponivel",
+            "gro": "indisponivel"
+          }
+        }
+      },
+      "L123_client-to-server": {
+        "ok": true,
+        "data": {
+          "route": "L123",
+          "instance_type": "m7i-flex.large",
+          "profile": "classico",
+          "bytes_sent_total": 71680,
+          "bytes_sent_within_first_rtt_window": 14480,
+          "rtt_ms_used_for_window": 122.958,
+          "mss_synack_announced_bytes": 8961,
+          "mss_pcap_max_payload_bytes": 1448,
+          "ss_ti_mss": 1448,
+          "mss_channels_agree": true,
+          "mss_bytes": 1448,
+          "ss_ti_cwnd": 10,
+          "ss_ti_raw_snapshot": "State Recv-Q Send-Q Local Address:Port Peer Address:Port \nESTAB 0      0       172.31.11.49:sd   54.232.25.30:49118\n\t cubic wscale:7,7 rto:370 rtt:123.008/61.504 mss:1448 pmtu:9001 rcvmss:536 advmss:8949 cwnd:10 segs_in:2 send 942kbps lastsnd:10 lastrcv:10 lastack:10 pacing_rate 1.88Mbps delivered:1 app_limited rcv_space:56587 rcv_ssthresh:56587 minrtt:123.008 snd_wnd:62848",
+          "offloads": {
+            "tso": "indisponivel",
+            "gso": "indisponivel",
+            "gro": "indisponivel"
+          }
+        }
+      },
+      "L219_server-to-client": {
+        "ok": false,
+        "error": "run_criterio2: conexao de teste falhou: ssh: connect to host 13.61.45.212 port 22: Connection timed out\n"
+      },
+      "L219_client-to-server": {
+        "ok": false,
+        "error": "run_criterio2: nao consegui descobrir a interface primaria do host que escuta"
+      },
+      "L325_server-to-client": {
+        "ok": false,
+        "error": "run_criterio2: conexao de teste falhou: ssh: connect to host 54.179.23.175 port 22: Connection timed out\n"
+      },
+      "L325_client-to-server": {
+        "ok": false,
+        "error": "run_criterio2: nao consegui descobrir a interface primaria do host que escuta"
+      },
+      "L14_server-to-client": {
+        "ok": false,
+        "error": "run_criterio2: conexao de teste falhou: ssh: connect to host 15.175.56.4 port 22: Connection timed out\n"
+      },
+      "L14_client-to-server": {
+        "ok": false,
+        "error": "run_criterio2: nao consegui descobrir a interface primaria do host que escuta"
+      },
+      "L30_server-to-client": {
+        "ok": false,
+        "error": "run_criterio2: conexao de teste falhou: ssh: connect to host 15.164.56.62 port 22: Connection timed out\n"
+      },
+      "L30_client-to-server": {
+        "ok": false,
+        "error": "run_criterio2: nao consegui descobrir a interface primaria do host que escuta"
+      }
+    },
+    "criterio7": {
+      "L0-sa-east-1": {
+        "rtt_ms_probe": 0.143,
+        "n_samples_probe": 20,
+        "rtt_ms_pcap": 0.202
+      },
+      "L123": {
+        "rtt_ms_probe": 122.905,
+        "n_samples_probe": 20,
+        "rtt_ms_pcap": 122.679
+      },
+      "L219": {
+        "ok": false,
+        "error": "run_criterio7(L219): canal probe falhou: ssh: connect to host 13.61.45.212 port 22: Connection timed out\n"
+      },
+      "L325": {
+        "ok": false,
+        "error": "run_criterio7(L325): canal probe falhou: ssh: connect to host 54.179.23.175 port 22: Connection timed out\n"
+      },
+      "L0-us-east-1": {
+        "rtt_ms_probe": 0.256,
+        "n_samples_probe": 20,
+        "rtt_ms_pcap": 0.244
+      },
+      "L14": {
+        "ok": false,
+        "error": "run_criterio7(L14): canal probe falhou: ssh: connect to host 15.175.56.4 port 22: Connection timed out\n"
+      },
+      "L0-ap-northeast-1": {
+        "rtt_ms_probe": 0.145,
+        "n_samples_probe": 20,
+        "rtt_ms_pcap": 0.104
+      },
+      "L30": {
+        "ok": false,
+        "error": "run_criterio7(L30): canal probe falhou: ssh: connect to host 15.164.56.62 port 22: Connection timed out\n"
+      }
+    },
+    "full_logs": {
+      "containers": {
+        "ap-northeast-1_v9-mtls": {
+          "bytes": 19178,
+          "rc": 0,
+          "server_ip": "13.192.136.211"
+        },
+        "ap-northeast-1_insurance-server-lambdas-auth-1": {
+          "bytes": 18000,
+          "rc": 0,
+          "server_ip": "13.192.136.211"
+        },
+        "ap-northeast-1_insurance-server-lambdas-mongo_seed-1": {
+          "bytes": 5682,
+          "rc": 0,
+          "server_ip": "13.192.136.211"
+        },
+        "ap-northeast-1_insurance-server-lambdas-mockapi-1": {
+          "bytes": 363263,
+          "rc": 0,
+          "server_ip": "13.192.136.211"
+        },
+        "sa-east-1_v9-mtls": {
+          "bytes": 20091,
+          "rc": 0,
+          "server_ip": "54.232.25.30"
+        },
+        "sa-east-1_insurance-server-lambdas-auth-1": {
+          "bytes": 17342,
+          "rc": 0,
+          "server_ip": "54.232.25.30"
+        },
+        "sa-east-1_insurance-server-lambdas-mongo_seed-1": {
+          "bytes": 5683,
+          "rc": 0,
+          "server_ip": "54.232.25.30"
+        },
+        "sa-east-1_insurance-server-lambdas-mockapi-1": {
+          "bytes": 363257,
+          "rc": 0,
+          "server_ip": "54.232.25.30"
+        },
+        "us-east-1_v9-mtls": {
+          "bytes": 18648,
+          "rc": 0,
+          "server_ip": "54.92.142.57"
+        },
+        "us-east-1_insurance-server-lambdas-auth-1": {
+          "bytes": 17342,
+          "rc": 0,
+          "server_ip": "54.92.142.57"
+        },
+        "us-east-1_insurance-server-lambdas-mongo_seed-1": {
+          "bytes": 5683,
+          "rc": 0,
+          "server_ip": "54.92.142.57"
+        },
+        "us-east-1_insurance-server-lambdas-mockapi-1": {
+          "bytes": 363239,
+          "rc": 0,
+          "server_ip": "54.92.142.57"
+        }
+      },
+      "instances": [
+        "server_ap-northeast-1",
+        "server_sa-east-1",
+        "server_us-east-1",
+        "client_L0-sa-east-1",
+        "client_L123",
+        "client_L219",
+        "client_L325",
+        "client_L0-us-east-1",
+        "client_L14",
+        "client_L0-ap-northeast-1",
+        "client_L30"
+      ]
+    }
+  }
+}
+=== launch_persistent: orchestrator.py saiu com codigo 0 em 2026-11-17T00:31:14Z ===

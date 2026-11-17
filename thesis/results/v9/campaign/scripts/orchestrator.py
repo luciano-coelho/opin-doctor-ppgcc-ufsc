@@ -2315,6 +2315,15 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     # com dado ja resumido em outro lugar).
                     "n_client_facing_handshakes": _count_client_facing_handshakes(
                         warmup_result.get("gateway_log_lines", [])),
+                    # Degrau 2, correcao de item 2 da Etapa 0 (achado real: a
+                    # mudanca aditiva em run_execution devolvia estas duas
+                    # chaves, mas este dict literal -- a serializacao que de
+                    # fato persiste em disco -- nunca as copiava do result,
+                    # descartando-as silenciosamente antes de qualquer
+                    # escrita). Mesma logica aplicada em execucao_entry
+                    # abaixo. Nenhuma chave existente removida ou renomeada.
+                    "t_fluxo_fino_seconds": warmup_result.get("t_fluxo_fino_seconds"),
+                    "phase_accounting": warmup_result.get("phase_accounting", {}),
                 }
                 aquecimento_calls.append(aquecimento_entry)
                 # Decisao 133, item 3: persistido no disco AGORA, nunca
@@ -2361,6 +2370,10 @@ def run_pilot(executor, seed: int, out_dir: Path, n_per_profile: int = N_PER_PRO
                     "handshake_bytes_per_connection": result.get("handshake_bytes_per_connection", []),
                     "n_client_facing_handshakes": _count_client_facing_handshakes(
                         result.get("gateway_log_lines", [])),
+                    # Degrau 2, correcao de item 2 da Etapa 0 -- ver comentario
+                    # equivalente em aquecimento_entry, acima.
+                    "t_fluxo_fino_seconds": result.get("t_fluxo_fino_seconds"),
+                    "phase_accounting": result.get("phase_accounting", {}),
                 }
                 execucoes_calls.append(execucao_entry)
                 criterio6_rows.append({
