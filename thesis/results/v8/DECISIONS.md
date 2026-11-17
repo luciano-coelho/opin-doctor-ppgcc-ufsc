@@ -193,11 +193,12 @@ two regions.
 
 **Root cause, confirmed 2026-10-10.** The hypothesis above is correct, and
 the actual origin of the 14ms/30ms targets is now known precisely: they
-come from real measurements Frederico took from a single fixed point --
-his own machine in Palhoça, SC -- to two nearby real-world destinations:
-~14ms to Córrego Grande, Florianópolis (UFSC), and ~30ms to São Paulo.
-Both are short, same-region/same-state or neighboring-state residential-ISP
-hops over tens to a few hundred km -- not inter-datacenter links at all.
+come from real measurements a colleague took from a single fixed point on
+a residential ISP connection in the Greater Florianópolis area, Santa
+Catarina, to two nearby real-world destinations: ~14ms to Florianópolis
+(UFSC), and ~30ms to São Paulo. Both are short, same-region/same-state or
+neighboring-state residential-ISP hops over tens to a few hundred km --
+not inter-datacenter links at all.
 This is a different *kind* of network path than AWS inter-region
 backbone links, which is why no AWS region pair anchored at `sa-east-1`
 (or, as Decision 10 will show, anchored at any single region) can be
