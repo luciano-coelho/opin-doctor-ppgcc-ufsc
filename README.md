@@ -10,10 +10,17 @@ thesis on migrating the OPIN consent flow from classical to post-quantum
 **Advisors:** Prof. Ricardo Custódio, Dr. and Prof. Martín Vigil, Dr. — UFSC
 
 **Looking for the thesis results?** Start at
-[`thesis/README.md`](thesis/README.md) — the final, official numbers are in
-[`thesis/results/v7/`](thesis/results/v7/).
+[`thesis/README.md`](thesis/README.md). This project went through three
+successive measurement campaigns — **v7** (simulated latency, the
+pre-qualification historical baseline), **v8** (real AWS cross-region
+latency, additive), and **v9** (a second, independent real-AWS campaign
+on a new account, with a corrected OPINsize formula and two supplementary
+investigations, "Degrau 1" and "Degrau 2") — see
+["Why three campaigns?"](#why-three-campaigns-v7-v8-v9) below for why none
+of them is simply discarded in favor of the others.
 
-Certificates for the Certificate Authority and mTLS clients are located in [`mock-service-os/certs`](./mock-service-os/certs).
+Certificates for the Certificate Authority and mTLS clients are located in
+[`mock-service-os/certs`](./mock-service-os/certs).
 
 ## Repository structure
 
@@ -22,12 +29,14 @@ Certificates for the Certificate Authority and mTLS clients are located in [`moc
 | [`mock-service-os/`](mock-service-os/) | The mock AS, RS gateway (mTLS), and their certificates/keys — the environment the thesis measures |
 | [`insurance-server-lambdas/`](insurance-server-lambdas/) | The Resource Server (RS), implemented in Java/Micronaut |
 | [`insurance-swagger/`](insurance-swagger/) | OpenAPI/Swagger definitions and codegen templates for the RS |
-| [`thesis/`](thesis/) | Thesis automation, experiment data, and results (`v1`–`v7`, with `v7` as the final one) |
+| [`thesis/`](thesis/) | Thesis automation, experiment data, and results (`v1`–`v9`) — see [`thesis/README.md`](thesis/README.md) |
 
 ---
 
 ## Table of Contents
 
+- [Why three campaigns? (v7, v8, v9)](#why-three-campaigns-v7-v8-v9)
+- [The official v9 campaign: tag, commit, and re-verification](#the-official-v9-campaign-tag-commit-and-re-verification)
 - [Prerequisites](#prerequisites)
 - [Instructions for macOS / Linux](#instructions-for-macos--linux)
 - [Instructions for Windows](#instructions-for-windows)
@@ -35,6 +44,63 @@ Certificates for the Certificate Authority and mTLS clients are located in [`moc
 - [Obtaining a Token Using Certificates](#obtaining-a-token-using-certificates)
 - [Architecture Design](#architecture-design)
 - [Thesis: Post-Quantum Migration](#thesis-post-quantum-migration)
+- [License](#license)
+- [How to cite](#how-to-cite)
+- [Use of Generative AI](#use-of-generative-ai)
+
+---
+
+## Why three campaigns? (v7, v8, v9)
+
+- **v7** — the pre-qualification, **simulated**-latency baseline (`tc`/`netem`
+  WAN-latency emulation on one machine). It remains the historical reference
+  result and is **not superseded**: see
+  [`thesis/results/v7/`](thesis/results/v7/).
+- **v8** — the thesis's first **real**-network campaign: the same experiment
+  run across real AWS inter-region latency instead of emulated latency.
+  **Additive**, not a replacement for v7 — the two measure genuinely
+  different things (emulated vs. real WAN conditions). See
+  [`thesis/results/v8/`](thesis/results/v8/) and its own `README.md`.
+- **v9** — a second, independent real-AWS campaign, on a **new AWS account**,
+  that (a) generalizes the orchestrator to more servers/routes, (b) adds a
+  fourth, diagnostic-only profile (**Control**), and (c) corrects a
+  methodological gap v8 did not have scoped (the internal signature bytes of
+  the encrypted `id_token`, see `DECISIONS.md`, Decisions 216-217). v9 also
+  includes two supplementary, pre-registered investigations run *after* the
+  official campaign closed — **"Degrau 1"** (exploratory root-causing of a
+  residual latency gap) and **"Degrau 2"** (a follow-up campaign with
+  finer-grained phase timing) — kept in their own subfolders
+  (`thesis/results/v9/analise_origem/`, `thesis/results/v9/degrau2/`) and
+  never mixed into the official campaign's frozen raw data. See
+  [`thesis/results/v9/`](thesis/results/v9/) and its own `README.md` for the
+  full breakdown.
+
+In short: **v7 and v8 are both still official**, each for what it measures
+(simulated vs. real latency); **v9** is the most recent, most complete real
+campaign, and the one with the most extensive engineering/statistical
+decision trail.
+
+## The official v9 campaign: tag, commit, and re-verification
+
+The v9 official measurement campaign (the one whose raw data, manifest, and
+`PINS.json` are frozen and must never change) is identified by:
+
+- **Tag:** `v9-campanha-oficial-final`
+- **Commit:** `c05dcb364192bc193e99704dea2aae5a33b8ae21`
+
+**Important for anyone re-verifying reproducibility or byte-for-byte
+integrity of the "frozen" artifacts** (`thesis/results/v9/campaign/PINS.json`,
+`thesis/results/v9/campaign_oficial_conta_nova_raw/manifest.sha256`, the
+campaign orchestration scripts under `thesis/results/v9/campaign/scripts/`,
+and the raw execution data itself): **always diff against commit
+`c05dcb36`, never against the current `HEAD`.** Commits after `c05dcb36`
+add new, separate work (Degrau 1, Degrau 2, the `id_token` OPINsize
+correction) — some of them touch the *same* orchestrator script in a
+purely additive way (new optional output fields, nothing removed or
+renamed), which means the script's own hash legitimately changes over
+time without the already-collected official campaign data changing by a
+single byte. `git diff c05dcb36 -- <path>` is the authoritative check for
+any file you believe should be frozen.
 
 ---
 
@@ -426,13 +492,47 @@ When deploying to another cloud provider, the only required adjustment is replac
 This environment is also the test bed for a doctoral thesis measuring the
 cost of migrating the OPIN consent flow above to post-quantum (PQC) and
 hybrid cryptography — the same gateway, AS, and RS described above, run
-under three cryptographic profiles (Classic, PQC, Hybrid) that vary only
-the TLS key exchange and the signature/certificate scheme.
+under three (v7/v8) or four (v9, which adds a diagnostic-only **Control**
+profile) cryptographic profiles that vary only the TLS key exchange and
+the signature/certificate scheme.
 
 - **Start here:** [`thesis/README.md`](thesis/README.md)
-- **Final, official results:** [`thesis/results/v7/`](thesis/results/v7/) —
-  see `Consolidated_Metrics_Report_FINAL.md` for the numbers,
-  `ARCHITECTURE.md` for the measured system and methodology, and
-  `DECISIONS.md` for the engineering decisions behind the final setup.
-- **Real, cryptographically verified artifacts** (certificates, tokens,
-  handshake evidence) per profile: [`thesis/results/v7/artifacts/`](thesis/results/v7/artifacts/)
+- **v7 (simulated latency, historical baseline):** [`thesis/results/v7/`](thesis/results/v7/)
+- **v8 (first real-AWS campaign, additive):** [`thesis/results/v8/`](thesis/results/v8/)
+- **v9 (second, independent real-AWS campaign — most recent, most complete):**
+  [`thesis/results/v9/`](thesis/results/v9/) — see `Consolidated_Metrics_Report_FINAL.md`
+  for the numbers, `DECISIONS.md` for the full engineering/statistical
+  decision trail (every methodological deviation, correction, and
+  independent audit along the way), and the
+  [tag/commit/re-verification note above](#the-official-v9-campaign-tag-commit-and-re-verification).
+
+## License
+
+This repository is under the [MIT License](LICENSE), inherited from the
+upstream fork this project started from
+([`br-openinsurance/MockOPIN`](https://github.com/br-openinsurance/MockOPIN) /
+Raidiam's Open Insurance Brasil mock service). The `LICENSE` file's copyright
+line ("Open Insurance Brasil") reflects that upstream origin, not this
+thesis's own additions specifically — see `CITATION.cff` for a `# TODO` note
+on this point.
+
+## How to cite
+
+See [`CITATION.cff`](CITATION.cff) for the machine-readable citation record.
+Several fields there (the final thesis title, version/release, DOI) are
+marked `# TODO` pending confirmation — check the file directly before citing.
+
+## Use of Generative AI
+
+During this work, Anthropic's Claude Sonnet 5 was used as an assistant,
+through Claude Code, between July 2026 and November 2026. It was used to
+write and review the code of the
+experimental environment and of the analysis scripts, to run consistency
+checks of the results against the raw data, and to draft and revise the text
+of the documentation. The architecture of the experiment, the research
+questions, the experimental design, the hypotheses, the choice of metrics
+and scope, and the interpretation of the results were defined by the author
+together with the advisors, who also made the main decisions of the work.
+All the material produced with the tool was reviewed by the author, who is
+responsible for the content of this work. The work belongs to the author and
+his advisors.
