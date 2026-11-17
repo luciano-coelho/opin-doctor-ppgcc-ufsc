@@ -13852,4 +13852,10 @@ Nenhuma tag com sufixo nova alem desta; `main` nunca tocada; nenhuma acao AWS/in
 
 **Acao na AWS nesta investigacao:** uma unica chamada de leitura, `describe-instances` (4 regioes, via perfil `mockopin-pqc-campanha`), pra confirmar estado da frota antes de reportar o item 5 -- confirmou os 8 hosts necessarios `running`, nenhuma acao de escrita/start/stop.
 
+## Decisao 213 -- Rodada 3 autorizada pelo usuario (corrige o achado da Decisao 212); item 0, deadline estendido para agora+6h nos 8 hosts, escrita atomica com leitura de confirmacao
+
+Usuario autorizou repetir o plano pre-registrado (mesmas sementes `20261117`/`20261118`, mesmas 360 execucoes/120 aquecimentos) com o codigo corrigido (commit `fe532c9e`). Frota permanece ligada, sem push/force/mover tags.
+
+**Deadline estendido para `2026-11-17T09:58:43Z` (epoch `1794909523`, agora+6h) nos 8 hosts**, escrita atomica (`tee` em `.tmp` + `mv`) seguida de leitura de confirmacao em cada host -- os 8 confirmaram o valor exato gravado (`ok: true` em todos). Padrao de enderecamento confirmado lendo `orchestrator.py` (`SSHExecutor`, docstring "SEMPRE pelo IP PUBLICO do alvo... nunca o privado"): o operador alcanca o controle direto (IP publico, identidade padrao `~/.ssh/id_ed25519`); o controle alcanca os outros 7 hosts tambem pelo IP PUBLICO de cada um (nunca o privado -- IPs privados cross-region nunca seriam roteaveis de qualquer forma), usando a chave `~/.ssh/campaign_key` que ja esta no proprio controle (entregue antes, nunca uma chave do operador). Primeira tentativa desta checagem usou IP privado por engano (erro meu) e deu timeout nos 7 hosts nao-controle -- corrigido antes de qualquer escrita de deadline errada.
+
 **NENHUM `stop-instances` executado** -- conforme instrucao explicita, fica pra uma rodada SEPARADA, com o usuario presente. Sem push, sem force, sem mover nenhuma tag nesta rodada. Frota continua `running` nos 8 hosts usados.
