@@ -11,7 +11,7 @@ diferente) e Decisao 139 em `thesis/results/v9/DECISIONS.md`.
 - **Interrompida (crash):** descoberta ao checar o andamento as
   ~2026-11-12T20:20Z-21:40Z.
 - **Causa real:** `RuntimeError` em `run_execution` -- timeout de SSH
-  transitorio pro cliente da rota L123 (ca-central-1, IP 15.175.74.137)
+  transitorio pro cliente da rota L123 (ca-central-1, IP <fleet-ip-client-L123-attempt2>)
   durante a 3a execucao da celula `classico/L123`. **O heartbeat corrigido
   (Decisao 138) funcionou corretamente desta vez** -- confirmado: as 12
   instancias continuaram `running`, nenhuma se autoparou. O host L123

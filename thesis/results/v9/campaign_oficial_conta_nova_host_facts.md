@@ -6,18 +6,18 @@ Coletado via SSH (chave do operador só para o host de controle; chave de campan
 
 | Papel | Rótulo | Região | IP privado | IP público |
 |---|---|---|---|---|
-| control | control | sa-east-1 | 172.31.25.65 | 15.229.65.10 |
-| server | sa-east-1 | sa-east-1 | 172.31.5.195 | 54.232.25.30 |
-| server | us-east-1 | us-east-1 | 172.31.14.117 | 54.92.142.57 |
-| server | ap-northeast-1 | ap-northeast-1 | 172.31.15.122 | 13.192.136.211 |
-| client | L0-sa-east-1 | sa-east-1 (colocado) | 172.31.2.133 | 56.125.120.180 |
-| client | L123 | ca-central-1 | 172.31.11.49 | 15.222.120.76 |
-| client | L219 | eu-north-1 | 172.31.43.183 | 13.61.45.212 |
-| client | L325 | ap-southeast-1 | 172.31.38.214 | 54.179.23.175 |
-| client | L0-us-east-1 | us-east-1 (colocado) | 172.31.5.229 | 44.199.121.131 |
-| client | L14 | ca-central-1 | 172.31.14.106 | 15.175.56.4 |
-| client | L0-ap-northeast-1 | ap-northeast-1 (colocado) | 172.31.15.45 | 13.197.84.234 |
-| client | L30 | ap-northeast-2 | 172.31.20.188 | 15.164.56.62 |
+| control | control | sa-east-1 | 172.31.25.65 | <fleet-ip-control> |
+| server | sa-east-1 | sa-east-1 | 172.31.5.195 | <fleet-ip-server-sa-east-1> |
+| server | us-east-1 | us-east-1 | 172.31.14.117 | <fleet-ip-server-us-east-1> |
+| server | ap-northeast-1 | ap-northeast-1 | 172.31.15.122 | <fleet-ip-server-ap-northeast-1> |
+| client | L0-sa-east-1 | sa-east-1 (colocado) | 172.31.2.133 | <fleet-ip-client-L0-sa-east-1> |
+| client | L123 | ca-central-1 | 172.31.11.49 | <fleet-ip-client-L123> |
+| client | L219 | eu-north-1 | 172.31.43.183 | <fleet-ip-client-L219> |
+| client | L325 | ap-southeast-1 | 172.31.38.214 | <fleet-ip-client-L325> |
+| client | L0-us-east-1 | us-east-1 (colocado) | 172.31.5.229 | <fleet-ip-client-L0-us-east-1> |
+| client | L14 | ca-central-1 | 172.31.14.106 | <fleet-ip-client-L14> |
+| client | L0-ap-northeast-1 | ap-northeast-1 (colocado) | 172.31.15.45 | <fleet-ip-client-L0-ap-northeast-1> |
+| client | L30 | ap-northeast-2 | 172.31.20.188 | <fleet-ip-client-L30> |
 
 ## Fatos por host
 

@@ -8,7 +8,7 @@ oficial v9, interrompida por queda do orquestrador (nao concluida).
 - **Interrompida (crash):** entre 2026-11-12T19:28Z e 2026-11-12T19:34Z,
   descoberta ao checar o andamento.
 - **Causa real:** `RuntimeError` em `_tcp_preflight` -- o cliente da rota L14
-  (ca-central-1, IP 16.52.219.70) ficou inalcancavel por SSH porque seu
+  (ca-central-1, IP <fleet-ip-client-L14-attempt1>) ficou inalcancavel por SSH porque seu
   proprio dead man's switch (heartbeat) ja tinha expirado e parado a
   instancia com seguranca (`stop`). Raiz do problema: a renovacao em lote
   (`renew_all_safety_timers`, no inicio da janela) da 3h de margem a TODOS os
