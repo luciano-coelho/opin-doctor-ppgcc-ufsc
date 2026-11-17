@@ -13887,5 +13887,3 @@ Usuario autorizou repetir o plano pre-registrado (mesmas sementes `20261117`/`20
 **Relatorio:** `RELATORIO_ETAPA2_D1_D5.md` -- explicitamente marcado como rascunho para revisao, NUNCA tratado como final/publicado. Separa claramente conclusoes pre-registradas de observacoes exploratorias (ex.: a direcao negativa de `http_calls_seconds` em D4a, a concentracao do custo Hybrid-PQC em http_calls+residual).
 
 **Frota confirmada `stopped` nos 8 hosts** (leitura `describe-instances`, 4 regioes, ~11min depois do deadline encurtado) -- todos com `Reason: "User initiated"` (dead-man's-switch via `shutdown -h now` dentro do guest, nunca uma chamada de API AWS). **Nenhum `stop-instances`/`terminate-instances` chamado em nenhum momento desta sessao inteira do Degrau 2.** Tudo commitado localmente, sem push, sem force, sem mover tags.
-
-**NENHUM `stop-instances` executado** -- conforme instrucao explicita, fica pra uma rodada SEPARADA, com o usuario presente. Sem push, sem force, sem mover nenhuma tag nesta rodada. Frota continua `running` nos 8 hosts usados.
