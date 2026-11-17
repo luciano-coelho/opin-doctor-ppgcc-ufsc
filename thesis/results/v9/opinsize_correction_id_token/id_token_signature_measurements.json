@@ -1,0 +1,141 @@
+{
+  "note": "Arquivo final MESCLADO manualmente a partir de 2 invocacoes reais de measure_id_token_signature_local.py (--profiles classico pqc hibrido-and, rodada as 2026-11-17T14:28:02Z; --profiles hibrido-v8, rodada as 2026-11-17T14:29:45Z, apos corrigir um bug real achado na 1a tentativa -- REMOTE_GATEWAY_HOST setado por engano, corrigido no script, ver Decisao 216 (emenda) em DECISIONS.md). Nenhum numero digitado a mao -- cada bloco abaixo e copia literal da saida JSON real de uma dessas 2 invocacoes. Execucao LOCAL real via docker compose (run_gate.py's start_block/teardown_stack), NUNCA a frota AWS. docker ps -a conferido ANTES e DEPOIS de cada invocacao -- os mesmos 19 containers de outros projetos (siga-localhost/biblio/evolution-api-v2), mesmos IDs, nenhum tocado; 0 containers deste projeto deixados rodando ao final.",
+  "method": "spy em memoria sobre opin_flow.decrypt_and_verify_jwt (nunca altera arquivo em disco), decifragem RSA-OAEP+A256GCM feita no script com cryptography, medicao da assinatura interna via baseline_automation.jwt_sig_breakdown (mesma funcao oficial, mesma unidade: bytes brutos decodificados de base64url)",
+  "route": "L0",
+  "results": {
+    "classico": {
+      "insurance": {
+        "jwe_transmitted_bytes": 1471,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "classical_sig_bytes": 256,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 256,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 256
+      },
+      "person": {
+        "jwe_transmitted_bytes": 1471,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "classical_sig_bytes": 256,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 256,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 256
+      }
+    },
+    "pqc": {
+      "insurance": {
+        "jwe_transmitted_bytes": 6905,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "ML-DSA-65",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "pqc_pure",
+          "classical_sig_bytes": null,
+          "pq_sig_bytes": 3309
+        },
+        "classical_sig_bytes": null,
+        "pq_sig_bytes": 3309,
+        "total_sig_bytes_raw": 3309
+      },
+      "person": {
+        "jwe_transmitted_bytes": 6905,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "ML-DSA-65",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "pqc_pure",
+          "classical_sig_bytes": null,
+          "pq_sig_bytes": 3309
+        },
+        "classical_sig_bytes": null,
+        "pq_sig_bytes": 3309,
+        "total_sig_bytes_raw": 3309
+      }
+    },
+    "hibrido-and": {
+      "_perfil_tese": "Hybrid",
+      "insurance": {
+        "jwe_transmitted_bytes": 7354,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "_nota": "rotulo 'classic_only' e um artefato de jwt_sig_breakdown (baseline_automation.py:328-346): o id_token SEMPRE declara alg='PS256' no header mesmo quando Strong-Nesting-assinado (opin_flow.py:837-838) e NUNCA carrega claim 'pqc' (Strong Nesting concatena sigma1||sigma2 na propria assinatura, nunca extende o payload) -- a funcao cai no branch PS256-sem-claim-pqc por eliminacao, atribuindo os 3565B INTEIROS a classical_sig_bytes. A soma total (total_sig_bytes_raw=3565) continua correta e bate exatamente com 256(PS256)+3309(ML-DSA-65) = a mesma aritmetica de Strong Nesting ja documentada na Decisao 147 pra JARM.",
+          "classical_sig_bytes": 3565,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 3565,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 3565
+      },
+      "person": {
+        "jwe_transmitted_bytes": 7354,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "classical_sig_bytes": 3565,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 3565,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 3565
+      }
+    },
+    "hibrido-v8": {
+      "_perfil_tese": "Control",
+      "insurance": {
+        "jwe_transmitted_bytes": 7354,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "_nota": "mesmo artefato de rotulo que hibrido-and -- ver nota acima.",
+          "classical_sig_bytes": 3565,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 3565,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 3565
+      },
+      "person": {
+        "jwe_transmitted_bytes": 7354,
+        "jwe_n_parts": 5,
+        "inner_jws_header_alg": "PS256",
+        "inner_jws_n_parts": 3,
+        "breakdown": {
+          "construction": "classic_only",
+          "classical_sig_bytes": 3565,
+          "pq_sig_bytes": null
+        },
+        "classical_sig_bytes": 3565,
+        "pq_sig_bytes": null,
+        "total_sig_bytes_raw": 3565
+      }
+    }
+  },
+  "summary_total_sig_bytes_raw_per_id_token": {
+    "classico": 256,
+    "pqc": 3309,
+    "hibrido-and_Hybrid": 3565,
+    "hibrido-v8_Control": 3565
+  },
+  "errors_encountered_and_fixed": {
+    "1a_tentativa_todos_os_4_perfis": "RuntimeError: tls_kem_proxy (detached) did not answer HTTPS on port 8443 within 30s -- causa raiz: measure_id_token_signature_local.py setava REMOTE_GATEWAY_HOST=127.0.0.1 por engano (copiado de orchestrator.py's _client_env, que e pro env de um SUBPROCESSO remoto/shimmado via SSH, nunca pro processo LOCAL que gerencia o proxy). Corrigido para fazer os.environ.pop('REMOTE_GATEWAY_HOST', None), exatamente como run_gate.py's _relaunch_client_proxy_and_signer (linha 352) ja fazia -- nunca percebido antes porque este script nunca tinha sido executado de verdade.",
+    "2a_tentativa_hibrido-v8_isolado": "JSONDecodeError: Expecting value: line 1 column 1 (char 0) -- falha transitoria pontual (so no hibrido-v8, so nesta rodada especifica, nunca reproduzida na rodada seguinte do MESMO perfil isolado) -- resolvida rerodando so --profiles hibrido-v8 isoladamente, sucesso completo na 2a tentativa, sem nenhuma mudanca de codigo adicional."
+  }
+}

@@ -114,9 +114,30 @@ def measure_one_profile(gateway_profile: str) -> dict:
     opin_profile = orch.CLIENT_CRYPTO_PROFILE_ENV[gateway_profile]
     import os
 
+    # Decisao 216 (emenda, achado real desta rodada): a 1a tentativa setava
+    # REMOTE_GATEWAY_HOST="127.0.0.1", copiado por engano de
+    # orchestrator.py's `_client_env` (que e pro env de um SUBPROCESSO
+    # remoto/shimmado via SSH, nunca pro processo LOCAL que gerencia o
+    # proxy/signer em si). `run_gate.py`'s `_relaunch_client_proxy_and_signer`
+    # (o caminho REAL que este script espelha) faz o oposto -- POPA
+    # REMOTE_GATEWAY_HOST explicitamente (linha 352) -- porque
+    # `opin_flow.start_tls_kem_proxy()` usa essa variavel pra decidir o
+    # ALVO da conexao de saida do proxy: setada, vira "<valor>:443" SEM
+    # `--network insurance-server-lambdas_default` (linhas 1260-1264/1322);
+    # ausente, vira "mtls:443" COM esse `--network` -- o alias real que
+    # `_launch_gateway` registra pro container do gateway na rede do
+    # compose. Setar "127.0.0.1" faz o proxy (dentro do SEU PROPRIO
+    # namespace de rede, sem a flag --network) tentar conectar no SEU
+    # PROPRIO loopback, nunca no do host -- causa raiz confirmada do erro
+    # real desta rodada ("tls_kem_proxy (detached) did not answer HTTPS
+    # on port 8443 within 30s", nos 4 perfis, idencito -- o LISTENER do
+    # proxy nem chega a aceitar a conexao de teste enquanto o alvo de
+    # saida for inalcancavel). Corrigido aqui pra exatamente o mesmo
+    # padrao de `run_gate.py` -- nunca setar REMOTE_GATEWAY_HOST neste
+    # processo.
     os.environ["V9_HARNESS"] = "1"
     os.environ["CRYPTO_PROFILE"] = opin_profile
-    os.environ["REMOTE_GATEWAY_HOST"] = "127.0.0.1"
+    os.environ.pop("REMOTE_GATEWAY_HOST", None)
 
     import opin_flow as of
     import latency_automation as la
