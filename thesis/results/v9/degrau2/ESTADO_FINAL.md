@@ -1,36 +1,36 @@
-# Degrau 2 — estado final desta sessão
+# Degrau 2 — final state of this session
 
-Atualizado em `2026-11-17T11:30Z` aproximadamente. Substitui o checkpoint anterior (abaixo, mantido como histórico) — Etapa 2 foi concluída.
+Updated at approximately `2026-11-17T11:30Z`. Replaces the previous checkpoint (below, kept as history) — Stage 2 has been completed.
 
-## O que foi feito até aqui
+## What has been done so far
 
-1. **Achado crítico (Decisão 212):** as 2 rodadas originais do Degrau 2 (`tentativa1_sem_campo_fino/`) não continham `t_fluxo_fino_seconds`/`phase_accounting` em nenhum registro — bug de serialização em `orchestrator.py` (segunda camada, `execucao_entry`/`aquecimento_entry`, nunca tocada pela mudança aditiva original). Corrigido localmente (commit `fe532c9e`), sem nenhuma ação na AWS.
-2. **Teste de fumaça:** passou integralmente (1 execução + 1 aquecimento, caminho completo até o disco, todos os campos presentes e não-nulos).
-3. **Porta de segurança (gate_watcher.py):** implementada, roda em paralelo a cada rodada, confere o primeiro `run01.json` real. **Passou nas duas rodadas** (`ok: true`), nunca abortou nada.
-4. **Rodada 3 completa — repetição do plano pré-registrado com o código corrigido:**
-   - Round1 (seed `20261117`): 180/180 execuções, 60/60 aquecimentos, exit code 0, custo ~US$2,86. 2/12 capturas dedicadas falharam (categoria "decifragem incompleta", não-fatal, autotratada).
-   - Round2 (seed `20261118`): 180/180 execuções, 60/60 aquecimentos, exit code 0, custo ~US$2,77. **12/12 capturas dedicadas falharam** — mesma categoria textual/estrutural ("decifragem incompleta em 3 tentativas", nunca "divergência de tamanho"), padrão uniforme nas 3 tentativas em todas as 12 células inspecionadas — **mas com taxa de falha muito maior que a Rodada 1 (100% vs 17%), sugerindo causa sistêmica da janela da Rodada 2, não aleatoriedade por execução. Isso NÃO afeta `t_fluxo_fino_seconds`/`phase_accounting` (campos centrais do Degrau 2) — é uma falha ortogonal, do critério 1 (verificação de tamanho de certificado via captura TLS dedicada), não do cronômetro fino.** Fica registrado como achado a investigar separadamente, não bloqueia D1-D5.
-   - Nenhum outro tipo de falha (transporte, assinatura, Traceback não-tratado) em nenhuma das duas rodadas.
-   - Custo total Rodada 3: **~US$5,63** (bem abaixo do limite de US$12).
+1. **Critical finding (Decision 212):** the 2 original Degrau 2 rounds (`tentativa1_sem_campo_fino/`) contained no `t_fluxo_fino_seconds`/`phase_accounting` in any record — a serialization bug in `orchestrator.py` (second layer, `execucao_entry`/`aquecimento_entry`, never touched by the original additive change). Fixed locally (commit `fe532c9e`), with no action on AWS.
+2. **Smoke test:** passed fully (1 execution + 1 warm-up, the complete path through to disk, all fields present and non-null).
+3. **Safety gate (gate_watcher.py):** implemented, runs in parallel on each round, checks the first real `run01.json`. **Passed on both rounds** (`ok: true`), never aborted anything.
+4. **Full round 3 — repeat of the pre-registered plan with the fixed code:**
+   - Round1 (seed `20261117`): 180/180 executions, 60/60 warm-ups, exit code 0, cost ~US$2,86. 2/12 dedicated captures failed (category "incomplete decryption", non-fatal, self-handled).
+   - Round2 (seed `20261118`): 180/180 executions, 60/60 warm-ups, exit code 0, cost ~US$2,77. **12/12 dedicated captures failed** — the same textual/structural category ("incomplete decryption after 3 attempts", never "size mismatch"), a uniform pattern across the 3 attempts in all 12 inspected cells — **but with a much higher failure rate than Round 1 (100% vs 17%), suggesting a systemic cause tied to Round 2's window, not per-execution randomness. This does NOT affect `t_fluxo_fino_seconds`/`phase_accounting` (Degrau 2's central fields) — it is an orthogonal failure, in criterion 1 (certificate-size verification via dedicated TLS capture), not in the fine-grained timer.** Recorded as a finding to investigate separately, it does not block D1-D5.
+   - No other type of failure (transport, signature, unhandled Traceback) in either round.
+   - Total Round 3 cost: **~US$5,63** (well under the US$12 limit).
 
-## Estado atual confirmado agora (re-verificado do zero, não assumido)
+## Current state confirmed now (re-verified from scratch, not assumed)
 
-- **Processos:** nenhum `orchestrator.py`/`gate_watcher.py` ativo em controle (`pgrep` limpo); `launch_persistent.py status` confirma `alive: false` para as duas rodadas.
-- **Frota:** os 8 hosts necessários estão `running` (confirmado via `describe-instances` de leitura, 4 regiões). **Nenhum `stop-instances`/`terminate-instances` foi executado em nenhum momento desta sessão.**
-- **Deadline:** ~0,96h (58min) restantes nos 8 hosts, contando sem renovação desde o fim da Rodada 2 (o heartbeat do orquestrador para quando o processo termina).
+- **Processes:** no `orchestrator.py`/`gate_watcher.py` active on the control host (`pgrep` clean); `launch_persistent.py status` confirms `alive: false` for both rounds.
+- **Fleet:** the 8 required hosts are `running` (confirmed via a read-only `describe-instances`, 4 regions). **No `stop-instances`/`terminate-instances` was run at any point in this session.**
+- **Deadline:** ~0,96h (58min) remaining on the 8 hosts, counting with no renewal since the end of Round 2 (the orchestrator's heartbeat stops when the process ends).
 
-## O que foi concluído depois deste checkpoint
+## What was completed after this checkpoint
 
-- **Coleta de dados:** Rodada 1 -- 376 arquivos verificados por sha256; Rodada 2 -- 346 arquivos verificados por sha256 (`collect_artifacts.py`).
-- **Verificação de campos obrigatórios:** nos 480 registros reais (360 execuções + 120 aquecimentos) -- 0 problemas. `t_fluxo_fino_seconds`, os 6 componentes de `phase_accounting`, `start_utc`/`end_utc`, `insurance[].latency_ms` presentes em 100% dos arquivos.
-- **Deadline encurtado** para `2026-11-17T11:24:49Z` (agora+10min) nos 8 hosts, escrita atômica com leitura de confirmação -- frota se desliga sozinha via dead-man's-switch. Nenhum `stop-instances`/`terminate-instances` chamado.
-- **Etapa 2 concluída:** as 7 análises (D1, D2, D2b, D3, D4a, D4b, D5) rodadas conforme `PLANO_DEGRAU2.md` + Emenda 1, sem alterar critérios/testes/sementes/regras de agregação. Regra das 2 rodadas aplicada primeiro -- 0/28 divergências, pooling permitido em todas as análises. Resultado completo: `RELATORIO_ETAPA2_D1_D5.md` (rascunho para revisão, não final/publicado) + `ETAPA2_RESULTADOS.json` (todos os números).
-  - **Resumo dos vereditos:** D1 SUSTENTADA, D2 REFUTADA (margem pequena na inclinação), D3 SUSTENTADA (mas a inversão de L0-sa-east-1 NÃO persiste no T_fluxo fino), D4a REFUTADA, D4b PARCIAL, D5 SUSTENTADA.
-- **Auditoria independente** (agente separado, nunca leu arquivo de chave) encontrou 1 achado de alta severidade (denominador não-declarado em D4a/D4b) e outros menores -- todos corrigidos antes deste relatório ser tratado como pronto para revisão (nenhum veredito final mudou, só números de suporte). Detalhe completo das correções: seção própria no `RELATORIO_ETAPA2_D1_D5.md`.
-- Tudo commitado localmente (sem push, sem force, sem mover tags) -- commits `42a3b175` (Rodada 3 + dados) e o commit desta Etapa 2.
+- **Data collection:** Round 1 -- 376 files verified by sha256; Round 2 -- 346 files verified by sha256 (`collect_artifacts.py`).
+- **Required-field verification:** across the 480 real records (360 executions + 120 warm-ups) -- 0 problems. `t_fluxo_fino_seconds`, the 6 `phase_accounting` components, `start_utc`/`end_utc`, `insurance[].latency_ms` present in 100% of the files.
+- **Deadline shortened** to `2026-11-17T11:24:49Z` (now+10min) on the 8 hosts, atomic write with confirmation read -- the fleet shuts itself down via the dead-man's switch. No `stop-instances`/`terminate-instances` called.
+- **Stage 2 completed:** the 7 analyses (D1, D2, D2b, D3, D4a, D4b, D5) run per `PLANO_DEGRAU2.md` + Amendment 1, without changing criteria/tests/seeds/aggregation rules. The two-round rule applied first -- 0/28 divergences, pooling allowed in all analyses. Full result: `RELATORIO_ETAPA2_D1_D5.md` (draft for review, not final/published) + `ETAPA2_RESULTADOS.json` (all the numbers).
+  - **Summary of verdicts:** D1 SUPPORTED, D2 REFUTED (small margin on the slope), D3 SUPPORTED (but the L0-sa-east-1 inversion does NOT persist in the fine-grained T_fluxo), D4a REFUTED, D4b PARTIAL, D5 SUPPORTED.
+- **Independent audit** (a separate agent, which never read a key file) found 1 high-severity finding (undeclared denominator in D4a/D4b) and other minor ones -- all fixed before this report was treated as ready for review (no final verdict changed, only supporting numbers). Full detail of the fixes: its own section in `RELATORIO_ETAPA2_D1_D5.md`.
+- Everything committed locally (no push, no force, no moving tags) -- commits `42a3b175` (Round 3 + data) and the commit for this Stage 2.
 
-**Frota confirmada `stopped` nos 8 hosts** (checagem de leitura `describe-instances`, 4 regiões, feita ~11min depois do deadline) -- todos com `Reason: "User initiated"` (o dead-man's-switch roda `shutdown -h now` dentro do guest, nunca uma chamada de API AWS de stop/terminate). **Nenhum `stop-instances`/`terminate-instances` foi chamado em nenhum momento desta sessão.**
+**Fleet confirmed `stopped` on the 8 hosts** (a read-only `describe-instances` check, 4 regions, done ~11min after the deadline) -- all with `Reason: "User initiated"` (the dead-man's switch runs `shutdown -h now` inside the guest, never an AWS API stop/terminate call). **No `stop-instances`/`terminate-instances` was called at any point in this session.**
 
-## O que depende do usuário agora
+## What now depends on the user
 
-Revisar `RELATORIO_ETAPA2_D1_D5.md` -- é um rascunho, explicitamente marcado como não-final. Decidir se investiga separadamente o achado da taxa de falha de captura dedicada 100% na Rodada 2 (não bloqueia nada, mas é um achado real não explicado).
+Review `RELATORIO_ETAPA2_D1_D5.md` -- it is a draft, explicitly marked as not final. Decide whether to separately investigate the finding of the 100% dedicated-capture failure rate in Round 2 (it blocks nothing, but is a real, unexplained finding).

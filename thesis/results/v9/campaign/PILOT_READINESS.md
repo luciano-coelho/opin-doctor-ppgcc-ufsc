@@ -1,129 +1,129 @@
-# Dossiê de prontidão do piloto v9 — PQC/híbrido/AND, AWS
+# v9 pilot readiness dossier — PQC/hybrid/AND, AWS
 
-Documento autônomo (Decisão 54, revisado na Decisão 55). Não exige
-ter acompanhado as decisões anteriores. Cobre: status real dos 7
-critérios do piloto, os pins de binário/imagem e como são entregues,
-a tolerância derivada de bytes de handshake, a política IAM restrita
-e o script de verificação, a parada de emergência independente do
-Terraform, o teto de custo (incluindo o pior caso), e o que falta do
-lado do Luciano.
+Standalone document (Decision 54, revised in Decision 55). Does not
+require having followed the previous decisions. Covers: actual status
+of the pilot's 7 criteria, the binary/image pins and how they are
+delivered, the tolerance derived from handshake bytes, the restricted
+IAM policy and the verification script, the emergency stop independent
+of Terraform, the cost ceiling (including the worst case), and what
+remains on Luciano's side.
 
-Escopo: piloto de 60 execuções (4 perfis × 3 rotas × N=5), nunca a
-campanha oficial de 960. Branch `v9/fase1-local`. Nenhuma ação de AWS
-foi tomada para produzir este documento.
+Scope: a 60-execution pilot (4 profiles × 3 routes × N=5), never the
+official 960-execution campaign. Branch `v9/fase1-local`. No AWS
+action was taken to produce this document.
 
 ---
 
-## a) Os 7 critérios de ir/não-ir — status real
+## a) The 7 go/no-go criteria — actual status
 
-| # | Critério (limiar) | Status | Evidência / o que falta |
+| # | Criterion (threshold) | Status | Evidence / what's missing |
 |---|---|---|---|
-| 1 | Tamanhos por mensagem — 0B no ClientHello, ±4B na Certificate, 0B nas demais, nas 12 capturas (4 perfis × 3 rotas) | **Validado localmente (mecânica completa)** | pcap real decifrado por perfil, flight extraído via tshark, bate exato com os baselines nos 4 perfis. `SSHExecutor.dedicated_capture` implementado e testado. **Só a AWS confirma:** interface real (`ens5`), tráfego cruzando 2 instâncias de verdade, tolerância com SAN real (EIP). |
-| 2 | initcwnd real ≥ 10 segmentos | **Só validável na AWS** | Método escrito e testado mecanicamente, só significativo com RTT > 0. |
-| 3 | Zero erros em 20/20 execuções na rota mais distante (`sa-east-1/L325`) | **Só validável na AWS** | Depende da rota L325 real. |
-| 4 | 44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA, exatos, em 60/60 | **Parcialmente validado localmente** | Contagem exata confirmada em centenas de execuções reais locais, 4 perfis, 0 erros. Cardinalidade 60/60 sob rede real só a AWS fecha. |
-| 5 | Zero erros em 60/60 execuções combinadas | **Parcialmente validado localmente** | Mesma evidência do item 4. |
-| 6 | CurveID + DualAuthenticated em 100% das execuções, keylog+captura+tamanhos extraídos | **Validado localmente (mecânica)** | Confirmado nos 4 perfis, centenas de conexões reais, 0 falhas. |
-| 7 | RTT de cada rota dentro de ±10% do nominal, dois canais concordando | **Não validado** | Método definido, depende de rotas reais. |
+| 1 | Per-message sizes — 0B in the ClientHello, ±4B in the Certificate, 0B in the rest, across the 12 captures (4 profiles × 3 routes) | **Validated locally (complete mechanics)** | Actual pcap decrypted per profile, flight extracted via tshark, matches the baselines exactly across the 4 profiles. `SSHExecutor.dedicated_capture` implemented and tested. **Only AWS confirms:** the real interface (`ens5`), traffic crossing 2 real instances, tolerance with a real SAN (EIP). |
+| 2 | Actual initcwnd ≥ 10 segments | **Only verifiable on AWS** | Method written and mechanically tested, only meaningful with RTT > 0. |
+| 3 | Zero errors in 20/20 executions on the most distant route (`sa-east-1/L325`) | **Only verifiable on AWS** | Depends on the real L325 route. |
+| 4 | 44 HTTP / 6 mTLS / 28 JWT / 4 jwks / 4 CA, exact, across 60/60 | **Partially validated locally** | Exact count confirmed across hundreds of real local executions, 4 profiles, 0 errors. The 60/60 cardinality under a real network can only be closed by AWS. |
+| 5 | Zero errors across the 60/60 combined executions | **Partially validated locally** | Same evidence as item 4. |
+| 6 | CurveID + DualAuthenticated in 100% of executions, keylog+capture+sizes extracted | **Validated locally (mechanics)** | Confirmed across the 4 profiles, hundreds of real connections, 0 failures. |
+| 7 | Each route's RTT within ±10% of nominal, two channels agreeing | **Not validated** | Method defined, depends on real routes. |
 
-**Leitura honesta:** nenhum dos 7 critérios está 100% fechado sem AWS — esperado, são critérios sobre rede real. Este documento garante que a MECÂNICA de cada um está implementada e testada com dados reais onde isso é possível localmente.
+**Honest reading:** none of the 7 criteria is 100% closed without AWS — expected, as they are criteria about a real network. This document ensures that the MECHANICS of each one is implemented and tested with real data wherever that is possible locally.
 
 ---
 
-## b) Baselines de handshake — os 4 valores, com a fonte
+## b) Handshake baselines — the 4 values, with their source
 
-**Correção desta rodada:** uma rodada anterior classificou os valores de Classico e PQC como "nunca citados antes" — falso. Os 4 já estavam no pré-registro, Decisão 14 (T6, instrumentação), `DECISIONS.md` linhas 1511-1519 e 1750-1751 (tabela consolidada "Total medido na fronteira do Handshake()").
+**Correction in this round:** an earlier round classified the Classic and PQC values as "never cited before" — false. All 4 were already in the pre-registration, Decision 14 (T6, instrumentation), `DECISIONS.md` lines 1511-1519 and 1750-1751 (the consolidated "Total measured at the Handshake() boundary" table).
 
-| Perfil | handshakeBytesIn (cliente→servidor) | handshakeBytesOut (servidor→cliente) | Fonte |
+| Profile | handshakeBytesIn (client→server) | handshakeBytesOut (server→client) | Source |
 |---|---|---|---|
-| Classico | 1.513 | 1.640 | Decisão 14, `DECISIONS.md` L1517/L1750-1751 |
-| PQC | 10.728 | 10.878 | Decisão 14, `DECISIONS.md` L1518/L1750-1751 |
-| Hibrido-v8 | 8.397 | 8.552 | Decisão 14, `DECISIONS.md` L1519/L1750-1751 |
-| Hibrido-AND | 11.902 | 12.177 | Decisão 14, `DECISIONS.md` L1520/L1750-1751 |
+| Classic | 1.513 | 1.640 | Decision 14, `DECISIONS.md` L1517/L1750-1751 |
+| PQC | 10.728 | 10.878 | Decision 14, `DECISIONS.md` L1518/L1750-1751 |
+| Hybrid-v8 | 8.397 | 8.552 | Decision 14, `DECISIONS.md` L1519/L1750-1751 |
+| Hybrid-AND | 11.902 | 12.177 | Decision 14, `DECISIONS.md` L1520/L1750-1751 |
 
-Os 4 foram reconfirmados com 0B de desvio em 480 conexões reais locais nesta sessão (Decisão 54) e de novo em 20 rebuilds de certificado com 4 variações de SAN (Decisão 55, item 3, abaixo).
+All 4 were reconfirmed with 0B of deviation across 480 real local connections in this session (Decision 54) and again across 20 certificate rebuilds with 4 SAN variations (Decision 55, item 3, below).
 
 ---
 
-## c) Pins de binário/imagem e como são entregues
+## c) Binary/image pins and how they are delivered
 
-### O que é pinado, e por quê
-`thesis/results/v9/campaign/PINS.json` (versionado) congela, para as 4 imagens: o sha256 do `.tar` (`tar_sha256`), as `RootFS.Layers`, um subconjunto do `.Config` (`Entrypoint`/`Cmd`/`Env`/`ExposedPorts`), e — só pra `gateway`/`proxy`, que têm binário Go próprio — o sha256 do binário extraído e a saída de `go version -m`. Tudo de **uma única imagem construída**, nunca recalculado automaticamente. Alterar o arquivo exige uma Emenda numerada em `DECISIONS.md`.
+### What is pinned, and why
+`thesis/results/v9/campaign/PINS.json` (version-controlled) freezes, for the 4 images: the `.tar`'s sha256 (`tar_sha256`), the `RootFS.Layers`, a subset of the `.Config` (`Entrypoint`/`Cmd`/`Env`/`ExposedPorts`), and — only for `gateway`/`proxy`, which have their own Go binary — the sha256 of the extracted binary and the output of `go version -m`. All from **a single built image**, never recomputed automatically. Changing the file requires a numbered Amendment in `DECISIONS.md`.
 
-**Reprodutibilidade, testada de verdade:** o binário do gateway e do proxy foi construído duas vezes, do zero (`--no-cache`), com `-trimpath` + `GOARCH=amd64` explícitos — sha256 **idêntico** nas duas vezes, nos dois binários. O `.tar` de `docker save` da mesma imagem local (nunca reconstruída) também é byte a byte reproduzível entre invocações independentes (confirmado, Decisão 68).
+**Reproducibility, actually tested:** the gateway and proxy binary was built twice, from scratch (`--no-cache`), with explicit `-trimpath` + `GOARCH=amd64` — **identical** sha256 both times, for both binaries. The `.tar` from `docker save` of the same local image (never rebuilt) is also byte-for-byte reproducible across independent invocations (confirmed, Decision 68).
 
-### Image ID — Decisão 68 (Emenda): descartado como critério de verificação
-**Achado real, ao vivo, na execução real do piloto (Decisão 67):** `docker image inspect .Id` **diverge entre versões diferentes de Docker**, mesmo carregando o MESMO `.tar`, com conteúdo comprovadamente idêntico — confirmado rodando um `docker:25-dind` (proxy local da versão real do servidor, Docker 25.0.16) ao lado do Docker do operador (29.9.1): pras 4 imagens, `RootFS.Layers` e o subconjunto de `.Config` saem **idênticos** nas duas versões; só o `.Id` final diverge. Isso quebrou o mecanismo da Decisão 55 na primeira execução real (gateway abortou com Image ID divergente, binário confirmado idêntico por baixo).
+### Image ID — Decision 68 (Amendment): dropped as a verification criterion
+**Real finding, live, during the pilot's actual execution (Decision 67):** `docker image inspect .Id` **diverges between different Docker versions**, even when loading the SAME `.tar`, with provably identical content — confirmed by running a `docker:25-dind` (a local proxy for the server's real version, Docker 25.0.16) alongside the operator's Docker (29.9.1): for the 4 images, `RootFS.Layers` and the `.Config` subset come out **identical** in both versions; only the final `.Id` diverges. This broke the Decision 55 mechanism on the first real execution (the gateway aborted on a divergent Image ID, with the binary confirmed identical underneath).
 
-**Corrigido:** o fail-closed de entrega não verifica mais Image ID. Image ID continua gravado em PINS.json, só como campo **informativo** — nunca comparado, nunca motivo de aborto. Nenhum critério pré-registrado do piloto (os 7 critérios/limiares da avaliação) muda — isso é só o MECANISMO de verificar que a imagem entregue é a esperada, nunca o que é medido.
+**Fixed:** the delivery fail-closed no longer checks Image ID. Image ID is still recorded in PINS.json, only as an **informational** field — never compared, never a cause for abort. No pre-registered pilot criterion (the 7 evaluation criteria/thresholds) changes — this is only the MECHANISM for verifying that the delivered image is the expected one, never what is measured.
 
-### Como a imagem chega a cada instância — nunca por `docker build`, 2 saltos reais, identidade por conteúdo (Decisão 68)
-Modelo real da v8 (`deliver_images.sh`) restaurado na Decisão 59 — dois saltos, cada um na máquina certa:
-1. `deliver_images.py`, na máquina do OPERADOR (tem Docker): `docker save -o <imagem>.tar <imagem>`, sha256 do `.tar` **conferido contra `tar_sha256` pinado** (Decisão 68, ANTES de qualquer scp — pega uma imagem local errada/reconstruída, nunca só corrupção de transporte), checagem de espaço em disco no controle, scp pro controle (`~/images/`). Pro gateway, também extrai o binário e confere o sha256 contra PINS.json aqui.
-2. `SSHExecutor._deliver_image(image_key, host)`, rodando DO CONTROLE: scp do `.tar` já estagiado (arquivo LOCAL, nunca `docker save`) pro host, `ssh host docker load`. Fail-closed, nesta ordem: (a) `RootFS.Layers` do host idênticas às pinadas; (b) o subconjunto de `.Config` do host idêntico ao pinado; (c) pra `gateway`/`proxy`, o sha256 do binário DENTRO do container carregado, igual ao pinado. Image ID é lido/registrado, só informativo.
+### How the image reaches each instance — never via `docker build`, 2 real hops, identity by content (Decision 68)
+v8's real model (`deliver_images.sh`) restored in Decision 59 — two hops, each on the right machine:
+1. `deliver_images.py`, on the OPERATOR's machine (which has Docker): `docker save -o <image>.tar <image>`, the `.tar`'s sha256 **checked against the pinned `tar_sha256`** (Decision 68, BEFORE any scp — catches a wrong/rebuilt local image, never just transport corruption), disk-space check on the control host, scp to the control host (`~/images/`). For the gateway, it also extracts the binary and checks its sha256 against PINS.json here.
+2. `SSHExecutor._deliver_image(image_key, host)`, running FROM THE CONTROL HOST: scp of the already-staged `.tar` (a LOCAL file, never `docker save`) to the host, `ssh host docker load`. Fail-closed, in this order: (a) the host's `RootFS.Layers` identical to the pinned ones; (b) the host's `.Config` subset identical to the pinned one; (c) for `gateway`/`proxy`, the sha256 of the binary INSIDE the loaded container, matching the pinned one. Image ID is read/recorded, informational only.
 
-Testado (tar adulterado reprova — antes de qualquer scp; camada adulterada reprova; config adulterado reprova; binário dentro da imagem adulterado reprova; tudo correto passa; uma segunda instância de `SSHExecutor`, simulando uma campanha oficial futura, passa com os mesmos pins; nenhuma chamada invoca `docker` localmente no controle).
+Tested (a tampered tar fails — before any scp; a tampered layer fails; tampered config fails; a tampered binary inside the image fails; everything correct passes; a second `SSHExecutor` instance, simulating a future official campaign, passes with the same pins; no call invokes `docker` locally on the control host).
 
-### Arquitetura de cada instância — quem roda o quê
-**Correção à Decisão 56(a) (achado real da Decisão 59):** "o orquestrador e o build rodam na máquina do operador... NUNCA numa instância AWS" estava **errado** pra parte "o orquestrador". O *build* (docker build/save) continua, de fato, só na máquina do operador — mas `orchestrator.py` (`SSHExecutor`, a execução remota real) só alcança servidor/clientes de dentro do **controle** (Security Group do servidor/clientes só aceita SSH do EIP do próprio controle, `main.tf`) — `deliver_to_control()` (`deliver_source.py`, Decisão 59) entrega `orchestrator.py` + dependências pro controle, de onde ele roda de verdade. `pki_relay.py`/`collect_artifacts.py`/`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py` continuam rodando **no operador** (nunca no controle) — falam com o controle por SSH (`pki_relay.py`/`collect_artifacts.py`) ou nem isso (`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py`, só API AWS direta).
+### Architecture of each instance — who runs what
+**Correction to Decision 56(a) (a real finding from Decision 59):** "the orchestrator and the build run on the operator's machine... NEVER on an AWS instance" was **wrong** for the "orchestrator" part. The *build* (docker build/save) indeed remains only on the operator's machine — but `orchestrator.py` (`SSHExecutor`, the actual remote execution) only reaches the server/clients from inside the **control** host (the server/clients' Security Group only accepts SSH from the control host's own EIP, `main.tf`) — `deliver_to_control()` (`deliver_source.py`, Decision 59) delivers `orchestrator.py` + dependencies to the control host, from where it actually runs. `pki_relay.py`/`collect_artifacts.py`/`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py` keep running **on the operator** (never on the control host) — they talk to the control host via SSH (`pki_relay.py`/`collect_artifacts.py`) or not even that (`cleanup.py`/`emergency_stop.py`/`iam_dryrun_check.py`, direct AWS API only).
 
-| Instância | Tipo | Arquitetura | Roda gateway/proxy/measure/pqc-signer? | Roda `docker` localmente? |
+| Instance | Type | Architecture | Runs gateway/proxy/measure/pqc-signer? | Runs `docker` locally? |
 |---|---|---|---|---|
-| Controle | `t4g.micro` | **ARM64** | **Não.** As 4 imagens (linux/amd64) nunca chegam a ser carregadas/executadas no controle — só relayadas (`.tar` estagiado por `deliver_images.py`, scp pro host, `docker load` rodando NO HOST via ssh). `orchestrator.py` roda de verdade AQUI (Decisão 59), mas nunca invoca `docker` como processo local (confirmado por teste, `test_deliver_image_nunca_invoca_docker_localmente`). | **Não — nunca.** |
-| Servidor (L0, sa-east-1) | `m7i-flex.large` | x86_64 | gateway + measure (ambos amd64, batem com a arquitetura real) |
-| Cliente L0 (co-localizado) | `m7i-flex.large` | x86_64 | proxy (amd64) |
-| Cliente L219 (eu-north-1) | `m7i-flex.large` | x86_64 | proxy |
-| Cliente L325 (ap-southeast-1) | `m7i-flex.large` | x86_64 | proxy |
+| Control | `t4g.micro` | **ARM64** | **No.** The 4 images (linux/amd64) never get loaded/run on the control host — only relayed (`.tar` staged by `deliver_images.py`, scp to the host, `docker load` running ON THE HOST via ssh). `orchestrator.py` actually runs HERE (Decision 59), but never invokes `docker` as a local process (confirmed by test, `test_deliver_image_nunca_invoca_docker_localmente`). | **No — never.** |
+| Server (L0, sa-east-1) | `m7i-flex.large` | x86_64 | gateway + measure (both amd64, matching the real architecture) |
+| Client L0 (co-located) | `m7i-flex.large` | x86_64 | proxy (amd64) |
+| Client L219 (eu-north-1) | `m7i-flex.large` | x86_64 | proxy |
+| Client L325 (ap-southeast-1) | `m7i-flex.large` | x86_64 | proxy |
 
-Nenhuma variante ARM das 3 imagens existe nem é necessária.
+No ARM variant of the 3 images exists or is needed.
 
-### `check_capture_prerequisites` — agora confere camadas+config, não mais Image ID
-Corrigido na Decisão 53 (só checava presença — uma imagem de origem/build diferente passaria sem ser pega) e de novo na Decisão 68 (Image ID descartado como critério, pelo mesmo motivo do resto deste documento): `check_capture_prerequisites(host, expected_measure_layers=..., expected_measure_config=...)` reprova explicitamente se `RootFS.Layers`/o subconjunto de `.Config` de `mockopin-v9-measure` na instância não baterem com PINS.json. Testado com camadas erradas (reprova), config errado (reprova) e os dois certos (passa).
+### `check_capture_prerequisites` — now checks layers+config, no longer Image ID
+Fixed in Decision 53 (it only checked presence — an image from a different origin/build would pass without being caught) and again in Decision 68 (Image ID dropped as a criterion, for the same reason as the rest of this document): `check_capture_prerequisites(host, expected_measure_layers=..., expected_measure_config=...)` explicitly fails if `mockopin-v9-measure`'s `RootFS.Layers`/`.Config` subset on the instance do not match PINS.json. Tested with wrong layers (fails), wrong config (fails), and both correct (passes).
 
 ---
 
-## d) Tolerância de bytes de handshake — derivada, validada em 20 rebuilds
+## d) Handshake-byte tolerance — derived, validated across 20 rebuilds
 
-**Correções desta rodada:** (1) a proposta anterior era assimétrica sem justificativa — o serial number do certificado afeta `In` E `Out`, nos 4 perfis, não só `In` do Hibrido-AND. (2) as 480 amostras anteriores vinham de um único build de certificado, nunca amostrando variação entre builds. As duas estão resolvidas pelo mecanismo abaixo, que substitui a proposta anterior inteira.
+**Corrections in this round:** (1) the earlier proposal was asymmetric without justification — the certificate's serial number affects BOTH `In` AND `Out`, across all 4 profiles, not just Hybrid-AND's `In`. (2) the previous 480 samples came from a single certificate build, never sampling variation across builds. Both are resolved by the mechanism below, which replaces the earlier proposal entirely.
 
-### `expected_handshake_bytes(perfil, certs_dir)`
-`thesis/results/v9/integration/evaluate_criteria.py`: `esperado = baseline_medido + (soma_DER_certificados_implantados − soma_DER_certificados_do_baseline)`, por sentido (`in` = cadeia do cliente, `out` = cadeia do servidor). Nunca reestima do zero — só propaga a diferença de certificado, a única fonte de variação legítima identificada (Decisão 54, item 3) fora de SNI/tickets/MinVersion (todos já controlados ou verificados por outro mecanismo, incluindo o pin de binário do item c acima).
+### `expected_handshake_bytes(profile, certs_dir)`
+`thesis/results/v9/integration/evaluate_criteria.py`: `expected = measured_baseline + (sum_DER_of_deployed_certificates − sum_DER_of_baseline_certificates)`, per direction (`in` = client chain, `out` = server chain). Never re-estimates from scratch — it only propagates the certificate difference, the only legitimate source of variation identified (Decision 54, item 3) outside of SNI/tickets/MinVersion (all already controlled or verified by another mechanism, including the binary pin from item c above).
 
-### Validação real: 20 rebuilds, 4 variações de SAN, 4 perfis
-`make certs` rodado 20 vezes (loopback, IP privado, IP público tipo EIP, nome DNS — 5 builds cada), cobrindo os 4 perfis, gateway reconstruído e medido de verdade a cada rebuild (nunca simulado):
+### Real validation: 20 rebuilds, 4 SAN variations, 4 profiles
+`make certs` run 20 times (loopback, private IP, EIP-style public IP, DNS name — 5 builds each), covering the 4 profiles, with the gateway actually rebuilt and measured on every rebuild (never simulated):
 
-| Variante de SAN | Builds | Desvio (previsto − medido), todos os perfis/sentidos |
+| SAN variant | Builds | Deviation (predicted − measured), all profiles/directions |
 |---|---|---|
-| Loopback (padrão) | 5 | **0B, todos** |
-| IP privado (10.0.1.50) | 5 | **0B, todos** |
-| IP público tipo EIP (203.0.113.50) | 5 | **0B, todos** |
-| Nome DNS adicional | 5 | **0B, todos** |
+| Loopback (default) | 5 | **0B, all** |
+| Private IP (10.0.1.50) | 5 | **0B, all** |
+| EIP-style public IP (203.0.113.50) | 5 | **0B, all** |
+| Additional DNS name | 5 | **0B, all** |
 
-**20/20 builds, 0B de desvio em TODOS.** Exemplo real (classico, SAN trocado de loopback para IP privado): certificado do servidor cai de 900B para 880B DER (-20B) — previsto `out=1620`, medido `out=1620`. Exato.
+**20/20 builds, 0B of deviation across ALL.** Real example (Classic, SAN changed from loopback to a private IP): the server certificate drops from 900B to 880B DER (-20B) — predicted `out=1620`, measured `out=1620`. Exact.
 
-### Achado desta rodada (Decisão 56, item 2): o desvio contra o BASELINE também pode ser zerado, não só previsto
-A técnica acima prevê corretamente qualquer desvio, mas descobrimos que dá pra **eliminar o desvio na origem**: `make certs SERVER_IPS="<IP real>,::1"` — mantendo a vírgula e o `::1` (placeholder IPv6, decorativo, nunca contatado — o mesmo papel que o próprio IP já tem no SAN, Decisão 30: só DNS importa pra verificação) — preserva EXATAMENTE a mesma contagem e tipo de entrada SAN do baseline (`127.0.0.1,::1`), já que uma entrada IPv4 sempre ocupa 4 bytes e uma IPv6 sempre 16 bytes em ASN.1 DER, **independente do valor**. Validado em 20 builds reais (10 IPs estilo privado, 10 estilo EIP público, variando o valor a cada build): **delta 0B contra o BASELINE (não só contra o previsto) nos 4 perfis, nos 2 sentidos, nos 20/20 builds, 80/80 combinações perfil×sentido.** Uma alternativa por preenchimento de nome DNS foi testada e descartada — o comprimento exato necessário não escala linearmente com o tamanho do nome (edge effects de codificação ASN.1 observados, nunca calibrado para 0B exato em 3 tentativas) — a técnica do IP+`::1` é mais simples e comprovadamente exata, preferida. Nenhuma Emenda necessária (a técnica é viável e não muda nenhum código, só o valor de `SERVER_IPS` passado em `make certs` no dia do piloto).
+### Finding in this round (Decision 56, item 2): the deviation against the BASELINE can also be zeroed out, not just predicted
+The technique above correctly predicts any deviation, but we discovered it is possible to **eliminate the deviation at the source**: `make certs SERVER_IPS="<real IP>,::1"` — keeping the comma and the `::1` (an IPv6 placeholder, decorative, never contacted — the same role the IP itself already has in the SAN, Decision 30: only DNS matters for verification) — preserves EXACTLY the same SAN entry count and type as the baseline (`127.0.0.1,::1`), since an IPv4 entry always takes up 4 bytes and an IPv6 entry always 16 bytes in ASN.1 DER, **regardless of the value**. Validated across 20 real builds (10 private-style IPs, 10 public EIP-style, varying the value on every build): **0B delta against the BASELINE (not just against the prediction) across the 4 profiles, in both directions, in 20/20 builds, 80/80 profile×direction combinations.** An alternative using DNS-name padding was tested and discarded — the exact length needed does not scale linearly with the name's size (ASN.1 encoding edge effects observed, never calibrated to an exact 0B in 3 attempts) — the IP+`::1` technique is simpler and provably exact, and is preferred. No Amendment needed (the technique is viable and does not change any code, only the `SERVER_IPS` value passed to `make certs` on pilot day).
 
-### Regra final proposta (pré-piloto, para aprovação — não aplicada retroativamente)
-- **Os limiares pré-registrados continuam sendo o gate oficial** do critério 1: 0B no ClientHello, ±4B na Certificate, 0B nas demais mensagens (Decisão 20/29/30, nunca alterados).
-- **`expected_handshake_bytes` entra como diagnóstico adicional**, nunca substituindo o gate acima. Implementado (`orchestrator._bytes_diagnostic_for_profile`, chamado pelo smoke gate): desvio previsto vs. medido ≠ 0 define `bytes_diagnostic_needs_decision=True` no manifesto — **PAUSA e pede decisão do Luciano, exatamente como o smoke gate** (nunca aborta nem ignora por conta própria). Testado (zero desvio passa; desvio detectado sinaliza a decisão pendente sem bloquear `smoke_ok`, que continua sendo decidido só pelos critérios já oficiais; mutante confirmado).
+### Final proposed rule (pre-pilot, for approval — not applied retroactively)
+- **The pre-registered thresholds remain the official gate** for criterion 1: 0B in the ClientHello, ±4B in the Certificate, 0B in the other messages (Decision 20/29/30, never changed).
+- **`expected_handshake_bytes` enters as an additional diagnostic**, never replacing the gate above. Implemented (`orchestrator._bytes_diagnostic_for_profile`, called by the smoke gate): a predicted-vs-measured deviation ≠ 0 sets `bytes_diagnostic_needs_decision=True` in the manifest — **PAUSES and asks for Luciano's decision, exactly like the smoke gate** (never aborts nor ignores on its own). Tested (zero deviation passes; a detected deviation flags the pending decision without blocking `smoke_ok`, which continues to be decided only by the already-official criteria; mutant confirmed).
 
 ---
 
-## e) Política IAM e verificação por dry-run
+## e) IAM policy and dry-run verification
 
-### Toda chamada EC2 que o Terraform faz (plan/apply/destroy), para os recursos de `main.tf`
-| Recurso | plan (refresh) | apply (criação/alteração) | destroy |
+### Every EC2 call Terraform makes (plan/apply/destroy), for the `main.tf` resources
+| Resource | plan (refresh) | apply (create/modify) | destroy |
 |---|---|---|---|
 | `aws_instance` | `DescribeInstances`, `DescribeInstanceAttribute`, `DescribeVolumes`, `DescribeTags` | `RunInstances`, `CreateTags`, `ModifyInstanceMetadataOptions` (IMDSv2), `ModifyInstanceAttribute` (shutdown behavior) | `TerminateInstances` |
 | `aws_eip` | `DescribeAddresses` | `AllocateAddress`, `AssociateAddress`, `CreateTags` | `DisassociateAddress`, `ReleaseAddress` |
-| `aws_key_pair` | `DescribeKeyPairs` | `ImportKeyPair` (a chave é fornecida via `tls_private_key`, nunca gerada pela AWS — por isso `ImportKeyPair`, não `CreateKeyPair`) | `DeleteKeyPair` |
-| `aws_security_group` | `DescribeSecurityGroups` | `CreateSecurityGroup`, `CreateTags` (inclui a regra de egress, inline no recurso) | `DeleteSecurityGroup` |
+| `aws_key_pair` | `DescribeKeyPairs` | `ImportKeyPair` (the key is supplied via `tls_private_key`, never generated by AWS — hence `ImportKeyPair`, not `CreateKeyPair`) | `DeleteKeyPair` |
+| `aws_security_group` | `DescribeSecurityGroups` | `CreateSecurityGroup`, `CreateTags` (includes the egress rule, inline in the resource) | `DeleteSecurityGroup` |
 | `aws_vpc_security_group_ingress_rule` (SSH + gateway) | `DescribeSecurityGroupRules` | `AuthorizeSecurityGroupIngress`, `CreateTags` | `RevokeSecurityGroupIngress` |
 | `data.aws_vpc`/`data.aws_subnets` | `DescribeVpcs`, `DescribeSubnets` | — | — |
-| Provider (toda operação) | `sts:GetCallerIdentity` | — | — |
+| Provider (every operation) | `sts:GetCallerIdentity` | — | — |
 
-### Política restrita (3 regiões + condições de tag onde o IAM permite)
+### Restricted policy (3 regions + tag conditions where IAM allows)
 ```json
 {
   "Version": "2012-10-17",
@@ -182,73 +182,73 @@ A técnica acima prevê corretamente qualquer desvio, mas descobrimos que dá pr
 }
 ```
 
-**Limitação honesta, sem mudança possível:** `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup` não suportam condição por `aws:ResourceTag` no momento da criação (o recurso não existe ainda) — usam `aws:RequestTag` (o que SERIA aplicado), que é o máximo que o IAM permite nesse ponto. `ec2:CreateTags` é restrito por `ec2:CreateAction` (só tageia o que acabou de ser criado por uma das 4 ações do projeto) em vez de por recurso, pela mesma razão.
+**Honest limitation, with no possible change:** `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup` do not support an `aws:ResourceTag` condition at creation time (the resource does not exist yet) — they use `aws:RequestTag` (what WOULD be applied), which is the most IAM allows at that point. `ec2:CreateTags` is restricted by `ec2:CreateAction` (it only tags what was just created by one of the project's 4 actions) instead of by resource, for the same reason.
 
-### `iam_dryrun_check.py` — testado com mock, nunca executado por este processo
-Chama cada ação acima com `--dry-run`, por região, usando parâmetros reais (AMIs pinadas, tipo de instância) para as ações sem recurso pré-existente; para as que exigem um recurso real (`TerminateInstances`, `ModifyInstanceAttribute`, `ReleaseAddress`, `DeleteKeyPair`, `RevokeSecurityGroupIngress`), aceita o ID como argumento opcional e marca `"nao testado"` explicitamente sem ele — nunca inventa um PASS. Testado (7 testes, `DryRunOperation`→autorizado, `UnauthorizedOperation`→reprovado, agregação por região). **O Luciano roda, com as credenciais reais, antes do piloto** (`python iam_dryrun_check.py --profile mockopin-pqc [--instance-id ... --key-name ... --sg-id ... --allocation-id ... --rule-id ...]`).
+### `iam_dryrun_check.py` — tested with a mock, never run by this process
+Calls each action above with `--dry-run`, per region, using real parameters (pinned AMIs, instance type) for the actions with no pre-existing resource; for the ones that require a real resource (`TerminateInstances`, `ModifyInstanceAttribute`, `ReleaseAddress`, `DeleteKeyPair`, `RevokeSecurityGroupIngress`), it accepts the ID as an optional argument and explicitly marks `"nao testado"` without it — never fabricating a PASS. Tested (7 tests, `DryRunOperation`→authorized, `UnauthorizedOperation`→rejected, aggregation per region). **Luciano runs it, with real credentials, before the pilot** (`python iam_dryrun_check.py --profile mockopin-pqc [--instance-id ... --key-name ... --sg-id ... --allocation-id ... --rule-id ...]`).
 
 ---
 
-## f) Parada de emergência — duas camadas
+## f) Emergency stop — two layers
 
-### Camada 1 (normal): `cleanup.py`, depende do state do Terraform
+### Layer 1 (normal): `cleanup.py`, depends on Terraform state
 ```
 python cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --force
 ```
-Ver detalhe na seção g. Depende do `terraform destroy` funcionar (state intacto e acessível).
+See detail in section g. Depends on `terraform destroy` working (intact and accessible state).
 
-### Camada 2 (independente do state): `emergency_stop.py`, novo
-Para o caso em que o state do Terraform está perdido, corrompido ou inacessível, mas os recursos ainda existem na conta. Age por **tag `Project=mockopin-pqc-v9-piloto`**, direto pela API, nas 3 regiões — cada ação destrutiva confere a tag (via uma chamada `describe-*` filtrada) imediatamente antes de agir, nunca sobre um ID solto.
+### Layer 2 (independent of state): `emergency_stop.py`, new
+For the case where Terraform's state is lost, corrupted, or inaccessible, but the resources still exist in the account. Acts via the **`Project=mockopin-pqc-v9-piloto` tag**, directly through the API, across the 3 regions — every destructive action checks the tag (via a filtered `describe-*` call) immediately before acting, never on a loose ID.
 
 ```
 python emergency_stop.py --profile mockopin-pqc --execute
 ```
-Sem `--execute`, só lista o que seria feito (modo padrão, nunca destrutivo por acidente). Ordem: instâncias (termina, espera até 2 min antes de seguir) → EIPs (desassocia, depois libera) → grupos de segurança (só depois das instâncias realmente terminarem) → key pairs. Testado com mock (6 testes: modo dry nunca chama nada mutável; cada ação só roda sobre o ID que veio da tag; desassocia antes de liberar EIP; mutante confirmado).
+Without `--execute`, it only lists what would be done (the default mode, never accidentally destructive). Order: instances (terminate, wait up to 2 min before proceeding) → EIPs (disassociate, then release) → security groups (only after the instances have actually terminated) → key pairs. Tested with a mock (6 tests: dry mode never calls anything mutable; each action only runs on the ID that came from the tag; disassociates before releasing an EIP; mutant confirmed).
 
-### Pior caso de custo se nada for feito além do autodesligamento
-Autodesligamento (`terminate`, não `stop`) sempre limita o COMPUTE — mas **nunca libera o EIP** (Decisão 45, confirmado direto no código real da v8: nenhum caminho de autodesligamento libera Elastic IP).
+### Worst-case cost if nothing is done beyond the self-shutdown
+Self-shutdown (`terminate`, not `stop`) always caps COMPUTE — but **never releases the EIP** (Decision 45, confirmed directly in v8's actual code: no self-shutdown path releases an Elastic IP).
 
-- **Compute, limitado pelo autodesligamento:** 4× `m7i-flex.large` por 4h + 1× `t4g.micro` por 5h ≈ (4 × US$0,0958 × 4h) + (US$0,0084 × 5h) ≈ **US$1,575**, e então para (instâncias terminadas).
-- **EBS:** `delete_on_termination` é o default do provider (nunca definido como `false` em `main.tf`) — apagado junto com a instância, sem custo residual.
-- **5 EIPs órfãos, SEM NENHUM LIMITE DE TEMPO:** US$0,005/h cada × 5 = **US$0,025/hora, indefinidamente**, até alguém rodar `emergency_stop.py`/`cleanup.py --release-eips` ou liberar manualmente. Em um mês esquecido: ≈ **US$18**. Pequeno, mas não-zero e sem teto — exatamente o cenário que `emergency_stop.py` (camada 2) existe para cobrir mesmo sem o Terraform.
-
----
-
-## g) Alerta de orçamento — reclassificado
-
-**Correção desta rodada:** um alerta de orçamento da AWS é uma **notificação com atraso de cobrança** (os Budgets da AWS são recalculados ~a cada 8-24h, nunca em tempo real) — nunca um limite automático que interrompe gastos. Tratá-lo como "proteção" seria otimista demais; é um alarme que avisa depois do fato, não um freio.
-
-Já existe um alerta geral na conta (herdado da v8, valor nunca lido por este projeto, por política — Decisão 27; referência histórica em `DECISIONS.md`: US$27,72). **Sugestão revisada: US$3** (abaixo da sugestão anterior de US$5) — ainda ~2,6× a estimativa normal do piloto (US$1,15 com margem), baixo o bastante para soar o alarme rápido mesmo contra o cenário do EIP órfão (US$0,60/dia) antes que acumule muito, mas longe o bastante da estimativa normal para não disparar por flutuação de preço. Decisão final do valor é do Luciano.
+- **Compute, capped by the self-shutdown:** 4× `m7i-flex.large` for 4h + 1× `t4g.micro` for 5h ≈ (4 × US$0,0958 × 4h) + (US$0,0084 × 5h) ≈ **US$1,575**, and then it stops (instances terminated).
+- **EBS:** `delete_on_termination` is the provider's default (never set to `false` in `main.tf`) — deleted along with the instance, no residual cost.
+- **5 orphaned EIPs, WITH NO TIME LIMIT AT ALL:** US$0,005/h each × 5 = **US$0,025/hour, indefinitely**, until someone runs `emergency_stop.py`/`cleanup.py --release-eips` or releases them manually. Over a forgotten month: ≈ **US$18**. Small, but non-zero and uncapped — exactly the scenario `emergency_stop.py` (layer 2) exists to cover even without Terraform.
 
 ---
 
-## h) Riscos residuais — atualizados
+## g) Budget alert — reclassified
 
-| # | Risco | Status | Decisão pendente |
+**Correction in this round:** an AWS budget alert is a **notification with billing delay** (AWS Budgets are recalculated ~every 8-24h, never in real time) — never an automatic limit that stops spending. Treating it as "protection" would be overly optimistic; it is an alarm that warns after the fact, not a brake.
+
+A general alert already exists on the account (inherited from v8, value never read by this project, by policy — Decision 27; historical reference in `DECISIONS.md`: US$27,72). **Revised suggestion: US$3** (below the earlier suggestion of US$5) — still ~2.6× the pilot's normal estimate (US$1,15 with margin), low enough to sound the alarm quickly even against the orphaned-EIP scenario (US$0,60/day) before it accumulates much, but far enough from the normal estimate to avoid triggering from price fluctuation. The final decision on the value is Luciano's.
+
+---
+
+## h) Residual risks — updated
+
+| # | Risk | Status | Pending decision |
 |---|---|---|---|
-| 1 | Imagem `mockopin-v9-measure` precisa existir em cada instância | **RESOLVIDO** (Decisão 55, item 2; mecanismo de verificação corrigido na Decisão 68) — entregue por `docker save`/`docker load`, identidade conferida por `RootFS.Layers`+`.Config` contra PINS.json, nunca `docker build` na instância | Nenhuma |
-| 2 | Proxy e measure sem o mesmo mecanismo de verificação do gateway | **RESOLVIDO** (Decisão 55, itens 1-2; Decisão 68) — as 4 agora tem pin de `tar_sha256`+`RootFS.Layers`+`.Config` (gateway/proxy também tem pin de binário+`go version -m`, conferido dentro da imagem carregada) | Nenhuma |
-| 3 | Controle sem autodesligamento por tag/projeto separado | Aceito e mitigado (`self_terminate_hours=5`, `terminate`) | Nenhuma |
-| 4 | Alerta de orçamento geral, não específico do piloto | Reclassificado (item g) — ainda pendente de criação | Decidir o valor (US$3 sugerido) e criar o alerta |
-| 5 | AND cobre só TLS 1.3 | Limitação de design aceita desde o pré-registro | Nenhuma |
-| 6 | `handshakeBytesIn/Out` sem tolerância pré-registrada formal | **RESOLVIDO quanto ao mecanismo** (Decisão 55, item 3) — `expected_handshake_bytes` validado em 20 rebuilds reais, 0B de desvio; vira diagnóstico que pausa, nunca o gate oficial | Aprovar o mecanismo como diagnóstico permanente (não é uma mudança de critério, só uma camada nova) |
-| 7 | Política IAM mais larga que o ideal em algumas ações de criação | **Documentado com justificativa técnica precisa** (item e) — é um limite real do IAM, não uma folga evitável | Aceitar como está (não há alternativa mais restrita dentro do IAM) |
-| 8 (novo) | `emergency_stop.py` nunca foi executado contra a AWS real (só testado com mock) | Registrado honesto | O Luciano testa em modo dry (`sem --execute`) contra a conta real antes de confiar nele numa emergência real |
+| 1 | The `mockopin-v9-measure` image needs to exist on each instance | **RESOLVED** (Decision 55, item 2; verification mechanism fixed in Decision 68) — delivered via `docker save`/`docker load`, identity checked by `RootFS.Layers`+`.Config` against PINS.json, never `docker build` on the instance | None |
+| 2 | Proxy and measure lacked the same verification mechanism as the gateway | **RESOLVED** (Decision 55, items 1-2; Decision 68) — all 4 now have a `tar_sha256`+`RootFS.Layers`+`.Config` pin (gateway/proxy also have a binary+`go version -m` pin, checked inside the loaded image) | None |
+| 3 | Control host with no separate per-tag/project self-shutdown | Accepted and mitigated (`self_terminate_hours=5`, `terminate`) | None |
+| 4 | General budget alert, not pilot-specific | Reclassified (item g) — still pending creation | Decide the value (US$3 suggested) and create the alert |
+| 5 | AND covers only TLS 1.3 | Design limitation accepted since the pre-registration | None |
+| 6 | `handshakeBytesIn/Out` with no formal pre-registered tolerance | **RESOLVED regarding the mechanism** (Decision 55, item 3) — `expected_handshake_bytes` validated across 20 real rebuilds, 0B deviation; becomes a pausing diagnostic, never the official gate | Approve the mechanism as a permanent diagnostic (not a criterion change, just a new layer) |
+| 7 | IAM policy broader than ideal on some creation actions | **Documented with precise technical justification** (item e) — it is a real IAM limit, not an avoidable slack | Accept as is (there is no more restrictive alternative within IAM) |
+| 8 (new) | `emergency_stop.py` was never run against real AWS (only tested with a mock) | Honestly recorded | Luciano tests it in dry mode (`without --execute`) against the real account before relying on it in a real emergency |
 
 ---
 
-## i) O runbook cobre a janela de 3-4h com o Luciano presente?
+## i) Does the runbook cover the 3-4h window with Luciano present?
 
-Sim — sequência inalterada desta revisão (apply → PKI → preflight de captura → porta de fumaça, agora com diagnóstico de bytes → 60 execuções → coleta → cleanup), ~45min-1h20 de execução ativa dentro da janela de 4h/5h de autodesligamento, com 3 pontos de pausa/decisão explícitos (preflight de captura, porta de fumaça incluindo o novo diagnóstico de bytes, verificação final de limpeza) — todos sempre decisão do Luciano, nunca automáticos.
+Yes — the sequence is unchanged from this revision (apply → PKI → capture preflight → smoke gate, now with the bytes diagnostic → 60 executions → collection → cleanup), ~45min-1h20 of active execution within the 4h/5h self-shutdown window, with 3 explicit pause/decision points (capture preflight, smoke gate including the new bytes diagnostic, final cleanup verification) — all always Luciano's decision, never automatic.
 
 ---
 
-## j) O que falta, do lado do Luciano (lista curta)
+## j) What remains, on Luciano's side (short list)
 
-1. Confirmar Service Quotas de vCPU nas 3 regiões e de Elastic IPs em `sa-east-1` (item b do dossiê original — sem mudança).
-2. Gerar um par de chaves SSH pessoal e exportar `TF_VAR_operator_ssh_public_key` antes do `terraform apply`.
-3. Revisar e aplicar a política IAM proposta (seção e) ao usuário/role do orquestrador — aceitar a folga documentada em `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup`, ou ajustar por conta própria.
-4. Rodar `iam_dryrun_check.py` com as credenciais reais antes do piloto, e separadamente testar `emergency_stop.py` em modo dry (sem `--execute`) contra a conta real.
-5. Decidir o valor do alerta de orçamento específico do piloto (US$3 sugerido) e criá-lo.
-6. Aprovar (ou pedir ajuste) o mecanismo de diagnóstico de bytes (`expected_handshake_bytes`, seção d) como camada de pausa-e-pergunta adicional ao smoke gate — nunca substitui os limiares pré-registrados.
-7. Definir a data do piloto.
+1. Confirm vCPU Service Quotas in the 3 regions and Elastic IP quotas in `sa-east-1` (item b of the original dossier — unchanged).
+2. Generate a personal SSH key pair and export `TF_VAR_operator_ssh_public_key` before `terraform apply`.
+3. Review and apply the proposed IAM policy (section e) to the orchestrator's user/role — accept the documented slack in `RunInstances`/`AllocateAddress`/`ImportKeyPair`/`CreateSecurityGroup`, or adjust it on your own.
+4. Run `iam_dryrun_check.py` with real credentials before the pilot, and separately test `emergency_stop.py` in dry mode (without `--execute`) against the real account.
+5. Decide the value of the pilot-specific budget alert (US$3 suggested) and create it.
+6. Approve (or request adjustment of) the bytes-diagnostic mechanism (`expected_handshake_bytes`, section d) as an additional pause-and-ask layer on the smoke gate — it never replaces the pre-registered thresholds.
+7. Set the pilot date.

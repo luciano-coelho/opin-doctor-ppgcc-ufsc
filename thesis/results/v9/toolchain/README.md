@@ -1,53 +1,54 @@
-# v9 Fase 1, T2: toolchain Go reproduzivel
+# v9 Phase 1, T2: reproducible Go toolchain
 
-Build local, em container, do Go a partir do codigo-fonte oficial, numa
-tag fixada, para servir de base ao fork de `crypto/tls` que o Hibrido-AND
-(D2/D3) exige. Nada de AWS aqui; nada e publicado fora deste repositorio.
+Local, in-container build of Go from the official source code, at a
+pinned tag, to serve as the base for the `crypto/tls` fork that
+Hybrid-AND (D2/D3) requires. No AWS here; nothing is published outside
+this repository.
 
-## Versao escolhida: go1.27.3
+## Chosen version: go1.27.3
 
-A v8 usou `go1.27rc2` (release candidate). Para a v9, a versao final
-escolhida e **go1.27.3** (lancado 2026-10-19), nao a rc2 nem a 1.27.0
-simples, pelos tres motivos registrados no cabecalho do `Dockerfile` e
-na Decisao correspondente de `DECISIONS.md`:
+v8 used `go1.27rc2` (release candidate). For v9, the final version
+chosen is **go1.27.3** (released 2026-10-19), neither the rc2 nor the
+plain 1.27.0, for the three reasons recorded in the `Dockerfile`'s
+header and in the corresponding Decision in `DECISIONS.md`:
 
-1. rc2 nunca foi promovida a estavel; a v9 comeca um mecanismo mais
-   sensivel (fork do proprio `crypto/tls`), sem motivo para partir de
-   uma base pre-lancamento.
-2. go1.27.3 inclui uma correcao de seguranca em `crypto/x509` que a rc2
-   nao tem, e o mecanismo AND depende diretamente da verificacao de
-   cadeia desse pacote (duas cadeias independentes).
-3. E a mesma versao contra a qual o patch de referencia externo do
-   Luciano (fora deste repositorio) ja foi validado -- usar a mesma aqui
-   elimina qualquer desvio de versao entre essa validacao e a
-   reconstrucao feita dentro deste container.
+1. rc2 was never promoted to stable; v9 begins a more sensitive
+   mechanism (forking `crypto/tls` itself), with no reason to start
+   from a pre-release base.
+2. go1.27.3 includes a `crypto/x509` security fix that rc2 does not
+   have, and the AND mechanism depends directly on that package's
+   chain verification (two independent chains).
+3. It is the same version against which Luciano's external reference
+   patch (outside this repository) has already been validated -- using
+   the same one here eliminates any version drift between that
+   validation and the rebuild done inside this container.
 
-Commit da tag `go1.27.3`, verificado nesta sessao contra
-`go.googlesource.com/go`: `2aae1000ea1d4b28923b96db28acf4e3b99d6aff`. O
-`Dockerfile` falha o build se o clone resolver para um commit diferente.
+Commit of the `go1.27.3` tag, verified in this session against
+`go.googlesource.com/go`: `2aae1000ea1d4b28923b96db28acf4e3b99d6aff`. The
+`Dockerfile` fails the build if the clone resolves to a different commit.
 
-## O que o Dockerfile faz
+## What the Dockerfile does
 
-1. Usa `golang:1.27.3-alpine` (pinado por digest) **somente** como
-   compilador de bootstrap (`GOROOT_BOOTSTRAP`).
-2. Clona `go.googlesource.com/go` fresco, na tag `go1.27.3`, e confirma o
-   commit contra o valor acima.
-3. Aplica `patches/and.patch` via `git apply`, se o arquivo nao estiver
-   vazio. Nesta etapa (T2) o arquivo esta vazio de proposito -- o
-   objetivo aqui e provar que o pipeline de build+teste funciona ponta a
-   ponta ANTES de qualquer codigo do fork existir. A T3 substitui esse
-   arquivo pelo patch real (~220 linhas em 6 arquivos + `dual.go`) e usa
-   este mesmo Dockerfile, sem alteracao, para aplica-lo e testa-lo.
-4. Roda `./make.bash` para construir o toolchain a partir da fonte
-   (patcheada ou nao).
-5. Roda a suite de testes do pacote `crypto/tls`, sem modificacao
-   (`go test -count=1 -v ./...` dentro de `src/crypto/tls`), contra o
-   toolchain recem-construido.
-6. Escreve `/build_metadata.json` dentro da imagem com a versao do Go, o
-   commit, os dois digests de imagem base, e o SHA-256 do patch aplicado
-   (ou a marca explicita de que nenhum foi aplicado).
+1. Uses `golang:1.27.3-alpine` (pinned by digest) **only** as the
+   bootstrap compiler (`GOROOT_BOOTSTRAP`).
+2. Clones `go.googlesource.com/go` fresh, at tag `go1.27.3`, and confirms
+   the commit against the value above.
+3. Applies `patches/and.patch` via `git apply`, if the file is not
+   empty. At this stage (T2) the file is deliberately empty -- the
+   goal here is to prove the build+test pipeline works end to end
+   BEFORE any fork code exists. T3 replaces this file with the real
+   patch (~220 lines across 6 files + `dual.go`) and uses this same
+   Dockerfile, unmodified, to apply and test it.
+4. Runs `./make.bash` to build the toolchain from the source
+   (patched or not).
+5. Runs the `crypto/tls` package's test suite, unmodified
+   (`go test -count=1 -v ./...` inside `src/crypto/tls`), against the
+   freshly built toolchain.
+6. Writes `/build_metadata.json` inside the image with the Go version,
+   the commit, the two base-image digests, and the SHA-256 of the
+   applied patch (or the explicit mark that none was applied).
 
-## Como rodar
+## How to run
 
 ```
 cd thesis/results/v9/toolchain
@@ -56,60 +57,59 @@ docker run --rm mockopin-v9-toolchain cat /crypto_tls_test_output.txt
 docker run --rm mockopin-v9-toolchain cat /build_metadata.json
 ```
 
-## Resultado esperado (T2, patch vazio)
+## Expected result (T2, empty patch)
 
-A suite de `crypto/tls` deve passar integralmente, com excecao de
-qualquer teste que dependa de acesso real a internet (propriedade
-preexistente dessa suite, nao algo introduzido por este build). O
-resultado real desta rodada esta registrado na Decisao de T2 em
-`DECISIONS.md` da v9, junto com a contagem exata de PASS/FAIL/SKIP.
+The `crypto/tls` suite should pass in full, with the exception of
+any test that depends on real internet access (a pre-existing
+property of that suite, not something introduced by this build). The
+real result of this round is recorded in the T2 Decision in v9's
+`DECISIONS.md`, along with the exact PASS/FAIL/SKIP count.
 
-## T3, concluida e revisada: patch real aplicado e testado
+## T3, completed and reviewed: real patch applied and tested
 
-`patches/and.patch` contem o mecanismo AND real: `dual.go` (321
-linhas) + mudancas em 6 arquivos existentes (`common.go`, `conn.go`,
+`patches/and.patch` contains the real AND mechanism: `dual.go` (321
+lines) + changes to 6 existing files (`common.go`, `conn.go`,
 `handshake_client.go`, `handshake_client_tls13.go`,
-`handshake_messages.go`, `handshake_server_tls13.go`, 543 linhas no
-total fora de `dual.go`/testes, mais um registro de 5 linhas em
-`tls_test.go`) + `dual_test.go` (903 linhas, 23 testes). SHA-256 do
-patch: `65f7ef4e50f5fd6025e9ab048cb4dd360a1455b3708702d648a93bd5c510cb2c`.
+`handshake_messages.go`, `handshake_server_tls13.go`, 543 lines in
+total outside `dual.go`/tests, plus a 5-line registration in
+`tls_test.go`) + `dual_test.go` (903 lines, 23 tests). Patch SHA-256:
+`65f7ef4e50f5fd6025e9ab048cb4dd360a1455b3708702d648a93bd5c510cb2c`.
 
-**Bug real encontrado e corrigido no proprio Dockerfile, antes do
-primeiro resultado:** a primeira versao deste passo fazia `cd src &&
-git apply ... && cd ..`, e reportava sucesso (exit 0) enquanto
-"Skipava" (`Skipped patch`) todo arquivo do patch, sem aplicar nada --
-`git apply` resolve os caminhos do patch contra a RAIZ do repositorio
-git, nao contra o diretorio corrente do shell. Corrigido com
-`git apply --directory=src/crypto/tls`. **Endurecido depois**: o passo
-agora conta quantos arquivos o proprio `and.patch` toca (via
-`grep -c '^diff --git'`) e falha o build explicitamente (`exit 1`) se
-`git status` nao mostrar exatamente esse numero de arquivos alterados
-em `src/crypto/tls` -- confirmado em um container de diagnostico
-isolado que, reintroduzindo deliberadamente o bug antigo, a checagem
-agora detecta a divergencia (9 esperados vs. 0 reais) em vez de deixar
-passar.
+**Real bug found and fixed in the Dockerfile itself, before the
+first result:** the first version of this step did `cd src &&
+git apply ... && cd ..`, and reported success (exit 0) while
+"Skipping" (`Skipped patch`) every file in the patch, without applying
+anything -- `git apply` resolves the patch's paths against the ROOT of
+the git repository, not against the shell's current directory. Fixed
+with `git apply --directory=src/crypto/tls`. **Hardened afterward**:
+the step now counts how many files `and.patch` itself touches (via
+`grep -c '^diff --git'`) and explicitly fails the build (`exit 1`) if
+`git status` does not show exactly that number of changed files in
+`src/crypto/tls` -- confirmed in an isolated diagnostic container that,
+by deliberately reintroducing the old bug, the check now detects the
+divergence (9 expected vs. 0 real) instead of letting it pass.
 
-**Resultado real, suite completa de `crypto/tls` (original + os 23
-testes do AND), contra o toolchain go1.27.3 reconstruido a partir do
-patch real, via o pipeline completo (clone -> verifica commit ->
-`git apply` endurecido -> `make.bash` -> teste):** `ok crypto/tls
-58.248s` -- **237 PASS, 0 FAIL, 0 SKIP** no nivel dos testes
-nomeados (214 da suite original, inalterados, + 23 do AND). Contando
-tambem as subcelulas internas de `TestBogoSuite` (a suite de
-conformidade da BoringSSL, embutida e offline): 2.991 PASS, 0 FAIL,
-2.278 SKIP -- os skips sao todos internos a essa matriz de
-conformidade (decisoes proprias do BoGo sobre quais casos aplicam a
-esta build), nao relacionados a rede; `TestVerifyHostname`,
-`TestRealResumption` e o proprio `TestBogoSuite` (nivel superior)
-passam, confirmando rede real disponivel no container. Medicao de
-tamanho de fio (`TestDualWireSizeMeasurement`): mensagem Certificate
-classica-so 814 B vs. dual (classica+ML-DSA-65) 6.355 B (+680,7%);
-campo de assinatura do CertificateVerify classico-so 256 B vs. dual
-3.567 B (+1.293,4%); cadeia PQ isolada 5.533 B.
+**Real result, full `crypto/tls` suite (original + the 23 AND
+tests), against the go1.27.3 toolchain rebuilt from the real patch,
+via the complete pipeline (clone -> verify commit -> hardened
+`git apply` -> `make.bash` -> test):** `ok crypto/tls
+58.248s` -- **237 PASS, 0 FAIL, 0 SKIP** at the level of
+named tests (214 from the original suite, unchanged, + 23 from AND).
+Also counting the internal subcells of `TestBogoSuite` (the
+BoringSSL conformance suite, embedded and offline): 2.991 PASS, 0 FAIL,
+2.278 SKIP -- the skips are all internal to that conformance matrix
+(BoGo's own decisions about which cases apply to
+this build), unrelated to the network; `TestVerifyHostname`,
+`TestRealResumption`, and `TestBogoSuite` itself (top level)
+pass, confirming real network availability inside the container. Wire-size
+measurement (`TestDualWireSizeMeasurement`): classical-only
+Certificate message 814 B vs. dual (classical+ML-DSA-65) 6.355 B (+680,7%);
+classical-only CertificateVerify signature field 256 B vs. dual
+3.567 B (+1.293,4%); isolated PQ chain 5.533 B.
 
-Detalhe completo, incluindo o teste do impostor lado a lado (par
-estrito/nao-estrito), a decisao sobre retomada de sessao e
-HelloRetryRequest, a tabela por arquivo, e a decisao sobre o tamanho
-do patch (543 linhas fora de `dual.go`/testes, acima do ~400 esperado,
-seguido como esta por decisao do Luciano): Decisoes 6 e 7 em
-`DECISIONS.md` da v9.
+Full detail, including the side-by-side impostor test (strict/
+non-strict pair), the decision on session resumption and
+HelloRetryRequest, the per-file table, and the decision on the patch's
+size (543 lines outside `dual.go`/tests, above the ~400 expected,
+kept as is by Luciano's decision): Decisions 6 and 7 in v9's
+`DECISIONS.md`.

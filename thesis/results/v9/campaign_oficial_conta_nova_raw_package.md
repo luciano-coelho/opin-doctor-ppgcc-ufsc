@@ -1,30 +1,30 @@
-# Pacote offline dos dados brutos da campanha oficial
+# Offline package of the official campaign's raw data
 
-Os dados brutos (pcaps, logs, `.keylog` de sessão TLS) de
-`thesis/results/v9/campaign_oficial_conta_nova_raw/` **não entram no git**
-(ver `.gitignore`) -- ficam compactados em um único pacote, fora do
-repositório, em um diretório privado local. Este arquivo registra onde
-esse pacote está e seu sha256, para que a integridade do pacote possa
-ser conferida sem precisar do pacote em si estar versionado.
+The raw data (pcaps, logs, TLS session `.keylog` files) from
+`thesis/results/v9/campaign_oficial_conta_nova_raw/` **does not go into git**
+(see `.gitignore`) -- it is kept compressed in a single package, outside the
+repository, in a local private directory. This file records where
+that package is and its sha256, so the package's integrity can
+be checked without the package itself being version-controlled.
 
-- **Caminho completo:** `C:\Users\lucia_csx8nlz\mockopin-offline-data\campaign_oficial_conta_nova_raw.tar.gz`
-  (fora de `MockOPIN\`, nunca rastreado pelo git).
-- **Formato:** `.tar.gz` (zstd não disponível neste ambiente no momento da
-  geração -- `tar -czf`, gzip padrão).
-- **Tamanho:** 100.340.836 bytes (~96 MiB / ~100 MB).
-- **sha256 do pacote:** `cdd10999aa19512c06cfdcd2b6fd825dc75b7bea325b4a31f57a532e55bf1228`
-- **Conteúdo:** a árvore completa de `campaign_oficial_conta_nova_raw/`,
-  incluindo os 78 arquivos `.keylog` (segredos de sessão TLS) junto com
-  os `.pcap` correspondentes -- os dois precisam estar juntos para
-  decifração/depuração offline, que é exatamente o propósito deste
-  pacote local.
-- **Verificação de integridade feita:** o pacote foi extraído para um
-  diretório temporário e os 725 arquivos resultantes foram conferidos,
-  um a um, por sha256 contra `campaign_oficial_conta_nova_sha256_manifest.txt`
-  (a mesma lista versionada no git) -- **0 divergências, 725/725
-  arquivos idênticos**. Diretório temporário removido depois da
-  verificação.
+- **Full path:** `C:\Users\lucia_csx8nlz\mockopin-offline-data\campaign_oficial_conta_nova_raw.tar.gz`
+  (outside `MockOPIN\`, never tracked by git).
+- **Format:** `.tar.gz` (zstd not available in this environment at the time of
+  generation -- `tar -czf`, standard gzip).
+- **Size:** 100.340.836 bytes (~96 MiB / ~100 MB).
+- **Package sha256:** `cdd10999aa19512c06cfdcd2b6fd825dc75b7bea325b4a31f57a532e55bf1228`
+- **Contents:** the complete tree of `campaign_oficial_conta_nova_raw/`,
+  including the 78 `.keylog` files (TLS session secrets) together with
+  their corresponding `.pcap` files -- the two need to be together for
+  offline decryption/debugging, which is exactly this local package's
+  purpose.
+- **Integrity check performed:** the package was extracted to a
+  temporary directory and the resulting 725 files were checked,
+  one by one, by sha256 against `campaign_oficial_conta_nova_sha256_manifest.txt`
+  (the same list version-controlled in git) -- **0 divergences, 725/725
+  files identical**. The temporary directory was removed after
+  verification.
 
-A cópia de trabalho local em `thesis/results/v9/campaign_oficial_conta_nova_raw/`
-não foi alterada nem removida por este empacotamento -- este pacote é uma
-cópia adicional, não uma migração.
+The local working copy at `thesis/results/v9/campaign_oficial_conta_nova_raw/`
+was neither altered nor removed by this packaging -- this package is an
+additional copy, not a migration.

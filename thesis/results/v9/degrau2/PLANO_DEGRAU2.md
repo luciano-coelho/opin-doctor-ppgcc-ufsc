@@ -1,149 +1,157 @@
-# Degrau 2 — pré-registro da campanha suplementar de latência com cronômetro fino
+> **Translation note.** This is an English translation of the pre-registration
+> document originally committed in Portuguese at commit `62f57326`
+> (2026-11-16T14:34:09-03:00) and subsequently amended ("Emenda 1") at commit
+> `f688242e` (2026-11-16T15:00:03-03:00 = 2026-11-16T18:00:03Z). The original
+> Portuguese text of both the pre-registration and Emenda 1 remains unchanged
+> in the git history at those commits — this translation does not replace or
+> supersede the registered original for pre-registration purposes.
 
-Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC. Fase SUPLEMENTAR, autorizada separadamente do relatório oficial já publicado (`Consolidated_Metrics_Report_FINAL.md`, **intocado nesta fase**) e da investigação exploratória "Degrau 1" (`thesis/results/v9/analise_origem/RELATORIO_ORIGEM.md`, também intocada). Dados em diretório separado — remoto: `~/campaign-data/v9/degrau2`; local: `thesis/results/v9/degrau2/`. **Este documento é committed ANTES de qualquer análise rodar ou qualquer dado novo ser coletado** — nenhum número abaixo vem de dados do Degrau 2 (todos os valores de `a`/`b`/`c` citados vêm do Degrau 1, já publicado, nunca recalculados aqui antes da coleta).
+# Degrau 2 — pre-registration of the supplementary fine-grained-timer latency campaign
 
-**Fora de escopo, explícito:** o perfil Control (`hibrido-v8`) NÃO entra nesta campanha suplementar. Nenhuma ação na AWS nesta Etapa 0 (tudo abaixo é local). A Etapa 1 (ações reais na AWS) só começa com autorização explícita e presença confirmada do usuário, **sub-etapa por sub-etapa** — a presença confirmada hoje não é uma autorização geral para todas as sub-etapas futuras.
+Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC. SUPPLEMENTARY phase, authorized separately from the already-published official report (`Consolidated_Metrics_Report_FINAL.md`, **untouched in this phase**) and from the exploratory "Degrau 1" investigation (`thesis/results/v9/analise_origem/RELATORIO_ORIGEM.md`, also untouched). Data in a separate directory — remote: `~/campaign-data/v9/degrau2`; local: `thesis/results/v9/degrau2/`. **This document is committed BEFORE any analysis runs or any new data is collected** — no number below comes from Degrau 2 data (all `a`/`b`/`c` values cited come from Degrau 1, already published, never recomputed here before data collection).
 
-## Motivação
+**Explicitly out of scope:** the Control profile (`hibrido-v8`) is NOT included in this supplementary campaign. No AWS action in this Stage 0 (everything below is local). Stage 1 (real AWS actions) only begins with explicit authorization and confirmed user presence, **sub-stage by sub-stage** — confirmed presence today is not a blanket authorization for all future sub-stages.
 
-O Degrau 1 confirmou, lendo o código (`latency_automation.run_once_timed()`), que a biblioteca já calcula internamente um T_fluxo FINO (`t_fluxo_seconds`) e uma decomposição por fase (`phase_accounting`: chamadas HTTP, assinatura, verificação, espera explícita, setup, resíduo interno) — mas esses campos são descartados por `orchestrator.py` antes de serem persistidos. Toda a investigação do Degrau 1 (H1-H4, itens 1-10) trabalhou só com o T_fluxo do ORQUESTRADOR ("parede": `end_utc - start_utc`, que inclui a chamada SSH completa + cold-start do Python + aquecimento de chave). O Degrau 2 persiste os dois campos (mudança aditiva, Etapa 0, item 2) e roda uma campanha nova, pequena, pra separar os dois de verdade — com RTT(controle,cliente) MEDIDO de verdade (não aproximado externamente, como no Degrau 1) via `probe_overhead.py`.
+## Motivation
 
-## Sementes fixas (registradas ANTES de qualquer coleta)
+Degrau 1 confirmed, by reading the code (`latency_automation.run_once_timed()`), that the library already internally computes a FINE-GRAINED T_fluxo (`t_fluxo_seconds`) and a per-phase decomposition (`phase_accounting`: HTTP calls, signing, verification, explicit wait, setup, internal residual) — but these fields are discarded by `orchestrator.py` before being persisted. The entire Degrau 1 investigation (H1-H4, items 1-10) worked only with the ORCHESTRATOR's T_fluxo ("wall-clock": `end_utc - start_utc`, which includes the full SSH call + Python cold-start + key warm-up). Degrau 2 persists both fields (an additive change, Stage 0, item 2) and runs a new, small campaign to actually separate the two — with RTT(control,client) actually MEASURED (not externally approximated, as in Degrau 1) via `probe_overhead.py`.
 
-- **Rodada 1:** semente `20261117`.
-- **Rodada 2:** semente `20261118`.
-- Usadas para: sorteio da ordem de perfis por rota e por rodada (gravado no manifesto, mesma convenção do Degrau 1/campanha oficial), e qualquer bootstrap estatístico feito na Etapa 2 (Hodges-Lehmann, IC 95%, `numpy.random.default_rng`, 10.000 reamostragens — mesma convenção de todo o Degrau 1).
+## Fixed seeds (registered BEFORE any data collection)
 
-## Testes exatos (declarados agora, nunca escolhidos depois de ver os dados)
+- **Round 1:** seed `20261117`.
+- **Round 2:** seed `20261118`.
+- Used for: drawing the profile order per route and per round (recorded in the manifest, the same convention as Degrau 1/the official campaign), and any statistical bootstrap performed in Stage 2 (Hodges-Lehmann, 95% CI, `numpy.random.default_rng`, 10.000 resamples — the same convention as all of Degrau 1).
 
-- Mann-Whitney U exato bilateral (`scipy.stats.mannwhitneyu`, `method="exact"`) para comparações entre 2 grupos (n=15 por grupo nesta campanha, não n=10 como na campanha oficial).
-- Correção de Holm sobre a família de testes de cada hipótese (D1: 3 testes/instalação; D3/D4: por célula, famílias separadas de D1).
-- Hodges-Lehmann (mediana das diferenças pareadas) com IC 95% via bootstrap (semente da rodada correspondente, 10.000 reamostragens).
-- Nenhum teste novo introduzido depois de ver os dados reais do Degrau 2.
+## Exact tests (declared now, never chosen after seeing the data)
 
-## As 5 hipóteses
+- Exact two-sided Mann-Whitney U (`scipy.stats.mannwhitneyu`, `method="exact"`) for comparisons between 2 groups (n=15 per group in this campaign, not n=10 as in the official campaign).
+- Holm correction over each hypothesis's test family (D1: 3 tests/installation; D3/D4: per cell, families separate from D1).
+- Hodges-Lehmann (median of the paired differences) with a 95% CI via bootstrap (the corresponding round's seed, 10.000 resamples).
+- No new test introduced after seeing Degrau 2's real data.
 
-### D1 — a heterogeneidade entre instalações (H4 do Degrau 1) é artefato do orquestrador?
+## The 5 hypotheses
 
-**Previsão numérica:** no T_fluxo PAREDE (Degrau 1, Classic, L0), as 3 instalações diferiam em até ~145% entre si (sa-east-1 mediana 2.357,9ms vs. ap-northeast-1 mediana 5.786,2ms). Se essa heterogeneidade for, no todo ou majoritariamente, um artefato do overhead de orquestração (SSH+cold-start, que o Item 5b do Degrau 1 já estimou como dependente do RTT controle-cliente), as medianas de T_fluxo FINO (`t_fluxo_seconds`) das 3 instalações devem ficar **dentro de ~10-15% umas das outras** (ordem de grandeza do que resta depois de remover ~1,8s+ de overhead fixo mais o termo `b×RTT_cc` de cada uma).
+### D1 — is the heterogeneity between installations (Degrau 1's H4) an artifact of the orchestrator?
 
-**Teste exato:** Mann-Whitney exato bilateral, 3 pares (sa-east-1×us-east-1, sa-east-1×ap-northeast-1, us-east-1×ap-northeast-1), perfil Classic, rotas L0, T_fluxo FINO, n=15 por grupo por rodada (testado separadamente em cada rodada E nos dados agrupados das 2 rodadas, n=30). Holm sobre os 3 pares.
+**Numerical prediction:** in the WALL-CLOCK T_fluxo (Degrau 1, Classic, L0), the 3 installations differed by up to ~145% from one another (sa-east-1 median 2.357,9ms vs. ap-northeast-1 median 5.786,2ms). If this heterogeneity is, wholly or mostly, an artifact of the orchestration overhead (SSH+cold-start, which Degrau 1's Item 5b already estimated as dependent on the control-client RTT), the FINE-GRAINED T_fluxo (`t_fluxo_seconds`) medians of the 3 installations should fall **within ~10-15% of one another** (the order of magnitude left over after removing ~1,8s+ of fixed overhead plus each one's `b×RTT_cc` term).
 
-**Critério de decisão:** **REFUTADA** (H4 era majoritariamente artefato de medição) se os 3 pares perderem significância (p Holm ≥ 0,05) E as medianas ficarem dentro de ~15% umas das outras. **SUSTENTADA** (a heterogeneidade real persiste, não é só artefato) se pelo menos 1 dos 3 pares continuar significativo (p Holm < 0,05) com diferença de mediana >15%. **O que direi se os dados não sustentarem nenhum dos dois extremos:** relato explícito dos p-valores e das diferenças de mediana reais, sem forçar um dos dois rótulos — "parcialmente explicada" só se a redução de diferença for clara (ex. de ~145% pra <50%) mas a significância persistir.
+**Exact test:** exact two-sided Mann-Whitney, 3 pairs (sa-east-1×us-east-1, sa-east-1×ap-northeast-1, us-east-1×ap-northeast-1), Classic profile, L0 routes, FINE-GRAINED T_fluxo, n=15 per group per round (tested separately in each round AND on the 2 rounds' pooled data, n=30). Holm over the 3 pairs.
 
-### D2 — o overhead (parede − fino) segue a regressão do Item 5b do Degrau 1?
+**Decision criterion:** **REFUTED** (H4 was mostly a measurement artifact) if all 3 pairs lose significance (Holm p ≥ 0,05) AND the medians fall within ~15% of one another. **SUPPORTED** (the real heterogeneity persists, it is not just an artifact) if at least 1 of the 3 pairs remains significant (Holm p < 0,05) with a median difference >15%. **What I will say if the data support neither extreme:** an explicit report of the real p-values and median differences, without forcing either label — "partially explained" only if the difference reduction is clear (e.g., from ~145% to <50%) but significance persists.
 
-**Modelo (já estimado no Degrau 1, nunca reajustado aqui antes de ver dados novos):** `overhead_previsto_ms = a + b × RTT(controle,cliente)_ms`, com `a ≈ 1.807,3ms` (IC 95% publicado `[1.553,7; 1.924,9]`) e `b ≈ 13,17` (IC 95% publicado `[12,20; 15,29]`), ambos do `RELATORIO_ORIGEM.md`, Item 5b.
+### D2 — does the overhead (wall-clock − fine-grained) follow Degrau 1's Item 5b regression?
 
-**RTT(controle,cliente) usado:** REAL, medido por `probe_overhead.py` (mediana de 30 conexões TCP novas à porta 22, Etapa 1) para `L0-us-east-1`/`L0-ap-northeast-1` — pela primeira vez sem aproximação externa. Para `L0-sa-east-1` e `L123`, o valor real já é conhecido do Degrau 1 (controle e servidor dessas rotas co-localizados em `sa-east-1`): `0,129ms` e `122,642ms` respectivamente — mas serão RECONFIRMADOS pelo mesmo `probe_overhead.py` nesta campanha, nunca só reaproveitados sem checar.
+**Model (already estimated in Degrau 1, never refit here before seeing new data):** `predicted_overhead_ms = a + b × RTT(control,client)_ms`, with `a ≈ 1.807,3ms` (published 95% CI `[1.553,7; 1.924,9]`) and `b ≈ 13,17` (published 95% CI `[12,20; 15,29]`), both from `RELATORIO_ORIGEM.md`, Item 5b.
 
-**Previsão numérica (fórmula declarada agora; valor exato finalizado de forma puramente mecânica quando `probe_overhead.py` rodar — isso não é ajustar a hipótese depois de ver resultados, é computar a mesma fórmula com o RTT real medido em vez do aproximado):**
+**RTT(control,client) used:** REAL, measured by `probe_overhead.py` (median of 30 new TCP connections to port 22, Stage 1) for `L0-us-east-1`/`L0-ap-northeast-1` — for the first time with no external approximation. For `L0-sa-east-1` and `L123`, the real value is already known from Degrau 1 (control and server of these routes co-located in `sa-east-1`): `0,129ms` and `122,642ms` respectively — but they will be RECONFIRMED by the same `probe_overhead.py` in this campaign, never just reused without checking.
+
+**Numerical prediction (formula declared now; the exact value finalized in a purely mechanical way once `probe_overhead.py` runs — this is not adjusting the hypothesis after seeing results, it is computing the same formula with the real measured RTT instead of the approximated one):**
 - `L0-sa-east-1`: `1.807,3 + 13,17×0,129 ≈ 1.809,0ms`
 - `L123`: `1.807,3 + 13,17×122,642 ≈ 3.422,3ms`
-- `L0-us-east-1`/`L0-ap-northeast-1`: `1.807,3 + 13,17×RTT_cc_medido` (RTT_cc a determinar por `probe_overhead.py`).
+- `L0-us-east-1`/`L0-ap-northeast-1`: `1.807,3 + 13,17×RTT_cc_measured` (RTT_cc to be determined by `probe_overhead.py`).
 
-**Critério de decisão:** **SUSTENTADA** se o overhead mediano observado (T_fluxo parede mediano − T_fluxo fino mediano) em cada uma das 4 células cair dentro do IC 95% do modelo (usando os extremos já publicados do IC de `a`/`b`: `[a_lo+b_lo×RTT; a_hi+b_hi×RTT]`) OU dentro de ±30% do ponto central — o que for mais permissivo — em pelo menos 3 das 4 células. **REFUTADA** se 3 ou mais células caírem fora dos dois critérios. **INCONCLUSIVA** no meio (exatamente 2 de 4 dentro, 2 fora).
+**Decision criterion:** **SUPPORTED** if the observed median overhead (median wall-clock T_fluxo − median fine-grained T_fluxo) in each of the 4 cells falls within the model's 95% CI (using the already-published extremes of `a`/`b`'s CI: `[a_lo+b_lo×RTT; a_hi+b_hi×RTT]`) OR within ±30% of the central point — whichever is more permissive — in at least 3 of the 4 cells. **REFUTED** if 3 or more cells fall outside both criteria. **INCONCLUSIVE** in between (exactly 2 of 4 inside, 2 outside).
 
-### D3 — a ordem Classic<PQC<Hybrid e a inversão de L0-sa-east-1 persistem no T_fluxo fino?
+### D3 — do the Classic<PQC<Hybrid order and the L0-sa-east-1 inversion persist in the fine-grained T_fluxo?
 
-**Previsão numérica:** no relatório oficial (T_fluxo parede), a ordem é `Classic<PQC<Hybrid` em `L123`/`L0-us-east-1`/`L0-ap-northeast-1` e `PQC<Classic<Hybrid` (inversão) em `L0-sa-east-1`. Como o overhead de orquestração é majoritariamente comum entre perfis (Degrau 1, item de impacto — exceto o viés pequeno de chave RSA, 26-45ms, já mostrado incapaz de trocar nenhum sinal), a previsão é que **a MESMA ordem persista no T_fluxo fino nas 4 células**, já que a causa da ordem (trabalho real de assinatura/verificação, Degrau 1 item 6) acontece DENTRO do T_fluxo fino, não fora dele.
+**Numerical prediction:** in the official report (wall-clock T_fluxo), the order is `Classic<PQC<Hybrid` on `L123`/`L0-us-east-1`/`L0-ap-northeast-1` and `PQC<Classic<Hybrid` (inversion) on `L0-sa-east-1`. Since the orchestration overhead is mostly common across profiles (Degrau 1, the impact item — except for the small RSA-key bias, 26-45ms, already shown unable to flip any sign), the prediction is that **the SAME order will persist in the fine-grained T_fluxo across the 4 cells**, since the cause of the order (real signing/verification work, Degrau 1 item 6) happens INSIDE the fine-grained T_fluxo, not outside it.
 
-**Teste exato:** comparação direta das medianas de T_fluxo fino por perfil, nas 4 células, mesma convenção de ordem do relatório oficial (Seção 4.2).
+**Exact test:** direct comparison of the per-profile fine-grained T_fluxo medians, across the 4 cells, the same order convention as the official report (Section 4.2).
 
-**Critério de decisão:** **SUSTENTADA** se a ordem persistir em ≥3 das 4 células. **REFUTADA** se divergir em ≥3 das 4 células. **INCONCLUSIVA** se exatamente 2 de 4 persistirem.
+**Decision criterion:** **SUPPORTED** if the order persists in ≥3 of the 4 cells. **REFUTED** if it diverges in ≥3 of the 4 cells. **INCONCLUSIVE** if exactly 2 of 4 persist.
 
-### D4 — onde mora a diferença ENTRE PERFIS no T_fluxo fino?
+### D4 — where does the difference BETWEEN PROFILES reside in the fine-grained T_fluxo?
 
-**Previsão numérica:** pela leitura de código já feita no Degrau 1 (item 6: PQC assina via despacho de rede ao serviço Node `pqc-signer`; Hybrid faz as duas coisas; verificação roteada pelo mesmo serviço nos 3 perfis), a previsão é que **Δ(signing_seconds + verification_seconds) entre PQC/Hybrid e Classic responda por ≥60% de Δ(T_fluxo fino)** em cada uma das 4 células, com **Δ(http_calls_seconds) <20%**.
+**Numerical prediction:** based on the code reading already done in Degrau 1 (item 6: PQC signs via a network dispatch to the Node `pqc-signer` service; Hybrid does both; verification routed through the same service in all 3 profiles), the prediction is that **Δ(signing_seconds + verification_seconds) between PQC/Hybrid and Classic will account for ≥60% of Δ(fine-grained T_fluxo)** in each of the 4 cells, with **Δ(http_calls_seconds) <20%**.
 
-**Teste exato:** decomposição direta de `phase_accounting` (`http_calls_seconds`, `signing_seconds`, `verification_seconds`, `explicit_wait_seconds`, `setup_seconds`, `residual_seconds`), medianas por perfil/célula, Δ calculado por subtração (nunca por mediana de diferenças por execução — mesma convenção de precisão usada no Degrau 1).
+**Exact test:** direct decomposition of `phase_accounting` (`http_calls_seconds`, `signing_seconds`, `verification_seconds`, `explicit_wait_seconds`, `setup_seconds`, `residual_seconds`), medians per profile/cell, Δ computed by subtraction (never by median of per-execution differences — the same precision convention used in Degrau 1).
 
-**Critério de decisão:** **SUSTENTADA** se a previsão (≥60% signing+verification, <20% http_calls) se confirmar em ≥3 das 4 células (para os 2 pares PQC-Classic e Hybrid-PQC, 8 comparações no total — "≥3 de 4" lido por célula, considerando os 2 pares daquela célula juntos). **REFUTADA** se a maior fração estiver em outro componente (ex. `residual_seconds` ou `setup_seconds`) em ≥3 das 4 células. **O que direi se a decomposição apontar pro `residual_seconds` interno da lib:** reportarei isso honestamente como um NOVO achado não previsto (o resíduo interno, que o próprio código documenta como "o hop do TLS-KEM-proxy e o handshake mTLS/KEM" — mecanismo já discutido no Degrau 1, item 5b, `c`≈19,40), sem forçá-lo a confirmar D4 como formulada.
+**Decision criterion:** **SUPPORTED** if the prediction (≥60% signing+verification, <20% http_calls) is confirmed in ≥3 of the 4 cells (for the 2 pairs PQC-Classic and Hybrid-PQC, 8 comparisons total — "≥3 of 4" read per cell, considering that cell's 2 pairs together). **REFUTED** if the largest fraction is in another component (e.g., `residual_seconds` or `setup_seconds`) in ≥3 of the 4 cells. **What I will say if the decomposition points to the library's internal `residual_seconds`:** I will honestly report this as a NEW, unforeseen finding (the internal residual, which the code itself documents as "the TLS-KEM-proxy hop and the mTLS/KEM handshake" — a mechanism already discussed in Degrau 1, item 5b, `c`≈19,40), without forcing it to confirm D4 as formulated.
 
-### D5 — o T_fluxo fino em L123 cresce com o RTT real na magnitude que `c`≈19,40 prevê?
+### D5 — does the fine-grained T_fluxo on L123 grow with the real RTT at the magnitude `c`≈19,40 predicts?
 
-**Previsão numérica:** `Δresiduo_fino(L123 − L0-sa-east-1, Classic) / RTT_real(L123, medido por probe_overhead.py ou reconfirmado do Degrau 1 ≈122,642ms) ≈ c ≈ 19,40` — mesma faixa de tolerância do Degrau 1/H3 (metade a dobro: **9,70 a 38,80**).
+**Numerical prediction:** `Δfine_residual(L123 − L0-sa-east-1, Classic) / real_RTT(L123, measured by probe_overhead.py or reconfirmed from Degrau 1 ≈122,642ms) ≈ c ≈ 19,40` — the same tolerance range as Degrau 1/H3 (half to double: **9,70 to 38,80**).
 
-**Teste exato:** `residuo_fino = t_fluxo_seconds − soma(latency_ms das chamadas HTTP reais)` (mesma decomposição do Degrau 1, mas sobre o T_fluxo FINO em vez do parede), mediana por célula, perfil Classic, razão `Δresiduo_fino / RTT_real`.
+**Exact test:** `fine_residual = t_fluxo_seconds − sum(latency_ms of the actual HTTP calls)` (the same decomposition as Degrau 1, but over the FINE-GRAINED T_fluxo instead of the wall-clock one), median per cell, Classic profile, ratio `Δfine_residual / real_RTT`.
 
-**Critério de decisão:** **SUSTENTADA** se a razão cair dentro de `[9,70; 38,80]`. **REFUTADA** se cair fora dessa faixa — sem categoria "inconclusiva" (mesma convenção do H3 original, pra manter o critério simétrico e não inflar categorias intermediárras).
+**Decision criterion:** **SUPPORTED** if the ratio falls within `[9,70; 38,80]`. **REFUTED** if it falls outside this range — no "inconclusive" category (the same convention as the original H3, to keep the criterion symmetric and not inflate intermediate categories).
 
-## Resumo das previsões (tabela única, pra conferência rápida na Etapa 2)
+## Summary of predictions (single table, for quick checking in Stage 2)
 
-| Hipótese | Previsão numérica | Critério SUSTENTADA | Critério REFUTADA |
+| Hypothesis | Numerical prediction | SUPPORTED criterion | REFUTED criterion |
 |---|---|---|---|
-| D1 | Medianas fino das 3 instalações dentro de ~10-15% entre si (vs. ~145% no parede) | 3 pares perdem significância (Holm) E dif. mediana <15% | ≥1 par mantém significância E dif. mediana >15% |
-| D2 | `a+b×RTT_cc` por célula (ver valores acima) | ≥3/4 células dentro do IC/±30% | ≥3/4 células fora |
-| D3 | Mesma ordem Classic/PQC/Hybrid do parede, inversão de L0-sa-east-1 incluída | Ordem persiste em ≥3/4 células | Ordem diverge em ≥3/4 células |
-| D4 | signing+verification ≥60% de Δfino; http_calls <20% | confirmado em ≥3/4 células | maior fração em outro componente em ≥3/4 células |
-| D5 | razão Δresiduo_fino/RTT entre 9,70 e 38,80 | dentro da faixa | fora da faixa |
+| D1 | Fine-grained medians of the 3 installations within ~10-15% of each other (vs. ~145% wall-clock) | All 3 pairs lose significance (Holm) AND median diff. <15% | ≥1 pair retains significance AND median diff. >15% |
+| D2 | `a+b×RTT_cc` per cell (see values above) | ≥3/4 cells within the CI/±30% | ≥3/4 cells outside |
+| D3 | Same Classic/PQC/Hybrid order as wall-clock, including the L0-sa-east-1 inversion | Order persists in ≥3/4 cells | Order diverges in ≥3/4 cells |
+| D4 | signing+verification ≥60% of Δfine; http_calls <20% | confirmed in ≥3/4 cells | largest fraction in another component in ≥3/4 cells |
+| D5 | Δfine_residual/RTT ratio between 9,70 and 38,80 | within the range | outside the range |
 
-## Reprodutibilidade
+## Reproducibility
 
-Nenhum dado de aquecimento (5 por célula, descartados) será lido nas análises da Etapa 2 — mesma regra do Degrau 1. Scripts da Etapa 0 (`probe_overhead.py`, script de coleta de `lscpu`/CPU) descritos no relatório da Etapa 0, nunca tocam nos scripts de medição existentes além da mudança aditiva já descrita (Etapa 0, item 2). Todo número das Etapas 1-2 virá de script, nunca digitado à mão.
+No warm-up data (5 per cell, discarded) will be read in the Stage 2 analyses — the same rule as Degrau 1. Stage 0 scripts (`probe_overhead.py`, the `lscpu`/CPU-info collection script) described in the Stage 0 report, never touching the existing measurement scripts beyond the already-described additive change (Stage 0, item 2). Every number in Stages 1-2 will come from a script, never typed by hand.
 
 ---
 
-## Emenda 1 — correções de critério, feita ANTES de qualquer dado real do Degrau 2 ser analisado
+## Amendment 1 — criteria corrections, made BEFORE any real Degrau 2 data is analyzed
 
-**Ordem real dos eventos (verdade verificada, não assumida por padrão) — 3 timestamps reais, UTC:**
-1. **Commit desta Emenda 1:** `2026-11-16T18:00:03Z` (commit `f688242e3dc6a7a3dc0e7c4d11df1e90074de95a`, confirmado via `git log --format=%aI` após o commit — valor literal registrado nesta nota de acompanhamento, não no mesmo commit que ele descreve, por razão estrutural: o timestamp de um commit só existe depois dele ser criado).
-2. **Primeira ação REAL na AWS do Bloco 1 (`start-instances`):** **NÃO ACONTECEU NENHUMA VEZ ATÉ AGORA.** A única tentativa foi BLOQUEADA pelo classificador de segurança da sessão antes de qualquer chamada chegar à AWS (nenhum efeito, nenhuma instância iniciada) — não existe timestamp real pra este evento porque ele nunca ocorreu. Antes disso, só uma ação de LEITURA (`describe-instances`, confirmando os 8 Instance IDs e que todos estavam `stopped`) foi executada com sucesso.
-3. **Primeira saída real de `probe_overhead.py`:** **NÃO EXISTE.** Confirmado agora, explicitamente, antes de escrever o resto desta emenda: busca no diretório inteiro do Degrau 2 e por qualquer arquivo mais novo que `probe_overhead.py` com esse nome no projeto inteiro — o único resultado é o próprio script-fonte e um `.pyc` de cache de bytecode (gerado pela verificação de sintaxe `py_compile` da Etapa 0, nunca uma execução real) — **zero dados reais de probe existem em qualquer lugar**.
+**Real order of events (verified truth, not assumed by default) — 3 real timestamps, UTC:**
+1. **Commit of this Amendment 1:** `2026-11-16T18:00:03Z` (commit `f688242e3dc6a7a3dc0e7c4d11df1e90074de95a`, confirmed via `git log --format=%aI` after the commit — a literal value recorded in this follow-up note, not in the same commit it describes, for a structural reason: a commit's timestamp only exists after it is created).
+2. **First REAL AWS action of Block 1 (`start-instances`):** **HAS NOT HAPPENED EVEN ONCE SO FAR.** The only attempt was BLOCKED by the session's safety classifier before any call reached AWS (no effect, no instance started) — there is no real timestamp for this event because it never occurred. Before that, only one READ action (`describe-instances`, confirming the 8 Instance IDs and that all were `stopped`) was executed successfully.
+3. **First real output from `probe_overhead.py`:** **DOES NOT EXIST.** Confirmed now, explicitly, before writing the rest of this amendment: a search of the entire Degrau 2 directory and for any file newer than `probe_overhead.py` with that name across the whole project — the only result is the source script itself and a bytecode-cache `.pyc` (generated by the Stage 0 `py_compile` syntax check, never a real run) — **zero real probe data exists anywhere**.
 
-**Conclusão de integridade, confirmada com verificação real (não por padrão):** como nem o evento 2 nem o evento 3 aconteceram, **esta emenda foi necessariamente escrita sem olhar pra nenhum número real do Degrau 2** — não porque eu tenha me abstido de olhar, mas porque **esses números simplesmente não existem ainda**. O Bloco 1 está travado na sub-etapa 1 (`start-instances`, bloqueado), nunca chegou às sub-etapas 2-5 (deadline, preflight, CPU info, `probe_overhead.py`) — **o Bloco 1 NÃO está concluído nem quase concluído.**
+**Integrity conclusion, confirmed with real verification (not by default):** since neither event 2 nor event 3 happened, **this amendment was necessarily written without looking at any real Degrau 2 number** — not because I abstained from looking, but because **those numbers simply do not exist yet**. Block 1 is stuck at sub-stage 1 (`start-instances`, blocked), it never reached sub-stages 2-5 (deadline, preflight, CPU info, `probe_overhead.py`) — **Block 1 is NOT completed, nor nearly completed.**
 
-### Correção do D1 (a versão original tinha o critério invertido)
+### D1 correction (the original version had the criterion inverted)
 
-**Novo critério, por equivalência estatística (substitui o critério original do D1 acima):**
-- **SUSTENTADA** (heterogeneidade é majoritariamente artefato de medição) se, nos 3 pares de instalação, o IC 95% bootstrap da diferença de Hodges-Lehmann cair **inteiramente DENTRO** de ±15% da menor mediana dos dois grupos daquele par.
-- **REFUTADA** se **algum** dos 3 ICs cair **inteiramente FORA** de ±15%.
-- **PARCIAL**, caso contrário (ex. um IC cruza a fronteira de ±15% sem ficar inteiramente dentro nem inteiramente fora) — reportando p-valor, diferença de mediana e IC de cada um dos 3 pares sem forçar um rótulo binário.
+**New criterion, by statistical equivalence (replaces D1's original criterion above):**
+- **SUPPORTED** (the heterogeneity is mostly a measurement artifact) if, across the 3 installation pairs, the Hodges-Lehmann difference's 95% bootstrap CI falls **entirely WITHIN** ±15% of the smaller median of that pair's two groups.
+- **REFUTED** if **any** of the 3 CIs falls **entirely OUTSIDE** ±15%.
+- **PARTIAL**, otherwise (e.g., a CI crosses the ±15% boundary without falling entirely inside nor entirely outside) — reporting the p-value, median difference, and CI of each of the 3 pairs without forcing a binary label.
 
-### Correção do D2 (erro conceitual: `a` já inclui trabalho que agora aparece dentro do próprio fino)
+### D2 correction (conceptual error: `a` already includes work that now appears inside the fine-grained value itself)
 
-**Problema identificado:** o modelo `overhead_previsto = a + b×RTT` do Degrau 1 foi estimado sobre o RESÍDUO do T_fluxo PAREDE (parede − soma das chamadas) — um resíduo que, nesta campanha, com o T_fluxo fino agora medido separadamente, **deixa de ser a melhor variável dependente**: parte do que `a` capturava no Degrau 1 (trabalho interno da lib — assinatura, verificação, setup, resíduo interno do handshake) hoje é CONHECIDO e mora dentro do próprio T_fluxo fino, não no overhead de orquestração.
+**Problem identified:** Degrau 1's `predicted_overhead = a + b×RTT` model was fit over the WALL-CLOCK T_fluxo's RESIDUAL (wall-clock − sum of the calls) — a residual which, in this campaign, now that the fine-grained T_fluxo is separately measured, **is no longer the best dependent variable**: part of what `a` captured in Degrau 1 (internal library work — signing, verification, setup, internal handshake residual) is now KNOWN and resides inside the fine-grained T_fluxo itself, not in the orchestration overhead.
 
-**Novo teste (substitui o teste original do D2):** regressão do overhead MEDIANO observado (`T_fluxo parede mediano − T_fluxo fino mediano`, por célula) contra o RTT(controle,cliente) REAL medido por `probe_overhead.py`, nas 4 células (n=4 pontos — mesma fragilidade estatística já declarada no Degrau 1 para ajustes com poucos pontos, reportada explicitamente).
+**New test (replaces D2's original test):** regression of the observed MEDIAN overhead (`median wall-clock T_fluxo − median fine-grained T_fluxo`, per cell) against the REAL RTT(control,client) measured by `probe_overhead.py`, across the 4 cells (n=4 points — the same statistical fragility already declared in Degrau 1 for fits with few points, explicitly reported).
 
-**Critério de decisão:** **SUSTENTADA** se a inclinação da regressão cair em `[12,2; 15,3]` **E** o intercepto cair em `[0; 1.925]`ms (faixa baseada no IC de `a`/`b` já publicado no Degrau 1, Item 5b). **REFUTADA** caso qualquer um dos dois fique fora da respectiva faixa.
+**Decision criterion:** **SUPPORTED** if the regression's slope falls within `[12,2; 15,3]` **AND** the intercept falls within `[0; 1.925]`ms (a range based on the `a`/`b` CI already published in Degrau 1, Item 5b). **REFUTED** if either one falls outside its respective range.
 
-**D2b (novo, adicional):** regressão SEPARADA usando só o tempo de "SSH puro" do `probe_overhead.py` (campo `ssh_handshake_ms`, não o overhead total parede-fino) contra o RTT(controle,cliente) real medido, nas mesmas 4 células. Reportar a inclinação dessa regressão e compará-la a `b≈13,17` — **declarado explicitamente agora:** o NÍVEL ABSOLUTO do tempo de SSH puro **não é previsto por nenhum modelo anterior** (nem o Degrau 1, nem o D2 acima) — só a INCLINAÇÃO (ms de SSH puro por ms de RTT) é comparável a `b`, nunca o valor absoluto do intercepto dessa regressão específica.
+**D2b (new, additional):** a SEPARATE regression using only `probe_overhead.py`'s "pure SSH" time (the `ssh_handshake_ms` field, not the total wall-clock-minus-fine overhead) against the real measured RTT(control,client), across the same 4 cells. Report this regression's slope and compare it to `b≈13,17` — **explicitly stated now:** the ABSOLUTE LEVEL of the pure SSH time **is not predicted by any earlier model** (neither Degrau 1 nor D2 above) — only the SLOPE (ms of pure SSH per ms of RTT) is comparable to `b`, never this specific regression's intercept's absolute value.
 
-### Adição ao D3 — testes por par, em cada célula
+### Addition to D3 — per-pair tests, in each cell
 
-Além da comparação de ordem agregada já prevista, **D3 ganha**: Mann-Whitney exato bilateral por PAR (Classic×PQC, PQC×Hybrid) em CADA uma das 4 células (8 testes no total), com correção de Holm sobre esses 8 testes — reportando direção (qual perfil fica com mediana maior) e significância de cada par individualmente, não só a ordem agregada já declarada.
+In addition to the already-planned aggregated order comparison, **D3 gains**: an exact two-sided Mann-Whitney test per PAIR (Classic×PQC, PQC×Hybrid) in EACH of the 4 cells (8 tests total), with Holm correction over these 8 tests — reporting the direction (which profile has the larger median) and significance of each pair individually, not just the already-declared aggregated order.
 
-**Previsão nova, declarada agora (antes de ver os dados):** a diferença PQC−Classic em `L0-sa-east-1` (T_fluxo fino) deve ficar em torno de `-69 + [26;45]`ms (ou seja, incorporando a faixa de viés RSA já conhecida do Degrau 1 — Classic paga ~26-45ms que PQC não paga, e no T_fluxo PAREDE dessa célula a diferença observada foi -69ms) — resultando numa faixa prevista de aproximadamente `[-43; -24]`ms. **A expectativa declarada é que esse par específico NÃO seja estatisticamente significativo** (p Holm ≥ 0,05), consistente com o que já foi visto no Degrau 1 para esse mesmo par no T_fluxo parede (p Holm=0,2176, não significativo).
+**New prediction, declared now (before seeing the data):** the PQC−Classic difference on `L0-sa-east-1` (fine-grained T_fluxo) should be around `-69 + [26;45]`ms (i.e., incorporating the RSA-bias range already known from Degrau 1 — Classic pays ~26-45ms that PQC does not pay, and in this cell's WALL-CLOCK T_fluxo the observed difference was -69ms) — resulting in a predicted range of approximately `[-43; -24]`ms. **The stated expectation is that this specific pair will NOT be statistically significant** (Holm p ≥ 0,05), consistent with what was already seen in Degrau 1 for this same pair in the wall-clock T_fluxo (Holm p=0,2176, not significant).
 
-### Divisão do D4 em D4a/D4b
+### Splitting D4 into D4a/D4b
 
-**D4a** (restrito às 3 células L0 — `L0-sa-east-1`, `L0-us-east-1`, `L0-ap-northeast-1`): mesmo critério já declarado (assinatura+verificação ≥60% de Δfino; `http_calls` <20%), aplicado aos 2 pares (PQC-Classic, Hybrid-PQC) em cada uma das 3 células L0. **Critério de decisão:** uma célula "confirma" D4a se AMBOS os pares daquela célula satisfizerem os dois limiares. **SUSTENTADA** se ≥2 das 3 células L0 confirmarem. **REFUTADA** se 0 ou 1 confirmarem.
+**D4a** (restricted to the 3 L0 cells — `L0-sa-east-1`, `L0-us-east-1`, `L0-ap-northeast-1`): the same already-declared criterion (signing+verification ≥60% of Δfine; `http_calls` <20%), applied to the 2 pairs (PQC-Classic, Hybrid-PQC) in each of the 3 L0 cells. **Decision criterion:** a cell "confirms" D4a if BOTH pairs in that cell satisfy both thresholds. **SUPPORTED** if ≥2 of the 3 L0 cells confirm. **REFUTED** if 0 or 1 confirm.
 
-**D4b** (novo — testa o efeito de RTT real, não o efeito de perfil): o ACRÉSCIMO de Δfino (por par de perfil) ao ir de `L0-sa-east-1` pra `L123` (mesma instalação `sa-east-1`, RTT real diferente) — ou seja, `Δfino(L123) − Δfino(L0-sa-east-1)`, calculado separadamente para o par PQC-Classic e para o par Hybrid-PQC (2 comparações). **Previsão:** esse acréscimo deve estar **≥60%** em `residual_seconds + http_calls` somados (mecanismos que podem escalar com RTT real: o resíduo interno da lib — handshake TLS-KEM-proxy — e as próprias chamadas HTTP) **E <40%** em assinatura+verificação somadas (primitivas criptográficas, cujo custo não deveria depender de RTT). **Critério de decisão:** **SUSTENTADA** se AMBAS as 2 comparações (PQC-Classic e Hybrid-PQC) confirmarem a previsão. **REFUTADA** se NENHUMA confirmar. **PARCIAL** se só 1 das 2 confirmar.
+**D4b** (new — tests the effect of real RTT, not the profile effect): the INCREMENT in Δfine (per profile pair) going from `L0-sa-east-1` to `L123` (same `sa-east-1` installation, different real RTT) — i.e., `Δfine(L123) − Δfine(L0-sa-east-1)`, computed separately for the PQC-Classic pair and for the Hybrid-PQC pair (2 comparisons). **Prediction:** this increment should be **≥60%** in `residual_seconds + http_calls` combined (mechanisms that could scale with real RTT: the library's internal residual — the TLS-KEM-proxy handshake — and the HTTP calls themselves) **AND <40%** in signing+verification combined (cryptographic primitives, whose cost should not depend on RTT). **Decision criterion:** **SUPPORTED** if BOTH of the 2 comparisons (PQC-Classic and Hybrid-PQC) confirm the prediction. **REFUTED** if NEITHER confirms. **PARTIAL** if only 1 of the 2 confirms.
 
-### Reformulação do D5 (remove a faixa simétrica `[9,70; 38,80]`)
+### Reformulation of D5 (removes the symmetric `[9,70; 38,80]` range)
 
-**Novos critérios (substituem integralmente o critério original do D5):**
-- **SUSTENTADA** (interpretação: "o componente de SSH explica o coeficiente `b`") se a razão `Δresiduo_fino/RTT` cair em `[13,6; 26]`.
-- **ALTERNATIVA** (interpretação: "compatível com `b+c`≈32,6 combinados, sem separar um componente de SSH puro") se cair em `(26; 42,4]`.
-- **ACHADO NOVO** (não forçado em nenhuma das duas categorias acima) se cair fora de `[13,6; 42,4]` em qualquer direção — os números reais são sempre reportados, qualquer que seja a faixa em que caiam.
+**New criteria (fully replace D5's original criterion):**
+- **SUPPORTED** (interpretation: "the SSH component explains the `b` coefficient") if the `Δfine_residual/RTT` ratio falls within `[13,6; 26]`.
+- **ALTERNATIVE** (interpretation: "compatible with `b+c`≈32,6 combined, without separating out a pure-SSH component") if it falls within `(26; 42,4]`.
+- **NEW FINDING** (not forced into either category above) if it falls outside `[13,6; 42,4]` in any direction — the real numbers are always reported, whichever range they fall into.
 
-### Regra geral das 2 rodadas (nova, aplicada a TODAS as 5 hipóteses)
+### General two-round rule (new, applied to ALL 5 hypotheses)
 
-**Antes de agrupar** os dados da rodada 1 (semente `20261117`) e da rodada 2 (semente `20261118`) para qualquer uma das análises D1-D5: rodar Mann-Whitney exato bilateral entre rodada 1 e rodada 2, **por célula E por métrica relevante** (T_fluxo fino; cada componente de `phase_accounting`: `http_calls_seconds`, `signing_seconds`, `verification_seconds`, `explicit_wait_seconds`, `setup_seconds`, `residual_seconds`). Correção de Holm sobre essa família de testes (4 células × 7 métricas = 28 testes).
+**Before pooling** round 1's data (seed `20261117`) and round 2's data (seed `20261118`) for any of the D1-D5 analyses: run an exact two-sided Mann-Whitney between round 1 and round 2, **per cell AND per relevant metric** (fine-grained T_fluxo; each `phase_accounting` component: `http_calls_seconds`, `signing_seconds`, `verification_seconds`, `explicit_wait_seconds`, `setup_seconds`, `residual_seconds`). Holm correction over this test family (4 cells × 7 metrics = 28 tests).
 
-**Se o p-valor ajustado por Holm for <0,05 em qualquer uma dessas comparações:** **NÃO agrupar** as duas rodadas para aquela célula/métrica específica — analisar as duas rodadas SEPARADAMENTE só para essa combinação, e **relatar isso explicitamente como uma divergência real entre rodadas** (nunca esconder, nunca assumir que é ruído sem o teste ter confirmado que não há diferença).
+**If the Holm-adjusted p-value is <0,05 on any of these comparisons:** **do NOT pool** the two rounds for that specific cell/metric — analyze the two rounds SEPARATELY only for that combination, and **explicitly report this as a real divergence between rounds** (never hide it, never assume it is noise without the test having confirmed there is no difference).
 
-## Resumo das previsões — ATUALIZADO pela Emenda 1
+## Summary of predictions — UPDATED by Amendment 1
 
-| Hipótese | Critério (pós-Emenda 1) |
+| Hypothesis | Criterion (post-Amendment 1) |
 |---|---|
-| D1 | SUSTENTADA/REFUTADA/PARCIAL por equivalência de IC a ±15% (ver texto) |
-| D2 | inclinação em `[12,2;15,3]` E intercepto em `[0;1.925]`ms, regressão do overhead observado vs. RTT real |
-| D2b | só a inclinação do SSH puro é comparável a `b`; nível absoluto não previsto por nenhum modelo |
-| D3 | + Mann-Whitney por par em cada célula (8 testes, Holm); previsão de `L0-sa-east-1` PQC-Classic ≈`[-43;-24]`ms, não significativo |
-| D4a | 3 células L0 só; ≥2/3 confirmam (ambos pares) = SUSTENTADA |
-| D4b | acréscimo L0-sa→L123; SUSTENTADA se ambos pares confirmam, REFUTADA se nenhum, PARCIAL se 1 |
-| D5 | SUSTENTADA `[13,6;26]` / ALTERNATIVA `(26;42,4]` / ACHADO NOVO fora de `[13,6;42,4]` |
-| Regra das 2 rodadas | Mann-Whitney rodada1×rodada2 por célula/métrica, Holm; NÃO agrupar onde p Holm<0,05 |
+| D1 | SUPPORTED/REFUTED/PARTIAL by CI equivalence at ±15% (see text) |
+| D2 | slope within `[12,2;15,3]` AND intercept within `[0;1.925]`ms, regression of the observed overhead vs. real RTT |
+| D2b | only the pure-SSH slope is comparable to `b`; the absolute level is not predicted by any model |
+| D3 | + per-pair Mann-Whitney in each cell (8 tests, Holm); prediction for `L0-sa-east-1` PQC-Classic ≈`[-43;-24]`ms, not significant |
+| D4a | 3 L0 cells only; ≥2/3 confirm (both pairs) = SUPPORTED |
+| D4b | increment L0-sa→L123; SUPPORTED if both pairs confirm, REFUTED if neither, PARTIAL if 1 |
+| D5 | SUPPORTED `[13,6;26]` / ALTERNATIVE `(26;42,4]` / NEW FINDING outside `[13,6;42,4]` |
+| Two-round rule | Mann-Whitney round1×round2 per cell/metric, Holm; do NOT pool where Holm p<0,05 |

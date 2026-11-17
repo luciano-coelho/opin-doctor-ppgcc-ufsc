@@ -1,75 +1,75 @@
-# Mapa de dependências — gateway, proxy, pqc-signer (e o backend que o gateway precisa)
+# Dependency map — gateway, proxy, pqc-signer (and the backend the gateway needs)
 
-Decisão do Luciano, item 2 (pós-Decisão 82): enumerar toda dependência
-de execução dos três componentes próprios da v9 — hostnames, portas,
-volumes, variáveis de ambiente, arquivos e imagens — e dizer **onde**
-cada uma resolve e **quem a fornece numa AWS real**. Levantado lendo
-direto o código (`orchestrator.py`, `business.go`/`business_server.go`,
-`opin_flow.py`), nunca suposto. Nenhuma linha abaixo ficou "só local" —
-a última (AUTH_URI/API_GATEWAY_URI) foi corrigida pela própria Decisão
-83, já refletida aqui.
+Luciano's decision, item 2 (post-Decision 82): enumerate every runtime
+dependency of the three components that are v9's own — hostnames, ports,
+volumes, environment variables, files, and images — and state **where**
+each one resolves and **who provides it on a real AWS**. Compiled by reading
+the code directly (`orchestrator.py`, `business.go`/`business_server.go`,
+`opin_flow.py`), never assumed. No line below remains "local only" —
+the last one that was (AUTH_URI/API_GATEWAY_URI) was fixed by Decision
+83 itself, already reflected here.
 
 ## Gateway (`mockopin-v9-gateway`)
 
-| Dependência | Tipo | Valor/forma | Quem fornece na AWS real |
+| Dependency | Type | Value/form | Who provides it on real AWS |
 |---|---|---|---|
-| Imagem docker | imagem | pinada em `PINS.json["images"]["gateway"]` | `deliver_images.py` (1º salto) + `SSHExecutor._deliver_image` (2º salto, Decisão 68) |
-| Porta 443 | porta | publicada no host (`-p 443:443`) | `_launch_gateway`, Decisão 70 |
-| `/real-certs` | volume (RO) | `mock-service-os/certs` | `deliver_source.py.COMMON_FILES` → servidor (e clientes) |
-| `/certs` (embutido na imagem, build-time) | arquivo baked-in | certificado de servidor mTLS por perfil | `COPY certs /certs` no Dockerfile, a partir de `certs/generated` — confirmado byte-a-byte idêntico ao que está em disco hoje (Decisão 75) |
-| `HTTP_MODE=business` | env | fixo | `_launch_gateway` |
-| `TICKETS_DISABLED=true` | env | fixo | `_launch_gateway` |
-| `CRYPTO_PROFILE` | env | por perfil (`classico`/`pqc`/`hibrido-v8`/`hibrido-and`) | `_launch_gateway` |
-| `KEYLOG_PATH` | env | só na captura dedicada | `_launch_gateway(keylog=True)` |
-| hostname `auth` (`AUTH_URI`, default `http://auth:3000`) | resolução de nome | rede Docker `insurance-server-lambdas_default` + `--network-alias` | **Decisão 83** — container `auth` (backend de negócio) na mesma rede, subido por `start_block` ANTES do gateway |
-| hostname `mockapi` (`API_GATEWAY_URI`, default `http://mockapi:8080`) | resolução de nome | idem | **Decisão 83** — container `mockapi`, idem |
-| `directory/` (`root-ca.pem`/`issuer-ca.pem`) | servido pelo PRÓPRIO gateway | nenhuma dependência externa | `business.go.directoryHandler`, lê `REAL_CERTS_DIR` |
+| Docker image | image | pinned in `PINS.json["images"]["gateway"]` | `deliver_images.py` (1st hop) + `SSHExecutor._deliver_image` (2nd hop, Decision 68) |
+| Port 443 | port | published on the host (`-p 443:443`) | `_launch_gateway`, Decision 70 |
+| `/real-certs` | volume (RO) | `mock-service-os/certs` | `deliver_source.py.COMMON_FILES` → server (and clients) |
+| `/certs` (baked into the image at build time) | baked-in file | per-profile mTLS server certificate | `COPY certs /certs` in the Dockerfile, from `certs/generated` — confirmed byte-for-byte identical to what is on disk today (Decision 75) |
+| `HTTP_MODE=business` | env | fixed | `_launch_gateway` |
+| `TICKETS_DISABLED=true` | env | fixed | `_launch_gateway` |
+| `CRYPTO_PROFILE` | env | per profile (`classico`/`pqc`/`hibrido-v8`/`hibrido-and`) | `_launch_gateway` |
+| `KEYLOG_PATH` | env | only in the dedicated capture | `_launch_gateway(keylog=True)` |
+| hostname `auth` (`AUTH_URI`, default `http://auth:3000`) | name resolution | Docker network `insurance-server-lambdas_default` + `--network-alias` | **Decision 83** — the `auth` container (business backend) on the same network, started by `start_block` BEFORE the gateway |
+| hostname `mockapi` (`API_GATEWAY_URI`, default `http://mockapi:8080`) | name resolution | same | **Decision 83** — the `mockapi` container, same |
+| `directory/` (`root-ca.pem`/`issuer-ca.pem`) | served by the gateway ITSELF | no external dependency | `business.go.directoryHandler`, reads `REAL_CERTS_DIR` |
 
-## Backend de negócio (Decisão 83 — dependência do gateway, não um componente "da v9" em si)
+## Business backend (Decision 83 — a dependency of the gateway, not a "v9" component in its own right)
 
-| Serviço | Imagem | Depende de | Health check real |
+| Service | Image | Depends on | Real health check |
 |---|---|---|---|
-| `auth` | `insurance-server-lambdas-auth` (reconstruída) | `localstack` (healthy), `mongodb` (started) | `curl -sf http://127.0.0.1:3000/jwks` |
-| `mockapi` | `raidiam-insurance-lambdas` (existente, ver Decisão 83 exceção) | `psql` (healthy) | `docker logs ...mockapi-1 \| grep "Startup completed"` |
-| `mongo_seed` | `insurance-server-lambdas-mongo_seed` (reconstruída) | `mongodb` | nenhum (job que roda e sai) |
-| `psql`/`localstack`/`mongodb` | imagens estoque, pinadas por digest exato DENTRO do `docker-compose.yml` | — | healthchecks nativos do próprio `docker-compose.yml` |
+| `auth` | `insurance-server-lambdas-auth` (rebuilt) | `localstack` (healthy), `mongodb` (started) | `curl -sf http://127.0.0.1:3000/jwks` |
+| `mockapi` | `raidiam-insurance-lambdas` (existing, see Decision 83 exception) | `psql` (healthy) | `docker logs ...mockapi-1 \| grep "Startup completed"` |
+| `mongo_seed` | `insurance-server-lambdas-mongo_seed` (rebuilt) | `mongodb` | none (a job that runs and exits) |
+| `psql`/`localstack`/`mongodb` | stock images, pinned by exact digest INSIDE `docker-compose.yml` | — | native health checks from `docker-compose.yml` itself |
 
-As 3 CUSTOM (`auth`/`mongo_seed`/`mockapi`) entregues ao SERVIDOR por
-`deliver_images.py` (1º salto) + `SSHExecutor._deliver_backend_images`
-(2º salto, uma vez por fleet). As 3 ESTOQUE (`psql`/`localstack`/
-`mongodb`) NUNCA passam por esse mecanismo (Decisão 87, achado real:
-`docker save` de uma imagem referenciada só por digest nunca
-preserva nome/digest através de save/load, confirmado ao vivo num
-`docker:25-dind` limpo) — `docker compose up` as resolve direto
-(pull do registro público, mesmo digest exato já fixado no compose).
-`docker-compose.yml` + configs pequenos entregues por
-`deliver_source.py.SERVER_ONLY_FILES` (Decisão 83).
+The 3 CUSTOM ones (`auth`/`mongo_seed`/`mockapi`) are delivered to the SERVER by
+`deliver_images.py` (1st hop) + `SSHExecutor._deliver_backend_images`
+(2nd hop, once per fleet). The 3 STOCK ones (`psql`/`localstack`/
+`mongodb`) NEVER go through this mechanism (Decision 87, a real finding:
+`docker save` of an image referenced only by digest never
+preserves name/digest across save/load, confirmed live on a clean
+`docker:25-dind`) — `docker compose up` resolves them directly
+(pull from the public registry, the same exact digest already pinned in the compose file).
+`docker-compose.yml` + small configs are delivered by
+`deliver_source.py.SERVER_ONLY_FILES` (Decision 83).
 
 ## Proxy (`mockopin-v9-proxy` / `tls_kem_proxy`)
 
-| Dependência | Tipo | Valor/forma | Quem fornece na AWS real |
+| Dependency | Type | Value/form | Who provides it on real AWS |
 |---|---|---|---|
-| Imagem docker | imagem | pinada em `PINS.json["images"]["proxy"]` | `deliver_images.py` + `_deliver_image` → CLIENTE |
-| `/certs` | volume (RO) | `thesis/results/v9/certs/generated` | `deliver_source.py.CLIENT_ONLY_FILES` → cliente |
-| Endereço do gateway | rede | IP REAL do host (`_server_gateway_ip` — privado se co-localizado/L0, público se não) | `orchestrator.py._server_gateway_ip`, Decisão 27/43/45 — NUNCA um alias Docker (o proxy roda numa instância DIFERENTE do gateway) |
+| Docker image | image | pinned in `PINS.json["images"]["proxy"]` | `deliver_images.py` + `_deliver_image` → CLIENT |
+| `/certs` | volume (RO) | `thesis/results/v9/certs/generated` | `deliver_source.py.CLIENT_ONLY_FILES` → client |
+| Gateway address | network | the host's REAL IP (`_server_gateway_ip` — private if co-located/L0, public otherwise) | `orchestrator.py._server_gateway_ip`, Decision 27/43/45 — NEVER a Docker alias (the proxy runs on a DIFFERENT instance from the gateway) |
 
 ## pqc-signer (`mockopin-pqc-signer`)
 
-| Dependência | Tipo | Valor/forma | Quem fornece na AWS real |
+| Dependency | Type | Value/form | Who provides it on real AWS |
 |---|---|---|---|
-| Imagem docker | imagem | pinada em `PINS.json["images"]["pqc-signer"]` | `deliver_images.py` + `_deliver_image` → CLIENTE (Decisão 58) |
-| Porta/volume externos | — | nenhum | `start_pqc_signer_service` só fala com o proxy localmente, dentro do mesmo cliente |
+| Docker image | image | pinned in `PINS.json["images"]["pqc-signer"]` | `deliver_images.py` + `_deliver_image` → CLIENT (Decision 58) |
+| External port/volume | — | none | `start_pqc_signer_service` only talks to the proxy locally, within the same client |
 
-## Camada de aplicação do cliente (`opin_flow.py`, via `campaign_client_runner.py`)
+## Client application layer (`opin_flow.py`, via `campaign_client_runner.py`)
 
-| Dependência | Tipo | Valor/forma | Quem fornece na AWS real |
+| Dependency | Type | Value/form | Who provides it on real AWS |
 |---|---|---|---|
-| `thesis/scripts/*.py` | arquivos | `opin_flow.py`/`campaign_client_runner.py`/etc. | `deliver_source.py.COMMON_FILES` → servidor+clientes |
-| `thesis/scripts/requirements.txt` | dependências Python | `pip3 install --require-hashes` | `deliver_source.py.install_client_requirements` → clientes (Decisão 71) |
-| `mock-service-os/certs` | volume/arquivos | certificados de aplicação do lado do cliente | `deliver_source.py.COMMON_FILES` → servidor+clientes |
+| `thesis/scripts/*.py` | files | `opin_flow.py`/`campaign_client_runner.py`/etc. | `deliver_source.py.COMMON_FILES` → server+clients |
+| `thesis/scripts/requirements.txt` | Python dependencies | `pip3 install --require-hashes` | `deliver_source.py.install_client_requirements` → clients (Decision 71) |
+| `mock-service-os/certs` | volume/files | client-side application certificates | `deliver_source.py.COMMON_FILES` → server+clients |
 
-## Conclusão
+## Conclusion
 
-Nenhuma dependência listada acima ainda é "só local" — a última que
-era (AUTH_URI/API_GATEWAY_URI, hostname `auth`/`mockapi`) foi corrigida
-pela própria Decisão 83, no mesmo pedido que gerou esta tabela.
+None of the dependencies listed above remains "local only" — the last one
+that was (AUTH_URI/API_GATEWAY_URI, hostname `auth`/`mockapi`) was fixed
+by Decision 83 itself, in the same request that produced this table.

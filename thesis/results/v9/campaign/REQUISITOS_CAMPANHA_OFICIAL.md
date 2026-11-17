@@ -1,100 +1,100 @@
-# Requisitos para a campanha oficial (960 execuções, 8 rotas) — documento apenas, nada implementado aqui
+# Requirements for the official campaign (960 executions, 8 routes) — a document only, nothing implemented here
 
-Pedido explícito do Luciano, após a Fase B (5ª tentativa real + reanálise offline do critério 2, Decisões 101-104) fechar 7/7 PASS. Este documento **só lista o que falta antes da campanha oficial** — nenhuma linha de código muda por causa dele. Ver `thesis/results/v9/DECISIONS.md` (Decisões 18/58/104) para a origem de cada achado citado.
-
----
-
-## (a) Cobertura do critério 2 — rota L325 e sentido cliente→servidor
-
-**Estado atual (Decisão 85/102):** `criterio2_probe.py` só roda uma vez, hardcoded em `CRITERIO2_PROBE_ROUTE = "L219"` (`dedicated_criteria.py`). Mede exclusivamente o sentido **servidor→cliente** (o servidor manda ≥64KB pro cliente que conectou).
-
-**O que falta:**
-1. **Rota L325 nunca foi exercitada para o critério 2** — nunca ligada, gap pré-existente desde a Decisão 85, nunca notado antes por falta de evidência que o expusesse. L219 (219ms) e L325 (325ms) têm RTTs diferentes o suficiente para o comportamento de `cwnd`/pacing poder divergir (a formação do primeiro flight depende de `rtt_from_handshake_same_connection`, que escala com o RTT real).
-2. **Sentido cliente→servidor nunca medido** — os voos do PRÓPRIO cliente durante os handshakes mTLS reais (seu `Certificate`+`CertificateVerify`+`Finished`, que para PQC/Hibrido-AND são maiores que o do servidor em alguns casos) nunca passaram pelo mesmo teste de `initcwnd`. O critério pré-registrado (Decisão 14/24/34) não distingue sentido explicitamente — mas o método dedicado hoje só cobre um dos dois.
-
-**Risco concreto de não corrigir antes da campanha:** o critério 2 oficial continuaria validando só 1 de 3 rotas e 1 de 2 sentidos — uma falha real de `initcwnd` no sentido cliente→servidor, ou especificamente na rota L325, passaria sem nenhuma evidência, exatamente como aconteceu com L0 no critério 1 antes da Decisão 99 corrigi-lo.
+Explicit request from Luciano, after Phase B (5th real attempt + offline re-analysis of criterion 2, Decisions 101-104) closed 7/7 PASS. This document **only lists what is missing before the official campaign** — no line of code changes because of it. See `thesis/results/v9/DECISIONS.md` (Decisions 18/58/104) for the origin of each cited finding.
 
 ---
 
-## (b) Gaps conhecidos do histórico do projeto, com prioridade
+## (a) Criterion 2 coverage — route L325 and the client→server direction
 
-### Achado 10 (Decisão 58) — sampler de CPU/steal: **gap aberto, prioridade ALTA, bloqueante antes da campanha oficial**
+**Current state (Decision 85/102):** `criterio2_probe.py` only runs once, hardcoded at `CRITERIO2_PROBE_ROUTE = "L219"` (`dedicated_criteria.py`). It measures exclusively the **server→client** direction (the server sends ≥64KB to the client that connected).
 
-A v8 real monitorava `cpu_mem_steal` (ruído de vizinhança em nuvem compartilhada — outras VMs no mesmo host físico competindo por CPU) durante toda janela cronometrada, via `_PeriodicSampler`/`_cpu_mem_sampler_start_cmd`/`_steal_pct_from_cpu_jsonl`, usado em `compute_window_health`. **O piloto da v9 (Decisões 90-102) não tem nada equivalente, por desenho explícito** — o piloto testa viabilidade, nunca foi a fonte dos números oficiais da tese.
+**What is missing:**
+1. **Route L325 has never been exercised for criterion 2** — never wired in, a pre-existing gap since Decision 85, never noticed before for lack of evidence that would expose it. L219 (219ms) and L325 (325ms) have sufficiently different RTTs that `cwnd`/pacing behavior could diverge (the first flight's formation depends on `rtt_from_handshake_same_connection`, which scales with the actual RTT).
+2. **The client→server direction has never been measured** — the client's OWN flights during the real mTLS handshakes (its `Certificate`+`CertificateVerify`+`Finished`, which for PQC/Hybrid-AND are larger than the server's in some cases) have never gone through the same `initcwnd` test. The pre-registered criterion (Decision 14/24/34) does not explicitly distinguish direction — but today's dedicated method only covers one of the two.
 
-**Risco concreto:** a campanha oficial (960 execuções, N=30/célula, horas de execução real) **é** a fonte dos números oficiais da tese — sem o sampler de steal, uma célula com ruído de vizinhança alto (comum em instâncias `m7i-flex.large`, que são *flex*, i.e., compartilham capacidade por desenho) ficaria indistinguível de um efeito real do perfil criptográfico. Qualquer diferença entre perfis medida sem esse controle é **não confiável** até o sampler existir — esse é precisamente o tipo de "ruído de medição vs. efeito real" que o relatório final da v8 (`Consolidated_Metrics_Report_FINAL.md`, Seção 8) já trata com cuidado estatístico; a v9 ainda não tem o dado de entrada pra fazer o mesmo.
-
-### Achado 18 (Decisão 58) — sondagem TCP restaurada: **FECHADO, não é mais um gap**
-
-`SSHExecutor._tcp_preflight(route)` já existe e já roda como primeira linha de `start_block`, uma vez por rota, fail-closed. Mencionado aqui só porque foi citado no mesmo achado histórico que o item acima — **nenhuma ação necessária**.
+**Concrete risk of not fixing this before the campaign:** the official criterion 2 would continue validating only 1 of 3 routes and 1 of 2 directions — a real `initcwnd` failure in the client→server direction, or specifically on route L325, would go through with no evidence at all, exactly as happened with L0 in criterion 1 before Decision 99 fixed it.
 
 ---
 
-## (c) O que o piloto NUNCA exercitou na AWS real — com o risco concreto de cada gap
+## (b) Known gaps from the project's history, with priority
 
-| # | Não exercitado | Risco concreto (não "não testado" genérico) |
+### Finding 10 (Decision 58) — CPU/steal sampler: **open gap, HIGH priority, blocking before the official campaign**
+
+The real v8 monitored `cpu_mem_steal` (noisy-neighbor interference in a shared cloud — other VMs on the same physical host competing for CPU) throughout the entire timed window, via `_PeriodicSampler`/`_cpu_mem_sampler_start_cmd`/`_steal_pct_from_cpu_jsonl`, used in `compute_window_health`. **The v9 pilot (Decisions 90-102) has nothing equivalent, by explicit design** — the pilot tests feasibility, it was never the source of the thesis's official numbers.
+
+**Concrete risk:** the official campaign (960 executions, N=30/cell, hours of real execution) **is** the source of the thesis's official numbers — without the steal sampler, a cell with high noisy-neighbor interference (common on `m7i-flex.large` instances, which are *flex*, i.e., they share capacity by design) would be indistinguishable from a real effect of the cryptographic profile. Any difference between profiles measured without this control is **unreliable** until the sampler exists — this is precisely the kind of "measurement noise vs. real effect" that v8's final report (`Consolidated_Metrics_Report_FINAL.md`, Section 8) already treats with statistical care; v9 does not yet have the input data to do the same.
+
+### Finding 18 (Decision 58) — TCP probe restored: **CLOSED, no longer a gap**
+
+`SSHExecutor._tcp_preflight(route)` already exists and already runs as the first line of `start_block`, once per route, fail-closed. Mentioned here only because it was cited in the same historical finding as the item above — **no action needed**.
+
+---
+
+## (c) What the pilot NEVER exercised on real AWS — with each gap's concrete risk
+
+| # | Not exercised | Concrete risk (not a generic "untested") |
 |---|---|---|
-| 1 | **Múltiplas janelas de tempo (settling/drift)** | A v8 real usa 3 janelas (w01/w02/w03) e já encontrou 10/72 células com tendência de queda estatisticamente significativa mesmo após K=5 execuções de aquecimento (Mann-Kendall, `Consolidated_Metrics_Report_FINAL.md` Seção 8). O piloto rodou **uma única janela, sem aquecimento formal, N=5/célula** — se a campanha oficial também tiver drift de settling (ex.: cache de conexão TLS session resumption, buffers do kernel se ajustando, cache de DNS), **isso nunca seria detectado** com o desenho atual, e os N=30 execuções de cada célula poderiam estar misturando um efeito transiente de "aquecimento" com o efeito real do perfil. |
-| 2 | **Retomada após interrupção** | Nenhum checkpoint/resume existe em `orchestrator.py run_pilot` — é um laço `for route: for profile: for run` em memória, que só escreve os 3 arquivos finais (`manifest.json`/`piloto_combined.log`/`piloto_calls.json`) no FIM de tudo (confirmado por leitura direta do código, Decisão 102). **Se a campanha oficial de 960 execuções cair no meio (conexão SSH, auto-desligamento de segurança, falha de instância) depois de, digamos, 700 execuções reais, as 700 são PERDIDAS — nada é salvo incrementalmente.** Isso já quase aconteceu nesta própria rodada (Passo 10, Decisão 101, SSH caiu durante a porta de fumaça) — só não causou perda porque era a porta de fumaça (12 execuções), não a campanha real. |
-| 3 | **Rotas/regiões além das 3 pilotadas** | O piloto usou sa-east-1 (L0/L219/L325, controle+servidor+1 cliente). **A campanha oficial precisa de 8 rotas reais** (Decisão 21: `sa-east-1` L0/L123/L219/L325, `us-east-1` L0/L14, `ap-northeast-1` L0/L30) — **`us-east-1` e `ap-northeast-1` nunca foram tocadas por esta rodada em NENHUM momento.** Risco concreto: qualquer problema específico de região (cota de EC2 diferente, AMI não disponível, latência SSH controle→cliente mais alta, política de IAM regional, Security Group com comportamento distinto) só apareceria na hora da campanha oficial, sem nenhum ensaio prévio nessas 2 regiões. |
-| 4 | **Escala real N=30** | O piloto usa N=5/perfil/rota (60 execuções totais). A campanha oficial usa N=30/perfil/rota (960 execuções totais) — **16x mais execuções**. Riscos concretos nunca exercitados nessa escala: (i) tamanho acumulado de `piloto_calls.json` — já chegou a **10,9MB com só 60 execuções reais** (Decisão 101) — a 960 execuções, por extrapolação linear, isso seria **~175MB**, um único arquivo JSON que o `consolidate_v9_pilot.py`/`evaluate_criteria.py` precisam carregar inteiro na memória; (ii) throttling de SSH já observado uma vez nesta própria rodada **depois de só 60 execuções** (Decisão 94, "throttling transitório do servidor logo após o Passo 11") — a 960 execuções, sem nenhuma mitigação testada em escala real além do retry simples já aplicado, o risco de throttling recorrente é desconhecido; (iii) espaço em disco das 12→96 capturas dedicadas (4 perfis × 8 rotas, com até 3 tentativas cada pela Decisão 99) nunca foi projetado nem testado. |
-| 5 | **Estabilidade de horas** | O piloto completo (Passo 0 a Passo 15) durou pouco mais de 4,5h nesta rodada, com a fase de medição real (Passo 11) levando ~1h03min para 60 execuções+12 capturas. A campanha oficial, com 960 execuções (16x) e 96 capturas dedicadas (8x), projetada linearmente, duraria **ordens de grandeza mais tempo** (ver seção de custo/duração abaixo) — **nunca se testou se a fleet, os containers, ou as sessões SSH permanecem saudáveis por esse tempo.** Riscos concretos: rotação de log não configurada em lugar nenhum (os containers do backend — `auth`/`mongo_seed`/`mockapi` — podem acumular logs sem limite, Decisão 96 já mostrou `mockapi-1` sozinho gerando 363KB de log em UMA execução do piloto); timers do `systemd` de autodesligamento de segurança (Decisão 101/102, `safety_timer.sh.tftpl`) precisariam ser estendidos múltiplas vezes manualmente, como aconteceu nesta própria rodada — sem automação, isso é um risco operacional real de a fleet cair no meio de uma campanha de muitas horas sem ninguém monitorando. |
+| 1 | **Multiple time windows (settling/drift)** | The real v8 uses 3 windows (w01/w02/w03) and already found 10/72 cells with a statistically significant downward trend even after K=5 warm-up executions (Mann-Kendall, `Consolidated_Metrics_Report_FINAL.md` Section 8). The pilot ran **a single window, no formal warm-up, N=5/cell** — if the official campaign also has settling drift (e.g., TLS session-resumption connection cache, kernel buffers adjusting, DNS cache), **this would never be detected** with the current design, and the N=30 executions of each cell could be mixing a transient "warm-up" effect with the profile's real effect. |
+| 2 | **Resume after interruption** | No checkpoint/resume exists in `orchestrator.py run_pilot` — it is an in-memory `for route: for profile: for run` loop, which only writes the 3 final files (`manifest.json`/`piloto_combined.log`/`piloto_calls.json`) at the END of everything (confirmed by directly reading the code, Decision 102). **If the official 960-execution campaign drops midway (SSH connection, safety self-shutdown, instance failure) after, say, 700 real executions, those 700 are LOST — nothing is saved incrementally.** This nearly happened in this very round (Step 10, Decision 101, SSH dropped during the smoke gate) — it only caused no loss because it was the smoke gate (12 executions), not the real campaign. |
+| 3 | **Routes/regions beyond the 3 piloted** | The pilot used sa-east-1 (L0/L219/L325, control+server+1 client). **The official campaign needs 8 real routes** (Decision 21: `sa-east-1` L0/L123/L219/L325, `us-east-1` L0/L14, `ap-northeast-1` L0/L30) — **`us-east-1` and `ap-northeast-1` were never touched by this round at ANY point.** Concrete risk: any region-specific problem (different EC2 quota, AMI unavailable, higher control→client SSH latency, regional IAM policy, Security Group behaving differently) would only show up during the official campaign, with no prior rehearsal in those 2 regions. |
+| 4 | **Real N=30 scale** | The pilot uses N=5/profile/route (60 executions total). The official campaign uses N=30/profile/route (960 executions total) — **16x more executions**. Concrete risks never exercised at this scale: (i) the accumulated size of `piloto_calls.json` — already reached **10,9MB with only 60 real executions** (Decision 101) — at 960 executions, by linear extrapolation, that would be **~175MB**, a single JSON file that `consolidate_v9_pilot.py`/`evaluate_criteria.py` need to load entirely into memory; (ii) SSH throttling already observed once in this very round **after only 60 executions** (Decision 94, "transient server throttling right after Step 11") — at 960 executions, with no mitigation tested at real scale beyond the simple retry already applied, the risk of recurring throttling is unknown; (iii) disk space for the 12→96 dedicated captures (4 profiles × 8 routes, with up to 3 attempts each per Decision 99) was never sized nor tested. |
+| 5 | **Hours-long stability** | The complete pilot (Step 0 to Step 15) took a little over 4,5h in this round, with the real measurement phase (Step 11) taking ~1h03min for 60 executions+12 captures. The official campaign, with 960 executions (16x) and 96 dedicated captures (8x), projected linearly, would take **orders of magnitude longer** (see the cost/duration section below) — **it was never tested whether the fleet, the containers, or the SSH sessions remain healthy for that long.** Concrete risks: log rotation not configured anywhere (the backend containers — `auth`/`mongo_seed`/`mockapi` — can accumulate logs without limit, Decision 96 already showed `mockapi-1` alone generating 363KB of log in ONE pilot execution); the safety self-shutdown `systemd` timers (Decision 101/102, `safety_timer.sh.tftpl`) would need to be manually extended multiple times, as happened in this very round — without automation, this is a real operational risk of the fleet going down mid-campaign over many hours with nobody monitoring. |
 
 ---
 
-## Resumo executivo (para referência rápida, não substitui a leitura das 5 linhas acima)
+## Executive summary (for quick reference, does not replace reading the 5 lines above)
 
-| Item | Prioridade | Bloqueante antes da campanha oficial? |
+| Item | Priority | Blocking before the official campaign? |
 |---|---|---|
-| (a) Critério 2: L325 + sentido cliente→servidor | Média — afeta só 1 dos 7 critérios | Recomendável, não necessariamente bloqueante |
-| (b) Achado 10, sampler de CPU/steal | **ALTA** | **Sim, pelo próprio registro da Decisão 58** — sem ele, as diferenças entre perfis medidas pela campanha oficial não são estatisticamente confiáveis |
-| (c.1) Múltiplas janelas/drift | Média-Alta | Afeta a validade estatística dos N=30, não a execução em si |
-| (c.2) Retomada após interrupção | **ALTA** | Risco operacional direto de perder trabalho de muitas horas |
-| (c.3) Rotas `us-east-1`/`ap-northeast-1` nunca tocadas | **ALTA** | Risco operacional de a campanha falhar numa região nunca ensaiada |
-| (c.4) Escala N=30/960 execuções | Média-Alta | Riscos de throttling/memória/disco conhecidos em escala menor, nunca projetados pra escala real |
-| (c.5) Estabilidade de horas | Média | Risco operacional, mitigável com monitoramento manual como nesta rodada |
+| (a) Criterion 2: L325 + client→server direction | Medium — affects only 1 of the 7 criteria | Advisable, not necessarily blocking |
+| (b) Finding 10, CPU/steal sampler | **HIGH** | **Yes, by Decision 58's own record** — without it, the differences between profiles measured by the official campaign are not statistically reliable |
+| (c.1) Multiple windows/drift | Medium-High | Affects the statistical validity of the N=30, not the execution itself |
+| (c.2) Resume after interruption | **HIGH** | Direct operational risk of losing many hours of work |
+| (c.3) Routes `us-east-1`/`ap-northeast-1` never touched | **HIGH** | Operational risk of the campaign failing in a never-rehearsed region |
+| (c.4) N=30/960-execution scale | Medium-High | Throttling/memory/disk risks known at smaller scale, never sized for the real scale |
+| (c.5) Hours-long stability | Medium | Operational risk, mitigable with manual monitoring as in this round |
 
-Nenhuma decisão de escopo é tomada aqui — isso cabe ao Luciano.
-
----
-
-## Parâmetros adicionais da campanha oficial, definidos por Luciano em 2026-11-09 (pós-piloto)
-
-Estes parâmetros são **só para a campanha oficial e o ensaio multi-região reduzido futuros** — nunca retroativos aos dados já coletados/preservados desta rodada (`piloto-real-aws-2026-11-09-v2`), que continuam intocados. Nenhum deles foi exercitado nesta rodada, então são registrados aqui como requisitos/parâmetros declarados para o próximo ciclo, não como uma Emenda ao pré-registro do piloto já fechado (Decisão 104):
-
-1. **Conta AWS nova, orçamento US$100.** A campanha oficial e o ensaio multi-região reduzido rodarão numa conta AWS separada da usada nas 5 tentativas do piloto — nada é reaproveitado da conta antiga (chaves SSH, EIPs, security groups, estado do Terraform); só código e as imagens Docker já verificadas por conteúdo (Decisões 61/68/101/103) atravessam para a conta nova.
-2. **Janelas oficiais, no máximo 30 minutos de intervalo entre uma e a próxima** — bem mais apertado que os ~2,78h de `setup_overhead` observados nesta rodada entre os Passos 0-10. Nunca foi exercitado: este piloto rodou numa única janela corrida, sem qualquer intervalo planejado entre sub-blocos.
-3. **Estrutura da campanha oficial:** 4 perfis × 8 rotas × N=30 = 960 execuções, divididas em **3 janelas de N=10** (não 1 de N=30 nem 30 de N=1), mantendo **Hibrido-v8 como perfil de controle**.
-4. **Ensaio multi-região reduzido, redefinido:** 4 perfis × 8 rotas × N=2 = 64 execuções, na conta nova, com a MESMA disciplina de ritmo/janela da campanha oficial (item 2), com o objetivo explícito de **zero intervenção manual necessária durante a campanha oficial real** — ou seja, este ensaio deve expor antecipadamente qualquer problema que exigiria uma correção ao vivo.
-
-**Risco concreto de nenhum destes 4 parâmetros ter sido exercitado ainda:** a conta nova significa que absolutamente nada de operacional (cotas de EC2, permissões IAM, VPC/subnets, AMI disponível na região, comportamento de Security Group) foi testado nela — todo o histórico de "já funcionou uma vez" desta rodada (Decisões 61-104) vale só para a conta antiga. A disciplina de 30 minutos entre janelas é mais apertada que QUALQUER intervalo real já observado neste projeto (o próprio `setup_overhead` de 2,78h já excede isso sozinho) — se a entrega de imagens/verificação de proveniência entre janelas não couber em 30 min, a campanha oficial pode não conseguir cumprir sua própria disciplina de janela.
+No scope decision is made here — that is up to Luciano.
 
 ---
 
-## Estimativa de custo/duração — 4 cenários, com a aritmética (nunca um número solto)
+## Additional official-campaign parameters, set by Luciano on 2026-11-09 (post-pilot)
 
-**Taxas reais, derivadas diretamente dos dados desta Fase B (Decisões 101/102), nunca estimativas de catálogo isoladas:**
-- `avg_s_por_execucao` = 3309,2s / 60 execuções reais = **55,15s/execução** (pooled L0+L219+L325)
-- `avg_s_por_captura` = 651s / 12 capturas reais (incluindo retries da Emenda 99) = **54,23s/captura**
-- `setup_overhead` (Passos 0-10: apply→smoke gate) = observado **~2,78h** nesta rodada (fixo, não escala com N — mas ESCALA com número de instâncias/imagens a entregar, ver ressalva abaixo)
-- `collect_teardown` (Passos 12-15) = observado **~0,75h**
-- Taxa de custo: `(n_flex × $0,0958 + $0,0084 + n_eips × $0,005)` USD/h, onde `n_flex` = servidor + clientes (1 por rota), `n_eips` = `n_flex` + controle
+These parameters are **only for the future official campaign and the reduced multi-region rehearsal** — never retroactive to the data already collected/preserved from this round (`piloto-real-aws-2026-11-09-v2`), which remains untouched. None of them was exercised in this round, so they are recorded here as requirements/parameters declared for the next cycle, not as an Amendment to the pilot's already-closed pre-registration (Decision 104):
 
-| Cenário | Execuções | Capturas | Instâncias (flex/clientes) | Tempo total | Custo total |
+1. **New AWS account, US$100 budget.** The official campaign and the reduced multi-region rehearsal will run in an AWS account separate from the one used for the pilot's 5 attempts — nothing is reused from the old account (SSH keys, EIPs, security groups, Terraform state); only code and the Docker images already verified by content (Decisions 61/68/101/103) carry over to the new account.
+2. **Official windows, at most 30 minutes of interval between one and the next** — much tighter than the ~2,78h of `setup_overhead` observed in this round between Steps 0-10. Never exercised: this pilot ran in a single continuous window, with no planned interval between sub-blocks.
+3. **Official campaign structure:** 4 profiles × 8 routes × N=30 = 960 executions, split into **3 windows of N=10** (not 1 of N=30 nor 30 of N=1), keeping **Hybrid-v8 as the control profile**.
+4. **Reduced multi-region rehearsal, redefined:** 4 profiles × 8 routes × N=2 = 64 executions, on the new account, with the SAME pacing/window discipline as the official campaign (item 2), with the explicit goal of **zero manual intervention needed during the real official campaign** — i.e., this rehearsal must expose in advance any problem that would require a live fix.
+
+**Concrete risk of none of these 4 parameters having been exercised yet:** the new account means absolutely nothing operational (EC2 quotas, IAM permissions, VPC/subnets, AMI availability in the region, Security Group behavior) has been tested there — the entire "already worked once" history of this round (Decisions 61-104) applies only to the old account. The 30-minute discipline between windows is tighter than ANY real interval ever observed in this project (the `setup_overhead` of 2,78h alone already exceeds it) — if image delivery/provenance verification between windows does not fit within 30 min, the official campaign may not be able to meet its own window discipline.
+
+---
+
+## Cost/duration estimate — 4 scenarios, with the arithmetic (never a bare number)
+
+**Real rates, derived directly from this Phase B's data (Decisions 101/102), never isolated catalog estimates:**
+- `avg_s_por_execucao` = 3309,2s / 60 real executions = **55,15s/execution** (pooled L0+L219+L325)
+- `avg_s_por_captura` = 651s / 12 real captures (including Amendment 99's retries) = **54,23s/capture**
+- `setup_overhead` (Steps 0-10: apply→smoke gate) = observed **~2,78h** in this round (fixed, does not scale with N — but DOES scale with the number of instances/images to deliver, see caveat below)
+- `collect_teardown` (Steps 12-15) = observed **~0,75h**
+- Cost rate: `(n_flex × $0,0958 + $0,0084 + n_eips × $0,005)` USD/h, where `n_flex` = server + clients (1 per route), `n_eips` = `n_flex` + control
+
+| Scenario | Executions | Captures | Instances (flex/clients) | Total time | Total cost |
 |---|---|---|---|---|---|
-| **(a) Campanha oficial completa** (8 rotas × 4 perfis × N=30, 3 janelas de N=10, conta nova) | 960 | 32 (4×8) | 9 flex (servidor+8 clientes) | base 2,78+14,71+0,48+0,75=18,72h + 2 intervalos entre as 3 janelas × até 0,5h = **~19,72h** | 0,9206 USD/h × 19,72h = **~US$18,15** |
-| **(b) As 3 rotas do piloto, N=30** (4×3×30) | 360 | 12 (4×3) | 4 flex (servidor+3 clientes) | 2,78+5,52+0,18+0,75 = **~9,2h** | 0,4166 USD/h × 9,2h = **~US$3,84** |
-| **(c) Ensaio multi-região reduzido** (8 rotas × 4 perfis × N=2, mesma disciplina de janela, conta nova) | 64 | 32 (4×8) | 9 flex (servidor+8 clientes) | base 2,78+0,98+0,48+0,75=4,99h + intervalo(s) de janela (ver nota 4) = **~5,0h a ~5,5h** | 0,9206 USD/h × 5,0–5,5h = **~US$4,60 a US$5,06** |
-| **(d) Ensaio curto de janela** (3 rotas × 4 perfis × N=1) | 12 | 12 (4×3) | 4 flex (servidor+3 clientes) | 2,78+0,18+0,18+0,75 = **~3,9h** | 0,4166 USD/h × 3,9h = **~US$1,62** |
+| **(a) Full official campaign** (8 routes × 4 profiles × N=30, 3 windows of N=10, new account) | 960 | 32 (4×8) | 9 flex (server+8 clients) | base 2,78+14,71+0,48+0,75=18,72h + 2 intervals between the 3 windows × up to 0,5h = **~19,72h** | 0,9206 USD/h × 19,72h = **~US$18,15** |
+| **(b) The pilot's 3 routes, N=30** (4×3×30) | 360 | 12 (4×3) | 4 flex (server+3 clients) | 2,78+5,52+0,18+0,75 = **~9,2h** | 0,4166 USD/h × 9,2h = **~US$3,84** |
+| **(c) Reduced multi-region rehearsal** (8 routes × 4 profiles × N=2, same window discipline, new account) | 64 | 32 (4×8) | 9 flex (server+8 clients) | base 2,78+0,98+0,48+0,75=4,99h + window interval(s) (see note 4) = **~5,0h to ~5,5h** | 0,9206 USD/h × 5,0–5,5h = **~US$4,60 to US$5,06** |
+| **(d) Short window rehearsal** (3 routes × 4 profiles × N=1) | 12 | 12 (4×3) | 4 flex (server+3 clients) | 2,78+0,18+0,18+0,75 = **~3,9h** | 0,4166 USD/h × 3,9h = **~US$1,62** |
 
-**Comparação com o orçamento de US$100 da conta nova (cenários (a) e (c)):**
-- (a) campanha oficial: **~US$18,15 computado vs. US$100 de teto** — margem de ~US$81,85 (≈5,5× o custo computado) para absorver o setup do zero da conta nova (IAM, VPC, quotas, retries) e qualquer subestimativa das ressalvas abaixo.
-- (c) ensaio multi-região reduzido: **~US$4,60–5,06 computado vs. US$100 de teto** — margem de ~US$95 (≈20×), ou seja, o teto de US$100 não é o fator limitante deste ensaio; o que limita é o tempo real de configuração manual da conta nova, não exercitado/medido aqui.
+**Comparison against the new account's US$100 budget (scenarios (a) and (c)):**
+- (a) official campaign: **~US$18,15 computed vs. a US$100 ceiling** — a margin of ~US$81,85 (≈5,5× the computed cost) to absorb the new account's from-scratch setup (IAM, VPC, quotas, retries) and any underestimate from the caveats below.
+- (c) reduced multi-region rehearsal: **~US$4,60–5,06 computed vs. a US$100 ceiling** — a margin of ~US$95 (≈20×), meaning the US$100 ceiling is not this rehearsal's limiting factor; what limits it is the real time for manually setting up the new account, not exercised/measured here.
 
-**Ressalvas explícitas sobre a aritmética acima (nunca escondidas):**
-1. `setup_overhead` foi observado com **5 instâncias** (1 servidor + 3 clientes + controle), **na conta antiga já configurada** (VPC/IAM/quotas já existentes de rodadas anteriores). Os cenários (a)/(c) usam **10 instâncias** (8 clientes) **numa conta AWS totalmente nova** (item "Conta AWS nova" acima) — tanto o número maior de hosts quanto a ausência de qualquer configuração prévia de conta provavelmente tornam `setup_overhead` MAIOR que os 2,78h observados, por um fator desconhecido — **não medido, tratado aqui como o mesmo valor por simplicidade, uma subestimativa conhecida e explícita** para (a) e (c).
-2. `avg_s_por_execucao`/`avg_s_por_captura` são extrapolações LINEARES de uma amostra de 60 execuções/12 capturas — a seção (c.4) do documento acima já registra que throttling de SSH JÁ apareceu uma vez nesta escala pequena (Decisão 94); em 960 execuções reais, o tempo por execução pode não ser constante.
-3. Nenhum destes 4 cenários inclui o sampler de CPU/steal (achado 10, ainda não implementado) nem qualquer uma das lacunas da seção (c) acima — são estimativas de tempo/custo de EXECUÇÃO, não de validade estatística.
-4. Para (a), o intervalo entre as 3 janelas (item "Janelas oficiais" acima) foi somado aqui como **2 intervalos × até 30 minutos cada** (o máximo permitido, tratado como teto conservador — pode ser menor na prática). Para (c), a divisão de N=2/célula em janelas não foi especificada por Luciano (a estrutura "3 janelas de N=10" é definida para N=30; não há uma divisão óbvia equivalente para N=2) — por isso o intervalo de (c) é apresentado como uma faixa (0 a 1 intervalo de até 30min, dependendo de o ensaio rodar como 1 passagem única ou como 2 sub-janelas de N=1), não um número único.
+**Explicit caveats on the arithmetic above (never hidden):**
+1. `setup_overhead` was observed with **5 instances** (1 server + 3 clients + control), **on the old account, already configured** (VPC/IAM/quotas already existing from previous rounds). Scenarios (a)/(c) use **10 instances** (8 clients) **on a brand-new AWS account** (the "New AWS account" item above) — both the larger number of hosts and the absence of any prior account configuration likely make `setup_overhead` LARGER than the 2,78h observed, by an unknown factor — **not measured, treated here as the same value for simplicity, a known and explicit underestimate** for (a) and (c).
+2. `avg_s_por_execucao`/`avg_s_por_captura` are LINEAR extrapolations from a sample of 60 executions/12 captures — section (c.4) of the document above already records that SSH throttling ALREADY appeared once at this small scale (Decision 94); at 960 real executions, the time per execution may not be constant.
+3. None of these 4 scenarios includes the CPU/steal sampler (finding 10, not yet implemented) nor any of the gaps in section (c) above — these are EXECUTION time/cost estimates, not of statistical validity.
+4. For (a), the interval between the 3 windows (the "Official windows" item above) was added here as **2 intervals × up to 30 minutes each** (the maximum allowed, treated as a conservative ceiling — it may be shorter in practice). For (c), the split of N=2/cell into windows was not specified by Luciano (the "3 windows of N=10" structure is defined for N=30; there is no obvious equivalent split for N=2) — which is why (c)'s interval is presented as a range (0 to 1 interval of up to 30min, depending on whether the rehearsal runs as a single pass or as 2 sub-windows of N=1), not a single number.
 
-Nenhuma recomendação de escopo é feita aqui — os números acima são para o Luciano decidir.
+No scope recommendation is made here — the numbers above are for Luciano to decide on.

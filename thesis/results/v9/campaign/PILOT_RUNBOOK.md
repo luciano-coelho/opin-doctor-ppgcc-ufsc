@@ -1,140 +1,142 @@
-# PILOT_RUNBOOK.md — Fase B, piloto real (60 execuções, 4 perfis × 3 rotas × N=5)
+# PILOT_RUNBOOK.md — Phase B, real pilot (60 executions, 4 profiles × 3 routes × N=5)
 
-## Campanha oficial, conta nova (Decisão 176) — inventário real e gap aberto
+## Official campaign, new account (Decision 176) — real inventory and open gap
 
-**Este bloco descreve a conta/infraestrutura AWS da campanha oficial
-atual (12 instâncias, 7 regiões, apply concluído nas Decisões
-174/175) — o roteiro Passo 0-15 abaixo, incluindo os números "60
-execuções/5 instâncias/3 regiões" do título, descreve a infraestrutura
-MENOR de uma rodada de piloto anterior e permanece como referência
-histórica de procedimento, não como a topologia desta conta.**
+**This block describes the AWS account/infrastructure of the current
+official campaign (12 instances, 7 regions, apply completed in
+Decisions 174/175) — the Step 0-15 script below, including the "60
+executions/5 instances/3 regions" numbers in the title, describes the
+SMALLER infrastructure of an earlier pilot round and remains as a
+historical reference for procedure, not as this account's topology.**
 
-Topologia real desta conta (fonte: `campaign_topology.py`, confirmada
-contra `terraform output` filtrado — nunca `-json` sem escopo, ver
-Decisão 176 sobre o incidente de exposição da chave):
+This account's real topology (source: `campaign_topology.py`,
+confirmed against a filtered `terraform output` — never `-json`
+unscoped, see Decision 176 on the key-exposure incident):
 
-| Host (endereço Terraform) | Papel | Região | Rota(s) servida(s) |
+| Host (Terraform address) | Role | Region | Route(s) served |
 |---|---|---|---|
-| `module.control` | controle | sa-east-1 | — |
-| `module.server_sa_east_1` | servidor | sa-east-1 | L0-sa-east-1, L123, L219, L325 |
-| `module.client_l0_sa_east_1` | cliente | sa-east-1 (colocado) | L0-sa-east-1 |
-| `module.client_ca_central_1_a` | cliente | ca-central-1 | L123 |
-| `module.client_eu_north_1` | cliente | eu-north-1 | L219 |
-| `module.client_ap_southeast_1` | cliente | ap-southeast-1 | L325 |
-| `module.server_us_east_1` | servidor | us-east-1 | L0-us-east-1, **L14** |
-| `module.client_l0_us_east_1` | cliente | us-east-1 (colocado) | L0-us-east-1 |
-| `module.client_ca_central_1_b` | cliente | ca-central-1 | **L14** |
-| `module.server_ap_northeast_1` | servidor | ap-northeast-1 | L0-ap-northeast-1, L30 |
-| `module.client_l0_ap_northeast_1` | cliente | ap-northeast-1 (colocado) | L0-ap-northeast-1 |
-| `module.client_ap_northeast_2` | cliente | ap-northeast-2 | L30 |
+| `module.control` | control | sa-east-1 | — |
+| `module.server_sa_east_1` | server | sa-east-1 | L0-sa-east-1, L123, L219, L325 |
+| `module.client_l0_sa_east_1` | client | sa-east-1 (co-located) | L0-sa-east-1 |
+| `module.client_ca_central_1_a` | client | ca-central-1 | L123 |
+| `module.client_eu_north_1` | client | eu-north-1 | L219 |
+| `module.client_ap_southeast_1` | client | ap-southeast-1 | L325 |
+| `module.server_us_east_1` | server | us-east-1 | L0-us-east-1, **L14** |
+| `module.client_l0_us_east_1` | client | us-east-1 (co-located) | L0-us-east-1 |
+| `module.client_ca_central_1_b` | client | ca-central-1 | **L14** |
+| `module.server_ap_northeast_1` | server | ap-northeast-1 | L0-ap-northeast-1, L30 |
+| `module.client_l0_ap_northeast_1` | client | ap-northeast-1 (co-located) | L0-ap-northeast-1 |
+| `module.client_ap_northeast_2` | client | ap-northeast-2 | L30 |
 
-12 hosts, 7 regiões, 8 rotas (`campaign_topology.CAMPAIGN_ROUTES`) —
-confirmado idêntico ao `main.tf` real desta conta. `L0-sa-east-1` e
-`L14` (os dois usados pelo piloto pedido nesta rodada) são servidos
-por `server_sa_east_1`+`client_l0_sa_east_1` e por
-`server_us_east_1`+`client_ca_central_1_b`, respectivamente — mapeamento
-inequívoco, confirmado nos comentários do próprio `main.tf`
-(`client_ca_central_1_a`/`_b` são instâncias distintas, nunca a mesma
-máquina).
+12 hosts, 7 regions, 8 routes (`campaign_topology.CAMPAIGN_ROUTES`) —
+confirmed identical to this account's actual `main.tf`. `L0-sa-east-1`
+and `L14` (the two used by the pilot requested in this round) are
+served by `server_sa_east_1`+`client_l0_sa_east_1` and by
+`server_us_east_1`+`client_ca_central_1_b`, respectively — an
+unambiguous mapping, confirmed in `main.tf`'s own comments
+(`client_ca_central_1_a`/`_b` are distinct instances, never the same
+machine).
 
-**Gap real encontrado (bloqueia a execução automática do piloto de 18
-execuções pedido — reportado, não corrigido, por instrução explícita
-desta rodada):** `orchestrator.py` só tem DOIS modos de seleção de
-rotas pela CLI:
-1. Sem `--campaign`: usa os globais `PROFILES`/`ROUTES` (`orchestrator.
-   py:220-221`), hardcoded pro piloto de 3 rotas de uma campanha
-   ANTERIOR (`["L0", "L219", "L325"]`) — nomes que nem existem nesta
-   conta (aqui a rota L0 é `L0-sa-east-1`/`L0-us-east-1`/
-   `L0-ap-northeast-1`, uma por servidor, nunca só `"L0"`).
-2. Com `--campaign`: usa `campaign_topology.CAMPAIGN_ROUTES` (as 8
-   rotas reais desta conta, confirmadas na tabela acima) — mas roda
-   TODAS as 8 rotas × TODOS os 4 perfis (`campaign_profiles =
-   list(PROFILES)`, `orchestrator.py:2709`), nunca um subconjunto. Isso
-   é a CAMPANHA COMPLETA, explicitamente fora do escopo autorizado
-   nesta rodada ("NÃO inicie a campanha completa").
+**Real gap found (blocks automatic execution of the 18-execution
+pilot requested — reported, not fixed, per this round's explicit
+instruction):** `orchestrator.py` only has TWO route-selection modes
+via the CLI:
+1. Without `--campaign`: uses the global `PROFILES`/`ROUTES`
+   (`orchestrator.py:220-221`), hardcoded for a 3-route pilot from an
+   EARLIER campaign (`["L0", "L219", "L325"]`) — names that don't even
+   exist in this account (here the L0 route is `L0-sa-east-1`/
+   `L0-us-east-1`/`L0-ap-northeast-1`, one per server, never just
+   `"L0"`).
+2. With `--campaign`: uses `campaign_topology.CAMPAIGN_ROUTES` (this
+   account's 8 real routes, confirmed in the table above) — but runs
+   ALL 8 routes × ALL 4 profiles (`campaign_profiles =
+   list(PROFILES)`, `orchestrator.py:2709`), never a subset. This is
+   the FULL CAMPAIGN, explicitly out of this round's authorized scope
+   ("do NOT start the full campaign").
 
-Não existe hoje um caminho de CLI pra rodar exatamente "4 perfis em
-L0-sa-east-1 + classico/hibrido-and em L14, 3 execuções cada" (18
-execuções, assimétrico por rota) sem: (a) editar `orchestrator.py`
-(fora do escopo autorizado — "NÃO altere scripts de medição, de
-criticidade, de orquestração ou de entrega"), ou (b) rodar `--campaign`
-de verdade (a campanha completa, 8 rotas × 4 perfis, também fora do
-escopo). **Por isso esta rodada para antes da entrega/piloto — ver
-Decisão 176.**
+There is today no CLI path to run exactly "4 profiles on
+L0-sa-east-1 + classico/hibrido-and on L14, 3 executions each" (18
+executions, asymmetric per route) without: (a) editing
+`orchestrator.py` (out of authorized scope — "do NOT change
+measurement, criteria, orchestration, or delivery scripts"), or (b)
+actually running `--campaign` (the full campaign, 8 routes × 4
+profiles, also out of scope). **This is why this round stops before
+delivery/pilot — see Decision 176.**
 
 ---
 
-# PILOT_RUNBOOK.md — Fase B, piloto real (60 execuções, 4 perfis × 3 rotas × N=5)
+# PILOT_RUNBOOK.md — Phase B, real pilot (60 executions, 4 profiles × 3 routes × N=5)
 
-**[Procedimento histórico abaixo, Decisão 79 — descreve a infraestrutura
-MENOR (5 instâncias, 3 regiões) de uma rodada de piloto anterior a
-esta conta nova. Mantido como referência de nível de detalhe/
-convenção de roteiro, não como procedimento válido para os 12 hosts
-desta campanha.]**
+**[Historical procedure below, Decision 79 — describes the SMALLER
+infrastructure (5 instances, 3 regions) of a pilot round that
+preceded this new account. Kept as a reference for level of
+detail/script convention, not as a valid procedure for this
+campaign's 12 hosts.]**
 
-Decisão do Luciano, item 4 (DECISIONS.md, Decisão 79): "escreva o
-PILOT_RUNBOOK.md da Fase B... no mesmo nível de detalhe do
-INFRA_REHEARSAL.md, e siga-o." Mesma convenção de máquina/comando
-daquele roteiro — repetida aqui, nunca redefinida:
+Luciano's decision, item 4 (DECISIONS.md, Decision 79): "write
+Phase B's PILOT_RUNBOOK.md... at the same level of detail as
+INFRA_REHEARSAL.md, and follow it." The same machine/command
+convention as that script — repeated here, never redefined:
 
-| Convenção | Significado |
+| Convention | Meaning |
 |---|---|
-| **[OPERADOR]** | Roda no laptop do Luciano. Só alcança o CONTROLE direto (`ssh_ingress_cidrs = {"operator": var.operator_ip_cidr}`) — nunca servidor/clientes direto. |
-| **[CONTROLE]** | Roda DE DENTRO da instância `control` (via `ssh $CONTROL_IP "<comando>"` disparado pelo operador). Só o controle alcança servidor/clientes (`ssh_ingress_cidrs` deles só listam `{"control": "${module.control.public_ip}/32"}`). |
+| **[OPERATOR]** | Runs on Luciano's laptop. Only reaches CONTROL directly (`ssh_ingress_cidrs = {"operator": var.operator_ip_cidr}`) — never the server/clients directly. |
+| **[CONTROL]** | Runs FROM INSIDE the `control` instance (via `ssh $CONTROL_IP "<command>"` triggered by the operator). Only the control host reaches the server/clients (their `ssh_ingress_cidrs` only lists `{"control": "${module.control.public_ip}/32"}`). |
 
-**`self_terminate_hours=4`** (vs. 1h do ensaio de infraestrutura) —
-o piloto real tem 60 execuções + 12 capturas dedicadas + 3 passos de
-entrega, uma janela maior que o ensaio puro de infraestrutura.
+**`self_terminate_hours=4`** (vs. 1h for the infrastructure rehearsal)
+— the real pilot has 60 executions + 12 dedicated captures + 3
+delivery steps, a larger window than the pure infrastructure
+rehearsal.
 
-**Pré-checagem do IP do operador (Decisão 77, `check_operator_ip.py`)
-roda ANTES de QUALQUER fase deste roteiro que dependa de SSH
-funcionar** — nunca só uma vez no Passo 0. Repita o comando do Passo
-1 antes de cada bloco marcado com 🔁 abaixo.
+**The operator-IP pre-check (Decision 77, `check_operator_ip.py`)
+runs BEFORE ANY phase of this script that depends on SSH working** —
+never just once in Step 0. Repeat Step 1's command before each block
+marked 🔁 below.
 
-**Gap fechado (Decisão 85):** os critérios 2 (initcwnd), 3 (zero
-erros na rota mais distante) e 7 (sanidade de latência) agora rodam
-de verdade contra o piloto real — `dedicated_criteria.py` (novo,
-entregue ao controle) liga os 3 produtores (`thesis/results/v9/
+**Gap closed (Decision 85):** criteria 2 (initcwnd), 3 (zero errors
+on the most distant route), and 7 (latency sanity) now actually run
+against the real pilot — `dedicated_criteria.py` (new, delivered to
+the control host) wires the 3 producers (`thesis/results/v9/
 integration/producers/{criterio2_probe,criterio3_collector,
-criterio7_rtt}.py`) ao pipeline: uma porta de ingress NOVA (9876,
-Decisão 85, mesmo escopo de `gateway_ingress_cidrs`) pro criterio 2;
-um adaptador que reusa `evaluate_criteria.criterion_4_counts` (nunca
-reimplementado) pro criterio 3; os dois produtores corrigidos pra
-rodar `tshark` via `docker run ... mockopin-v9-measure` (o servidor
-real nunca tem `tshark` no PATH do host) pro criterio 7. **Este
-roteiro agora fecha os 7 critérios de verdade — nenhum "sem
-evidência" esperado por desenho.**
+criterio7_rtt}.py`) into the pipeline: a NEW ingress port (9876,
+Decision 85, same scope as `gateway_ingress_cidrs`) for criterion 2;
+an adapter that reuses `evaluate_criteria.criterion_4_counts` (never
+reimplemented) for criterion 3; both producers fixed to run `tshark`
+via `docker run ... mockopin-v9-measure` (the real server never has
+`tshark` on the host's PATH) for criterion 7. **This script now
+actually closes all 7 criteria — no "no evidence" expected by
+design.**
 
 ---
 
-## Passo 0 — pré-requisitos **[OPERADOR]**
+## Step 0 — prerequisites **[OPERATOR]**
 
 ```
 export TF_VAR_operator_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
 cd thesis/results/v9/terraform
 terraform init
 ```
-**Saída esperada:** `Terraform has been successfully initialized!`
-**Critério de abortar:** qualquer erro de init/provider.
+**Expected output:** `Terraform has been successfully initialized!`
+**Abort criterion:** any init/provider error.
 
 ---
 
-## Passo 1 — pré-checagem do IP do operador (Decisão 77) **[OPERADOR]** 🔁
+## Step 1 — operator-IP pre-check (Decision 77) **[OPERATOR]** 🔁
 
 ```
 python ../campaign/scripts/check_operator_ip.py --tf-dir .
 ```
-**Saída esperada (fleet ainda não existe, 1ª vez):** `{"ok": false, "error": "... recurso ... nao encontrado no state ..."}` — **esperado e inofensivo** antes do primeiro apply (Passo 2); a regra só existe depois dele. Depois do Passo 2, repita este comando — a partir daí a saída esperada é `{"ok": true, "changed": false, ...}` (ou `"changed": true` com o IP novo, se tiver mudado).
-**Critério de abortar:** depois do Passo 2 existir, qualquer `"ok": false` com uma mensagem de `terraform apply` falhando — nunca prosseguir pra nenhum passo com SSH sem resolver isto primeiro (ver nota de infraestrutura da Decisão 72/77 — um bloqueio real de 8 minutos já custou uma fleet inteira).
+**Expected output (fleet does not exist yet, 1st time):** `{"ok": false, "error": "... recurso ... nao encontrado no state ..."}` — **expected and harmless** before the first apply (Step 2); the rule only exists after it. After Step 2, repeat this command — from then on the expected output is `{"ok": true, "changed": false, ...}` (or `"changed": true` with the new IP, if it changed).
+**Abort criterion:** after Step 2 exists, any `"ok": false` with a `terraform apply` failure message — never proceed to any step with SSH without resolving this first (see the Decision 72/77 infrastructure note — a real 8-minute lockout already cost an entire fleet).
 
 ---
 
-## Passo 2 — `terraform plan`, depois `terraform apply` (`self_terminate_hours=4`) **[OPERADOR]**
+## Step 2 — `terraform plan`, then `terraform apply` (`self_terminate_hours=4`) **[OPERATOR]**
 
-Mesma infraestrutura do ensaio de infraestrutura, MAIS 3 regras novas
-(Decisão 85 — porta dedicada do produtor do critério 2):
+Same infrastructure as the infrastructure rehearsal, PLUS 3 new rules
+(Decision 85 — the criterion-2 producer's dedicated port):
 
-| Recurso | Quantidade |
+| Resource | Quantity |
 |---|---|
 | `tls_private_key.campaign` | 1 |
 | `aws_key_pair` | 4 |
@@ -150,115 +152,115 @@ Mesma infraestrutura do ensaio de infraestrutura, MAIS 3 regras novas
 export TF_VAR_operator_ip_cidr="$(curl -s https://checkip.amazonaws.com)/32"
 terraform plan -var="self_terminate_hours=4"
 ```
-**Saída esperada:** `Plan: 31 to add, 0 to change, 0 to destroy.` — se divergir, **pare e reconcilie antes do apply**.
+**Expected output:** `Plan: 31 to add, 0 to change, 0 to destroy.` — if it diverges, **stop and reconcile before applying**.
 
 ```
 terraform apply -var="self_terminate_hours=4" -auto-approve
 ```
-**Saída esperada:** `Apply complete! Resources: 31 added, 0 changed, 0 destroyed.`
-**Critério de abortar:** qualquer erro de apply, ou N ≠ 31 sem explicação — `terraform destroy -auto-approve` imediatamente.
+**Expected output:** `Apply complete! Resources: 31 added, 0 changed, 0 destroyed.`
+**Abort criterion:** any apply error, or N ≠ 31 without explanation — run `terraform destroy -auto-approve` immediately.
 
-Repita o Passo 1 agora (a regra de ingress já existe).
+Repeat Step 1 now (the ingress rule already exists).
 
 ---
 
-## Passo 3 — confirmar instâncias + gerar `/tmp/inventory.json` **[OPERADOR]**
+## Step 3 — confirm instances + generate `/tmp/inventory.json` **[OPERATOR]**
 
 ```
 aws ec2 describe-instances --profile mockopin-pqc --region sa-east-1 \
   --filters "Name=tag:Project,Values=mockopin-pqc-v9-piloto" \
   --query "Reservations[].Instances[].State.Name"
 ```
-(repetir para `eu-north-1`/`ap-southeast-1`)
-**Saída esperada:** `"running"` nas 3 regiões (5 instâncias no total).
-**Critério de abortar:** qualquer instância fora de `running`/`pending` por mais de 2 minutos.
+(repeat for `eu-north-1`/`ap-southeast-1`)
+**Expected output:** `"running"` across the 3 regions (5 instances total).
+**Abort criterion:** any instance outside `running`/`pending` for more than 2 minutes.
 
-Gera `/tmp/inventory.json` (`terraform output -json inventory`), confere o formato real contra o que `deliver_source.py`/`pki_relay.py`/`orchestrator.py` leem (mesmo procedimento do Passo 2 de `INFRA_REHEARSAL.md`).
+Generate `/tmp/inventory.json` (`terraform output -json inventory`), check the actual format against what `deliver_source.py`/`pki_relay.py`/`orchestrator.py` read (same procedure as Step 2 of `INFRA_REHEARSAL.md`).
 
 ---
 
-## Passo 4 — entregar a chave SSH da campanha pro controle **[OPERADOR → CONTROLE]**
+## Step 4 — deliver the campaign's SSH key to the control host **[OPERATOR → CONTROL]**
 
 ```
 terraform -chdir=../../terraform output -raw campaign_private_key | \
   python pki_relay.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --deliver-campaign-key --inventory-json /tmp/inventory.json
 ```
-**Saída esperada:** JSON com `"campaign_key_remote_path": "/home/ec2-user/.ssh/campaign_key"`.
-**Critério de abortar:** qualquer `RuntimeError`.
-**Nunca impresso:** o conteúdo da chave.
+**Expected output:** JSON with `"campaign_key_remote_path": "/home/ec2-user/.ssh/campaign_key"`.
+**Abort criterion:** any `RuntimeError`.
+**Never printed:** the key's content.
 
 ---
 
-## Passo 5 — Docker pronto nas 5 instâncias **[CONTROLE/OPERADOR]**
+## Step 5 — Docker ready across the 5 instances **[CONTROL/OPERATOR]**
 
-Mesmo laço fail-closed do Passo 4 de `INFRA_REHEARSAL.md` (SSH direto do controle a cada host, relé pela chave da campanha, `FAILED=""`/`exit 1` se algum nunca ficar pronto).
-**Saída esperada:** `"Docker pronto: <IP>"` pras 5 instâncias.
-**Critério de abortar:** exit code ≠ 0 — a mensagem já diz qual host falhou.
+Same fail-closed loop as Step 4 of `INFRA_REHEARSAL.md` (direct SSH from the control host to each host, relayed via the campaign key, `FAILED=""`/`exit 1` if one never becomes ready).
+**Expected output:** `"Docker pronto: <IP>"` for the 5 instances.
+**Abort criterion:** exit code ≠ 0 — the message already states which host failed.
 
 ---
 
-## Passo 6 — `deliver_source.py`: código-fonte e certificados **[OPERADOR → CONTROLE → servidor/clientes]** 🔁
+## Step 6 — `deliver_source.py`: source code and certificates **[OPERATOR → CONTROL → server/clients]** 🔁
 
 ```
 python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --inventory-json /tmp/inventory.json
 ```
-**Saída esperada:** relatório por destino (`server`, `L0`, `L219`, `L325`) — `files` lista `COMMON_FILES` (todos) + `certs/generated` (só clientes) + `"requirements_installed": true"` (só clientes, Decisão 71).
-**Critério de abortar:** qualquer `RuntimeError`.
+**Expected output:** a report per destination (`server`, `L0`, `L219`, `L325`) — `files` lists `COMMON_FILES` (all) + `certs/generated` (clients only) + `"requirements_installed": true"` (clients only, Decision 71).
+**Abort criterion:** any `RuntimeError`.
 
 ---
 
-## Passo 7 — `deliver_source.py --to-control`: `orchestrator.py` e dependências **[OPERADOR → CONTROLE]**
+## Step 7 — `deliver_source.py --to-control`: `orchestrator.py` and dependencies **[OPERATOR → CONTROL]**
 
-**O que é copiado pro controle agora** (`CONTROL_FILES`, Decisões 76/85 acrescentam os últimos itens desta lista):
+**What is now copied to the control host** (`CONTROL_FILES`, Decisions 76/85 add the last items in this list):
 - `campaign/scripts/{orchestrator,cli,preflight}.py`, `rehearsal_handshake.sh`
-- `campaign/scripts/{dedicated_criteria,deliver_images}.py` (Decisão 85 — `orchestrator.py` agora importa `deliver_images` pro `BACKEND_IMAGE_KEYS`; `dedicated_criteria.py` roda do controle, mesma convenção)
+- `campaign/scripts/{dedicated_criteria,deliver_images}.py` (Decision 85 — `orchestrator.py` now imports `deliver_images` for `BACKEND_IMAGE_KEYS`; `dedicated_criteria.py` runs from the control host, same convention)
 - `campaign/PINS.json`, `integration/evaluate_criteria.py`
 - `v8/campaign/scripts/redact_aws_errors.py`
-- **`thesis/results/v9/certs/generated`** (Decisão 76 — o diagnóstico de bytes do smoke gate, Passo 10, lê isto do controle; sem isto, antes desta Decisão, quebrava com `FileNotFoundError` — agora, mesmo se faltasse, só pausaria o diagnóstico, nunca o gate oficial)
-- `inventory.json` (copiado em separado)
+- **`thesis/results/v9/certs/generated`** (Decision 76 — the smoke gate's bytes diagnostic, Step 10, reads this from the control host; without this, before this Decision, it broke with `FileNotFoundError` — now, even if missing, it would only pause the diagnostic, never the official gate)
+- `inventory.json` (copied separately)
 
 ```
 python deliver_source.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --to-control --inventory-json /tmp/inventory.json
 ```
-**Saída esperada:** `{"target": "control", "ip": "...", "files": [...]}` incluindo `thesis/results/v9/certs/generated`.
-**Critério de abortar:** qualquer `RuntimeError`. Nunca fala com servidor/cliente.
+**Expected output:** `{"target": "control", "ip": "...", "files": [...]}` including `thesis/results/v9/certs/generated`.
+**Abort criterion:** any `RuntimeError`. Never talks to the server/client.
 
 ---
 
-## Passo 8 — `deliver_images.py`: as 4 imagens pinadas (gateway/proxy/pqc-signer/measure) **[OPERADOR → CONTROLE]**
+## Step 8 — `deliver_images.py`: the 4 pinned images (gateway/proxy/pqc-signer/measure) **[OPERATOR → CONTROL]**
 
 ```
 python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador>
 ```
-**Saída esperada:** JSON com `disk_check`, `images` (4 entradas, `sha256_ok: true`), `gateway_binary_info_delivered: true`.
-**Critério de abortar:** qualquer `RuntimeError`.
+**Expected output:** JSON with `disk_check`, `images` (4 entries, `sha256_ok: true`), `gateway_binary_info_delivered: true`.
+**Abort criterion:** any `RuntimeError`.
 
-**Não entregue aqui, de propósito (Decisão 57):** `mockopin-v9-negtest` — não é usada pelo piloto real (só pelo ensaio `rehearsal_handshake.sh`), nunca necessária neste roteiro.
+**Not delivered here, on purpose (Decision 57):** `mockopin-v9-negtest` — not used by the real pilot (only by the `rehearsal_handshake.sh` rehearsal), never needed in this script.
 
-## Passo 8b — `deliver_images.py --images`: as 3 imagens do backend de negócio (Decisão 83) **[OPERADOR → CONTROLE]**
+## Step 8b — `deliver_images.py --images`: the 3 business-backend images (Decision 83) **[OPERATOR → CONTROL]**
 
-**Achado real (Decisão 91, ao executar este roteiro de novo):** o default
-de `--images` em `deliver_images.py` é `ALL_IMAGE_KEYS` (gateway/proxy/
-pqc-signer/measure — nome enganoso, nunca incluiu o backend), nunca
-`BACKEND_IMAGE_KEYS` (auth/mongo_seed/mockapi, Decisão 83/87) — o Passo
-8 sozinho NUNCA entrega o backend. Sem este passo, `start_block`
-(chamado já no Passo 10) quebra com `RuntimeError: _deliver_image(auth,
-...): .../auth.tar nao encontrado no controle`.
+**Real finding (Decision 91, while running this script again):** the
+default for `--images` in `deliver_images.py` is `ALL_IMAGE_KEYS`
+(gateway/proxy/pqc-signer/measure — a misleading name, it never
+included the backend), never `BACKEND_IMAGE_KEYS` (auth/mongo_seed/
+mockapi, Decision 83/87) — Step 8 alone NEVER delivers the backend.
+Without this step, `start_block` (already called in Step 10) breaks
+with `RuntimeError: _deliver_image(auth, ...): .../auth.tar nao
+encontrado no controle`.
 
 ```
 python deliver_images.py --control-ip "$CONTROL_IP" --operator-key <chave-do-operador> \
   --images auth mongo_seed mockapi
 ```
-**Saída esperada:** JSON com `disk_check`, `images` (3 entradas — auth/
-mongo_seed/mockapi, `sha256_ok: true`).
-**Critério de abortar:** qualquer `RuntimeError`.
+**Expected output:** JSON with `disk_check`, `images` (3 entries — auth/mongo_seed/mockapi, `sha256_ok: true`).
+**Abort criterion:** any `RuntimeError`.
 
 ---
 
-## Passo 9 — conferir `python3`/dependências do pipeline real no controle **[CONTROLE]**
+## Step 9 — check `python3`/the real pipeline's dependencies on the control host **[CONTROL]**
 
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
@@ -268,24 +270,24 @@ python3 orchestrator.py --help >/dev/null && echo "OK: orchestrator.py importa e
 python3 launch_persistent.py --help >/dev/null && echo "OK: launch_persistent.py importa e roda"
 REMOTE
 ```
-**Saída esperada:** versão do Python 3, depois `OK: orchestrator.py importa e roda`, depois `OK: launch_persistent.py importa e roda`.
-**Nota (Decisão 76):** `evaluate_criteria.py` não depende mais de `cryptography` pro diagnóstico de bytes (trocado por `ssl.PEM_cert_to_DER_cert`, stdlib) — nenhum pacote de terceiros é necessário pra este passo.
-**Critério de abortar:** qualquer traceback de import, ou `python3` ausente.
+**Expected output:** the Python 3 version, then `OK: orchestrator.py importa e roda`, then `OK: launch_persistent.py importa e roda`.
+**Note (Decision 76):** `evaluate_criteria.py` no longer depends on `cryptography` for the bytes diagnostic (replaced by `ssl.PEM_cert_to_DER_cert`, stdlib) — no third-party package is needed for this step.
+**Abort criterion:** any import traceback, or `python3` missing.
 
 ---
 
-## Passo 10 — porta de fumaça: preflight de captura + 12 execuções (Decisão 48/53/55/76) **[CONTROLE]** 🔁
+## Step 10 — smoke gate: capture preflight + 12 executions (Decision 48/53/55/76) **[CONTROL]** 🔁
 
-**Decisão 172 (pedido do Luciano, item 4b da Decisão 171): este passo
-NUNCA MAIS roda `orchestrator.py` direto numa sessão SSH bloqueante**
-— uma queda de internet do operador durante a janela matava a
-execução real no meio. A partir desta Decisão, todo lançamento de
-`orchestrator.py` (smoke ou piloto) passa por `launch_persistent.py`
-(entregue ao controle no Passo 7, mesmo `CONTROL_FILES` de
-`deliver_source.py`): `start` desacopla o processo da sessão SSH
-(`setsid`/novo grupo de sessão + lock exclusivo + PID + log em
-arquivo) e retorna em segundos — a sessão SSH pode cair depois disso
-sem afetar a janela em andamento.
+**Decision 172 (Luciano's request, item 4b of Decision 171): this
+step NEVER AGAIN runs `orchestrator.py` directly in a blocking SSH
+session** — an operator internet outage during the window used to
+kill the real execution midway. From this Decision on, every
+`orchestrator.py` launch (smoke or pilot) goes through
+`launch_persistent.py` (delivered to the control host in Step 7,
+the same `CONTROL_FILES` as `deliver_source.py`): `start` decouples
+the process from the SSH session (`setsid`/new session group +
+exclusive lock + PID + file log) and returns within seconds — the SSH
+session can drop afterward without affecting the window in progress.
 
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
@@ -296,48 +298,50 @@ python3 launch_persistent.py --name smoke start -- \
   --images-staging-dir ~/images --smoke --out ~/campaign-data/v9/smoke
 REMOTE
 ```
-**Saída esperada deste comando (imediata, nunca o fim da janela):**
-`{"started": true, "pid": <N>, "log": "..."}`. Se `"started": false`
-(`"already_running"`/`"lock_busy"`), já existe uma janela em andamento
-com o mesmo `--name` — nunca uma segunda instância em paralelo.
+**Expected output of this command (immediate, never the end of the window):**
+`{"started": true, "pid": <N>, "log": "..."}`. If `"started": false`
+(`"already_running"`/`"lock_busy"`), a window with the same `--name`
+is already running — never a second instance in parallel.
 
-**Acompanhamento (repita quantas vezes quiser, inclusive de uma sessão
-SSH NOVA — nunca precisa ser a mesma que lançou):**
+**Monitoring (repeat as many times as you like, including from a
+BRAND-NEW SSH session — it never needs to be the one that launched
+it):**
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" \
   "cd ~/thesis/results/v9/campaign/scripts && python3 launch_persistent.py --name smoke status"
 ```
-`"alive": false` + `"progress": {"source": "manifest.json", "complete": true, ...}` = terminou de verdade. `"alive": true` + `"progress": {"source": "manifest_partial.json", ...}` = ainda rodando, progresso real (nunca inventado) lido do mesmo arquivo incremental que `orchestrator.py` já escreve por célula (Decisão 133). `python3 launch_persistent.py --name smoke tail -n 50` mostra as últimas linhas do log real.
+`"alive": false` + `"progress": {"source": "manifest.json", "complete": true, ...}` = actually finished. `"alive": true` + `"progress": {"source": "manifest_partial.json", ...}` = still running, real progress (never fabricated) read from the same incremental file that `orchestrator.py` already writes per cell (Decision 133). `python3 launch_persistent.py --name smoke tail -n 50` shows the real log's last lines.
 
-**O que roda, na ordem, automaticamente, dentro de UMA chamada**
-(`run_smoke_gate`, nunca passos separados): (1) `capture_ready_
-check()` — aborta ANTES de qualquer execução se tcpdump/sudo/imagem/
-interface faltar; (2) 12 execuções (1 por perfil × rota, nunca
-contam nas 60 oficiais); (3) 4 capturas de prova do mecanismo
-(`smoke_capture_proof/`, nunca confundidas com as 12 oficiais do
-critério 1); (4) diagnóstico de bytes por perfil (Decisão 76 —
-NUNCA quebra mais o gate; qualquer desvio ou exceção só marca
-`bytes_diagnostic_needs_decision`, pausa, nunca derruba `smoke_ok`).
+**What runs, in order, automatically, within ONE call**
+(`run_smoke_gate`, never separate steps): (1) `capture_ready_
+check()` — aborts BEFORE any execution if tcpdump/sudo/image/
+interface is missing; (2) 12 executions (1 per profile × route,
+never counting toward the 60 official ones); (3) 4 mechanism-proof
+captures (`smoke_capture_proof/`, never confused with the 12
+official criterion-1 ones); (4) per-profile bytes diagnostic
+(Decision 76 — it NEVER breaks the gate anymore; any deviation or
+exception only flags `bytes_diagnostic_needs_decision`, pauses, never
+brings down `smoke_ok`).
 
-**Saída esperada (dentro do `manifest.json`, via `status`):** JSON com
+**Expected output (inside `manifest.json`, via `status`):** JSON with
 `"smoke_ok": true`, `"capture_preflight": {"go": true, ...}`,
 `"capture_proof_ok": true`, `"total_execucoes": 12`.
-`"bytes_diagnostic_needs_decision"` pode vir `true` ou `false` —
-**nunca**, por si só, motivo de abortar (é diagnóstico, nunca o gate
-oficial).
-**Critério de abortar:** `"smoke_ok": false` dentro do manifesto (o
-processo sempre sai sozinho, nunca destrói nada automaticamente,
-Decisão 49/Emenda 12). Decisão do Luciano: corrigir e repetir dentro
-da janela de 4h, ou mandar destruir (Passo 14). Se o motivo for um
-critério pré-registrado falhando com o código já verificado correto
-— regra 7(a) desta autorização, STOP.
+`"bytes_diagnostic_needs_decision"` may come back `true` or `false`
+— **never**, on its own, a reason to abort (it is a diagnostic,
+never the official gate).
+**Abort criterion:** `"smoke_ok": false` inside the manifest (the
+process always exits on its own, never destroying anything
+automatically, Decision 49/Amendment 12). Luciano's decision: fix and
+repeat within the 4h window, or order a destroy (Step 14). If the
+reason is a pre-registered criterion failing with code already
+verified correct — rule 7(a) of this authorization, STOP.
 
 ---
 
-## Passo 11 — piloto real: 60 execuções + 12 capturas dedicadas **[CONTROLE]** 🔁
+## Step 11 — real pilot: 60 executions + 12 dedicated captures **[CONTROL]** 🔁
 
-**Mesma mudança do Passo 10 (Decisão 172) — launcher, nunca SSH
-bloqueante direto:**
+**Same change as Step 10 (Decision 172) — a launcher, never a direct
+blocking SSH session:**
 
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
@@ -348,21 +352,21 @@ python3 launch_persistent.py --name piloto start -- \
   --images-staging-dir ~/images --out ~/campaign-data/v9/piloto
 REMOTE
 ```
-**Acompanhamento:** `python3 launch_persistent.py --name piloto status`/`tail -n 50`, de qualquer sessão SSH, a qualquer momento — ver Passo 10. **Critério NOVO (n), teste de persistência real (Decisão 172):** com o piloto em andamento, o operador derruba a própria sessão SSH de propósito UMA VEZ (ex. fecha o terminal/perde a conexão no meio da janela); o piloto DEVE continuar e terminar sozinho — confirme com `status` de uma sessão SSH NOVA que a janela seguiu progredindo e terminou completa. O relatório da campanha registra que este teste foi feito e o resultado.
+**Monitoring:** `python3 launch_persistent.py --name piloto status`/`tail -n 50`, from any SSH session, at any time — see Step 10. **NEW criterion (n), real persistence test (Decision 172):** with the pilot in progress, the operator deliberately drops their own SSH session ONCE (e.g., closes the terminal/loses the connection mid-window); the pilot MUST continue and finish on its own — confirm with `status` from a BRAND-NEW SSH session that the window kept progressing and finished complete. The campaign report records that this test was performed and its result.
 
-**Saída esperada (via `status`, apos `"alive": false`):** JSON com `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 arquivos) escritos em `~/campaign-data/v9/piloto/` (saída FLAT, Decisão 75/78 — nunca dividida por perfil). **Emenda robustez-de-captura (item 0+3, pedido do Luciano):** `criterio1_capturas/capturas_brutas/` ganha o pcap+keylog BRUTOS de TODA tentativa de cada uma das 12 capturas dedicadas (sucesso ou falha, até 3 tentativas cada — retry só quando o modo de falha é decifragem incompleta, nunca divergência de tamanho); a tentativa vencedora de cada captura também fica em `criterio1_capturas/{perfil}_{rota}.pcap`/`.keylog` (sem sufixo de tentativa).
-**Critério de abortar:** qualquer exceção/`RuntimeError` (start_block, run_execution, dedicated_capture), visível no log (`tail`) e refletido em `"alive": false` sem `manifest.json` completo (só `manifest_partial.json`, `"complete": false`) — inclusive "decifragem incompleta em 3 tentativas" (as 3 tentativas ficam preservadas em `capturas_brutas/` mesmo assim, nunca perdidas) — nenhuma correção de código no meio desta janela sem registrar Decisão numerada; se a correção alterar o que é medido, regra 7(e), STOP. **Nunca relance com `--resume` assumindo que os dados parciais contam** — a política fail-closed já existente em `orchestrator.py` (nunca alterada por este launcher) sempre refaz a janela inteira do zero quando `manifest.json` não existe; só pula a reexecução se `manifest.json` já existir COMPLETO e idêntico.
+**Expected output (via `status`, after `"alive": false`):** JSON with `"total_execucoes": 60`, `"expected_total": 60`, `"total_capturas": 12`, `"smoke": false` — `manifest.json`/`piloto_combined.log`/`piloto_calls.json`/`criterio6_execucoes.json`/`criterio1_capturas/*.log` (12 files) written to `~/campaign-data/v9/piloto/` (FLAT output, Decision 75/78 — never split by profile). **Capture-robustness amendment (item 0+3, Luciano's request):** `criterio1_capturas/capturas_brutas/` gains the RAW pcap+keylog from EVERY attempt of each of the 12 dedicated captures (success or failure, up to 3 attempts each — retry only when the failure mode is incomplete decryption, never a size mismatch); the winning attempt of each capture also lands in `criterio1_capturas/{perfil}_{rota}.pcap`/`.keylog` (no attempt suffix).
+**Abort criterion:** any exception/`RuntimeError` (start_block, run_execution, dedicated_capture), visible in the log (`tail`) and reflected in `"alive": false` with no complete `manifest.json` (only `manifest_partial.json`, `"complete": false`) — including "incomplete decryption after 3 attempts" (the 3 attempts remain preserved in `capturas_brutas/` regardless, never lost) — no code fix mid-window without recording a numbered Decision; if the fix changes what is measured, rule 7(e), STOP. **Never relaunch with `--resume` assuming the partial data counts** — the fail-closed policy already present in `orchestrator.py` (never altered by this launcher) always redoes the entire window from scratch when `manifest.json` does not exist; it only skips re-execution if `manifest.json` already exists COMPLETE and identical.
 
-**Fim de campanha (so por ordem explicita do usuario, DEPOIS dos
-resultados copiados pra fora do controle — Passo 12/13): remova a
-chave privada da campanha do controle com `python3
-cleanup_campaign_key.py --key-path ~/.ssh/campaign_key` (Decisão
-172) — confirma que o arquivo sumiu, nunca roda automaticamente em
-nenhum outro ponto deste roteiro.**
+**End of campaign (only on the user's explicit order, AFTER the
+results have been copied out of the control host — Step 12/13):
+remove the campaign's private key from the control host with
+`python3 cleanup_campaign_key.py --key-path ~/.ssh/campaign_key`
+(Decision 172) — confirms the file is gone, never runs automatically
+at any other point in this script.**
 
 ---
 
-## Passo 11.5 — produtores dedicados dos critérios 2/3/7 (Decisão 85) **[CONTROLE]**
+## Step 11.5 — dedicated producers for criteria 2/3/7 (Decision 85) **[CONTROL]**
 
 ```
 ssh -i <chave-do-operador> ec2-user@"$CONTROL_IP" bash -s <<'REMOTE'
@@ -371,44 +375,46 @@ python3 dedicated_criteria.py --inventory-json inventory.json --ssh-key ~/.ssh/c
   --dir ~/campaign-data/v9/piloto
 REMOTE
 ```
-**O que roda, na ordem:** critério 3 (local, reusa `evaluate_criteria.
-criterion_4_counts` já escrito pelo Passo 11, filtra L325) → critério
-2 (sobe `criterio2_probe.py` no servidor, dispara 1 conexão de teste
-do cliente L219 via `/dev/tcp`, porta 9876 — Emenda MSS-efetivo, item
-2: `mss_bytes` só existe quando `ss -ti` e o maior payload real do
-pcap concordam, nunca o MSS anunciado no SYN-ACK) → critério 7 (por
-rota: `probe` do cliente contra 443, `pcap` no servidor reaproveitando
-os pcaps dedicados que o Passo 11 já escreveu em `/tmp` — Emenda
-RTT-pcap, item 1: mede SYN-ACK saindo → ACK fechando o handshake
-voltando, nunca SYN chegando → SYN-ACK saindo) → `collect_full_logs`
-(item 0, regra fail-closed nova: log CHEIO, sem janela de tempo, dos
-4 containers do servidor — gateway/auth/mongo_seed/mockapi — +
-diagnóstico leve de cada instância). Escreve
+**What runs, in order:** criterion 3 (local, reuses
+`evaluate_criteria.criterion_4_counts` already written by Step 11,
+filters L325) → criterion 2 (starts `criterio2_probe.py` on the
+server, triggers 1 test connection from the L219 client via
+`/dev/tcp`, port 9876 — effective-MSS amendment, item 2: `mss_bytes`
+only exists when `ss -ti` and the actual largest pcap payload agree,
+never the MSS announced in the SYN-ACK) → criterion 7 (per route:
+`probe` from the client against 443, `pcap` on the server reusing
+the dedicated pcaps that Step 11 already wrote to `/tmp` — RTT-pcap
+amendment, item 1: measures SYN-ACK going out → ACK closing the
+handshake coming back, never SYN arriving → SYN-ACK going out) →
+`collect_full_logs` (item 0, new fail-closed rule: FULL log, with no
+time window, of the server's 4 containers — gateway/auth/mongo_seed/
+mockapi — + a light diagnostic of each instance). Writes
 `criterio2_initcwnd.json`/`criterio2_probe.pcap`/
 `criterio3_l325_execucoes.json`/`criterio7_rtt_por_rota.json`/
-`full_container_logs/` no MESMO diretório `~/campaign-data/v9/
-piloto/` — um único pull no Passo 12 traz tudo junto.
-**Saída esperada:** JSON com as 4 chaves (`criterio2`/`criterio3`/
-`criterio7`/`full_logs`), nenhuma vazia.
-**Critério de abortar:** qualquer `RuntimeError` — nunca prossiga pro
-Passo 12 com um dos 3 arquivos ausente (a consolidação reportaria
-"sem evidência" silenciosamente, sem dizer que a causa foi este
-passo falhando).
+`full_container_logs/` into the SAME `~/campaign-data/v9/
+piloto/` directory — a single pull in Step 12 brings everything
+together.
+**Expected output:** JSON with the 4 keys (`criterio2`/`criterio3`/
+`criterio7`/`full_logs`), none empty.
+**Abort criterion:** any `RuntimeError` — never proceed to Step 12
+with one of the 3 files missing (the consolidation would silently
+report "no evidence", without saying the cause was this step
+failing).
 
 ---
 
-## Passo 12 — coleta com manifesto verificado (Decisão 78) **[OPERADOR → CONTROLE]**
+## Step 12 — collection with verified manifest (Decision 78) **[OPERATOR → CONTROL]**
 
 ```
 python collect_artifacts.py --control-ip "$CONTROL_IP" --key <chave-do-operador> \
   --remote-dir ~/campaign-data/v9/piloto --local-dir /tmp/v9_piloto_coletado
 ```
-**Saída esperada:** JSON com `"files_verified": N` (N = todos os arquivos do diretório — agora inclui, além do que já existia, os pcaps/keylogs BRUTOS de toda tentativa de captura em `criterio1_capturas/capturas_brutas/` + os vencedores em `criterio1_capturas/*.pcap`/`*.keylog`, `criterio2_probe.pcap`, e `full_container_logs/*.log` — item 0, regra fail-closed nova), `.pull-verified` escrito em `/tmp/v9_piloto_coletado/`. **Este `.pull-verified` é o marcador que o Passo 14 agora EXIGE** (`--pull-verified-marker`) antes de qualquer teardown — nunca mais `--force` como caminho principal.
-**Critério de abortar:** qualquer `RuntimeError` ("nao bate"/"ausente") — nunca confiar numa cópia parcial/corrompida.
+**Expected output:** JSON with `"files_verified": N` (N = every file in the directory — now including, in addition to what already existed, the RAW pcaps/keylogs from every capture attempt in `criterio1_capturas/capturas_brutas/` + the winners in `criterio1_capturas/*.pcap`/`*.keylog`, `criterio2_probe.pcap`, and `full_container_logs/*.log` — item 0, new fail-closed rule), `.pull-verified` written to `/tmp/v9_piloto_coletado/`. **This `.pull-verified` is the marker that Step 14 now REQUIRES** (`--pull-verified-marker`) before any teardown — never again `--force` as the main path.
+**Abort criterion:** any `RuntimeError` ("nao bate"/"ausente") — never trust a partial/corrupted copy.
 
 ---
 
-## Passo 13 — consolidação final (Decisão 79) **[OPERADOR]**
+## Step 13 — final consolidation (Decision 79) **[OPERATOR]**
 
 ```
 python consolidate_v9_pilot.py \
@@ -416,36 +422,50 @@ python consolidate_v9_pilot.py \
   --out-dir ../../piloto/dados_oficiais/piloto-real-aws-<data-utc> \
   --run-label piloto-real-aws-<data-utc>
 ```
-**Saída esperada:** `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` escritos em `thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-<data>/`. **Esperado, por desenho, nesta rodada (Decisão 85 fechou o gap):** os 7 critérios avaliados de verdade sobre dados REAIS de AWS pela primeira vez na história deste pacote (PASS ou FAIL real por critério, nunca suposto, nunca "sem evidência"). `"all_criteria_pass"` reflete o resultado real — nem sempre `true` é esperado (um critério pode reprovar de verdade), mas nenhum deve reprovar por ARQUIVO AUSENTE.
-**Critério de abortar:** nenhum — é só leitura/consolidação, nunca toca a fleet. Se algum dos 7 reprovar por "arquivo não encontrado" (em vez de um FAIL real com dados), volte ao Passo 11.5 — algo não rodou.
+**Expected output:** `RELATORIO_PILOTO.md` + `criteria_evaluation.json` + `raw/` written to `thesis/results/v9/piloto/dados_oficiais/piloto-real-aws-<date>/`. **Expected, by design, in this round (Decision 85 closed the gap):** all 7 criteria actually evaluated against REAL AWS data for the first time in this package's history (a real PASS or FAIL per criterion, never assumed, never "no evidence"). `"all_criteria_pass"` reflects the real result — `true` is not always expected (a criterion may genuinely fail), but none should fail due to a MISSING FILE.
+**Abort criterion:** none — it is read-only/consolidation, it never touches the fleet. If any of the 7 fails due to "file not found" (instead of a real FAIL with data), go back to Step 11.5 — something did not run.
 
 ---
 
-## Passo 14 — teardown **[OPERADOR]**
+## Step 14 — teardown **[OPERATOR]**
 
-**Emenda fail-closed (item 0, pedido do Luciano):** até esta rodada, o comando principal usava `--force`, que NUNCA de fato exercitava o gate que já existia em código (`.pull-verified`) — achado real, corrigido aqui. Sequência: `emergency_stop.py` modo dry (diagnóstico) → `cleanup.py --tf-dir ../../terraform --profile mockopin-pqc --release-eips --pull-verified-marker /tmp/v9_piloto_coletado/.pull-verified` (principal — bloqueia com `RuntimeError` se o Passo 12 não tiver rodado/verificado os brutos, `all_clean: true` esperado) → `emergency_stop.py --execute` (fallback, só se `all_clean: false`).
+**Fail-closed amendment (item 0, Luciano's request):** until this
+round, the main command used `--force`, which NEVER actually
+exercised the gate that already existed in code (`.pull-verified`) —
+a real finding, fixed here. Sequence: `emergency_stop.py` dry mode
+(diagnostic) → `cleanup.py --tf-dir ../../terraform --profile
+mockopin-pqc --release-eips --pull-verified-marker
+/tmp/v9_piloto_coletado/.pull-verified` (main — blocks with a
+`RuntimeError` if Step 12 did not run/verify the raw files,
+`all_clean: true` expected) → `emergency_stop.py --execute`
+(fallback, only if `all_clean: false`).
 
-**`--force --reason "<motivo>"` só é aceitável nas exceções da regra 7** (limite de custo ou de segurança atingido no meio do piloto, com evidência ainda não coletada) — `--force` sem `--reason` agora falha alto (`cleanup.py` exige a razão, nunca um bypass silencioso). Usado assim, o relatório final tem que dizer explicitamente o que foi perdido (quais brutos nunca foram verificados).
+**`--force --reason "<reason>"` is only acceptable under the rule-7
+exceptions** (a cost or safety limit reached mid-pilot, with evidence
+not yet collected) — `--force` without `--reason` now fails loudly
+(`cleanup.py` requires the reason, never a silent bypass). Used this
+way, the final report must explicitly state what was lost (which raw
+files were never verified).
 
 ---
 
-## Passo 15 — verificação final: nada ficou na conta **[OPERADOR]**
+## Step 15 — final verification: nothing left in the account **[OPERATOR]**
 
-As mesmas 12 chamadas do Passo 14 de `INFRA_REHEARSAL.md` (`describe-instances`/`describe-addresses`/`describe-security-groups`/`describe-key-pairs`, 3 regiões × 4 chamadas), independentes do `all_clean` auto-reportado pelo `cleanup.py`.
-**Saída esperada:** as 12 chamadas devolvem listas **vazias**.
-**Critério de abortar/alerta:** qualquer recurso ainda presente.
+The same 12 calls from Step 14 of `INFRA_REHEARSAL.md` (`describe-instances`/`describe-addresses`/`describe-security-groups`/`describe-key-pairs`, 3 regions × 4 calls), independent of the `all_clean` self-reported by `cleanup.py`.
+**Expected output:** all 12 calls return **empty** lists.
+**Abort/alert criterion:** any resource still present.
 
 ---
 
-## Custo estimado do piloto
+## Estimated pilot cost
 
-5 instâncias (4× `m7i-flex.large` + 1× `t4g.micro`) + 5 EIPs, janela
-alvo de autodesligamento 4h, mas a execução real (apply → 60
-execuções → coleta → cleanup) deve durar bem menos que isso — ordem
-de grandeza esperada, por analogia ao ensaio de infraestrutura (~35
-min pros Passos 0-10 dali) mais o tempo das 60 execuções/12 capturas
-reais (nunca medido ainda, nenhuma execução real completa até
-agora): estimativa de 1-2h de fleet.
+5 instances (4× `m7i-flex.large` + 1× `t4g.micro`) + 5 EIPs, a 4h
+self-shutdown target window, but the real execution (apply → 60
+executions → collection → cleanup) should take much less than that —
+an expected order of magnitude, by analogy to the infrastructure
+rehearsal (~35 min for its Steps 0-10) plus the time for the 60 real
+executions/12 captures (never measured yet, no complete real
+execution so far): estimate of 1-2h of fleet time.
 - Compute: (4 × US$0,0958 + US$0,0084) × (1.5)h ≈ US$0,59
 - EIP: 5 × US$0,005 × 1.5h ≈ US$0,04
-- **Total estimado: ≈ US$0,6-1,2**, dentro do teto de US$5 desta autorização, somado ao já gasto na Fase A (~US$0,55).
+- **Estimated total: ≈ US$0,6-1,2**, within this authorization's US$5 ceiling, added to what was already spent in Phase A (~US$0,55).

@@ -1,110 +1,110 @@
-# Degrau 2, Etapa 2 — resultados das 5 hipóteses (D1-D5)
+# Degrau 2, Stage 2 — results of the 5 hypotheses (D1-D5)
 
-Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC. **Rascunho para revisão — não considerar final/publicado.** Segue `PLANO_DEGRAU2.md` + Emenda 1 integralmente, sem alterar critérios, testes, sementes ou regras de agregação. Todo número vem de `scripts/etapa2_analise_d1_d5.py`, lendo diretamente `campaign_data/round{1,2}/runs_raw/*.json` e `hardware_probe/probe_overhead_result.json` — nenhum valor digitado à mão. Saída completa (todos os números, inclusive os não citados aqui): `ETAPA2_RESULTADOS.json`.
+Luciano Figueiredo Coelho | PPGCC/LabSEC/UFSC. **Draft for review — do not treat as final/published.** Follows `PLANO_DEGRAU2.md` + Amendment 1 in full, without changing criteria, tests, seeds, or aggregation rules. Every number comes from `scripts/etapa2_analise_d1_d5.py`, reading directly from `campaign_data/round{1,2}/runs_raw/*.json` and `hardware_probe/probe_overhead_result.json` — no value typed by hand. Full output (every number, including those not cited here): `ETAPA2_RESULTADOS.json`.
 
-## Regra das 2 rodadas (aplicada antes de qualquer análise)
+## Two-round rule (applied before any analysis)
 
-Mann-Whitney exato bilateral, Rodada 1 (seed `20261117`) × Rodada 2 (seed `20261118`), por rota × métrica (`t_fluxo_fino_seconds` + 6 componentes de `phase_accounting` = 7 métricas × 4 rotas = 28 testes), Holm sobre os 28. **Nenhuma das 28 comparações teve p ajustado <0,05 — as duas rodadas puderam ser agrupadas em todas as análises abaixo**, sem nenhuma divergência real a reportar.
+Exact two-sided Mann-Whitney, Round 1 (seed `20261117`) × Round 2 (seed `20261118`), per route × metric (`t_fluxo_fino_seconds` + the 6 `phase_accounting` components = 7 metrics × 4 routes = 28 tests), Holm over the 28. **None of the 28 comparisons had an adjusted p <0,05 — the two rounds could be pooled in every analysis below**, with no real divergence to report.
 
-**Escolha metodológica explícita (não coberta literalmente pelo texto do plano, decidida ANTES de ver os p-valores):** "célula" nesta regra = rota (4, não 12), agrupando os 3 perfis dentro de cada rota (n=45/rodada) — a única leitura consistente com o número fixo "4 células × 7 métricas = 28 testes" já escrito no plano. Isso não afeta nenhum critério de decisão downstream, já que todas as 28 comparações vieram não-significativas.
+**Explicit methodological choice (not literally covered by the plan's text, decided BEFORE seeing the p-values):** "cell" in this rule = route (4, not 12), pooling the 3 profiles within each route (n=45/round) — the only reading consistent with the fixed "4 cells × 7 metrics = 28 tests" number already written in the plan. This does not affect any downstream decision criterion, since all 28 comparisons came back non-significant.
 
-## D1 — heterogeneidade entre instalações é artefato do orquestrador?
+## D1 — is the heterogeneity between installations an artifact of the orchestrator?
 
-| Par | Mediana A (ms) | Mediana B (ms) | HL diff (ms) | IC95% bootstrap (ms) | Banda ±15% (ms) | Dentro da banda? |
+| Pair | Median A (ms) | Median B (ms) | HL diff (ms) | 95% bootstrap CI (ms) | ±15% band (ms) | Within the band? |
 |---|---|---|---|---|---|---|
-| sa×us | 1808,4 | 1828,3 | -14,3 | [-37,9; 12,5] | ±271,3 | Sim |
-| sa×ap | 1808,4 | 1879,7 | -70,2 | [-96,3; -44,0] | ±271,3 | Sim |
-| us×ap | 1828,3 | 1879,7 | -56,6 | [-83,3; -30,8] | ±274,3 | Sim |
+| sa×us | 1808,4 | 1828,3 | -14,3 | [-37,9; 12,5] | ±271,3 | Yes |
+| sa×ap | 1808,4 | 1879,7 | -70,2 | [-96,3; -44,0] | ±271,3 | Yes |
+| us×ap | 1828,3 | 1879,7 | -56,6 | [-83,3; -30,8] | ±274,3 | Yes |
 
-**Veredito: SUSTENTADA** (heterogeneidade do T_fluxo PAREDE é majoritariamente artefato de medição) — os 3 ICs caem inteiramente dentro de ±15% da menor mediana do par, exatamente o critério da Emenda 1. Note-se que 2 dos 3 pares são estatisticamente significativos mesmo após Holm (sa×ap e us×ap, p Holm=0,0014) — a diferença é real e detectável, mas pequena em magnitude relativa (≤70ms, dentro da banda de tolerância pré-registrada de ~271-274ms). O terceiro par (sa×us) não é significativo (p Holm=0,321). Esses p-valores são puramente descritivos (convenção geral de testes do plano) — a decisão SUSTENTADA/REFUTADA/PARCIAL de D1 usa exclusivamente o critério de IC-vs-banda da Emenda 1, nunca p-valor. **Achado de processo:** a primeira versão deste script tinha os rótulos SUSTENTADA/REFUTADA invertidos em relação à definição literal da Emenda 1 — corrigido antes deste relatório ser escrito, citado aqui por transparência.
+**Verdict: SUPPORTED** (the WALL-CLOCK T_fluxo's heterogeneity is mostly a measurement artifact) — all 3 CIs fall entirely within ±15% of the pair's smaller median, exactly Amendment 1's criterion. Note that 2 of the 3 pairs are statistically significant even after Holm (sa×ap and us×ap, Holm p=0,0014) — the difference is real and detectable, but small in relative magnitude (≤70ms, within the pre-registered ~271-274ms tolerance band). The third pair (sa×us) is not significant (Holm p=0,321). These p-values are purely descriptive (the plan's general testing convention) — D1's SUPPORTED/REFUTED/PARTIAL decision uses exclusively Amendment 1's CI-vs-band criterion, never a p-value. **Process finding:** the first version of this script had the SUPPORTED/REFUTED labels inverted relative to Amendment 1's literal definition — fixed before this report was written, cited here for transparency.
 
-## D2 — overhead (parede−fino) segue a regressão do Item 5b do Degrau 1?
+## D2 — does the overhead (wall-clock − fine-grained) follow Degrau 1's Item 5b regression?
 
-| Rota | Overhead observado (ms) | RTT real (ms) |
+| Route | Observed overhead (ms) | Real RTT (ms) |
 |---|---|---|
 | L0-sa-east-1 | 456,1 | 2,25 |
 | L0-us-east-1 | 2106,4 | 113,40 |
 | L0-ap-northeast-1 | 4438,2 | 259,11 |
 | L123 | 2290,7 | 124,50 |
 
-Regressão (4 pontos): inclinação = **15,53 ms/ms**, intercepto = **384,67 ms**.
+Regression (4 points): slope = **15,53 ms/ms**, intercept = **384,67 ms**.
 
-**Veredito: REFUTADA.** Intercepto (384,67ms) está dentro da faixa `[0;1.925]`ms, mas a inclinação (15,53) fica **fora** de `[12,2;15,3]` por uma margem pequena (0,23). Por construção do critério ("REFUTADA caso qualquer um dos dois fique fora"), basta um dos dois falhar. Com apenas 4 pontos, esta é a mesma fragilidade estatística já declarada no pré-registro — a conclusão é sensível a um único ponto.
+**Verdict: REFUTED.** The intercept (384,67ms) is within the `[0;1.925]`ms range, but the slope (15,53) falls **outside** `[12,2;15,3]` by a small margin (0,23). By the criterion's construction ("REFUTED if either one falls outside"), it only takes one of the two to fail. With only 4 points, this is the same statistical fragility already stated in the pre-registration — the conclusion is sensitive to a single point.
 
-## D2b — regressão do "SSH puro" vs RTT real (adicional, sem critério SUSTENTADA/REFUTADA)
+## D2b — "pure SSH" regression vs. real RTT (additional, no SUPPORTED/REFUTED criterion)
 
-Inclinação = **11,77** ms de SSH puro por ms de RTT (vs. `b≈13,17` do Degrau 1 — mesma ordem de grandeza, nunca comparável em nível absoluto). Intercepto = 230,18ms (não previsto por nenhum modelo anterior, conforme já declarado na Emenda 1).
+Slope = **11,77** ms of pure SSH per ms of RTT (vs. Degrau 1's `b≈13,17` — the same order of magnitude, never comparable at the absolute level). Intercept = 230,18ms (not predicted by any earlier model, as already stated in Amendment 1).
 
-## D3 — ordem Classic/PQC/Hybrid e inversão em L0-sa-east-1 persistem no T_fluxo fino?
+## D3 — do the Classic/PQC/Hybrid order and the L0-sa-east-1 inversion persist in the fine-grained T_fluxo?
 
-| Rota | Ordem observada (fino) | Ordem oficial (parede) | Persiste? |
+| Route | Observed order (fine-grained) | Official order (wall-clock) | Persists? |
 |---|---|---|---|
-| L0-sa-east-1 | Classic < PQC < Hybrid | PQC < Classic < Hybrid | **Não** |
-| L0-us-east-1 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Sim |
-| L0-ap-northeast-1 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Sim |
-| L123 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Sim |
+| L0-sa-east-1 | Classic < PQC < Hybrid | PQC < Classic < Hybrid | **No** |
+| L0-us-east-1 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Yes |
+| L0-ap-northeast-1 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Yes |
+| L123 | Classic < PQC < Hybrid | Classic < PQC < Hybrid | Yes |
 
-**Veredito: SUSTENTADA** (persiste em 3/4 rotas). **A inversão de L0-sa-east-1 NÃO persiste no T_fluxo fino** — no parede, PQC era mais rápido que Classic nessa instalação (diferença atribuída ao viés de 26-45ms da chave RSA do Classic, Degrau 1); no fino, Classic volta a ser (ligeiramente) mais rápido que PQC, mas a diferença (7,8ms) é pequena e **não significativa** (p Holm=0,546), consistente com a previsão específica da Emenda 1.
+**Verdict: SUPPORTED** (persists in 3/4 routes). **The L0-sa-east-1 inversion does NOT persist in the fine-grained T_fluxo** — in the wall-clock value, PQC was faster than Classic on that installation (a difference attributed to Classic's 26-45ms RSA-key bias, Degrau 1); in the fine-grained value, Classic is once again (slightly) faster than PQC, but the difference (7,8ms) is small and **not significant** (Holm p=0,546), consistent with Amendment 1's specific prediction.
 
-**Previsão específica de L0-sa-east-1 (PQC−Classic, mesma convenção da Emenda 1):** observado **+7,8ms**, fora da faixa prevista `[-43;-24]`ms, mas **não-significativo como previsto** (p Holm=0,546 ≥0,05). A não-significância bateu com a previsão; a magnitude e o sinal não (a Emenda 1 previa PQC mais barato que Classic por ~24-43ms; o observado é PQC muito levemente mais caro, 7,8ms, dentro do ruído).
+**Specific prediction for L0-sa-east-1 (PQC−Classic, the same convention as Amendment 1):** observed **+7,8ms**, outside the predicted `[-43;-24]`ms range, but **not significant as predicted** (Holm p=0,546 ≥0,05). The non-significance matched the prediction; the magnitude and sign did not (Amendment 1 predicted PQC cheaper than Classic by ~24-43ms; the observed value is PQC very slightly more expensive, 7,8ms, within noise).
 
-Testes por par (8, Holm): todos os pares Classic×PQC são não-significativos (p Holm entre 0,09 e 0,55); todos os pares PQC×Hybrid são significativos (p Holm <0,012, a maioria <0,0001) — Hybrid é consistentemente mais caro que PQC em todas as 4 rotas.
+Per-pair tests (8, Holm): all Classic×PQC pairs are non-significant (Holm p between 0,09 and 0,55); all PQC×Hybrid pairs are significant (Holm p <0,012, most <0,0001) — Hybrid is consistently more expensive than PQC across all 4 routes.
 
-## D4a — Δ(PQC/Hybrid vs Classic) no T_fluxo fino é dominado por signing+verification?
+## D4a — is Δ(PQC/Hybrid vs. Classic) in the fine-grained T_fluxo dominated by signing+verification?
 
-**Nota metodológica (pós-auditoria):** o plano define a fração como componente ÷ Δ(T_fluxo fino) (escalar). Como Δfino é pequeno em várias células (há cancelamento entre componentes de sinais opostos), essa fração literal produz valores >100% ou com oscilação de sinal — reportados abaixo exatamente como saem, sem arredondar para dentro de `[0%,100%]`.
+**Methodological note (post-audit):** the plan defines the fraction as component ÷ Δ(fine-grained T_fluxo) (a scalar). Since Δfine is small in several cells (there is cancellation between components of opposite signs), this literal fraction produces values >100% or with sign oscillation — reported below exactly as they come out, without rounding into `[0%,100%]`.
 
-| Rota | PQC−Classic: sign+verif / http_calls (Δfino, ms) | Hybrid−PQC: sign+verif / http_calls (Δfino, ms) | Confirma (ambos pares)? |
+| Route | PQC−Classic: sign+verif / http_calls (Δfine, ms) | Hybrid−PQC: sign+verif / http_calls (Δfine, ms) | Confirms (both pairs)? |
 |---|---|---|---|
-| L0-sa-east-1 | 332,3% / -300,5% (7,8) | 8,1% / 65,3% (102,6) | Não |
-| L0-us-east-1 | 86,0% / 76,2% (27,4) | 6,9% / 39,2% (84,1) | Não |
-| L0-ap-northeast-1 | 176,0% / -23,8% (14,9) | 4,7% / 52,8% (157,8) | Não |
+| L0-sa-east-1 | 332,3% / -300,5% (7,8) | 8,1% / 65,3% (102,6) | No |
+| L0-us-east-1 | 86,0% / 76,2% (27,4) | 6,9% / 39,2% (84,1) | No |
+| L0-ap-northeast-1 | 176,0% / -23,8% (14,9) | 4,7% / 52,8% (157,8) | No |
 
-**Veredito: REFUTADA** (0/3 rotas confirmam os dois pares — em nenhuma rota o par PQC−Classic simultaneamente atinge sign+verif≥60% E http_calls<20%, por conta do segundo limiar; L0-us-east-1 e L0-ap-northeast-1 atingem facilmente o limiar de signing+verification, mas falham em `http_calls<20%`). **Achado honesto, não forçado na hipótese original:** a instabilidade numérica em si (fracões >100%, sinais trocando) já é um resultado — ela aparece porque Δfino é pequeno e os componentes individuais (signing positivo, http_calls às vezes negativo) quase se cancelam, não porque o cálculo esteja errado. O par Hybrid−PQC nunca é dominado por signing+verification (sempre <9%) — fica concentrado em `http_calls_seconds` (39-65%) e no resíduo (ver `ETAPA2_RESULTADOS.json`), consistente com a leitura do Degrau 1 de que o custo duplo do Hybrid está mais ligado ao handshake/TLS-KEM-proxy e a round-trips adicionais do que à assinatura/verificação em si.
+**Verdict: REFUTED** (0/3 routes confirm both pairs — on no route does the PQC−Classic pair simultaneously reach sign+verif≥60% AND http_calls<20%, because of the second threshold; L0-us-east-1 and L0-ap-northeast-1 easily reach the signing+verification threshold, but fail `http_calls<20%`). **Honest finding, not forced into the original hypothesis:** the numerical instability itself (fractions >100%, signs flipping) is a result in itself — it appears because Δfine is small and the individual components (signing positive, http_calls sometimes negative) nearly cancel out, not because the calculation is wrong. The Hybrid−PQC pair is never dominated by signing+verification (always <9%) — it is concentrated in `http_calls_seconds` (39-65%) and the residual (see `ETAPA2_RESULTADOS.json`), consistent with Degrau 1's reading that Hybrid's extra cost is more tied to the handshake/TLS-KEM-proxy and extra round-trips than to the signing/verification itself.
 
-## D4b — o acréscimo de Δfino ao ir de L0-sa-east-1 para L123 é dominado por resíduo+HTTP?
+## D4b — is the increment in Δfine going from L0-sa-east-1 to L123 dominated by residual+HTTP?
 
-| Par | Incremento total (ms) | residual+http | signing+verif | Confirma? |
+| Pair | Total increment (ms) | residual+http | signing+verif | Confirms? |
 |---|---|---|---|---|
-| Classic→PQC | 16,7 | 59,5% | 6,6% | Não (por 0,5 ponto percentual) |
-| PQC→Hybrid | -30,7 | 78,0% | 5,6% | **Sim** |
+| Classic→PQC | 16,7 | 59,5% | 6,6% | No (by 0,5 percentage point) |
+| PQC→Hybrid | -30,7 | 78,0% | 5,6% | **Yes** |
 
-**Veredito: PARCIAL** (1/2 pares confirma). O par PQC→Hybrid confirma claramente a previsão. O par Classic→PQC fica a apenas 0,5 ponto percentual do limiar de 60% (59,5%) — tecnicamente REFUTA esse sub-teste pelo critério exato, mas a direção e a ordem de grandeza batem com a previsão; a fração de signing+verification (6,6%) está bem dentro do limite `<40%` esperado.
+**Verdict: PARTIAL** (1/2 pairs confirm). The PQC→Hybrid pair clearly confirms the prediction. The Classic→PQC pair is only 0,5 percentage points away from the 60% threshold (59,5%) — it technically REFUTES this sub-test by the exact criterion, but the direction and order of magnitude match the prediction; the signing+verification fraction (6,6%) is well within the expected `<40%` limit.
 
-## D5 — razão Δresíduo_fino/RTT real em L123 vs L0-sa-east-1
+## D5 — ratio of Δfine_residual/real RTT on L123 vs. L0-sa-east-1
 
-Mediana resíduo fino: L0-sa-east-1 = 1388,7ms; L123 = 3599,6ms. Δ = 2210,9ms. RTT real L123 = 124,50ms. **Razão = 17,76**.
+Median fine-grained residual: L0-sa-east-1 = 1388,7ms; L123 = 3599,6ms. Δ = 2210,9ms. Real RTT for L123 = 124,50ms. **Ratio = 17,76**.
 
-**Veredito: SUSTENTADA** (dentro de `[13,6;26]`) — compatível com a leitura de que o componente de SSH explica o coeficiente `b` do Degrau 1.
+**Verdict: SUPPORTED** (within `[13,6;26]`) — compatible with the reading that the SSH component explains Degrau 1's `b` coefficient.
 
-## Resumo
+## Summary
 
-| Hipótese | Veredito |
+| Hypothesis | Verdict |
 |---|---|
-| D1 | SUSTENTADA |
-| D2 | REFUTADA (por margem pequena na inclinação) |
-| D2b | descritiva (inclinação 11,77 vs b≈13,17) |
-| D3 | SUSTENTADA (inversão de L0-sa NÃO persiste no fino) |
-| D4a | REFUTADA |
-| D4b | PARCIAL |
-| D5 | SUSTENTADA |
+| D1 | SUPPORTED |
+| D2 | REFUTED (by a small margin on the slope) |
+| D2b | descriptive (slope 11,77 vs. b≈13,17) |
+| D3 | SUPPORTED (the L0-sa inversion does NOT persist in the fine-grained value) |
+| D4a | REFUTED |
+| D4b | PARTIAL |
+| D5 | SUPPORTED |
 
-## Separação pré-registrado × exploratório
+## Pre-registered × exploratory separation
 
-Todos os vereditos acima seguem exatamente os critérios/testes/sementes do `PLANO_DEGRAU2.md` + Emenda 1, sem nenhuma alteração após ver os dados. As seguintes observações são **exploratórias** (não fazem parte de nenhum critério pré-registrado, só descrevem o padrão encontrado nos números já calculados): a direção negativa de `http_calls_seconds` em D4a para 2 das 3 rotas L0; a concentração do custo Hybrid−PQC em `http_calls_seconds`+`residual_seconds`; o fato de 2/3 pares de D1 serem estatisticamente significativos apesar de SUSTENTADA.
+All the verdicts above follow exactly the criteria/tests/seeds of `PLANO_DEGRAU2.md` + Amendment 1, with no change after seeing the data. The following observations are **exploratory** (not part of any pre-registered criterion, they only describe the pattern found in the already-computed numbers): the negative direction of `http_calls_seconds` in D4a for 2 of the 3 L0 routes; the concentration of the Hybrid−PQC cost in `http_calls_seconds`+`residual_seconds`; the fact that 2/3 of D1's pairs are statistically significant despite SUPPORTED.
 
-## Correções feitas após auditoria independente (antes deste relatório ser tratado como final)
+## Corrections made after independent audit (before this report was treated as final)
 
-Uma auditoria independente (agente separado, nunca leu nenhum arquivo de chave) encontrou e eu corrigi:
+An independent audit (a separate agent, which never read any key file) found, and I fixed:
 
-1. **[Alta]** D4a/D4b usavam um denominador não-declarado (soma das magnitudes absolutas dos 6 componentes) em vez do denominador literal do plano (o próprio Δfino/incremento). Corrigido — agora usa o denominador literal, com a instabilidade numérica resultante (fracões >100%, sinais trocando quando Δfino é pequeno) reportada explicitamente nas tabelas acima, nunca escondida.
-2. **[Média]** D3's previsão de L0-sa-east-1 tinha um erro de sinal (negava PQC−Classic antes de comparar com uma faixa já definida para PQC−Classic). Corrigido — sem efeito no veredito porque a magnitude já ficava fora da faixa nos dois sinais, mas o valor relatado agora é o correto.
-3. **[Baixa]** Dois booleanos de D2 (`slope_in_range`/`intercept_in_range`) serializavam como string `"True"`/`"False"` no JSON por um `numpy.bool_` não convertido — corrigido para `bool` nativo; nunca afetou o veredito em si (calculado antes da serialização).
-4. **[Baixa, latente]** D4a/D4b nunca checavam a regra das 2 rodadas antes de agrupar — sem efeito real nesta rodada (nenhuma divergência existe), mas adicionada uma guarda que falha alto se isso mudar numa rodada futura, em vez de agrupar silenciosamente.
-5. Também adicionados: Holm sobre os 3 p-valores descritivos de D1 (convenção geral do plano, nunca usada na decisão de D1) e uma nota explícita sobre a semente de bootstrap usada quando um par de D1 é agrupado (Rodada 1, `20261117` — o plano não cobre literalmente o caso agrupado).
+1. **[High]** D4a/D4b were using an undeclared denominator (the sum of the absolute magnitudes of the 6 components) instead of the plan's literal denominator (Δfine/the increment itself). Fixed — it now uses the literal denominator, with the resulting numerical instability (fractions >100%, signs flipping when Δfine is small) explicitly reported in the tables above, never hidden.
+2. **[Medium]** D3's prediction for L0-sa-east-1 had a sign error (it negated PQC−Classic before comparing it against a range already defined for PQC−Classic). Fixed — no effect on the verdict because the magnitude already fell outside the range under both signs, but the reported value is now correct.
+3. **[Low]** Two of D2's booleans (`slope_in_range`/`intercept_in_range`) were serializing as the string `"True"`/`"False"` in the JSON due to an unconverted `numpy.bool_` — fixed to a native `bool`; it never affected the verdict itself (computed before serialization).
+4. **[Low, latent]** D4a/D4b never checked the two-round rule before pooling — no real effect in this round (no divergence exists), but a guard was added that fails loudly if this changes in a future round, instead of silently pooling.
+5. Also added: Holm correction over D1's 3 descriptive p-values (the plan's general convention, never used in D1's decision) and an explicit note on the bootstrap seed used when a D1 pair is pooled (Round 1, `20261117` — the plan does not literally cover the pooled case).
 
-Nenhuma dessas correções mudou os 6 vereditos finais (D1 SUSTENTADA, D2 REFUTADA, D3 SUSTENTADA, D4a REFUTADA, D4b PARCIAL, D5 SUSTENTADA) — mudaram números de suporte e, em D4a/D4b, a magnitude exata das frações reportadas.
+None of these corrections changed the 6 final verdicts (D1 SUPPORTED, D2 REFUTED, D3 SUPPORTED, D4a REFUTED, D4b PARTIAL, D5 SUPPORTED) — they changed supporting numbers and, in D4a/D4b, the exact magnitude of the reported fractions.
 
-## Achado operacional não relacionado às hipóteses
+## Operational finding unrelated to the hypotheses
 
-12/12 capturas dedicadas falharam na Rodada 2 (vs 2/12 na Rodada 1) — mesma categoria de erro já aceita ("decifragem incompleta", nunca "divergência de tamanho"), mas com taxa muito maior, sugerindo causa sistêmica da janela da Rodada 2. Não afeta nenhum número usado nas análises D1-D5 acima (campo ortogonal). Detalhe completo: `DECISIONS.md`, Decisão 214.
+12/12 dedicated captures failed in Round 2 (vs. 2/12 in Round 1) — the same already-accepted error category ("incomplete decryption", never "size mismatch"), but at a much higher rate, suggesting a systemic cause tied to Round 2's window. It does not affect any number used in the D1-D5 analyses above (an orthogonal field). Full detail: `DECISIONS.md`, Decision 214.
