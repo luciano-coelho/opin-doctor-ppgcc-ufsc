@@ -1,4 +1,4 @@
-# Decisions — Nível 1 (TLS key exchange coverage)
+# Decisions — Level 1 (TLS key exchange coverage)
 
 ## 1. The gateway's shared `tls.Config` broke `auth`'s own internal RS-fetch call -- fixed by extending Decision 5's existing carve-out to the key-exchange dimension, not by discovering a new race
 
@@ -101,7 +101,7 @@ reported.
 client already sends the right SNI; it has no idea this distinction exists
 on the server side.
 
-## 2. `handshake_bytes` cannot be compared v5-vs-v6 directly -- the TLS client implementation changed, not just the curve. A same-implementation "Go-clássico" baseline was added instead
+## 2. `handshake_bytes` cannot be compared v5-vs-v6 directly -- the TLS client implementation changed, not just the curve. A same-implementation "Go-classical" baseline was added instead
 
 **Context.** The first pilot's `handshake_bytes` came back *smaller* with
 ML-KEM than v5's pre-KEM numbers, in both profiles -- the opposite of the
@@ -153,7 +153,7 @@ exact TCP segmentation, how much of the connection's tail end
 `countingConn`/`StateActive` captures), so no configuration change can make
 this comparison trustworthy at the byte level.
 
-**Decision: `handshake_bytes` gets its own, auxiliary "Go-clássico"
+**Decision: `handshake_bytes` gets its own, auxiliary "Go-classical"
 baseline, measured with the same client implementation as the KEM
 measurement itself -- it does not replace v5's official Classic numbers
 for anything else.** A new tool, `thesis/scripts/go_handshake_probe/`
@@ -178,21 +178,21 @@ truth for any other comparison in the thesis. Every other metric --
 JWT size, certificate size, `JWK_PK_size`, bytes per participant, T_fluxo
 -- continues to come from the real `opin_flow.py` flow (Python client),
 exactly as documented throughout `thesis/results/v5/` and the rest of this
-directory. The final Nível 1 comparison table presents `handshake_bytes`
+directory. The final Level 1 comparison table presents `handshake_bytes`
 with this baseline named explicitly alongside it, not silently substituted
 for v5's Classic number.
 
 **Pilot results (0ms, 10 runs each, 0% spread):**
 
-| | Go-clássico baseline | PQC (Go + `MLKEM1024`) | Hybrid (Go + `X25519MLKEM768`) |
+| | Go-classical baseline | PQC (Go + `MLKEM1024`) | Hybrid (Go + `X25519MLKEM768`) |
 |---|---|---|---|
 | `mtls_handshake_bytes` | PQC cert: 13,525 · Hybrid cert: 15,743 | 16,605 | 18,023 |
 
-The two Go-clássico values differ from each other (13,525 vs. 15,743)
+The two Go-classical values differ from each other (13,525 vs. 15,743)
 because the certificate itself differs by profile (`client_one_pqc.crt`
 2,953 bytes vs. `client_one_hybrid.crt` 6,859 bytes) -- exactly as
 expected, since only the curve was meant to be isolated per profile, not
-the certificate. PQC's own delta (Go-clássico 13,525 -> PQC+KEM 16,605)
+the certificate. PQC's own delta (Go-classical 13,525 -> PQC+KEM 16,605)
 is +3,080 bytes; Hybrid's own delta (15,743 -> 18,023) is +2,280 bytes --
 both close to, and consistent with, the no-client-cert controlled test
 above (+2,969 / +2,169), the small remaining difference plausibly being
@@ -201,7 +201,7 @@ TCP-segmentation noise from the extra certificate bytes now in play.
 ## 3. The full-batch "+10-12s proxy overhead" contradicted the stub calibration (~2ms) by ~1000x -- root cause was `opin_flow.py` resolving the literal string `"localhost"`, not a cost of the two-hop bridge architecture
 
 **Context.** `CONSOLIDATED_REPORT.md`'s first version concluded that the
-~10-12s `T_fluxo` gap between the Go-clássico-via-proxy baseline and v5's
+~10-12s `T_fluxo` gap between the Go-classical-via-proxy baseline and v5's
 Classic profile was "overhead of the test's two-hop bridge architecture,"
 explicitly flagging that this contradicted the Fase 4 stub-mode calibration
 (~2ms, Python -> proxy -> Python, gateway never touched) by close to 1000x.
@@ -244,7 +244,7 @@ attempt stalls/fails, and only then falls back to `127.0.0.1` -- costing
 `API_CONNECT_HOST`/`DIRECTORY_CONNECT_HOST` all built the proxy target as
 `f"localhost:{TLS_KEM_PROXY_PORT}"`. With `N_mTLS = 6` fresh, never-reused
 connections per full flow execution, 2.095s x 6 ≈ **12.57s** -- matching the
-batch's own "+10.66s (PQC) / +11.98s (Híbrido)" overhead at 0ms almost
+batch's own "+10.66s (PQC) / +11.98s (Hybrid)" overhead at 0ms almost
 exactly. The stub calibration never saw this: it deliberately performs one
 warmup request (excluded from measurement, matching the project's existing
 "discard warmup" convention) and then measures 200 requests reused on that
@@ -257,20 +257,20 @@ what it measured (steady-state reused-connection cost); it was simply never
 representative of the real flow's connection pattern (6 fresh connections,
 none reused across pools).
 
-**Hypothesis 3: the decomposition against the Go-clássico baseline is
+**Hypothesis 3: the decomposition against the Go-classical baseline is
 capturing something beyond what it should.** Partially true, but not in a
-way that invalidates the KEM-cost conclusion. The Go-clássico latency
+way that invalidates the KEM-cost conclusion. The Go-classical latency
 baseline reuses the same `start_tls_kem_proxy`/`*_CONNECT_HOST` code path
 (curve overridden via `TLS_KEM_PROXY_CURVE_OVERRIDE=classical`), so it paid
 the exact same `"localhost"` cost, to the same degree, as the KEM
-(PQC/Híbrido) runs it was compared against -- only the curve differs
+(PQC/Hybrid) runs it was compared against -- only the curve differs
 between the two, which has no bearing on DNS resolution. Because the bug
 was present and equal on both sides of that specific subtraction, it
 **cancels out**: the `CONSOLIDATED_REPORT.md` "delta do KEM" table (PQC/
-Híbrido vs. Go-clássico, values from -0.35s to +1.13s) was not distorted by
+Hybrid vs. Go-classical, values from -0.35s to +1.13s) was not distorted by
 it, and its conclusion -- ML-KEM's own cost is negligible relative to
 measurement noise -- stands. What *was* wrong is the separate "overhead do
-proxy" table (Go-clássico vs. v5's Classic profile, +9.56s to +12.22s
+proxy" table (Go-classical vs. v5's Classic profile, +9.56s to +12.22s
 across scenarios): v5's Classic profile never went through `tls_kem_proxy`
 or the string `"localhost"` at all, so that side of the comparison is
 clean, and the entire gap landed on the contaminated side. The number was
@@ -286,10 +286,10 @@ variables in `thesis/scripts/opin_flow.py`. Validated at three levels:
 |---|---|---|
 | `fetch_server_keys_and_ca` (3 fresh connections) | 4.149s | **0.064s** |
 | Insurance sub-flow total | 10.547s | **5.621s** |
-| Full flow (insurance + person, 28 calls, Híbrido, 0ms) | ~21-22s (pilot-observed) | **10.635s** |
+| Full flow (insurance + person, 28 calls, Hybrid, 0ms) | ~21-22s (pilot-observed) | **10.635s** |
 
 The post-fix full-flow number (10.635s, real ML-KEM key exchange included)
-lands almost exactly on v5's own pre-existing Híbrido `T_fluxo` at 0ms
+lands almost exactly on v5's own pre-existing Hybrid `T_fluxo` at 0ms
 (**10.7295s**, `thesis/results/v5/latency/CONSOLIDATED_REPORT.md`) --
 signature-only, no proxy, no KEM. The gap the batch attributed to "proxy
 architecture overhead" is, once the DNS artifact is removed, statistically
@@ -297,16 +297,16 @@ indistinguishable from zero.
 
 **Conclusion.** The batch's `handshake_bytes` results (240 runs, Decision 2)
 are unaffected -- byte counts do not depend on wall-clock connection time.
-**All 240 latency runs (KEM + Go-clássico baseline, both profiles, all 6
+**All 240 latency runs (KEM + Go-classical baseline, both profiles, all 6
 scenarios) are contaminated by this artifact and must be re-run** with the
 fix in place before `CONSOLIDATED_REPORT.md`'s latency section and its
 "proxy overhead" framing can be considered valid.
 
 ## 4. A ~2s Hybrid/0ms residual, investigated instead of accepted as noise -- traced to session-level Docker Desktop degradation, not to the KEM or the Hybrid certificate
 
-**Context.** After Decision 3's fix, the restarted Nível 1 pilot's
-Híbrido/0ms group came back with a median 2.01s above v5's own historical
-Híbrido baseline (10.7295s) and a 39.7% spread, including one run at
+**Context.** After Decision 3's fix, the restarted Level 1 pilot's
+Hybrid/0ms group came back with a median 2.01s above v5's own historical
+Hybrid baseline (10.7295s) and a 39.7% spread, including one run at
 16.36s -- while PQC/0ms landed within 0.05s of its own v5 number. **Ordered
 to investigate before treating this as noise**, with three named checks.
 
@@ -325,11 +325,11 @@ bridge.
 **A first re-test pointed at session settling, but a second one
 contradicted that explanation.** Cross-referencing each run's own
 timestamp against the `docker compose --force-recreate` that started the
-Híbrido group's containers showed the elevated runs clustered in the ~2
+Hybrid group's containers showed the elevated runs clustered in the ~2
 minutes right after the switch, with later runs (7-10) already tightening.
 A clean re-run of the same 10 executions on the same, by-then long-settled
 stack (no recreate in between) gave median 11.369s (17.9% spread) -- 0.64s
-above v5's Híbrido number, matching v5's own pre-existing PQC-vs-Híbrido
+above v5's Hybrid number, matching v5's own pre-existing PQC-vs-Hybrid
 gap (0.597s, its signature-composition cost) almost exactly. This looked
 like a closed explanation ("settle after switching profile") until it was
 turned into a permanent, testable protocol (below) and immediately
@@ -348,7 +348,7 @@ window nor a cache prune fully reversed it.**
 **Resolution: an unrelated, externally-triggered Docker Desktop restart
 turned into a clean-environment test.** With the OPIN stack brought back
 up exactly once (no further recreates, no prune, no profile switch), the
-Go-clássico/Hybrid-cert baseline (0ms, 10 runs) was repeated every ~17
+Go-classical/Hybrid-cert baseline (0ms, 10 runs) was repeated every ~17
 minutes for 8 rounds (~2h20m), hands-off between rounds:
 
 | Round | Time (UTC) | Median | Spread |
@@ -367,13 +367,13 @@ after -- round 3 immediately returned to the tightest spread of the whole
 series), the seven remaining rounds hold flat between 10.56s and 11.80s
 across the full 2h20m window, with the *last* round (10.575s, 2h14m after
 the first) lower than the first (10.896s) -- the opposite of a growth
-trend. This range brackets v5's own Híbrido number (10.7295s) tightly.
+trend. This range brackets v5's own Hybrid number (10.7295s) tightly.
 **The degradation was specific to that Docker Desktop session's own
 accumulated state (consistent with -- though not proven to be only --
 the 25GB+ build cache and hours of container churn observed before the
 restart), not an inherent property of long OPIN test sessions, and not
 caused by the KEM, the Hybrid certificate, or the two-hop proxy.** The
-official Híbrido/0ms KEM pilot was re-run once more on this now-validated
+official Hybrid/0ms KEM pilot was re-run once more on this now-validated
 environment: median 10.897s, spread 16.8% -- 0.17s from v5, fully
 consistent with the drift measurement's own range.
 
@@ -399,7 +399,7 @@ already up (its own dependency isn't gated by compose's own health
 ordering here).
 
 **Decision.** `thesis/scripts/switch_crypto_profile.py` is now the only
-sanctioned way to switch `CRYPTO_PROFILE`, for the remainder of Nível 1
+sanctioned way to switch `CRYPTO_PROFILE`, for the remainder of Level 1
 (Etapas 1 and 2) and any future work that reuses this pipeline. It: (1)
 force-recreates the profile-dependent services; (2) detects and retries
 the two known exit races above rather than requiring a human to notice and
@@ -441,11 +441,11 @@ does what Decision 4 intends.
 
 ## 6. v6 (with the two-hop proxy) came back *faster* than v5 (direct Python) at high-latency scenarios -- investigated instead of left as an unexplained "positive" result
 
-**Context.** Etapa 2's full latency table showed v6's PQC/Híbrido `T_fluxo`
+**Context.** Etapa 2's full latency table showed v6's PQC/Hybrid `T_fluxo`
 (with KEM, via the proxy) consistently *below* v5's own historical
-PQC/Híbrido numbers (no KEM, no proxy, direct Python) at the higher-latency
+PQC/Hybrid numbers (no KEM, no proxy, direct Python) at the higher-latency
 scenarios, growing with the scenario: roughly flat at 0-30ms (-0.7s to
-+0.7s) but reaching -2.18s (PQC) / -0.18s (Híbrido) at 225ms and -3.43s /
++0.7s) but reaching -2.18s (PQC) / -0.18s (Hybrid) at 225ms and -3.43s /
 -3.15s at 320ms. **Flagged as counter-intuitive before writing it into the
 final report as a positive finding**, since v6 has an *extra* hop (the
 proxy) that v5 never paid for -- a two-hop architecture reading as faster
@@ -473,7 +473,7 @@ efficiency difference: negligible when few ms are riding on each round
 trip, compounding once each round trip is worth hundreds of ms.
 
 **Conclusion, stated at the confidence level the evidence supports.** The
-"v6 faster than v5 at high latency" pattern is **not a Nível 1 result** --
+"v6 faster than v5 at high latency" pattern is **not a Level 1 result** --
 it does not reflect anything about ML-KEM, the two-hop proxy, or this
 etapa's own methodology. It traces, at least in large part, to v6's mTLS
 connections now being driven by Go's `crypto/tls` (via `tls_kem_proxy`,
@@ -487,7 +487,7 @@ elsewhere in the flow's other fresh connections, or ordinary run-to-run
 noise) and is left honestly unresolved rather than rounded up to "fully
 explained." **This finding must be presented in `CONSOLIDATED_REPORT.md`
 as a Go-vs-Python client-implementation artifact of this etapa's own
-measurement method, explicitly not implied as a Nível 1 performance
+measurement method, explicitly not implied as a Level 1 performance
 benefit of any kind.**
 
 ## 7. Closing Decision 6's residual: repeated across all 6 scenarios, plus a real second structural finding, plus an honest data-availability limit
@@ -528,20 +528,20 @@ sensible answer where the actual gap is large enough to be a real signal.
 | Scenario | Profile | Actual gap (v6-v5) | Model-explained | Verdict |
 |---|---|---|---|---|
 | 0ms | PQC | +0.71s | +0.10s | **wrong sign** -- noise-dominated |
-| 0ms | Híbrido | -0.08s | +0.13s | over-predicts a near-zero gap -- noise-dominated |
+| 0ms | Hybrid | -0.08s | +0.13s | over-predicts a near-zero gap -- noise-dominated |
 | 14ms | PQC | -0.71s | +0.12s | only 17% -- mostly noise |
-| 14ms | Híbrido | -0.04s | +0.17s | over-predicts -- noise-dominated (known 51.3%-spread anomaly, Etapa 2) |
+| 14ms | Hybrid | -0.04s | +0.17s | over-predicts -- noise-dominated (known 51.3%-spread anomaly, Etapa 2) |
 | 30ms | PQC | -0.47s | +0.22s | 46% |
-| 30ms | Híbrido | +0.16s | +0.24s | **wrong sign** -- noise-dominated |
+| 30ms | Hybrid | +0.16s | +0.24s | **wrong sign** -- noise-dominated |
 | 140ms | PQC | -1.35s | +0.89s | **66%** |
-| 140ms | Híbrido | +0.03s | +0.85s | **wrong sign**, gap too close to zero -- noise-dominated |
+| 140ms | Hybrid | +0.03s | +0.85s | **wrong sign**, gap too close to zero -- noise-dominated |
 | 225ms | PQC | -2.18s | +1.40s | **64%** |
-| 225ms | Híbrido | -0.18s | +1.40s | over-predicts massively -- noise-dominated |
+| 225ms | Hybrid | -0.18s | +1.40s | over-predicts massively -- noise-dominated |
 | 320ms | PQC | -3.43s | +2.03s | **59%** |
-| 320ms | Híbrido | -3.15s | +2.13s | **68%** |
+| 320ms | Hybrid | -3.15s | +2.13s | **68%** |
 
 **Only 4 of the 12 profile/scenario combinations have a gap large enough
-to be a reliable signal at all** (PQC at 140/225/320ms, Híbrido at 320ms
+to be a reliable signal at all** (PQC at 140/225/320ms, Hybrid at 320ms
 only) -- and at exactly those 4, the fresh-connection-efficiency model
 explains a consistent **59-68%** of the gap, every time. At the other 8,
 the model's own precise, clean, monotonic prediction has the wrong sign or
@@ -553,7 +553,7 @@ never a real effect to explain in the first place.
 
 **Step 3 -- decomposed where time actually goes, with direct evidence, for
 the consistent 59-68% (not the noise-dominated cells).** Instrumented one
-live Go-clássico run (PQC cert, 320ms) with the gateway's own access log
+live Go-classical run (PQC cert, 320ms) with the gateway's own access log
 (`docker logs`, the same instrumentation Decision 1/2 used), deduplicating
 by `remoteIP` (`baseline_automation.py`'s existing
 `dedupe_handshake_samples_by_connection`). Found **13 distinct mTLS
@@ -577,7 +577,7 @@ connections at the gateway per flow execution, not 6**:
   AS<->RS introspection pattern already documented in `thesis/results/
   v5/size/DECISIONS.md` Decision 5 and `thesis/results/v5/latency/
   DECISIONS.md` Decision 9 -- pre-existing since v5, not introduced by
-  Nível 1. The 2x-round-trip cost itself is consistent with `auth`'s own
+  Level 1. The 2x-round-trip cost itself is consistent with `auth`'s own
   Node.js HTTPS client (not Python, not Go) needing more round trips per
   handshake than Go's `crypto/tls` does -- a third data point for "TLS
   client implementation affects round-trip count," on top of Decision 6's
@@ -632,7 +632,7 @@ in the same order of magnitude as the remaining residual (roughly
 ~1.1-1.4s at 320ms for PQC) -- plausibly sufficient to close most or all
 of it. **This was not converted into an exact, verified seconds-by-
 scenario reconciliation**: Step 3's live per-connection capture used the
-Go-clássico (classical-curve) path specifically, one ad-hoc run, not the
+Go-classical (classical-curve) path specifically, one ad-hoc run, not the
 audited 10-run batches themselves, and reconciling its connection count
 against the batch's own aggregate `requests_logged` numbers exactly
 (13 distinct connections observed live vs the 14-request/28-call ratio
@@ -645,7 +645,7 @@ re-verified to the same standard as the count itself.
 
 **Conclusion.** The Go-vs-Python client-implementation effect (Decision 6)
 is confirmed as a real mechanism explaining **59-68%** of the gap at the 4
-scenarios where the gap is a real signal (PQC 140/225/320ms, Híbrido
+scenarios where the gap is a real signal (PQC 140/225/320ms, Hybrid
 320ms); the other 8 profile/scenario cells were never a real effect to
 explain. A second, now also confirmed-deterministic (not race-driven)
 contributor exists: v6 makes exactly 4 more server-internal, Node.js-

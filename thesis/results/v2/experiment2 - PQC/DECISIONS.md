@@ -27,7 +27,7 @@ SSA's JWS header, building the `KeyObject` via
 `ssaJwks` has no other consumer in `mock_as`, confirmed via grep, so this doesn't
 leave a half-migrated jose v2 dependency anywhere else.
 
-**Confirmed by:** user, 2026-08-07 ("Sim, segue com o workaround").
+**Confirmed by:** user, 2026-08-07 ("Yes, go ahead with the workaround.").
 
 ## 2. Go gateway (mock_mtls): use Go 1.27 pre-release for ML-DSA-65 mTLS support
 
@@ -107,7 +107,7 @@ never actually signed Consents/Person API responses or did any JWE encryption --
 `nimbus-jose-jwt` was only used for an unrelated `Pair` utility class, and
 incoming access tokens were parsed via Nimbus's `PlainObject` (`alg: none`,
 no signature check at all). This contradicted the Etapa 2 brief's premise
-("RS assina respostas com PS256"). The user confirmed (2026-08-07, citing the
+("RS signs responses with PS256"). The user confirmed (2026-08-07, citing the
 Open Finance Brasil FAPI Security Profile, which requires JWS response
 signing on sensitive APIs) that MockOPIN's RS was simply missing a real
 requirement, and to build it -- not just "migrate" something that never

@@ -557,8 +557,7 @@ security reason for it, matching what was actually implemented.
 ## 7. Etapa 7: opin_flow.py hybrid mode -- two real infrastructure bugs found and fixed, plus one pre-existing bug found that is NOT specific to hybrid
 
 **Code changes, minimal by design** (per the architecture doc's own
-framing: "reutilizados integralmente... produzem um terceiro conjunto de
-valores"). `get_client_cert_paths()` gained a `hybrid` branch pointing at
+framing: "reused wholesale... produce a third set of values"). `get_client_cert_paths()` gained a `hybrid` branch pointing at
 `client_one_hybrid.crt`/`.key` (Etapa 6) -- an ordinary RSA cert/key pair
 as far as this script's TLS stack is concerned. `load_client_signing_key()`
 gained a `hybrid` branch that reuses `client_one.jwks`'s plain PS256 key
@@ -1651,81 +1650,82 @@ concrete, demonstrated discovery failure, not the general design question.
 
 ---
 
-**NOTA DATADA (2026-11-10) -- a escolha de RS256 acima foi SUBSTITUIDA por
-PS256. O texto da decisao original, acima, e preservado sem alteracao;
-esta nota registra a mudanca, nunca reescreve o historico.**
+**DATED NOTE (2026-11-10) -- the RS256 choice above was REPLACED by
+PS256. The original decision text, above, is preserved unchanged;
+this note records the change, it never rewrites history.**
 
-Pedido do Luciano, antes do tag de congelamento da campanha oficial v9,
-por tres razoes: (1) coerencia com o que o ecossistema OPIN/Open Finance
-Brasil realmente usa -- nao achei, nesta auditoria, nenhum texto literal
-de especificacao FAPI/OPIN neste repositorio que proiba RS256 ou exija
-PS256 explicitamente (procurado e nao encontrado, registrado honesto, nao
-inventado); a evidencia real e circunstancial mas concreta: o cliente de
-conformance-suite REAL (Raidiam/Open Finance Brasil,
-`insurance-server-lambdas/conformance-suite/scripts/configs/clients.json`)
-publica sua propria chave de assinatura com `"alg": "PS256"`, nunca RS256;
-(2) eliminar o confundidor de padding (PSS contra PKCS1v1.5) na
-comparacao Classic x Hibrido nos tres artefatos que usam payload
-extension -- Classic e o meio classico do Strong Nesting ja eram PS256,
-so a payload extension divergia; (3) remover um desvio a declarar na
-tese.
+Requested by the author, before the official v9 campaign's freeze tag,
+for three reasons: (1) consistency with what the OPIN/Open Finance
+Brasil ecosystem actually uses -- this audit found no literal text in
+any FAPI/OPIN specification in this repository that forbids RS256 or
+explicitly requires PS256 (searched for and not found, reported
+honestly, not invented); the real evidence is circumstantial but
+concrete: the REAL conformance-suite client (Raidiam/Open Finance
+Brasil, `insurance-server-lambdas/conformance-suite/scripts/configs/clients.json`)
+publishes its own signing key with `"alg": "PS256"`, never RS256;
+(2) eliminate the padding confound (PSS vs. PKCS1v1.5) in the
+Classic vs. Hybrid comparison across the three artifacts that use
+payload extension -- Classic and Strong Nesting's classical half were
+already PS256, only the payload extension diverged; (3) remove a
+deviation that would otherwise have to be disclosed in the thesis.
 
-**O que mudou de verdade, nos mesmos tres artefatos desta decisao
-(client_assertion, PAR, resposta do RS) -- id_token/JARM continuam Strong
-Nesting, nunca tocados:**
+**What actually changed, in the same three artifacts covered by this
+decision (client_assertion, PAR, RS response) -- id_token/JARM remain on
+Strong Nesting, never touched:**
 - `insurance-server-lambdas/.../crypto/ResponseSigningService.java`:
-  `JWSAlgorithm.RS256` -> `JWSAlgorithm.PS256` (a assinatura real; Nimbus
-  `RSASSASigner` ja faz RSASSA-PSS automaticamente pra `PS256`, mesmo
-  padrao que `loadPs256Signer()` ja usava para o perfil Classic); `alg()`
-  e o `plainRsaJwk` publicado em `publicJwks()` tambem passam a dizer
+  `JWSAlgorithm.RS256` -> `JWSAlgorithm.PS256` (the real signature; Nimbus's
+  `RSASSASigner` already does RSASSA-PSS automatically for `PS256`, the
+  same pattern `loadPs256Signer()` already used for the Classic profile);
+  `alg()` and the `plainRsaJwk` published in `publicJwks()` now also say
   `"PS256"`.
-- `mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js` e
-  `thesis/scripts/pqc-signer/signer_core.mjs` (duas implementacoes
-  espelhadas, mesma raiz): `constants.RSA_PKCS1_PADDING` ->
-  `constants.RSA_PKCS1_PSS_PADDING` com `saltLength:
-  constants.RSA_PSS_SALTLEN_DIGEST` -- o MESMO padrao ja usado por
-  `verifyStrongNesting`/`hybridVerification.js` pro meio classico do
-  Strong Nesting, nao uma tecnica nova.
-- `thesis/scripts/opin_flow.py` (`_sign_jwt_hybrid`, assinatura do
-  client_assertion/PAR do lado do cliente): `algorithm="RS256"` ->
-  `algorithm="PS256"` via `pyjwt`, mesma chamada, so o parametro muda.
+- `mock-service-os/mock_as/utils/opin/payloadExtensionVerification.js` and
+  `thesis/scripts/pqc-signer/signer_core.mjs` (two mirrored
+  implementations, same root): `constants.RSA_PKCS1_PADDING` ->
+  `constants.RSA_PKCS1_PSS_PADDING` with `saltLength:
+  constants.RSA_PSS_SALTLEN_DIGEST` -- the SAME pattern already used by
+  `verifyStrongNesting`/`hybridVerification.js` for Strong Nesting's
+  classical half, not a new technique.
+- `thesis/scripts/opin_flow.py` (`_sign_jwt_hybrid`, the client-side
+  signing of client_assertion/PAR): `algorithm="RS256"` ->
+  `algorithm="PS256"` via `pyjwt`, same call, only the parameter changes.
 - `mock-service-os/mock_as/utils/opin/configuration.js`: `clientSigningAlgs`
-  passa a ser `['PS256']` em vez de `['RS256']` -- fonte unica que
-  alimenta `requestObjectSigningAlgValues`/`clientAuthSigningAlgValues`/
-  `request_object_signing_alg` no discovery metadata do AS.
-- `mock-service-os/certs/client_one_hybrid_pub.jwks`: campo `"alg"`
-  republicado como `"PS256"` (mesma chave RSA, mesmo `kid` -- so o
-  rotulo de algoritmo muda). Com isso o arquivo fica byte-identico ao
-  `client_one_pub.jwks` do perfil Classic (mesma chave, agora mesmo alg).
+  becomes `['PS256']` instead of `['RS256']` -- the single source feeding
+  `requestObjectSigningAlgValues`/`clientAuthSigningAlgValues`/
+  `request_object_signing_alg` in the AS's discovery metadata.
+- `mock-service-os/certs/client_one_hybrid_pub.jwks`: the `"alg"` field
+  republished as `"PS256"` (same RSA key, same `kid` -- only the
+  algorithm label changes). This makes the file byte-identical to the
+  Classic profile's `client_one_pub.jwks` (same key, now same alg).
 
-**Efeito colateral honesto, nao escondido:** antes desta mudanca,
-`alg: "RS256"` no cabecalho de um artefato hibrido era um sinal facil de
-"isto e payload extension, nao Strong Nesting". Depois dela, TODOS os
-artefatos hibridos (id_token, JARM, client_assertion, PAR, resposta do
-RS) dizem `alg: "PS256"` no cabecalho, iguais entre si -- a distincao
-entre os dois esquemas passa a depender inteiramente do comprimento da
-assinatura (`isStrongNestingShaped()`, ja o mecanismo real de despacho,
-nunca mudou) e da presenca do claim `pqc`, nunca mais do `alg` do
-cabecalho sozinho. Isso nao quebra nada (o despacho real ja nao usava
-`alg` para decidir), mas um leitor externo olhando so o cabecalho perde
-aquele sinal.
+**Honest side effect, not hidden:** before this change, `alg: "RS256"`
+in a hybrid artifact's header was an easy signal that "this is payload
+extension, not Strong Nesting." After it, ALL hybrid artifacts (id_token,
+JARM, client_assertion, PAR, RS response) say `alg: "PS256"` in the
+header, identical to each other -- the distinction between the two
+schemes now depends entirely on the signature's length
+(`isStrongNestingShaped()`, already the real dispatch mechanism, never
+changed) and on the presence of the `pqc` claim, never again on the
+header's `alg` alone. This breaks nothing (the real dispatch logic
+never used `alg` to decide), but an external reader looking only at the
+header loses that signal.
 
-**Tamanhos de assinatura confirmados inalterados:** RSA-2048 continua
-256 bytes de assinatura (PSS e PKCS1v1.5 produzem assinaturas do mesmo
-tamanho, o modulo da chave); ML-DSA-65 continua 3309 bytes. Nenhum dado
-de tamanho/byte ja coletado em rodadas anteriores precisa de re-coleta
-por causa desta mudanca especifica de padding.
+**Signature sizes confirmed unchanged:** RSA-2048 still produces a
+256-byte signature (PSS and PKCS1v1.5 produce signatures of the same
+size, the key's modulus); ML-DSA-65 still produces 3309 bytes. No
+size/byte data already collected in previous rounds needs re-collection
+because of this specific padding change.
 
-**Teste de regressao novo:**
+**New regression test:**
 `thesis/scripts/tests/test_signature_verification.py::test_hybrid_rs256_payload_extension_rejected`
--- forja um artefato de payload extension assinado com RS256 (o esquema
-ANTIGO, chave RSA-2048 gerada localmente so pro teste) e confirma que o
-verificador atual REJEITA, nunca aceita por engano. O teste
-`test_wrong_algorithm_rejected` (citado originalmente como
-`test_signature_verification.py:116`) NAO foi invertido: lido de novo
-com cuidado, aquele teste e pulado inteiramente pro perfil hybrid
-(`pytest.skip` explicito) e testa uma propriedade ortogonal (rejeicao por
-`expected_alg` incorreto nos perfis classic/pqc de chave unica) que nunca
-dependeu de RS256 nem de payload extension -- inverter aquela linha
-teria sido um erro, registrado aqui para nao esconder a divergencia entre
-o pedido original e o que de fato fazia sentido fazer.
+-- forges a payload-extension artifact signed with RS256 (the OLD
+scheme, an RSA-2048 key generated locally just for the test) and
+confirms the current verifier REJECTS it, never mistakenly accepting
+it. The `test_wrong_algorithm_rejected` test (originally cited as
+`test_signature_verification.py:116`) was NOT inverted: on a careful
+re-read, that test is skipped entirely for the hybrid profile
+(explicit `pytest.skip`) and tests an orthogonal property (rejection
+due to an incorrect `expected_alg` in the single-key classic/pqc
+profiles) that never depended on RS256 or payload extension --
+inverting that line would have been a mistake, recorded here so as not
+to hide the divergence between the original request and what actually
+made sense to do.
