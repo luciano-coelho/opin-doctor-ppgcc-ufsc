@@ -12,8 +12,9 @@ rationale:**
 - **[`results/v7/`](results/v7/)** — the pre-qualification, **simulated**
   WAN-latency (`tc`/`netem`) baseline. Historical, but **not superseded**:
   start with [`results/v7/Consolidated_Metrics_Report_FINAL.md`](results/v7/Consolidated_Metrics_Report_FINAL.md)
-  for the numbers, [`results/v7/ARCHITECTURE.md`](results/v7/ARCHITECTURE.md)
-  for how the measured system works, and [`results/v7/DECISIONS.md`](results/v7/DECISIONS.md)
+  for the numbers and the measured-system architecture (folded into this
+  same file since 2026-09-25; the former standalone `ARCHITECTURE.md` no
+  longer exists), and [`results/v7/DECISIONS.md`](results/v7/DECISIONS.md)
   for the engineering decisions behind that setup.
 - **[`results/v8/`](results/v8/)** — the thesis's first **real**-AWS
   cross-region latency campaign. Additive to v7, not a replacement — see
@@ -49,7 +50,8 @@ token exchange, resource queries — 28 or 44 HTTP calls across two
 sub-flows, depending on the campaign) and is measured for both **size**
 (bytes of cryptographic material, via the OPINsize equation extended in
 this thesis with a fourth, PKI term) and **latency** (`T_fluxo`, across
-real or emulated WAN-latency scenarios). See `results/v7/ARCHITECTURE.md`
+real or emulated WAN-latency scenarios). See
+`results/v7/Consolidated_Metrics_Report_FINAL.md`
 for the full system diagram and measurement methodology (v8/v9 reuse the
 same measured system, run against real AWS inter-region latency instead of
 emulated latency).
@@ -90,7 +92,7 @@ thesis/
 └── results/
     ├── v7/                simulated-latency campaign (size/, latency/, artifacts/ -- real
     │                       captured, cryptographically verified artifacts per profile,
-    │                       DECISIONS.md, ARCHITECTURE.md, Consolidated_Metrics_Report_FINAL.md)
+    │                       DECISIONS.md, Consolidated_Metrics_Report_FINAL.md)
     ├── v8/                first real-AWS cross-region latency campaign (additive to v7)
     ├── v9/                second, independent real-AWS campaign -- generalized topology,
     │                       Control profile, corrected OPINsize, Degrau 1/Degrau 2
@@ -163,7 +165,7 @@ id_token's *internal* signature bytes were counted in OPINsize — see
 - **Bytes per participant** — AS/RS/Directory egress, for estimating
   cloud-egress cost of the migration.
 
-See `results/v7/ARCHITECTURE.md` (methodology), each campaign's own
-`Consolidated_Metrics_Report_FINAL.md` (results), and each campaign's
+See each campaign's own
+`Consolidated_Metrics_Report_FINAL.md` (methodology and results) and each campaign's
 `DECISIONS.md` (the full methodological trail, including every deviation,
 correction, and independent audit) for full detail.
