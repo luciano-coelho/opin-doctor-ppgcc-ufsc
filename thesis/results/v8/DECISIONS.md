@@ -400,8 +400,8 @@ directly in the AWS Console (IAM -> Policies ->
 administrator credentials -- Claude never had, requested, stored, or saw
 any administrator access key or secret for this step; the change was
 guided verbally (exact before/after JSON diff) and applied by the author
-themselves, consistent with this project's "ampliar a policy e decisao do
-Luciano" rule. The edit created a new policy version via the IAM console's
+themselves, consistent with this project's "widening the policy is
+Luciano's decision" rule. The edit created a new policy version via the IAM console's
 normal "Edit policy" flow (up to 5 versions retained, old version not
 deleted), touching only the `aws:RequestedRegion` list -- no change to
 `Action`, `Effect`, `Resource`, or the `STSCallerIdentity` statement.
@@ -1130,8 +1130,9 @@ between that scan and the actual push.
 ## 25. Buenos Aires Local Zone opted in -- instance catalog found, client type left open
 
 **Opt-in completed 2026-10-12.** The author opted into the
-`us-east-1-bue-1` zone group via the AWS Console (Visualização global da
-AWS -> Regiões e zonas -> "Argentina (Buenos Aires)" -> Aceitar). Verified
+`us-east-1-bue-1` zone group via the AWS Console (Global AWS View -> Regions
+and zones -> "Argentina (Buenos Aires)" -> Accept; menu labels as shown in
+the console's Portuguese-language UI). Verified
 from the restricted `mockopin-pqc` profile: `describe-instance-type-
 offerings` for `us-east-1-bue-1a`, empty before the opt-in (Decision 17,
 23), now returns a real catalog. (Note: `describe-availability-zones`'
@@ -1835,8 +1836,8 @@ them with two additions (packet-loss upper-bound reporting, the
 
 **Scenario order across a day.** Not specified by the author's brief
 beyond "profile order randomized per window" -- **this is an open
-question flagged for the author** (see the chat report's "dúvidas"
-section). Proposed default, pending confirmation: cycle through all 6
+question flagged for the author** (see the chat report's "open
+questions" section). Proposed default, pending confirmation: cycle through all 6
 scenarios each window in a fixed, non-randomized order (`L0, L14, L30,
 L123, L219, L325`), since scenario order doesn't carry the same
 time-of-day-confound risk profile order does (different scenarios run on
@@ -2821,30 +2822,31 @@ estimate, checked 2026-10-12, same v7 sources as Decision 47:**
   $35-55** for this specific campaign run. Still an order of magnitude
   under the $200 Free Plan credit.
 
-**Nota de correção (2026-10-27, piloto 3 real):** o "45 resources to
-add" acima estava desatualizado. `terraform plan` real, full topology,
-mostrou **65 to add, 0 to change, 0 to destroy** (confirmado ao vivo,
-piloto 3). A diferença exata (20 recursos) são as regras
-`aws_vpc_security_group_ingress_rule` (uma por cenário/gateway em cada
-servidor + uma de SSH por módulo: 12 SSH + 8 gateway = 20) -- este
-parágrafo, escrito em 2026-10-12, contou "12 security groups" como se
-cada um fosse um recurso atômico com suas regras embutidas; o código
-real desde então (ou já desde então, não verificado) modela cada regra
-de ingress como seu próprio recurso Terraform. Nenhum `replace`/
-`destroy` -- não é drift de configuração, é estimativa de contagem
-nunca recalculada contra o código real. Contagem correta por tipo: 12
+**Correction note (2026-10-27, real pilot 3):** the "45 resources to
+add" above was outdated. The real `terraform plan`, full topology,
+showed **65 to add, 0 to change, 0 to destroy** (confirmed live,
+pilot 3). The exact difference (20 resources) is the
+`aws_vpc_security_group_ingress_rule` rules (one per scenario/gateway on
+each server + one SSH rule per module: 12 SSH + 8 gateway = 20) -- this
+paragraph, written on 2026-10-12, counted "12 security groups" as if
+each were a single atomic resource with its rules embedded; the actual
+code since then (or possibly already at the time, not verified) models
+each ingress rule as its own Terraform resource. No `replace`/
+`destroy` -- this is not configuration drift, it's a count estimate that
+was never recalculated against the real code. Correct count by type: 12
 `aws_instance` + 12 `aws_eip` + 12 `aws_security_group` + 20
 `aws_vpc_security_group_ingress_rule` + 8 `aws_key_pair` + 1
-`tls_private_key` = 65. Revisadas as 20 regras uma a uma contra o
-código-fonte (`main.tf`, não só o plano, já que vários valores de CIDR
-aparecem como "known after apply"): nenhuma usa `0.0.0.0/0`/`::/0`;
-`var.operator_ip_cidr` aparece em exatamente um lugar (SSH do módulo
-`control`); todo outro módulo usa exclusivamente o IP público do
-`control` para SSH; cada servidor só abre a porta 443 para os cenários
-daquele próprio servidor, com o L0 colocalizado usando IP privado nos
-3 casos. As 45 instance-hours/custo estimados abaixo continuam válidos
-(a contagem de INSTÂNCIAS, que domina o custo, não mudou -- só a
-contagem de regras de firewall, que não tem custo próprio).
+`tls_private_key` = 65. The 20 rules were reviewed one by one against
+the source code (`main.tf`, not just the plan, since several CIDR
+values show as "known after apply"): none uses `0.0.0.0/0`/`::/0`;
+`var.operator_ip_cidr` appears in exactly one place (SSH on the
+`control` module); every other module uses exclusively the `control`
+module's public IP for SSH; each server only opens port 443 for the
+scenarios belonging to that server itself, with the colocated L0 using
+a private IP in all 3 cases. The 45 instance-hours/cost estimated below
+remains valid (the INSTANCE count, which dominates cost, hasn't
+changed -- only the firewall-rule count, which carries no cost of its
+own).
 
 ## 55. Remote mode and delivery: image-ID comparison, real image-size/transfer/cost estimates, disk sizing confirmed, Docker-dependency audit, `REMOTE_GATEWAY_HOST` validation, pilot acceptance criterion, safety-timer margin confirmed
 
@@ -3171,7 +3173,7 @@ produces** (endpoint, request/response/total bytes, per-call latency,
 status, participant) -- Decision 42 originally also wanted an explicit
 per-call connection identifier and a per-call retry flag; neither exists
 in the lab's current call-dict today, and adding them would mean
-touching `do_call()` itself, which "sem reescrevê-las" rules out for
+touching `do_call()` itself, which "without rewriting them" rules out for
 this pass. Registered as a known, honest gap, not fabricated.
 
 **Overlap guard:** one `threading.Lock()` per installation
@@ -3985,7 +3987,7 @@ rehearsal (not simulated), 3 profiles:**
     `negotiated-group verification FAILED (B.12): CLIENT-FACING
     channel ... negotiated 'CurveP521', expected 'MLKEM1024'`,
     recorded in `campaign-status.json` as `"state": "aborted"`.
-  - **Abort loudly, tcpdump unavailable ("sem interface" in the sense
+  - **Abort loudly, tcpdump unavailable ("no interface" in the sense
     of "capture can't actually happen")**: the real `tcpdump` binary
     hidden (`mv` to a different name) on the client -- the backgrounded
     start command still exited 0 (the `&` absorbs it), but
@@ -4417,8 +4419,8 @@ validation against real pilot data (none exists yet, by design -- the
 pilot hasn't run) -- stated plainly, not implied otherwise.
 
 **(6) Data-retention rule for the pilot's data, documented in
-`PILOT_RUNBOOK.md`** (new section, "Dados do piloto — regra de
-retenção"): the pilot's 2-cell, 1-window data counts as window 1 of the
+`PILOT_RUNBOOK.md`** (new section, "Pilot data — retention
+rule"): the pilot's 2-cell, 1-window data counts as window 1 of the
 full campaign's own cells ONLY if the measurement protocol doesn't
 change afterward (concrete examples given of what does and doesn't
 count as a protocol change: `campaign_run.py`/`campaign_client_runner.py`
@@ -4818,7 +4820,7 @@ reproduced here.
 `c6i.xlarge`/`c5.2xlarge`) remains unresolved -- untouched by this test.
 The flex-launch-test Terraform changes (AZ pinning, shutdown safety net,
 the `availability_zone` bugfix) were deliberately left uncommitted the
-turn the test itself ran ("não commita," that turn's own instruction,
+turn the test itself ran ("don't commit," that turn's own instruction,
 while Luciano was still reviewing results) and are committed THIS turn
 instead, now that he's chosen.
 
@@ -5166,7 +5168,7 @@ to keep working on what didn't need it:**
    `install_common_packages.sh`'s own `cloud-init-output.log` rather
    than guessing why.
 
-**"Depois do piloto" / resume-after-Docker-restart list, in the exact
+**"After the pilot" / resume-after-Docker-restart list, in the exact
 order Luciano specified:**
 - Only server+client in x86_64 DinD this time (control's arm64 is
   already validated -- no need to re-run it under emulation again).
@@ -5202,7 +5204,7 @@ substantially more likely to work than before this turn's three fixes.
 ## 76. Heavy local rehearsal abandoned in favor of the AWS pilot itself as the delivery/resume rehearsal; a light, no-DinD flow check run instead -- full real flow confirmed under Python 3.9 for all 3 profiles, 3 of OPINsize's 4 terms reproduced byte-for-byte against v7, one real local-stack bug found and fixed (stale `mongo-data` volume, unrelated to the campaign); `METRICS_COVERAGE.md` and `consolidate_v8.py` written and tested end to end
 
 A no-AWS-mutation, no-AWS-cost turn (this turn's own opening constraint).
-Supersedes Decision 75's own "depois do piloto" resume list, specifically
+Supersedes Decision 75's own "after the pilot" resume list, specifically
 the item "Only server+client in x86_64 DinD this time" -- Luciano's own
 instruction this turn was explicit: the DinD/DooD heavy rehearsal is
 discarded outright, not resumed. **Reason:** it does not represent the
@@ -5332,8 +5334,8 @@ field), status, and -- for every "not covered"/"covered with
 difference" row -- the reason and a proposed fix, exactly as this turn's
 own instruction required; the only large, deferred fix is the pcap
 handshake-bytes extractor (`term_handshake`, and therefore OPINsize's
-own total and the flow-time decomposition), explicitly on the "depois do
-piloto" list. `consolidate_v8.py` reads the real `v8/latency/...` tree
+own total and the flow-time decomposition), explicitly on the "after the
+pilot" list. `consolidate_v8.py` reads the real `v8/latency/...` tree
 (Decision 53's own layout) and writes `consolidated.json` +
 `CONSOLIDATED_REPORT.md`, reusing v7's own `pem_der_len()` helper
 verbatim rather than reimplementing it, and adding one genuinely new
@@ -5353,7 +5355,7 @@ with no fixture supplied, correctly come back `"incomplete_missing_
 term_handshake"` with the right partial sum rather than a silently wrong
 total. `python3 -m pytest tests/test_consolidate_v8.py` passes.
 
-**"Depois do piloto" additions from this turn:** the pcap-based
+**"After the pilot" additions from this turn:** the pcap-based
 handshake-bytes extractor (`term_handshake`, OPINsize's own complete
 total, the flow-time decomposition, and `ClientHello` as its own
 figure) -- all four blocked on the same missing tool, all four
@@ -5667,7 +5669,7 @@ own real per-run figure read directly from
 (`requests_logged: 42`, `opin_processing_ms.count: 42`, checked across
 multiple runs and all three profiles -- always 42, never a different
 number). **Open question, not silently resolved:** Luciano's own recall
-of "38 requisições registradas por cenário" does not match any real v7
+of "38 requests logged per scenario" does not match any real v7
 data file actually read this turn (consistently 42, in both
 `requests_logged` and `opin_processing_ms.count`, across every run
 checked) -- reported as a discrepancy, not forced to fit by inventing a
@@ -5721,7 +5723,7 @@ against a real test tree built from this turn's own real snaplen=128
 captures (classic/pqc/hybrid, one execution each): all three PASS on
 size; SNI correctly comes back `None` and is correctly NOT gated.
 
-**Depois do piloto / open items from this turn:** whether to fix
+**After the pilot / open items from this turn:** whether to fix
 `mock_mtls/main.go`'s own handshake-byte counting boundary (point 1,
 Luciano's own call, a gateway code change); reconciling the "38 vs 42"
 requests-logged discrepancy (point 2, needs Luciano's own source or
@@ -5973,8 +5975,8 @@ this campaign is a thesis requirement, not a nice-to-have.** Moved
 `ssh`/`gateway` ingress off the shared `aws_security_group` resource's
 own inline `dynamic` blocks onto separate `aws_vpc_security_group_
 ingress_rule` resources (AWS provider v5+; one resource per allowed
-`/32`, same design Decision 49 already specified -- "uma regra por
-cliente"). This alone was NOT sufficient: a real full-campaign plan
+`/32`, same design Decision 49 already specified -- "one rule per
+client"). This alone was NOT sufficient: a real full-campaign plan
 (45 resources, fresh regions with no state at all) hit a SECOND, related
 error, `Invalid for_each argument ... known only after apply`, because
 `for_each` over a SET needs every member known at plan time (the value
@@ -6066,7 +6068,7 @@ $0.10-0.15 total so far -- well inside the pilot's own sub-$1 estimate.
 delivery, no execution, no further pilot steps -- those remain gated on
 their own stop points from the original pilot runbook prompt.
 
-**Depois do piloto:** consider whether `aws_vpc_security_group_ingress_
+**After the pilot:** consider whether `aws_vpc_security_group_ingress_
 rule`'s own static-map-key pattern (this entry) should be documented in
 `PILOT_RUNBOOK.md` itself as a known Terraform/AWS-provider interaction,
 for whoever next modifies this module; the operator discovery key has
@@ -6151,7 +6153,7 @@ on all 4. Real AMI IDs recorded via IMDSv2: control
 region).
 
 **Commit, scoped and recorded.** Per Luciano's own condition on this
-turn's PONTO DE PARADA 1 approval: `scripts/scan_secrets.sh` run and
+turn's STOP POINT 1 approval: `scripts/scan_secrets.sh` run and
 passed (clean on tracked + staged + full history) BEFORE committing;
 one commit containing ONLY the 3 delivery-script fixes above (no
 docs, no data) -- `93671aa5a8974efd7918bbeec85ae6d7203cf62a` -- pushed
@@ -6163,14 +6165,14 @@ pilot produces carries its own delivery-script provenance without
 requiring a `.git` checkout on control.
 
 **Not a protocol change.** Checked against `PILOT_RUNBOOK.md`'s own
-"o que conta como mudança de protocolo" list: none of these 3 fixes
+"what counts as a protocol change" list: none of these 3 fixes
 touch `campaign_run.py`/`campaign_client_runner.py`, the instance type,
 or the content of a delivered Docker image (the glob bug corrupted a
 TRANSFER, caught before any corrupted image was ever loaded -- the
 images actually running on every host are byte-identical to what was
 built locally, confirmed via the per-host image-ID comparison above).
-This is squarely "ajuste em script de entrega/infra, não do protocolo
-de medição" -- the pilot's window 1 data remains eligible to count
+This is squarely "a fix to a delivery/infra script, not to the
+measurement protocol" -- the pilot's window 1 data remains eligible to count
 toward the full campaign under the runbook's own retention rule.
 
 README.md's Caveats section updated: local `rsync` is optional (falls
@@ -6178,13 +6180,13 @@ back to split+scp either side is missing it), and that fallback's
 reassembly is whole-file sha256-verified before any `docker load`, with
 a glob narrow enough to exclude its own sidecar files.
 
-**Next:** Item 2 (EXECUÇÃO DO PILOTO) -- 60 real executions (10/profile
-x 3 profiles x 2 scenarios), per PONTO DE PARADA 1's own approval.
+**Next:** Item 2 (PILOT EXECUTION) -- 60 real executions (10/profile
+x 3 profiles x 2 scenarios), per STOP POINT 1's own approval.
 
 ## 82. `campaign_run.service` never existed anywhere in the repository, and `campaign_run.py` itself was never delivered to the control instance by any script -- both documented as "already written"/already in place, neither real; fixed by extending `deliver_source.sh`, not worked around with an ad hoc start mechanism (commit `57ebaafc365c72bd3ded74afcc193d243ecac91f`)
 
 Found trying to actually start the pilot's 60 real executions, right
-after Decision 81's PONTO DE PARADA 1 was approved: `README.md`/
+after Decision 81's STOP POINT 1 was approved: `README.md`/
 `PILOT_RUNBOOK.md` both describe `campaign_run.service` as "already
 written" and instruct `sudo systemctl edit campaign_run.service` on
 control. Checked directly, for real, before trusting it: `systemctl cat
@@ -6382,7 +6384,7 @@ pause, the pilot destroyed before resolving it):**
      yet validated against real AWS).
    - **`campaign_run.py`'s own consumer-side fix (reading `colocated`
      to pick the IP) was deliberately NOT written** -- Luciano's own
-     pause instruction ("não continues nenhuma correção nem execução")
+     pause instruction ("don't continue any fix or execution")
      landed before it was started.
    - **The pre-flight port-443 connectivity check (every client,
      including `L0`, short timeout, explicit failure not a hang) was
@@ -6438,7 +6440,7 @@ timeout fixes; item 6 (not yet applied) only changes which of the
 server's two already-existing IP addresses a co-located client is
 handed.
 
-**Depois do piloto / ao retomar, em ordem:**
+**After the pilot / upon resuming, in order:**
 1. Luciano confirms the real cost via the Billing console.
 2. `campaign_run.py`'s `colocated`-aware IP selection (item 6 above) --
    write it, matching `_REMOTE_CLIENT_ENV()`'s own existing shape.
@@ -6449,10 +6451,10 @@ handed.
    (this harness refuses `terraform apply`/`destroy` as a blind
    action), or an interactive apply Luciano runs himself.
 5. Re-apply the pilot topology (21 resources, same as Decision 80),
-   re-run item 1 (ENTREGA) fresh -- the 7 fixes above are already
+   re-run item 1 (DELIVERY) fresh -- the 7 fixes above are already
    committed, so this should be the first attempt that doesn't re-hit
    any of them.
-6. Resume item 2 (EXECUÇÃO DO PILOTO) from the start -- no partial
+6. Resume item 2 (PILOT EXECUTION) from the start -- no partial
    pilot data exists to resume from or discard.
 7. None of `pilot_acceptance.py`'s 11 criteria have been checked
    against real data yet -- this pilot never produced a single real
@@ -6609,7 +6611,7 @@ item 4 is a local-only verification exercise, no campaign code
 changed as a result of it (it confirmed Decision 83's own fix was
 already correct).
 
-**Depois do piloto / ao retomar** (supersedes Decision 83's own list --
+**After the pilot / upon resuming** (supersedes Decision 83's own list --
 step "4. terraform apply for the colocated output field" there is now
 OBSOLETE: a fresh `campaign_up.sh` apply creates the whole topology,
 `colocated` field included, with no separate manual output-only apply
@@ -6620,13 +6622,13 @@ needed):
    balance confirmed current.
 3. `campaign_up.sh` -- fresh apply, 21 resources, `colocated` already
    in the inventory this time.
-4. Item 1 (ENTREGA) fresh -- all 7 of Decision 83's own fixes plus
+4. Item 1 (DELIVERY) fresh -- all 7 of Decision 83's own fixes plus
    this entry's own `colocated` consumer are already committed, so
    this should be the first attempt that doesn't re-hit any of them.
 5. `verify_gateway_connectivity()`'s own table (step 4 of the runbook,
    now automatic) should show `OK` for every client, including `L0` --
    if it doesn't, stop there, before spending any more real time.
-6. Resume item 2 (EXECUÇÃO DO PILOTO) -- no partial pilot data exists
+6. Resume item 2 (PILOT EXECUTION) -- no partial pilot data exists
    to resume from or discard.
 7. Watch `PILOT_TIME_BUDGET_HOURS` (default 3h) -- past it, the
    orchestrator itself will block and ask, not silently keep going.
@@ -6854,7 +6856,7 @@ PQC/hybrid path") -- not attempted this turn, explicitly flagged as
 future work rather than guessed at from an undersized sample.
 
 **What to adjust before the full campaign** (supersedes nothing --
-first entry in this list; previous "depois do piloto" lists, Decisions
+first entry in this list; previous "after the pilot" lists, Decisions
 83/84, are now fully executed):
 1. `BASELINE_BYTES`/`pilot_acceptance.py`'s Criterion 1 and `pcap_utils.
    py`'s `extract_clean_handshake_bytes()`/Criterion 11 are now both
@@ -7287,12 +7289,12 @@ cases pass, all 3 profiles (see table above).
 
 ### Item 4 -- verdict
 
-**Fluxo completo: CONFIRMED.** Every signed artifact the client receives
+**Complete flow: CONFIRMED.** Every signed artifact the client receives
 is now verified, in all 3 profiles, through one uniform mechanism;
 `verify_signature=False` no longer exists anywhere in `opin_flow.py`;
 all mandatory negative tests pass in all 3 profiles.
 
-**Migração total: CONFIRMED for classic and hybrid; CONFIRMED for pqc
+**Total migration: CONFIRMED for classic and hybrid; CONFIRMED for pqc
 with one documented, pre-existing, out-of-scope exception** (id_token's
 JWE encryption, RSA-OAEP, Decision 4/thesis/results/v2 and v4) -- no
 other classical algorithm remains anywhere in pqc's own traffic.
@@ -7451,1032 +7453,1031 @@ implemented for this -- out of scope by the same decisions as before.
 **Not a protocol change.** `mock_mtls/main.go`/`tls_kem_proxy/main.go`
 untouched (confirmed by diff). No AWS touched this turn.
 
-## 89. Piloto 2 completo na AWS real (60/60 execuções, 44 chamadas, verificação ativa) -- achado de ordem (Hybrid mais rápido que PQC) registrado como observação em investigação, NÃO interpretado; diagnóstico local (sem AWS) separou parte do confundimento; dois bugs reais do orquestrador corrigidos com testes; verificação-timing e Criterion 6/N=30 fechados.
+## 89. Pilot 2 completed on real AWS (60/60 executions, 44 calls, active verification) -- an order-effect finding (Hybrid faster than PQC) logged as an observation under investigation, NOT interpreted; local diagnosis (no AWS) separated part of the confound; two real orchestrator bugs fixed with tests; verification-timing and Criterion 6/N=30 closed
 
-**Piloto 2 rodou real, ponta a ponta.** 27 recursos Terraform criados e
-verificados; testes negativos (`tests/test_signature_verification.py`)
-passaram contra a AWS real nos 3 perfis, logo após cada troca; 60/60
-execuções reais coletadas (10/perfil x 2 cenários, `call_count=44` em
-todas); dados puxados e verificados por sha256; bateria de aceitação
-10/11 PASS; teardown completo, 27 recursos destruídos, as 7 regiões
-confirmadas limpas via `aws ec2 describe-instances`/sg/key-pair/volume/
-EIP direto (não só o exit code do `terraform destroy`), incluindo o
-controle (sa-east-1). Custo real estimado ~US$1,10 (infraestrutura em
-pé ~3h40min) -- Luciano confere o valor exato no Billing console.
+**Pilot 2 ran for real, end to end.** 27 Terraform resources created and
+verified; negative tests (`tests/test_signature_verification.py`)
+passed against real AWS in all 3 profiles, right after each switch;
+60/60 real executions collected (10/profile x 2 scenarios, `call_count=44`
+across all of them); data pulled and sha256-verified; acceptance battery
+10/11 PASS; complete teardown, 27 resources destroyed, all 7 regions
+confirmed clean via direct `aws ec2 describe-instances`/sg/key-pair/volume/
+EIP calls (not just `terraform destroy`'s own exit code), including
+control (sa-east-1). Estimated real cost ~US$1,10 (infrastructure up
+for ~3h40min) -- Luciano to confirm the exact figure on the Billing console.
 
-**Reorganização de pastas (decisão do Luciano, não minha escolha
-unilateral):** piloto 1 e piloto 2 usavam o MESMO caminho
+**Folder reorganization (Luciano's own decision, not my unilateral
+choice):** pilot 1 and pilot 2 used the SAME path
 (`thesis/results/v8/latency/experiment{1,2,3}.../sa-east-1/{L0,L325}/`)
--- copiar o piloto 2 para lá teria sobrescrito os arquivos reais do
-piloto 1, que o `PILOT_1_NOTE.md` e o runbook dizem explicitamente que
-devem ser preservados. Perguntado antes de tocar em qualquer arquivo;
-Luciano escolheu pastas próprias para os dois:
-`thesis/results/v8/latency-pilot1-no-verification/` (42 chamadas, não
-usado no artigo, intocado) e
-`thesis/results/v8/latency-pilot2-full-flow/` (44 chamadas,
-verificação ativa, dados do artigo) -- `consolidated.json`/
-`CONSOLIDATED_REPORT.md` regenerados no novo caminho com o
-`consolidate_v8.py` já corrigido desta rodada (números idênticos ao
-que já estava gravado; só o schema ganhou o campo novo de verification
-timing, ver abaixo).
+-- copying pilot 2 there would have overwritten pilot 1's real files,
+which `PILOT_1_NOTE.md` and the runbook explicitly say must be
+preserved. Asked before touching any file;
+Luciano chose separate folders for the two:
+`thesis/results/v8/latency-pilot1-no-verification/` (42 calls, not
+used in the thesis, untouched) and
+`thesis/results/v8/latency-pilot2-full-flow/` (44 calls,
+active verification, the thesis's own data) -- `consolidated.json`/
+`CONSOLIDATED_REPORT.md` regenerated at the new path with
+`consolidate_v8.py` already fixed this round (numbers identical to
+what was already recorded; only the schema gained the new verification
+timing field, see below).
 
-**O achado (registrado aqui como observação, não como conclusão
-causal):** T_fluxo real mostrou Hybrid mais RÁPIDO que PQC, intervalos
-de confiança bootstrap (95%) não se sobrepondo em L0: Hybrid mediana
-9,030s [8,946, 9,457] vs PQC mediana 10,524s [10,346, 10,822]; em L325
-os intervalos quase não se sobrepõem (Hybrid [28,499, 28,819] vs PQC
-[28,805, 29,151]). Contraria a ordem esperada Classic < PQC < Hybrid.
+**The finding (logged here as an observation, not a causal
+conclusion):** real T_fluxo showed Hybrid FASTER than PQC, bootstrap
+confidence intervals (95%) not overlapping at L0: Hybrid median
+9,030s [8,946, 9,457] vs PQC median 10,524s [10,346, 10,822]; at L325
+the intervals barely overlap (Hybrid [28,499, 28,819] vs PQC
+[28,805, 29,151]). This contradicts the expected ordering Classic < PQC < Hybrid.
 
-**Diagnóstico local (sem AWS), pedido antes de qualquer interpretação
-causal -- "não concluas antes de testar todas as hipóteses":**
+**Local diagnosis (no AWS), requested before any causal
+interpretation -- "don't conclude before testing every hypothesis":**
 
-1. *Efeito de ordem/janela, com os dados reais do piloto 2 em si.*
-   `_campaign-control/windows/sa-east-1/window01.json` confirma: UMA
-   única janela rodou (não as 3 do protocolo completo), com ordem de
-   perfil sorteada (seed=1806032845) e resultado PQC -> Classic ->
-   Hybrid -- PQC rodou primeiro (logo após a entrega+assentamento da
-   instância recém-criada), Hybrid rodou último. Com uma única janela,
-   ordem e identidade do perfil são PERFEITAMENTE confundidos nesta
-   amostra: não há como separar estatisticamente "PQC é lento por ser
-   PQC" de "PQC é lento por ter rodado primeiro" só com estes dados.
-   Dentro de cada bloco de 10, não há tendência de queda clara (run01
-   não é sistematicamente o mais lento do seu próprio bloco, exceto
-   levemente em classic) -- o assentamento de 5 execuções antes da
-   coleta parece ter absorvido o grosso do aquecimento DENTRO de cada
-   bloco; o que não dá pra descartar é um efeito de aquecimento da
-   INSTÂNCIA como um todo (CPU credit/frequency scaling de uma EC2
-   recém-lançada), que afetaria o bloco que roda primeiro
-   (PQC) mais que os que rodam depois, independente do algoritmo.
+1. *Order/window effect, using pilot 2's own real data.*
+   `_campaign-control/windows/sa-east-1/window01.json` confirms: ONE
+   single window ran (not the 3 of the full protocol), with a shuffled
+   profile order (seed=1806032845) resulting in PQC -> Classic ->
+   Hybrid -- PQC ran first (right after delivery+settling of the
+   freshly-created instance), Hybrid ran last. With a single window,
+   order and profile identity are PERFECTLY confounded in this
+   sample: there is no way to statistically separate "PQC is slow because
+   it's PQC" from "PQC is slow because it ran first" from this data alone.
+   Within each block of 10, there is no clear downward trend (run01
+   is not systematically the slowest of its own block, except
+   slightly for classic) -- the 5-execution settling period before
+   collection seems to have absorbed most of the warm-up WITHIN each
+   block; what cannot be ruled out is a warm-up effect from the
+   INSTANCE as a whole (CPU credit/frequency scaling of a freshly-launched EC2
+   instance), which would affect the block that runs first
+   (PQC) more than the ones that run later, regardless of algorithm.
 
-2. *Decomposição por chamadas/servidor/CPU, dados reais do piloto 2.*
-   Em L0: soma das 44 `latency_ms` de `calls.jsonl` é pequena e
-   PARECIDA entre perfis (classic 469,5ms / pqc 427,6ms / hybrid
-   509,4ms mediana) -- ou seja, 90-96% do T_fluxo de cada perfil NÃO
-   está nas chamadas HTTP em si, mas num resíduo ("gap" = T_fluxo menos
-   soma das chamadas) de 5.034,9 / 10.101,6 / 8.519,8ms
-   (classic/pqc/hybrid). `opin_processing_ms` (perna do servidor,
-   `consolidate_v8.py`'s `opin_processing_stats()`) é minúsculo e
-   igual entre perfis (6,0 / 6,0 / 7,5ms mediana) -- não é o servidor.
-   Duração do handshake mTLS também pequena e sem favorecer hybrid
-   (14,0 / 3,0 / 14,0ms) -- não é o handshake. CPU do cliente é
-   PARECIDA entre pqc e hybrid (22,33% / 21,22% médio) e mais alta que
-   classic (16,79%) -- ou seja, o custo de CPU em si não diferencia
-   pqc de hybrid; a diferença de ~1,58s no "gap" entre os dois não é
-   explicada por nenhuma perna medida (chamadas, servidor, handshake,
-   CPU) -- sobra para operações locais de assinatura/verificação via
-   o serviço `pqc-signer` (Node.js, chamadas HTTP locais ao
-   `signer_core.mjs`, não instrumentadas em `calls.jsonl`) e/ou para o
-   efeito de ordem do item 1.
+2. *Decomposition by calls/server/CPU, pilot 2's real data.*
+   At L0: the sum of `calls.jsonl`'s 44 `latency_ms` values is small and
+   SIMILAR across profiles (classic 469,5ms / pqc 427,6ms / hybrid
+   509,4ms median) -- in other words, 90-96% of each profile's T_fluxo is
+   NOT in the HTTP calls themselves, but in a residual ("gap" = T_fluxo minus
+   the sum of calls) of 5.034,9 / 10.101,6 / 8.519,8ms
+   (classic/pqc/hybrid). `opin_processing_ms` (the server-side leg,
+   `consolidate_v8.py`'s `opin_processing_stats()`) is tiny and
+   equal across profiles (6,0 / 6,0 / 7,5ms median) -- it's not the server.
+   mTLS handshake duration is also small and doesn't favor hybrid
+   (14,0 / 3,0 / 14,0ms) -- it's not the handshake. Client CPU is
+   SIMILAR between pqc and hybrid (22,33% / 21,22% mean) and higher than
+   classic (16,79%) -- in other words, CPU cost by itself doesn't differentiate
+   pqc from hybrid; the ~1,58s difference in the "gap" between the two isn't
+   explained by any measured leg (calls, server, handshake,
+   CPU) -- it's left over for local signing/verification operations via
+   the `pqc-signer` service (Node.js, local HTTP calls to
+   `signer_core.mjs`, not instrumented in `calls.jsonl`) and/or for the
+   order effect from item 1.
 
-3. *Auditoria de assimetria de arquitetura.* Tabela operação x perfil:
-   verificação de CADA artefato assinado recebido (id_token, JARM,
-   resposta do RS) passa pelo MESMO serviço `pqc-signer` nos 3 perfis
-   (inclusive classic, que não usa `pyjwt.decode()` para isso) -- mas
-   hybrid faz o dobro de checagens de assinatura por artefato
-   (Strong Nesting: sigma1 clássica + sigma2 ML-DSA-65) contra UMA
-   checagem do PQC puro; o lado servidor espelha isso (hybrid compõe
-   e publica DUAS entradas "sig" no `/jwks`, Decision 88). Ou seja,
-   arquiteturalmente hybrid faz um SUPERCONJUNTO do trabalho
-   criptográfico do PQC puro (nunca menos) -- o achado real (hybrid
-   mais rápido) é inconsistente com uma explicação pura de "custo de
-   algoritmo", e consistente com um confundimento de ordem/posição
+3. *Architecture-asymmetry audit.* Operation-by-profile table:
+   verification of EACH signed artifact received (id_token, JARM,
+   RS response) goes through the SAME `pqc-signer` service in all 3 profiles
+   (including classic, which doesn't use `pyjwt.decode()` for this) -- but
+   hybrid performs twice as many signature checks per artifact
+   (Strong Nesting: classical sigma1 + ML-DSA-65 sigma2) against ONE
+   check for pure PQC; the server side mirrors this (hybrid composes
+   and publishes TWO "sig" entries in `/jwks`, Decision 88). In other
+   words, architecturally hybrid does a SUPERSET of pure PQC's
+   cryptographic work (never less) -- the real finding (hybrid
+   faster) is inconsistent with a pure "algorithm cost" explanation,
+   and consistent with an order/position confound
    (item 1).
 
-4. *Teste local controlado, ordem ABBA alternada.* `switch_crypto_profile.py`/
-   `latency_automation.run_once_timed_with_retry()` reaproveitados
-   (sem nenhuma mudança em `opin_flow.py`/`main.go` -- confirmado por
-   diff), stack local, padrão Classic/PQC/Hybrid/Hybrid/PQC/Classic
-   repetido 5 vezes (30 slots, 2 execuções/slot, troca de container só
-   quando o perfil muda de fato -- 60 execuções reais, N=20/perfil; um
-   soluço real de infra no meio -- CHECKPOINT do psql em 6,21s,
-   limiar 5,0s -- tratado reiniciando o container psql e retomando a
-   partir do slot interrompido, sem perder dados já gravados).
-   Resultado real, com bootstrap 95% CI:
-   - classic: mediana 3,265s, IC [3,112, 3,453]
-   - pqc: mediana 2,701s, IC [2,629, 2,826]
-   - hybrid: mediana 3,456s, IC [3,148, 3,701]
+4. *Controlled local test, alternating ABBA order.* `switch_crypto_profile.py`/
+   `latency_automation.run_once_timed_with_retry()` reused
+   (no change at all to `opin_flow.py`/`main.go` -- confirmed by
+   diff), local stack, Classic/PQC/Hybrid/Hybrid/PQC/Classic pattern
+   repeated 5 times (30 slots, 2 executions/slot, container switch only
+   when the profile actually changes -- 60 real executions, N=20/profile; one
+   real infra hiccup in the middle -- psql CHECKPOINT at 6,21s,
+   threshold 5,0s -- handled by restarting the psql container and resuming
+   from the interrupted slot, without losing already-recorded data).
+   Real result, with bootstrap 95% CI:
+   - classic: median 3,265s, CI [3,112, 3,453]
+   - pqc: median 2,701s, CI [2,629, 2,826]
+   - hybrid: median 3,456s, CI [3,148, 3,701]
 
-   Ordem local (sem latência WAN): **PQC < Classic < Hybrid** -- nem a
-   ordem esperada da literatura (Classic < PQC < Hybrid) nem a ordem
-   real da AWS (Hybrid < PQC) se reproduzem aqui. O que importa para o
-   achado: IC de hybrid [3,148, 3,701] e de pqc [2,629, 2,826] NÃO se
-   sobrepõem -- com ordem sorteada/alternada e N=20/perfil (bem mais
-   poder estatístico que os N=10 da AWS), **hybrid é
-   significativamente MAIS LENTO que PQC localmente**, o oposto exato
-   do que o piloto 2 mostrou na AWS real.
+   Local order (no WAN latency): **PQC < Classic < Hybrid** -- neither the
+   order expected from the literature (Classic < PQC < Hybrid) nor
+   AWS's real order (Hybrid < PQC) reproduce here. What matters for the
+   finding: hybrid's CI [3,148, 3,701] and pqc's [2,629, 2,826] do NOT
+   overlap -- with shuffled/alternating order and N=20/profile (far more
+   statistical power than AWS's N=10), **hybrid is
+   significantly SLOWER than PQC locally**, the exact opposite
+   of what pilot 2 showed on real AWS.
 
-   Efeito de posição/troca checado diretamente: comparando a primeira
-   execução de um slot que trocou de perfil contra a primeira execução
-   de um slot encadeado (mesmo perfil do slot anterior, sem troca), não
-   há penalidade sistemática de "primeiro depois da troca" em nenhum
-   perfil (hybrid até inverteu: slots encadeados vieram mais lentos que
-   os que trocaram, n pequeno por célula, provavelmente ruído). Por
-   ciclo (1 a 5, cobrindo os ~45 minutos do teste todo) a mediana não
-   cai monotonicamente -- 3,396 / 3,080 / 2,881 / 3,157 / 3,361s --
-   sem um padrão claro de aquecimento do processo como um todo.
+   Position/switch effect checked directly: comparing the first
+   execution of a slot that switched profile against the first execution
+   of a chained slot (same profile as the previous slot, no switch), there is
+   no systematic "first after switch" penalty in any
+   profile (hybrid even inverted: chained slots came out slower than
+   the switched ones, small n per cell, likely noise). By
+   cycle (1 to 5, covering the ~45 minutes of the whole test) the median does not
+   fall monotonically -- 3,396 / 3,080 / 2,881 / 3,157 / 3,361s --
+   with no clear sign of warm-up across the process as a whole.
 
-**Conclusão:** o achado real da AWS (hybrid mais rápido que PQC) **não
-se sustenta** quando a ordem é controlada/alternada e o N sobe para 20
-por perfil -- localmente a relação se INVERTE (hybrid significativamente
-mais lento que PQC), batendo com o que a auditoria de arquitetura
-(item 3) já apontava: hybrid faz um superconjunto do trabalho
-criptográfico do PQC puro (duas verificações de assinatura por
-artefato contra uma), nunca deveria ser mais rápido num ambiente sem
-confundimento. O teste local também não achou evidência de uma
-penalidade simples de "primeiro-depois-da-troca" que explicasse o
-achado da AWS por si só. A explicação mais parcimoniosa com as
-evidências reunidas: o resultado da AWS é um artefato da JANELA ÚNICA,
-NÃO ROTACIONADA, do piloto 2 (PQC sorteado primeiro, Hybrid sorteado
-por último, nenhuma repetição com outra ordem) combinado com algum
-efeito específico daquele ambiente/execução (ex.: throttling de CPU de
-uma instância EC2 recém-lançada ainda não estabilizada durante o
-PRIMEIRO bloco de perfil, que por acaso foi o do PQC) -- não uma
-propriedade real do algoritmo ML-DSA-65 puro vs. híbrido. Isso é uma
-hipótese bem fundamentada pelos dados reunidos, não uma certeza: os
-dados reais do piloto continuam sendo os dados reais, e a única forma
-de confirmar ou refutar isso de verdade é repetir a medição na AWS com
-múltiplas janelas de ordem sorteada independentemente (ver abaixo).
+**Conclusion:** the real AWS finding (hybrid faster than PQC) **does
+not hold up** when order is controlled/alternated and N rises to 20
+per profile -- locally the relationship INVERTS (hybrid significantly
+slower than PQC), matching what the architecture audit
+(item 3) already pointed to: hybrid does a superset of pure PQC's
+cryptographic work (two signature verifications per
+artifact against one), and should never be faster in an environment without
+confounding. The local test also found no evidence of a simple
+"first-after-switch" penalty that would explain the
+AWS finding by itself. The most parsimonious explanation given the
+evidence gathered: the AWS result is an artifact of pilot 2's SINGLE,
+NON-ROTATED WINDOW (PQC drawn first, Hybrid drawn
+last, no repetition with another order) combined with some
+effect specific to that environment/execution (e.g. CPU throttling on
+a freshly-launched EC2 instance not yet stabilized during the
+FIRST profile block, which happened to be PQC's) -- not a real
+property of the pure ML-DSA-65 algorithm vs. the hybrid one. This is a
+hypothesis well grounded in the evidence gathered, not a certainty: the
+pilot's real data remains the real data, and the only way to truly
+confirm or refute this is to repeat the measurement on AWS with
+multiple independently-shuffled-order windows (see below).
 
-**O que falta confirmar na AWS real:** rodar o piloto 2 (ou a campanha
-completa) com as 3 janelas do protocolo original e ordem sorteada
-INDEPENDENTEMENTE por janela (já suportado por
+**What still needs confirming on real AWS:** running pilot 2 (or the
+full campaign) with the original protocol's 3 windows and order shuffled
+INDEPENDENTLY per window (already supported by
 `campaign_run.py`'s `profile_order = PROFILES[:]; rng.shuffle(...)`) --
-só com múltiplas janelas, cada uma com uma ordem diferente, dá pra
-separar estatisticamente ordem de algoritmo nos dados REAIS de rede;
-o teste local acima testa se o efeito aparece numa rede sem latência
-WAN, não se ele se reproduz com latência real.
+only with multiple windows, each with a different order, can order be
+statistically separated from algorithm in REAL network data;
+the local test above tests whether the effect appears on a network without
+WAN latency, not whether it reproduces with real latency.
 
-**Correções (item 3):**
+**Fixes (item 3):**
 
-1. `campaign_run.py`'s `run_window()`: uma instalação sem nenhum
-   cenário habilitado no inventário deste run (ex.: piloto escopado só
-   para sa-east-1, rodando contra a lista completa de instalações da
-   campanha) chamava `sys.exit()` -- abortava o processo inteiro do
-   orquestrador, não só aquela instalação. Confirmado real no piloto 2
-   (us-east-1, sem cenário habilitado, veio depois de sa-east-1 na
-   ordem de iteração) -- inofensivo NESTA execução só porque
-   sa-east-1 já tinha terminado as 60 execuções antes da iteração
-   chegar em us-east-1; numa campanha com mais de uma instalação
-   escopada de forma desigual, teria matado o restante de instalações
-   já saudáveis também. Corrigido: agora imprime um aviso e `return`
-   (pula só aquela instalação/janela), sem abortar a campanha.
-   `tests/test_installation_skip.py` (novo): 3 cenários de inventário
-   falso -- piloto só sa-east-1 (confirma us-east-1 pulado sem
-   SystemExit e sa-east-1 seguindo normal), campanha completa
-   (confirma nenhuma instalação pulada), instalação totalmente ausente
-   do inventário (mesmo resultado do caso 1). `test_block_order.py`
-   (existente) confirmado ainda passando.
+1. `campaign_run.py`'s `run_window()`: an installation with no
+   scenario enabled in this run's inventory (e.g. a pilot scoped only
+   to sa-east-1, running against the campaign's full installation list)
+   called `sys.exit()` -- aborting the orchestrator's entire process,
+   not just that installation. Confirmed real in pilot 2
+   (us-east-1, with no scenario enabled, came after sa-east-1 in the
+   iteration order) -- harmless IN THIS run only because
+   sa-east-1 had already finished its 60 executions before iteration
+   reached us-east-1; in a campaign with more than one unevenly-scoped
+   installation, it would also have killed the remaining
+   already-healthy installations. Fixed: it now prints a warning and `return`s
+   (skipping only that installation/window), without aborting the campaign.
+   `tests/test_installation_skip.py` (new): 3 fake-inventory
+   scenarios -- sa-east-1-only pilot (confirms us-east-1 is skipped without
+   a SystemExit and sa-east-1 proceeds normally), full campaign
+   (confirms no installation skipped), installation completely absent
+   from the inventory (same result as case 1). `test_block_order.py`
+   (existing) confirmed still passing.
 
-2. `already_done()`/o loop round-robin (`campaign_run.py`, já
-   existente, não alterado): confirmado por leitura direta do código
-   que `Restart=on-failure` NÃO repete execuções já gravadas -- cada
-   `(window, scenario, global_run_index)` é checado contra
-   `run{NN}.json` já existente em disco antes de rodar; um restart
-   reentra no mesmo loop e só "resume past it" pelas que faltam.
-   Comportamento pré-existente, correto, não precisou de correção
-   nem de teste novo -- só verificação.
+2. `already_done()`/the round-robin loop (`campaign_run.py`, already
+   existing, unchanged): confirmed by direct code reading
+   that `Restart=on-failure` does NOT repeat already-recorded executions -- each
+   `(window, scenario, global_run_index)` is checked against an already-existing
+   `run{NN}.json` on disk before running; a restart
+   re-enters the same loop and only "resumes past it" for the ones missing.
+   Pre-existing, correct behavior, needed no fix
+   nor a new test -- just verification.
 
-3. Verificação-timing por artefato: `campaign_client_runner.py` agora
-   chama `of.clear_verification_timings()` antes de cada execução
-   cronometrada e anexa `of.get_verification_timings()` ao resultado
-   (`result["verification_timings"]`, lista de `{artifact,
-   duration_ms}`) -- os MESMOS timers que `verify_jwt()`/
-   `decrypt_and_verify_jwt()` já gravavam, só agora surfaçados.
-   `consolidate_v8.py` agrega por artefato (`verification_timings_ms.
-   per_artifact`, mediana/min/max/bootstrap CI) e reporta no
-   `CONSOLIDATED_REPORT.md`; dados reais do piloto 2 (anteriores a
-   esta mudança) corretamente marcados `"missing (run predates
-   campaign_client_runner.py wiring)"`, não um zero falso. Overhead do
-   cronômetro medido diretamente (`timeit`, 100k repetições): 0,737
-   microssegundos por chamada de verificação (dois `time.monotonic()`
-   + um `list.append()`) -- com 3-6 verificações por execução, overhead
-   total por execução ~2-4 microssegundos, desprezível contra um
-   T_fluxo de segundos (menos de 1 parte em 1 milhão). Não altera o que
-   T_fluxo mede além deste overhead já existente antes desta mudança
-   (a instrumentação em si já rodava dentro da janela cronometrada;
-   só a exposição no JSON é nova). Validado localmente, de ponta a
-   ponta: uma execução real (classic) produziu `verification_timings`
-   com 7 entradas reais (3 `rs_response`, 2 `jarm`, 2 `id_token`); um
-   diretório de cenário sintético com 3 execuções, passado por
-   `consolidate_profile_scenario()`, produziu medianas/IC bootstrap
-   por artefato corretamente (ex.: `id_token` mediana 12,5ms sobre 3
-   execuções).
+3. Per-artifact verification timing: `campaign_client_runner.py` now
+   calls `of.clear_verification_timings()` before each timed execution
+   and attaches `of.get_verification_timings()` to the result
+   (`result["verification_timings"]`, a list of `{artifact,
+   duration_ms}`) -- the SAME timers that `verify_jwt()`/
+   `decrypt_and_verify_jwt()` already recorded, now simply surfaced.
+   `consolidate_v8.py` aggregates per artifact (`verification_timings_ms.
+   per_artifact`, median/min/max/bootstrap CI) and reports it in
+   `CONSOLIDATED_REPORT.md`; pilot 2's real data (predating
+   this change) is correctly marked `"missing (run predates
+   campaign_client_runner.py wiring)"`, not a false zero. Timer
+   overhead measured directly (`timeit`, 100k repetitions): 0,737
+   microseconds per verification call (two `time.monotonic()`
+   calls + one `list.append()`) -- with 3-6 verifications per execution, total
+   overhead per execution ~2-4 microseconds, negligible against a
+   T_fluxo of seconds (less than 1 part in 1 million). This doesn't change what
+   T_fluxo measures beyond this overhead, which already existed before this change
+   (the instrumentation itself already ran inside the timed window;
+   only exposing it in the JSON is new). Validated locally, end to
+   end: one real execution (classic) produced `verification_timings`
+   with 7 real entries (3 `rs_response`, 2 `jarm`, 2 `id_token`); a
+   synthetic scenario directory with 3 executions, run through
+   `consolidate_profile_scenario()`, correctly produced bootstrap
+   medians/CIs per artifact (e.g. `id_token` median 12,5ms over 3
+   executions).
 
-4. Criterion 6 (`pilot_acceptance.py`): limiar de ±5% NÃO alterado.
-   Documentado que o piloto usa N=10/célula e a campanha completa usa
-   N=30/célula (`RUNS_PER_WINDOW=10` x `WINDOWS_PER_CAMPAIGN=3`).
-   Projeção via bootstrap (resample a N=30 a partir dos 10 valores
-   reais do piloto 2, 2000 resamples, mesmo método de
-   `bootstrap_median_ci()`): a ÚNICA célula que falha hoje em N=10
-   (hybrid/L0, largura 5,7% do IC) projeta 3,8% em N=30 -- dentro do
-   alvo. Todas as outras células já passam em N=10 e projetam ainda
-   mais estreitas em N=30 (ex.: pqc/L0 4,5% -> 2,1%). N=30 deve ser
-   suficiente para o alvo de ±5% sem precisar mudar o limiar.
+4. Criterion 6 (`pilot_acceptance.py`): the ±5% threshold was NOT changed.
+   Documented that the pilot uses N=10/cell while the full campaign uses
+   N=30/cell (`RUNS_PER_WINDOW=10` x `WINDOWS_PER_CAMPAIGN=3`).
+   Bootstrap projection (resampling to N=30 from pilot 2's 10 real
+   values, 2000 resamples, the same `bootstrap_median_ci()`
+   method): the ONLY cell that fails today at N=10
+   (hybrid/L0, CI width 5,7%) projects to 3,8% at N=30 -- within
+   the target. All other cells already pass at N=10 and project
+   even narrower at N=30 (e.g. pqc/L0 4,5% -> 2,1%). N=30 should be
+   sufficient for the ±5% target without needing to change the threshold.
 
-## 90. Contabilidade completa do T_fluxo (novas categorias signing/setup/wait, resíduo caracterizado via cProfile real); ordem balanceada por quadrado latino + aquecimento de instância + posição como covariável; portões de validação (24 execuções) e de aceite da janela 1; campaign_down.sh sem prompt interativo. Sem AWS -- só código, testes locais, docs.
+## 90. Complete T_fluxo accounting (new signing/setup/wait categories, residual characterized via real cProfile); order balanced via a Latin square + instance warm-up + position as a covariate; validation gates (24 executions) and window-1 acceptance gate; campaign_down.sh with no interactive prompt. No AWS -- code, local tests, and docs only.
 
-Turno de 4 itens, todos sem tocar AWS, `mock_mtls/main.go` ou
-`tls_kem_proxy/main.go` (confirmado por diff ao final de cada item).
+A 4-item turn, none of it touching AWS, `mock_mtls/main.go`, or
+`tls_kem_proxy/main.go` (confirmed by diff at the end of each item).
 
-### Item 1 — Contabilidade completa do T_fluxo
+### Item 1 — Complete T_fluxo accounting
 
-`opin_flow.py` já tinha `_VERIFICATION_TIMINGS` (turno anterior). Esta
-sessão acrescentou duas categorias novas e confirmou uma terceira como
-"efetivamente zero por construção":
+`opin_flow.py` already had `_VERIFICATION_TIMINGS` (previous turn). This
+session added two new categories and confirmed a third as
+"effectively zero by construction":
 
-- **`_SIGNING_TIMINGS`** (novo): `sign_jwt()` agora cronometra a si
-  mesmo (um único ponto de wrap cobre os 3 ramos -- PS256 via pyjwt,
+- **`_SIGNING_TIMINGS`** (new): `sign_jwt()` now times itself
+  (a single wrap point covers all 3 branches -- PS256 via pyjwt,
   ML-DSA-65 via `_run_pqc_signer()`, hybrid via `_sign_jwt_hybrid()`,
-  que por sua vez chama `_run_pqc_signer()` de novo), com um parâmetro
-  `artifact` livre (mesma convenção de `verify_jwt()`). `make_client_
-  assertion()`/`make_request_object()` passam esse `artifact` adiante;
-  os 4 pontos de chamada reais (`/token` client_credentials, PAR
-  request_object, PAR assertion, `/token` authorization_code) recebem
-  rótulos distintos (`client_assertion:token_cc`,
+  which in turn calls `_run_pqc_signer()` again), with a free
+  `artifact` parameter (the same convention as `verify_jwt()`). `make_client_
+  assertion()`/`make_request_object()` pass this `artifact` along;
+  the 4 real call sites (`/token` client_credentials, PAR
+  request_object, PAR assertion, `/token` authorization_code) receive
+  distinct labels (`client_assertion:token_cc`,
   `request_object:par`, `client_assertion:par`,
   `client_assertion:token_ac`).
-- **`_WAIT_TIMINGS`** (novo): o ÚNICO `time.sleep()` dentro da janela
-  medida de T_fluxo é o loop de poll em `wait_for_authorization_code()`
-  esperando o callback local -- cronometrado só no caminho de SUCESSO
-  (o caminho de retry/descarte já é excluído de T_fluxo via
-  `wasted_seconds`, cronometrá-lo de novo aqui seria contar o mesmo
-  tempo duas vezes). Todo outro `time.sleep()` do arquivo roda FORA da
-  janela medida (dentro de `start_tls_kem_proxy()`/`start_pqc_signer_
-  service()`, chamados uma vez por BLOCO, não por execução) ou dentro
-  do caminho já descartado.
-- **`_SETUP_TIMINGS`** (novo, achado real via profiling, não previsto
-  no pedido original): uma primeira validação local (classic, 3
-  perfis) mostrou um resíduo (T_fluxo menos a soma de HTTP+signing+
-  verification+wait) de **~75% do T_fluxo** -- muito alto para aceitar
-  sem investigar. Um `cProfile` real de uma execução local (classic)
-  identificou 3 custos reais, específicos, nunca antes instrumentados,
-  nenhum deles assinatura/verificação/KEM/chamada HTTP:
-  - `load_signing_key` -- construção do objeto de chave RSA a partir
-    do JWK de assinatura do cliente (`cryptography`'s own
-    `RSAPrivateNumbers.private_key()`), ~0,42s/chamada, 2x/execução
-    (uma por sub-fluxo, dentro de `load_client_signing_key()`).
-  - `generate_callback_cert` -- geração de um keypair RSA-2048
-    descartável para o certificado TLS auto-assinado do callback OIDC
-    local (`_generate_callback_tls_cert()`), ~0,26s/chamada,
-    2x/execução.
-  - `callback_server_teardown` -- `socketserver.serve_forever()` da
-    stdlib do Python faz poll via `select()` com `poll_interval=0,5s`
-    fixo; `shutdown()` precisa esperar o poll EM CURSO retornar antes
-    de parar, pagando até ~0,5s por chamada -- não é código deste
-    projeto, é um detalhe da stdlib nunca visto antes porque nunca
-    tinha sido cronometrado.
-  Nenhum dos três é assinatura, verificação, operação KEM, ou chamada
-  HTTP a uma parte do OPIN -- é scaffolding do próprio harness de
-  teste (geração de cert/chave local, ciclo de vida do servidor HTTPS
-  de callback), por isso ganhou categoria própria em vez de ficar
-  escondido dentro do resíduo.
+- **`_WAIT_TIMINGS`** (new): the ONLY `time.sleep()` inside T_fluxo's
+  measured window is the poll loop in `wait_for_authorization_code()`
+  waiting for the local callback -- timed only on the SUCCESS path
+  (the retry/discard path is already excluded from T_fluxo via
+  `wasted_seconds`; timing it again here would count the same
+  time twice). Every other `time.sleep()` in the file runs OUTSIDE the
+  measured window (inside `start_tls_kem_proxy()`/`start_pqc_signer_
+  service()`, called once per BLOCK, not per execution) or inside
+  the already-discarded path.
+- **`_SETUP_TIMINGS`** (new, a real finding via profiling, not foreseen
+  in the original request): an initial local validation (classic, 3
+  profiles) showed a residual (T_fluxo minus the sum of HTTP+signing+
+  verification+wait) of **~75% of T_fluxo** -- too high to accept
+  without investigating. A real `cProfile` of a local execution (classic)
+  identified 3 real, specific costs, never instrumented before,
+  none of them signature/verification/KEM/HTTP call related:
+  - `load_signing_key` -- building the RSA key object from
+    the client's signing JWK (`cryptography`'s own
+    `RSAPrivateNumbers.private_key()`), ~0,42s/call, 2x/execution
+    (one per sub-flow, inside `load_client_signing_key()`).
+  - `generate_callback_cert` -- generating a disposable RSA-2048
+    keypair for the local OIDC callback's self-signed TLS
+    certificate (`_generate_callback_tls_cert()`), ~0,26s/call,
+    2x/execution.
+  - `callback_server_teardown` -- Python stdlib's
+    `socketserver.serve_forever()` polls via `select()` with a fixed
+    `poll_interval=0,5s`; `shutdown()` has to wait for the poll ALREADY IN
+    PROGRESS to return before stopping, paying up to ~0,5s per call -- not
+    code from this project, it's a stdlib detail never seen before because it had
+    never been timed.
+  None of the three is signature, verification, a KEM operation, or an
+  HTTP call to any part of OPIN -- it is the test harness's own
+  scaffolding (local cert/key generation, the callback HTTPS server's
+  lifecycle), which is why it earned its own category instead of staying
+  hidden inside the residual.
 
-**Resultado após instrumentar `_SETUP_TIMINGS`**: resíduo caiu de ~75%
-para **14-24% do T_fluxo**, nos 3 perfis, validado com 3 execuções
-reais cada (classic, pqc, hybrid) contra a stack local -- não um
-único ponto, uma amostra pequena mas real. Números medianos (segundos,
-3 execuções/perfil):
+**Result after instrumenting `_SETUP_TIMINGS`**: the residual dropped from ~75%
+to **14-24% of T_fluxo**, across the 3 profiles, validated with 3
+real executions each (classic, pqc, hybrid) against the local stack -- not a
+single data point, a small but real sample. Median figures (seconds,
+3 executions/profile):
 
-| perfil | T_fluxo | http | signing | verification | wait | setup | resíduo | resíduo % |
+| profile | T_fluxo | http | signing | verification | wait | setup | residual | residual % |
 |---|---|---|---|---|---|---|---|---|
 | classic | 3,22 | 0,57 | 0,07 | 0,11 | ~0 | 1,98 | 0,48 | 14,7% |
 | pqc | 2,65 | 0,56 | 0,12 | 0,12 | ~0 | 1,15 | 0,62 | 23,5% |
 | hybrid | 3,40 | 0,58 | 0,18 | 0,10 | ~0 | 1,92 | 0,52 | 14,7% |
 
-(mediana de 3 execuções cada; variação execução-a-execução observada
-entre 14,5% e 24,1% nas 9 execuções reais -- máquina de desenvolvimento
-com ~20 outros containers Docker não relacionados rodando
-concorrentemente, ruído de fundo real, não um bug.)
+(median of 3 executions each; execution-to-execution variation observed
+between 14,5% and 24,1% across the 9 real executions -- development
+machine with ~20 other, unrelated Docker containers running
+concurrently, real background noise, not a bug.)
 
-**Resíduo remanescente (14-24%), explicado, não instrumentado
-separadamente**: o mesmo `cProfile` confirmou que custo de SSL/TLS
+**Remaining residual (14-24%), explained, not instrumented
+separately**: the same `cProfile` confirmed that SSL/TLS cost
 (`load_verify_locations`, `connect()`, `load_cert_chain`,
-`enum_certificates`) já está DENTRO do intervalo medido de cada
-chamada HTTP (`do_call()`'s own `start`/`end` em volta de
-`session.request()`) -- não é um gap adicional, é por isso que
-`http_calls_seconds` já é maior do que RTTs puros de loopback
-sugeririam. O que resta de fato não-instrumentado é: (a) o handshake
-mTLS/KEM em si, que acontece dentro de `tls_kem_proxy`/`mock_mtls`
-(Go, off-limits este turno) sem ponto de instrumentação do lado
-cliente possível sem tocar `main.go`; (b) overhead geral de
-interpretador Python/JSON/dict ao longo de ~230 mil chamadas de função
-por execução; (c) o ruído de fundo da máquina já citado. Nenhum desses
-é uma categoria que valha inventar sem dados reais -- reportado como
-resíduo caracterizado, não um número misterioso.
+`enum_certificates`) is already INSIDE the measured interval of each
+HTTP call (`do_call()`'s own `start`/`end` around
+`session.request()`) -- it's not an additional gap, it's why
+`http_calls_seconds` is already larger than pure loopback RTTs
+would suggest. What remains genuinely uninstrumented is: (a) the
+mTLS/KEM handshake itself, which happens inside `tls_kem_proxy`/`mock_mtls`
+(Go, off-limits this turn) with no client-side instrumentation
+point possible without touching `main.go`; (b) general Python
+interpreter/JSON/dict overhead across ~230 thousand function calls
+per execution; (c) the machine background noise already mentioned. None of these
+is a category worth inventing without real data -- reported as a
+characterized residual, not a mysterious number.
 
-**Overhead dos próprios cronômetros** (`timeit`, 200k repetições de
-`time.monotonic()` + montar dict + `list.append()`): 0,397
-microssegundos/chamada. Uma execução real tem ~23 desses eventos (8
-signing + 7 verification + 2 wait + ~6 setup) -> overhead total
-~0,009ms/execução, **~0,0003% de um T_fluxo de ~3s** -- não altera o
-que é medido de forma perceptível.
+**The timers' own overhead** (`timeit`, 200k repetitions of
+`time.monotonic()` + building a dict + `list.append()`): 0,397
+microseconds/call. A real execution has ~23 of these events (8
+signing + 7 verification + 2 wait + ~6 setup) -> total overhead
+~0,009ms/execution, **~0,0003% of a T_fluxo of ~3s** -- doesn't perceptibly
+change what is measured.
 
-**Erro de ambiente encontrado e corrigido no caminho** (não é um bug
-deste turno, é um achado operacional): a validação local inicial para
-o perfil `pqc` falhou com `ValueError: Unknown key type:
-2.16.840.1.101.3.4.3.18` (o OID do ML-DSA-65) dentro de
-`_verify_cert_signed_by_mldsa65()`. Investigado e confirmado: o
-`python` do PATH deste shell é o Python de sistema
-(`C:\Python313\python.exe`, `cryptography==46.0.3`, sem suporte a
-ML-DSA), não o `.venv` do projeto (`thesis/scripts/.venv`,
-`cryptography==50.0.0`, pinado em `requirements.txt` como `50.0.2`).
-Confirmado reproduzindo o MESMO erro contra o código ORIGINAL (não
-modificado), via `git stash` -- não é uma regressão desta sessão.
-Corrigido daqui em diante usando `.venv/Scripts/python.exe`
-explicitamente para toda validação local (classic/pqc/hybrid, todas
-as 3 reconfirmadas limpas depois da correção).
+**Environment error found and fixed along the way** (not a bug
+from this turn, an operational finding): the initial local validation for
+the `pqc` profile failed with `ValueError: Unknown key type:
+2.16.840.1.101.3.4.3.18` (the ML-DSA-65 OID) inside
+`_verify_cert_signed_by_mldsa65()`. Investigated and confirmed: this
+shell's PATH `python` is the system Python
+(`C:\Python313\python.exe`, `cryptography==46.0.3`, with no ML-DSA
+support), not the project's `.venv` (`thesis/scripts/.venv`,
+`cryptography==50.0.0`, pinned in `requirements.txt` as `50.0.2`).
+Confirmed by reproducing the SAME error against the ORIGINAL,
+unmodified code, via `git stash` -- not a regression from this session.
+Fixed from here on by using `.venv/Scripts/python.exe`
+explicitly for every local validation (classic/pqc/hybrid, all
+3 reconfirmed clean after the fix).
 
-`consolidate_v8.py`: novos blocos `signing_timings_ms`, `setup_timings_
-ms`, `wait_timings_ms`, `phase_accounting` (todos seguindo o mesmo
-padrão `status`/`runs_with_data`/estatística agregada de
-`verification_timings_ms`, incluindo `"missing (run predates ...)"`
-para dados anteriores a este turno, nunca um zero falso). Validado
-contra os 11 testes existentes (`test_consolidate_v8.py`, continua
-passando sem alteração) e contra uma verificação sintética própria
-(3 execuções reais repetidas num diretório de cenário temporário,
-confirma que o dado sai por execução E que mediana/IC saem por
-célula). `METRICS_COVERAGE.md` atualizado com a linha nova e os
-números reais acima.
+`consolidate_v8.py`: new `signing_timings_ms`, `setup_timings_
+ms`, `wait_timings_ms`, `phase_accounting` blocks (all following the same
+`status`/`runs_with_data`/aggregated-statistics pattern as
+`verification_timings_ms`, including `"missing (run predates ...)"`
+for data preceding this turn, never a false zero). Validated
+against the 11 existing tests (`test_consolidate_v8.py`, still
+passes unchanged) and against its own synthetic check
+(3 real executions repeated in a temporary scenario directory,
+confirming the data comes out per execution AND that median/CI come out per
+cell). `METRICS_COVERAGE.md` updated with the new row and the
+real figures above.
 
-### Item 2 — Ordem balanceada (quadrado latino) + aquecimento de instância
+### Item 2 — Balanced order (Latin square) + instance warm-up
 
-`run_window()` sorteava `profile_order` de forma independente por
-janela (`rng.shuffle`) -- exatamente o que confundiu identidade de
-perfil com posição/janela no piloto 2 real (Decision 89: a única
-janela real sorteou PQC primeiro e Hybrid por último). Substituído por
-`build_latin_square_profile_orders(seed)`: UMA semente para a campanha
-toda (não mais uma por janela) sorteia uma permutação-base dos 3
-perfis e uma direção de rotação (+1/-1); as 3 janelas são a base e suas
-2 rotações cíclicas nessa direção -- um quadrado latino circulante, que
-garante de graça a restrição de coluna (cada posição também vê cada
-perfil exatamente uma vez) sem rejection sampling. 6 bases x 2 direções
-= 12 quadrados possíveis, o total exato de quadrados latinos 3x3 --
-todos alcançáveis pela semente. `campaign_up.sh` agora grava
-`latin_square_seed` (uma chave) em vez de `window_seeds` (uma por
-janela) no `campaign_schedule.json`.
+`run_window()` shuffled `profile_order` independently per
+window (`rng.shuffle`) -- exactly what confounded profile
+identity with position/window in real pilot 2 (Decision 89: the only
+real window drew PQC first and Hybrid last). Replaced with
+`build_latin_square_profile_orders(seed)`: ONE seed for the whole
+campaign (no longer one per window) draws a base permutation of the 3
+profiles and a rotation direction (+1/-1); the 3 windows are the base and its
+2 cyclic rotations in that direction -- a circulant Latin square, which
+guarantees the column constraint for free (each position also sees each
+profile exactly once) with no rejection sampling. 6 bases x 2 directions
+= 12 possible squares, the exact total number of 3x3 Latin squares --
+all reachable via the seed. `campaign_up.sh` now records
+`latin_square_seed` (a single key) instead of `window_seeds` (one per
+window) in `campaign_schedule.json`.
 
-`profile_position_in_window` (0/1/2, `enumerate(profile_order)`) agora
-é gravado em todo `run{NN}.json` real, junto do `window` que já
-existia -- a covariável que faltava para separar efeito de ordem de
-efeito real sem precisar do teste ABBA local inteiro de novo.
-`consolidate_v8.py` agrega isso em `t_fluxo_by_window_position.series`
-por célula, pronto para a análise usar sem reler cada `run{NN}.json`
-manualmente.
+`profile_position_in_window` (0/1/2, `enumerate(profile_order)`) is now
+recorded in every real `run{NN}.json`, alongside the `window` field that
+already existed -- the covariate that was missing to separate order
+effect from real effect without needing the whole local ABBA test again.
+`consolidate_v8.py` aggregates this in `t_fluxo_by_window_position.series`
+per cell, ready for analysis to use without re-reading every `run{NN}.json`
+by hand.
 
-**Aquecimento de instância** (`run_instance_warmup()`, novo): uma vez
-por instalação, antes do PRIMEIRO bloco da campanha inteira -- 180s
-(3 minutos) de fluxos descartáveis (perfil classic) via o mesmo
-`run_warmup()` já existente, gravados em
-`_campaign-control/instance_warmup/`, nunca na árvore real de dados.
-180s não foi escolhido depois de ver resultado nenhum: é uma margem de
-50% sobre os ~2 minutos que a Decision 4 (`switch_crypto_profile.py`)
-já tinha medido para o fechamento da janela de *settling* de uma
-RECRIAÇÃO DE CONTAINER (perturbação mais leve que o boot de uma
-instância EC2 nova de verdade, que ainda tem disco EBS frio, cache de
-página do SO frio, caches de JIT/interpretador frios).
+**Instance warm-up** (`run_instance_warmup()`, new): once
+per installation, before the FIRST block of the whole campaign -- 180s
+(3 minutes) of disposable flows (classic profile) via the same
+already-existing `run_warmup()`, recorded in
+`_campaign-control/instance_warmup/`, never in the real data tree.
+180s wasn't chosen after looking at any result: it's a 50% margin
+over the ~2 minutes that Decision 4 (`switch_crypto_profile.py`)
+had already measured for a CONTAINER RE-CREATION's *settling*
+window to close (a lighter perturbation than booting a genuinely new
+EC2 instance, which still has a cold EBS disk, a cold OS page
+cache, and cold JIT/interpreter caches).
 
-Testes novos (`tests/test_latin_square_order.py`, 6 casos): o quadrado
-é de fato um quadrado latino (linha E coluna, 200 sementes diferentes),
-determinístico por semente, não degenerado a uma única ordem, rejeita
-`len(PROFILES) != WINDOWS_PER_CAMPAIGN`; `run_instance_warmup()` roda
-pelo tempo configurado e depois desliga os proxies, grava fora da
-árvore real, pula instalação sem cenário disponível no inventário
-(mesma filosofia "pula, não aborta" do item 3 de turnos anteriores).
+New tests (`tests/test_latin_square_order.py`, 6 cases): the square
+is indeed a Latin square (by row AND column, 200 different seeds),
+deterministic per seed, not degenerate to a single order, rejects
+`len(PROFILES) != WINDOWS_PER_CAMPAIGN`; `run_instance_warmup()` runs
+for the configured duration and then shuts down the proxies, records outside
+the real tree, skips an installation with no scenario available in the inventory
+(the same "skip, don't abort" philosophy from item 3 of previous turns).
 
-### Item 3 — Portões de validação e de aceite da janela 1
+### Item 3 — Validation and window-1 acceptance gates
 
-`run_validation_stage()` (novo): 1 execução por perfil em cada um dos 8
-cenários da campanha completa (4 sa-east-1 + 2 us-east-1 + 2
-ap-northeast-1 = 8; x 3 perfis = 24 execuções), ANTES da janela 1,
-gravadas em `_campaign-control/validation_stage/`, nunca na árvore
-real. Depois de escritas, bloqueia em
+`run_validation_stage()` (new): 1 execution per profile across each of the 8
+full-campaign scenarios (4 sa-east-1 + 2 us-east-1 + 2
+ap-northeast-1 = 8; x 3 profiles = 24 executions), BEFORE window 1,
+recorded in `_campaign-control/validation_stage/`, never in the
+real tree. Once written, it blocks on
 `wait_for_operator_gate("validation_stage")`. `wait_for_operator_gate()`
-(novo) espera indefinidamente (sem timeout, de propósito) um arquivo
-marcador (`_campaign-control/gates/<nome>.approved`) que SÓ o operador
-cria, depois de puxar a amostra via `campaign_pull.sh` e rodar
-`pilot_acceptance.py` contra ela fora da instância -- o orquestrador
-em si não tem acesso a pcaps/dados já puxados para rodar isso ele
-mesmo (só roda NA instância de controle). Mesmo mecanismo reaplicado
-depois da janela 1 inteira completar (`wait_for_operator_gate(
-"window1_acceptance")`), antes da janela 2 começar -- aceite completo
-sobre o dataset real, não só a amostra de 24.
+(new) waits indefinitely (no timeout, by design) for a marker
+file (`_campaign-control/gates/<name>.approved`) that ONLY the operator
+creates, after pulling the sample via `campaign_pull.sh` and running
+`pilot_acceptance.py` against it off the instance -- the orchestrator
+itself has no access to pcaps/already-pulled data to run this
+itself (it only runs ON the control instance). The same mechanism is reapplied
+after window 1 fully completes (`wait_for_operator_gate(
+"window1_acceptance")`), before window 2 begins -- full acceptance
+over the real dataset, not just the 24-execution sample.
 
-Testado com inventários falsos (`tests/test_validation_gate.py`, 5
-casos): inventário de campanha completa roda exatamente 24 execuções e
-chama o portão 1 vez; inventário de piloto (só sa-east-1) roda 6 (3
-perfis x 2 cenários), pulando as outras 2 instalações sem abortar;
-instalação totalmente ausente do inventário não roda nenhuma execução
-mas ainda chega ao portão; o portão retorna na hora se o marcador já
-existe, e bloqueia de fato até o marcador aparecer (thread separada
-criando o arquivo depois de um delay, confirmado por tempo decorrido).
+Tested with fake inventories (`tests/test_validation_gate.py`, 5
+cases): a full-campaign inventory runs exactly 24 executions and
+calls the gate once; a pilot inventory (sa-east-1 only) runs 6 (3
+profiles x 2 scenarios), skipping the other 2 installations without aborting;
+an installation completely absent from the inventory runs no execution
+but still reaches the gate; the gate returns immediately if the marker already
+exists, and genuinely blocks until the marker appears (a separate thread
+creating the file after a delay, confirmed by elapsed time).
 
-`PILOT_RUNBOOK.md`: nova seção "Portões da campanha completa" com os 3
-passos (aquecimento, validação, aceite da janela 1), o que o operador
-precisa fazer em cada um, estimativa rotulada de tempo por etapa
-(mesma metodologia das Decisions 47/54/55, não um número exato), e o
-critério de aborto específico (se `pilot_acceptance.py` reportar
-`OVERALL: FAIL` contra a amostra ou contra a janela 1, o operador NÃO
-cria o marcador -- investiga e corrige primeiro).
+`PILOT_RUNBOOK.md`: a new "Full-campaign gates" section with the 3
+steps (warm-up, validation, window-1 acceptance), what the operator
+needs to do at each one, a labeled time estimate per step
+(the same methodology as Decisions 47/54/55, not an exact figure), and the
+specific abort criterion (if `pilot_acceptance.py` reports
+`OVERALL: FAIL` against the sample or against window 1, the operator does NOT
+create the marker -- investigates and fixes first).
 
-### Item 4 — `campaign_down.sh` sem prompt interativo
+### Item 4 — `campaign_down.sh` with no interactive prompt
 
-O prompt final (`read -r -p ...`, perguntando se apaga o state/chave
-local) foi substituído por um comportamento padrão não-interativo:
-sem a flag `--delete-local-state`, o script MANTÉM o state/chave local
-(o lado seguro -- ambos já são local-only, no `.gitignore`, nunca
-commitados, Decision 49, então manter não custa nada) e reporta
-exatamente quais arquivos permanecem e onde. Com `--delete-local-state`,
-remove e reporta exatamente o que removeu. Lógica extraída para uma
-função nomeada (`report_and_handle_local_state()`) especificamente para
-ser testável sem terraform/AWS: `tests/test_campaign_down_local_state.sh`
-extrai essa função real do arquivo (não duplica a lógica) e a testa
-contra diretórios falsos -- mantém por padrão, remove só com a flag,
-não erra com diretório vazio em nenhum dos dois modos, e (o ponto
-central do bug original) retorna imediatamente com stdin redirecionado
-de `/dev/null`, em vez de bloquear ou falhar com "Inappropriate ioctl
+The final prompt (`read -r -p ...`, asking whether to delete the local
+state/key) was replaced with a non-interactive default behavior:
+without the `--delete-local-state` flag, the script KEEPS the local
+state/key (the safe side -- both are already local-only, in `.gitignore`, never
+committed, Decision 49, so keeping them costs nothing) and reports
+exactly which files remain and where. With `--delete-local-state`,
+it removes them and reports exactly what it removed. The logic was extracted into a
+named function (`report_and_handle_local_state()`) specifically to
+be testable without terraform/AWS: `tests/test_campaign_down_local_state.sh`
+extracts this real function from the file (it doesn't duplicate the logic) and tests
+it against fake directories -- keeps by default, removes only with the flag,
+doesn't error on an empty directory in either mode, and (the
+central point of the original bug) returns immediately with stdin redirected
+from `/dev/null`, instead of blocking or failing with "Inappropriate ioctl
 for device".
 
-**O que ficou da execução anterior** (teardown real do piloto 2,
-turno anterior, antes desta correção existir): `terraform.tfstate`
-(0 recursos -- destroy real já tinha funcionado), `terraform.tfstate.
-backup`, `.terraform/`, `.terraform.lock.hcl`, todos em
-`thesis/results/v8/campaign/terraform/`, local-only, no `.gitignore`.
-Deixados como estão (comportamento padrão, nenhuma ação tomada agora)
--- Luciano pode rodar `rm -rf thesis/results/v8/campaign/terraform/
+**What was left over from the previous run** (pilot 2's real teardown,
+previous turn, before this fix existed): `terraform.tfstate`
+(0 resources -- the real destroy had already worked), `terraform.tfstate.
+backup`, `.terraform/`, `.terraform.lock.hcl`, all under
+`thesis/results/v8/campaign/terraform/`, local-only, in `.gitignore`.
+Left as-is (default behavior, no action taken now)
+-- Luciano can run `rm -rf thesis/results/v8/campaign/terraform/
 {.terraform,.terraform.lock.hcl,terraform.tfstate,terraform.tfstate.backup}`
-manualmente se quiser limpá-los, ou deixar para a próxima campanha
-(Terraform recria o que precisar).
+manually if he wants to clean them up, or leave them for the next campaign
+(Terraform recreates whatever it needs).
 
-### Fechamento
+### Closing
 
-`scan_secrets.sh` passou antes do commit. Dois commits separados
-(código, docs) -- nenhum dado de piloto neste turno, nenhuma chamada
-AWS. Testes: 27 (`pytest tests/`) + 10 (`test_campaign_down_local_state.sh`)
-+ 6 (`test_latin_square_order.py`, incluído nos 27) + 5
-(`test_validation_gate.py`, incluído nos 27) -- todos passando.
+`scan_secrets.sh` passed before the commit. Two separate commits
+(code, docs) -- no pilot data this turn, no AWS calls. Tests: 27 (`pytest tests/`) + 10 (`test_campaign_down_local_state.sh`)
++ 6 (`test_latin_square_order.py`, included in the 27) + 5
+(`test_validation_gate.py`, included in the 27) -- all passing.
 
-## 91. Atestado de perfis (Classic/PQC/Hybrid), medido em execução real contra a stack local, sem AWS -- grupo TLS/versão/algoritmo de assinatura/JWT/JWKS/verificação/hash de config/teste negativo, com quantificação em bytes do custo real da extensão ML-DSA inerte do Hybrid; achado de imagem Docker única; nenhuma FALHA sem explicação concreta -- piloto 3 e campanha NÃO bloqueados
+## 91. Profile attestation (Classic/PQC/Hybrid), measured on a real execution against the local stack, no AWS -- TLS group/version/signature algorithm/JWT/JWKS/verification/config hash/negative test, with a byte-level quantification of Hybrid's inert ML-DSA extension's real cost; single-Docker-image finding; no unexplained FAILure -- pilot 3 and the campaign NOT blocked
 
-`thesis/results/v8/PROFILE_ATTESTATION.md` (novo). Metodologia: uma
-execução real por perfil contra a stack local (sem AWS -- nada aqui
-precisava), com captura real de pacotes (sidecar `nicolaka/netshoot`
-rodando `tcpdump`/`tshark` no MESMO namespace de rede do container
-`insurance-server-lambdas-mtls-1`, via `--network container:...` --
-pacotes reais, não sintéticos) cruzada contra o log estruturado real do
-próprio gateway (`curveID`/`tlsVersion`/`cipherSuite`/
-`mtlsHandshakeBytes`/`clientCertBytes`) e contra os arquivos de
-certificado puxados DO CONTAINER RODANDO (`docker exec ... cat
-certs/...`, não da cópia local do repo). Commit medido:
-`ba63354f56a4b0860ec1c138cc65339cd01c08dd`; hashes de
+`thesis/results/v8/PROFILE_ATTESTATION.md` (new). Methodology: one
+real execution per profile against the local stack (no AWS -- nothing here
+needed it), with real packet capture (`nicolaka/netshoot` sidecar
+running `tcpdump`/`tshark` in the SAME network namespace as the
+`insurance-server-lambdas-mtls-1` container, via `--network container:...` --
+real packets, not synthetic) cross-checked against the gateway's own
+real structured log (`curveID`/`tlsVersion`/`cipherSuite`/
+`mtlsHandshakeBytes`/`clientCertBytes`) and against the certificate
+files pulled FROM THE RUNNING CONTAINER (`docker exec ... cat
+certs/...`, not from the repo's local copy). Commit measured:
+`ba63354f56a4b0860ec1c138cc65339cd01c08dd`; hashes of
 `opin_flow.py`/`mock_mtls/main.go`/`tls_kem_proxy/main.go`/
-`signer_core.mjs` registrados no próprio atestado.
+`signer_core.mjs` recorded in the attestation itself.
 
-**Achados principais, todos PASSA depois da correção de redação abaixo**:
-- Grupo TLS negociado: Classic `CurveP384`/grupo IANA 24; PQC
-  `MLKEM1024`/grupo 514; Hybrid `SecP384r1MLKEM1024`/grupo 4589 --
-  confirmado por DUAS fontes reais independentes (pcap via `tshark` e
-  log do gateway), concordando exatamente nos 3 perfis. TLS 1.3 e
-  cipher `TLS_AES_128_GCM_SHA256` em todos.
-- Certificado X.509 (handshake): PKCS1v1.5/SHA-256 nos três perfis
-  (Classic e Hybrid, RSA-4096; PQC, ML-DSA-65). Nenhuma cadeia de 3
-  níveis existe -- é sempre folha->raiz direto (2 níveis); os arquivos
-  `root-ca.pem`/`issuer-ca.pem` servidos pelo Directory mock são
-  SEPARADOS da cadeia real do handshake mTLS, não fazem parte dela.
-- JWT/JWKS: PS256 (Classic), ML-DSA-65 (PQC), e no Hybrid dois
-  algoritmos reais distintos (`RS256` para artefatos emitidos pelo
-  cliente -- payload-extension, Decision 13; `MLDSA65-RSA2048-PSS-
-  SHA256` para artefatos emitidos pelo AS -- Strong Nesting, Decision
-  9) -- confirmado em JWTs reais capturados e em `/jwks` reais buscados
-  ao vivo. O `/jwks` do RS do Hybrid publica 2 entradas `sig`
-  (composta + cópia RS256, Decision 88, reconfirmado ao vivo); o do AS
-  publica só 1.
-- Verificação: 7 eventos reais de verificação por execução (das 44
-  chamadas, 7 carregam artefato assinado verificável), 21/21 sem
-  exceção nas 3 execuções reais desta sessão.
-- Hashes vs v7: certificados de servidor e de cliente de Classic/Hybrid
-  idênticos à v7. O certificado de CLIENTE PQC mudou (commit `478bda5`,
-  depois do fechamento oficial da v7) -- motivo real e já documentado
-  (fecha uma assimetria: a cadeia PQC da v7 tinha assinatura de CA
-  ainda clássica/RSA apesar da chave ser ML-DSA-65; agora é ML-DSA-65
-  ponta a ponta). `docker-compose.yml` também mudou (commit `27fc794`)
-  -- só ordem de boot, confirmado sem efeito no que é medido.
-- Teste negativo: os 3 perfis, como cliente, falharam o handshake real
-  contra um servidor de outro perfil -- `tls_kem_proxy`'s own log:
-  `remote error: tls: handshake failure`, alerta TLS real, não um
-  timeout de rede genérico.
+**Main findings, all PASS after the wording correction below**:
+- Negotiated TLS group: Classic `CurveP384`/IANA group 24; PQC
+  `MLKEM1024`/group 514; Hybrid `SecP384r1MLKEM1024`/group 4589 --
+  confirmed by TWO independent real sources (pcap via `tshark` and
+  the gateway log), agreeing exactly across the 3 profiles. TLS 1.3 and
+  the `TLS_AES_128_GCM_SHA256` cipher in all of them.
+- X.509 certificate (handshake): PKCS1v1.5/SHA-256 in all three profiles
+  (Classic and Hybrid, RSA-4096; PQC, ML-DSA-65). No 3-level
+  chain exists at all -- it's always a direct leaf->root (2 levels); the
+  `root-ca.pem`/`issuer-ca.pem` files served by the Directory mock are
+  SEPARATE from the real mTLS handshake chain, not part of it.
+- JWT/JWKS: PS256 (Classic), ML-DSA-65 (PQC), and in Hybrid two
+  distinct real algorithms (`RS256` for artifacts issued by the
+  client -- payload-extension, Decision 13; `MLDSA65-RSA2048-PSS-
+  SHA256` for artifacts issued by the AS -- Strong Nesting, Decision
+  9) -- confirmed in real captured JWTs and in real `/jwks` endpoints
+  fetched live. Hybrid's RS `/jwks` publishes 2 `sig` entries
+  (composed + an RS256 copy, Decision 88, reconfirmed live); the AS's
+  publishes only 1.
+- Verification: 7 real verification events per execution (of the 44
+  calls, 7 carry a verifiable signed artifact), 21/21 with no
+  exception across this session's 3 real executions.
+- Hashes vs v7: Classic/Hybrid server and client certificates are
+  identical to v7. The PQC CLIENT certificate changed (commit `478bda5`,
+  after v7's official freeze) -- a real, already-documented reason
+  (it closes an asymmetry: v7's PQC chain had a CA signature that was
+  still classical/RSA despite the key being ML-DSA-65; it's now ML-DSA-65
+  end to end). `docker-compose.yml` also changed (commit `27fc794`)
+  -- only boot order, confirmed to have no effect on what is measured.
+- Negative test: all 3 profiles, as a client, failed the real handshake
+  against a server from a different profile -- `tls_kem_proxy`'s own log:
+  `remote error: tls: handshake failure`, a real TLS alert, not a
+  generic network timeout.
 
-**Correção de redação (pedido explícito, mesma rodada)**: a primeira
-versão deste atestado marcou FALHA em 2 linhas por uma formulação de
-expectativa que conflava camadas -- corrigido tanto no atestado quanto
-em `thesis/README.md`'s própria tabela de perfis (coluna única
-"Signatures" dividida em "X.509 certificate signature" e "JWT
-signature", e a célula do PQC que dizia "certificates issued by an RSA
-CA" -- verdadeira antes do commit `478bda5`, falsa agora -- corrigida
-para refletir a cadeia ML-DSA-65 ponta a ponta atual). A regra, agora
-explícita nos dois lugares: PS256 é o algoritmo do JWT, não do
-certificado (que usa PKCS1v1.5 nos 3 perfis); no Hybrid, a troca de
-chaves TLS é híbrida, a autenticação do handshake (certificado) é RSA
-puro, e a assinatura dupla (Strong Nesting) vale só na camada JWT -- a
-extensão ML-DSA no certificado é inerte no handshake, lida mas nunca
-usada pelo `crypto/tls` (confirmado lendo `mock_mtls/main.go`, não
-alterado).
+**Wording correction (explicit request, same round)**: the first
+version of this attestation marked FAIL on 2 lines because of an
+expectation phrasing that conflated layers -- fixed both in the attestation and
+in `thesis/README.md`'s own profiles table (the single "Signatures"
+column split into "X.509 certificate signature" and "JWT
+signature", and the PQC cell that said "certificates issued by an RSA
+CA" -- true before commit `478bda5`, false now -- corrected
+to reflect the current end-to-end ML-DSA-65 chain). The rule, now
+explicit in both places: PS256 is the JWT's algorithm, not the
+certificate's (which uses PKCS1v1.5 in all 3 profiles); in Hybrid, the TLS
+key exchange is hybrid, handshake authentication (the certificate) is
+pure RSA, and the double signature (Strong Nesting) only applies at the JWT
+layer -- the ML-DSA extension in the certificate is inert during the handshake,
+read but never used by `crypto/tls` (confirmed by reading
+`mock_mtls/main.go`, unchanged).
 
-**Quantificação em bytes (seção 7 do atestado)**:
-- O que a extensão ML-DSA soma ao termo de handshake do Hybrid: as 3
-  extensões X.509 custom (`2.5.29.72/73/74`) somam exatamente 5.301
-  bytes POR CERTIFICADO (medido via DER real, `mtls_hybrid.crt` e
-  `client_one_hybrid.crt` -- idêntico nos dois). Como mTLS transmite
-  os dois certificados (servidor + cliente) em cada um dos 6
-  handshakes client-facing do fluxo, isso soma **10.602 bytes/handshake
-  só da extensão** -- **76,6%** do delta real medido entre Classic e
-  Hybrid nos próprios `mtlsHandshakeBytes` do gateway nesta sessão
-  (5.112 B vs 18.950 B, delta 13.838 B). O restante (3.236 B) vem do
-  key share SecP384r1MLKEM1024 em si (maior que P-384 puro) mais 128 B
-  de overhead estrutural não-ML-DSA. Conclusão: a maior parte do custo
-  extra de bytes do handshake Hybrid é a extensão inerte, não a troca
-  de chaves PQC.
-- Efeito da correção do certificado de cliente PQC no OPINsize vs v7 --
-  **RESOLVIDO COM MEDIÇÃO** (turno seguinte, 2026-10-27, terceira
-  rodada; a "tensão em aberto" registrada antes foi investigada a
-  fundo, não deixada por hipótese). Montado localmente, lado a lado, o
-  certificado ANTIGO (`478bda5^`, via `git show`, chaves privadas
-  reutilizadas sem alteração -- confirmado nunca terem mudado) e o
-  NOVO (atual) para os 3 arquivos PQC live-handshake do servidor
-  (trocados dentro do volume bind-mount real do `mtls` --
-  **achado novo**: `insurance-server-lambdas/docker-compose.yml` monta
-  `../mock-service-os/certs/:/app/certs/` do host, os certificados NÃO
-  estão embutidos na imagem) e o arquivo do cliente no host, com
-  `mtls` reiniciado entre trocas; tudo restaurado via `git checkout` ao
-  final, `git status` confirmado limpo. O cliente ATUAL rejeita a
-  cadeia antiga por desenho (`verify_ca_chain()` corretamente barra uma
-  raiz PQC não auto-assinada em ML-DSA-65 -- confirma, ao vivo, que o
-  código de hoje já não voltaria à cadeia antiga); bytes reais do
-  handshake antigo foram medidos via um script externo read-only
-  chamando `do_call()` diretamente (5 conexões reais), sem passar pela
-  checagem de cadeia (lógica do cliente, não requisito do protocolo).
-  Medido ao vivo: antigo `clientCertBytes`=2.953 B, `mtlsHandshakeBytes`
-  mediana=16.749 B (9 conexões); novo `clientCertBytes`=5.879 B,
-  mediana=22.607 B (40 conexões) -- ambos batendo exatamente ou quase
-  exatamente com os valores históricos da Decision 14 da v7 (2.953/
-  5.879 idêntico; 16.605/22.607, a mediana nova idêntica, a antiga
-  0,9% diferente por ruído de amostra pequena). A própria Decision 14
-  da v7 (dado bruto, não inferência) já documentava que seu valor
-  oficial (322.895 B) é o PÓS-fix, corrigido analiticamente em
-  `report_data_v7.json` antes mesmo da v7 citar esse número como
-  referência. Reconciliação exata: `delta_handshake (6.002 B) x N_mTLS
+**Byte-level quantification (attestation section 7)**:
+- What the ML-DSA extension adds to Hybrid's handshake term: the 3
+  custom X.509 extensions (`2.5.29.72/73/74`) add up to exactly 5.301
+  bytes PER CERTIFICATE (measured via real DER, `mtls_hybrid.crt` and
+  `client_one_hybrid.crt` -- identical in both). Since mTLS transmits
+  both certificates (server + client) in each of the flow's 6
+  client-facing handshakes, this adds up to **10.602 bytes/handshake
+  from the extension alone** -- **76,6%** of the real delta measured between Classic and
+  Hybrid in the gateway's own `mtlsHandshakeBytes` in this session
+  (5.112 B vs 18.950 B, delta 13.838 B). The remainder (3.236 B) comes from
+  the SecP384r1MLKEM1024 key share itself (larger than pure P-384) plus 128 B
+  of non-ML-DSA structural overhead. Conclusion: most of Hybrid's
+  handshake's extra byte cost is the inert extension, not the PQC
+  key exchange.
+- Effect of the PQC client certificate fix on OPINsize vs. v7 --
+  **RESOLVED WITH MEASUREMENT** (following turn, 2026-10-27, third
+  round; the "open tension" logged earlier was investigated
+  thoroughly, not left as a hypothesis). Assembled locally, side by side, the
+  OLD certificate (`478bda5^`, via `git show`, private keys
+  reused unchanged -- confirmed to have never changed) and the
+  NEW (current) one for the server's 3 live-handshake PQC files
+  (swapped inside `mtls`'s real bind-mount volume --
+  **new finding**: `insurance-server-lambdas/docker-compose.yml` mounts
+  `../mock-service-os/certs/:/app/certs/` from the host, the certificates are NOT
+  baked into the image) and the client's file on the host, with
+  `mtls` restarted between swaps; everything restored via `git checkout` at the
+  end, `git status` confirmed clean. The CURRENT client rejects the
+  old chain by design (`verify_ca_chain()` correctly blocks a
+  PQC root not self-signed in ML-DSA-65 -- confirming, live, that
+  today's code would no longer accept the old chain); the old handshake's real
+  bytes were measured via a read-only external script calling
+  `do_call()` directly (5 real connections), bypassing the chain
+  check (client-side logic, not a protocol requirement).
+  Measured live: old `clientCertBytes`=2.953 B, `mtlsHandshakeBytes`
+  median=16.749 B (9 connections); new `clientCertBytes`=5.879 B,
+  median=22.607 B (40 connections) -- both matching exactly or almost
+  exactly v7's own historical Decision 14 values (2.953/
+  5.879 identical; 16.605/22.607, the new median identical, the old one
+  0,9% different due to small-sample noise). v7's own Decision 14
+  (raw data, not inference) already documented that its official value
+  (322.895 B) is the POST-fix one, corrected analytically in
+  `report_data_v7.json` even before v7 cited this number as a
+  reference. Exact reconciliation: `delta_handshake (6.002 B) x N_mTLS
   (6) + delta_PKI (3.957 B) x N_PKI (4) = 36.012 + 15.828 = 51.840 B =
-  322.895 - 271.055` -- fecha exato. O resíduo de +3.904 B entre
-  322.895 (v7) e `V8_OPINSIZE` (326.799) não tem nada a ver com o
-  certificado (os dois lados já usam o mesmo, o novo) -- é exatamente
-  a adição do `/jwks` do RS no fluxo de 44 chamadas, já documentada em
-  `METRICS_COVERAGE.md` antes desta investigação começar (mesmo valor,
-  byte a byte: 322.895 + 3.904 = 326.799, fecha exato também.
-  **Conclusão (forma "a"): v7 e v8 SÃO comparáveis quanto ao
-  certificado PQC.** Nada a declarar ao orientador como viés -- o fix
-  já estava corretamente embutido na própria referência da v7 antes
-  desta tese citá-la.
+  322.895 - 271.055` -- closes exactly. The +3.904 B residual between
+  322.895 (v7) and `V8_OPINSIZE` (326.799) has nothing to do with the
+  certificate (both sides already use the same, new one) -- it's exactly
+  the addition of the RS's `/jwks` to the 44-call flow, already documented in
+  `METRICS_COVERAGE.md` before this investigation began (the same value,
+  byte for byte: 322.895 + 3.904 = 326.799, also closes exactly.
+  **Conclusion (form "a"): v7 and v8 ARE comparable regarding the
+  PQC certificate.** Nothing to disclose to the advisor as bias -- the fix
+  was already correctly baked into v7's own reference figure before
+  this thesis ever cited it.
 
-**Imagem Docker única**: confirmado via `docker inspect` com os 3
-perfis testados na mesma sessão -- `insurance-server-lambdas-mtls`
-(`sha256:6f8cbcfb45fb...`) é A MESMA imagem nos 3 perfis; o que muda é
-só `CRYPTO_PROFILE` (env var) + os arquivos de certificado que o
-binário Go carrega em tempo de execução. Não existem "3 imagens, uma
-por perfil".
+**Single Docker image**: confirmed via `docker inspect` with all 3
+profiles tested in the same session -- `insurance-server-lambdas-mtls`
+(`sha256:6f8cbcfb45fb...`) is THE SAME image across the 3 profiles; what changes
+is only `CRYPTO_PROFILE` (an env var) + the certificate files that the
+Go binary loads at runtime. There is no "3 images, one
+per profile".
 
-**Decisão implementada no turno seguinte (2026-10-27, antes do piloto 3,
-para não contar como intervenção durante a janela)**: `campaign_run.py`'s
-`run_window()` agora grava `gateway_image_id` (novo
-`get_gateway_image_digest()`, reusa o MESMO comando `docker image
-inspect -f '{{.Id}}'` que `pre_block_checks()` já rodava por bloco, só
-que também surfaçado a nível de janela) em `window{NN}.json`, e
-`code_hash` (novo `CODE_HASH`, sha256 de `opin_flow.py` +
-`campaign_client_runner.py` + `campaign_run.py`, computado uma vez por
-processo) em todo `run{NN}.json` (inclusive os da `run_validation_stage()`).
-Testado localmente: `get_gateway_image_digest()` contra o Docker real
-desta máquina retornou `sha256:6f8cbcfb45fb...` -- o MESMO hash já
-confirmado na atestação de perfis acima, a mesma imagem única. 7 testes
-novos (`tests/test_image_and_code_hash.py`), incluindo um que edita um
-arquivo de verdade e confirma que `CODE_HASH` muda. 34 testes
-`pytest` + 10 `bash` no total, todos passando.
+**Decision implemented the following turn (2026-10-27, before pilot 3,
+so it wouldn't count as an intervention during the window)**: `campaign_run.py`'s
+`run_window()` now records `gateway_image_id` (new
+`get_gateway_image_digest()`, reusing the SAME `docker image
+inspect -f '{{.Id}}'` command `pre_block_checks()` already ran per block, just
+also surfaced at the window level) in `window{NN}.json`, and
+`code_hash` (new `CODE_HASH`, sha256 of `opin_flow.py` +
+`campaign_client_runner.py` + `campaign_run.py`, computed once per
+process) in every `run{NN}.json` (including `run_validation_stage()`'s own).
+Tested locally: `get_gateway_image_digest()` against this machine's real
+Docker returned `sha256:6f8cbcfb45fb...` -- the SAME hash already
+confirmed in the profile attestation above, the same single image. 7 new
+tests (`tests/test_image_and_code_hash.py`), including one that edits a
+real file and confirms `CODE_HASH` changes. 34 `pytest`
+tests + 10 `bash` tests in total, all passing.
 
-**Conclusão**: nenhuma FALHA sem explicação concreta -- piloto 3 e a
-campanha NÃO estão bloqueados por este atestado. A tensão da seção 7b
-foi resolvida com medição real (terceira rodada, acima) -- v7 e v8 são
-comparáveis quanto ao certificado PQC, sem resíduo sem explicação.
+**Conclusion**: no unexplained FAILure -- pilot 3 and the
+campaign are NOT blocked by this attestation. Section 7b's tension
+was resolved with real measurement (third round, above) -- v7 and v8 are
+comparable regarding the PQC certificate, with no unexplained residual.
 
-## 92. Plano de análise do piloto 3 -- registrado ANTES de olhar qualquer dado real (pedido explícito, item 8 do prompt do piloto 3)
+## 92. Pilot 3 analysis plan -- registered BEFORE looking at any real data (explicit request, item 8 of the pilot 3 prompt)
 
-Escopo do piloto 3 (ensaio geral da campanha completa, topologia cheia,
-tamanho/janelas do piloto): os 3 servidores (`sa-east-1`, `us-east-1`,
-`ap-northeast-1`), os 8 cenários (4+2+2, a lista completa, não a
-sub-lista `L0`/`L325` dos pilotos 1/2), 3 perfis, **10 execuções por
-perfil/cenário, 1 janela** (não 3) -- `CAMPAIGN_WINDOWS_PER_CAMPAIGN=1`,
-sem `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` definido (topologia completa).
-Total: 3 x 8 x 10 = **240 execuções reais**, contra as 60 dos pilotos
-1/2 (`sa-east-1` só) e as 720 da campanha completa (3 janelas x 240).
-45 recursos Terraform (12 instâncias + 12 EIPs + 12 security groups + 7
-key pairs de campanha + 1 key pair de operador + 1 chave SSH gerada --
-mesma contagem já confirmada ao vivo na Decision 54), 12 instâncias
-`m7i-flex.large` (tipo já escolhido e validado nos pilotos 1/2,
-reaproveitado, não re-escolhido sem motivo).
+Pilot 3's scope (a full dress rehearsal of the complete campaign, full
+topology, pilot-sized/pilot-windowed): the 3 servers (`sa-east-1`, `us-east-1`,
+`ap-northeast-1`), the 8 scenarios (4+2+2, the full list, not pilots
+1/2's `L0`/`L325` sub-list), 3 profiles, **10 executions per
+profile/scenario, 1 window** (not 3) -- `CAMPAIGN_WINDOWS_PER_CAMPAIGN=1`,
+with no `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` set (full topology).
+Total: 3 x 8 x 10 = **240 real executions**, against pilots
+1/2's 60 (`sa-east-1` only) and the full campaign's 720 (3 windows x 240).
+45 Terraform resources (12 instances + 12 EIPs + 12 security groups + 7
+campaign key pairs + 1 operator key pair + 1 generated SSH key --
+the same count already confirmed live in Decision 54), 12
+`m7i-flex.large` instances (a type already chosen and validated in pilots 1/2,
+reused, not re-chosen without reason).
 
-**Plano de análise, decidido agora, sem ver nenhum número do piloto 3**:
-- Estatística central: mediana por célula (perfil x cenário x servidor),
-  a mesma convenção de v1-v7 e dos pilotos 1/2 -- nunca média.
-- Incerteza: IC 95% via bootstrap (mesma `bootstrap_median_ci()` já
-  usada em `consolidate_v8.py`), reportado ao lado de cada mediana, não
-  substituindo-a.
-- Covariável: posição do perfil na janela (`profile_position_in_window`,
-  item 2 da Decision 90) entra na análise de qualquer inversão de
-  latência observada -- junto com decomposição por fase do fluxo
-  (`phase_accounting`, Decision 90), tempos por artefato
-  (`verification_timings`/`signing_timings`), `steal` máximo, perda de
-  pacotes (pcap) e o efeito de instância fria (`run_instance_warmup()`,
-  item 2 da Decision 90). Uma inversão Classic/PQC/Hybrid em latência só
-  é aceita como explicada se pelo menos uma dessas evidências, medida
-  (não hipótese), sustentar a explicação -- "ruído" não é uma categoria
-  válida de explicação neste piloto.
-- Inversões SEM explicação concreta ficam marcadas **ABERTO** no
-  critério de aceite 4 -- não PASSA, não FALHA.
-- Nenhum run é removido da amostra por julgamento. Um run só é
-  descartado com motivo técnico registrado (ex.: retry de PAR TTL já
-  excluído por desenho, falha de verificação de assinatura que abortou
-  o fluxo, divergência de grupo negociado) -- cada descarte é contado e
-  listado, nunca silenciosamente ausente do denominador.
-- Ordem esperada em bytes (OPINsize v8, ±3%): Classic (77.801) < PQC
-  (326.799) < Hybrid (360.857) -- critério de aceite 1/4, não column
-  aberta a interpretação.
+**Analysis plan, decided now, before seeing any of pilot 3's numbers**:
+- Central statistic: median per cell (profile x scenario x server),
+  the same convention as v1-v7 and pilots 1/2 -- never the mean.
+- Uncertainty: 95% CI via bootstrap (the same `bootstrap_median_ci()`
+  already used in `consolidate_v8.py`), reported alongside each median, not
+  replacing it.
+- Covariate: the profile's position within the window (`profile_position_in_window`,
+  Decision 90 item 2) enters the analysis of any observed latency
+  inversion -- together with the flow's phase decomposition
+  (`phase_accounting`, Decision 90), per-artifact timings
+  (`verification_timings`/`signing_timings`), max `steal`, packet
+  loss (pcap), and the cold-instance effect (`run_instance_warmup()`,
+  Decision 90 item 2). A Classic/PQC/Hybrid latency inversion is only
+  accepted as explained if at least one of these pieces of evidence, measured
+  (not hypothesized), supports the explanation -- "noise" is not a
+  valid explanation category in this pilot.
+- Inversions WITHOUT a concrete explanation are marked **OPEN** under
+  acceptance criterion 4 -- neither PASS nor FAIL.
+- No run is removed from the sample by judgment. A run is only
+  discarded with a recorded technical reason (e.g. a PAR TTL retry already
+  excluded by design, a signature-verification failure that aborted
+  the flow, a negotiated-group mismatch) -- every discard is counted and
+  listed, never silently missing from the denominator.
+- Expected byte-wise ordering (OPINsize v8, ±3%): Classic (77.801) < PQC
+  (326.799) < Hybrid (360.857) -- acceptance criterion 1/4, not a column
+  open to interpretation.
 
-Este parágrafo é o compromisso prévio (pre-registration, mesmo
-princípio já usado para o descarte do warmup run nos pilotos
-anteriores) -- a análise real do piloto 3, quando os dados chegarem,
-segue exatamente isto, não um método escolhido depois de ver o
-resultado.
+This paragraph is the prior commitment (pre-registration, the same
+principle already used for discarding the warm-up run in previous
+pilots) -- pilot 3's real analysis, once the data arrives,
+follows exactly this, not a method chosen after seeing the
+result.
 
-**Addendum (2026-10-28, checagem de cobertura Schardong -- ver Decision
-94): três acréscimos ao plano de análise, pedidos explicitamente,
-mantendo mediana e bootstrap como estão:**
-- **Resumo da distribuição por combinação** (perfil x cenário x
-  servidor): mínimo, Q1, Q3, p95, máximo e um histograma de 10 bins --
-  `stats_block()` em `consolidate_v8.py` agora inclui isso em TODA
-  métrica que já passa por ele (não só T_fluxo), não um cálculo
-  separado e paralelo.
-- **Shapiro-Wilk**, para registrar a não normalidade (nunca para
-  decidir PASS/FAIL de nada) -- mesma regra da Decision 92 original:
-  só evidência medida e concreta assenta uma inversão, nunca um teste
-  estatístico isolado.
-- **Mann-Whitney (postos) entre perfis**, por célula servidor/cenário,
-  sobre as amostras reais de T_fluxo -- diz apenas se as distribuições
-  são estatisticamente distinguíveis, nunca por si só a causa de uma
-  inversão.
+**Addendum (2026-10-28, Schardong coverage check -- see Decision
+94): three additions to the analysis plan, explicitly requested,
+keeping median and bootstrap as they are:**
+- **Distribution summary per combination** (profile x scenario x
+  server): minimum, Q1, Q3, p95, maximum, and a 10-bin histogram --
+  `consolidate_v8.py`'s `stats_block()` now includes this on EVERY
+  metric that already goes through it (not just T_fluxo), not a
+  separate, parallel calculation.
+- **Shapiro-Wilk**, to record non-normality (never to decide
+  PASS/FAIL for anything) -- the same rule as the original Decision 92:
+  only measured, concrete evidence settles an inversion, never an
+  isolated statistical test.
+- **Mann-Whitney (rank-based) between profiles**, per server/scenario
+  cell, over the real T_fluxo samples -- only states whether the
+  distributions are statistically distinguishable, never by itself the cause
+  of an inversion.
 
-Shapiro-Wilk e Mann-Whitney usam `scipy.stats` -- único lugar deste
-pipeline de análise que depende de algo fora da stdlib (nunca instalado
-em nenhuma instância EC2; `thesis/scripts/requirements.txt`, que É o
-runtime real do campo/cliente, não foi tocado). Decisão registrada
-explicitamente porque este projeto tem um estilo documentado de evitar
-dependência nova para uma necessidade estreita (`pcap_utils.py`, próprio
-docstring) -- reimplementar Shapiro-Wilk à mão (algoritmo Royston 1995,
-AS R94, com coeficientes tabulados) para uma tese é um risco maior do
-que declarar essa dependência: um teste de normalidade silenciosamente
-errado é pior do que uma dependência nova e explícita. Mann-Whitney
-poderia ser escrito à mão com segurança, mas ficou na mesma biblioteca
-para não ter um teste artesanal ao lado de um Shapiro-Wilk de
-biblioteca. Degrada honestamente (`"status": "scipy not installed"`)
-se `scipy` não estiver disponível no ambiente local de análise, nunca
-quebra o `consolidate_v8.py`.
+Shapiro-Wilk and Mann-Whitney use `scipy.stats` -- the only place in this
+analysis pipeline that depends on anything outside the stdlib (never installed
+on any EC2 instance; `thesis/scripts/requirements.txt`, which IS the
+field/client's real runtime, was not touched). Decision recorded
+explicitly because this project has a documented style of avoiding a
+new dependency for a narrow need (`pcap_utils.py`'s own
+docstring) -- reimplementing Shapiro-Wilk by hand (the Royston 1995
+algorithm, AS R94, with tabulated coefficients) for a thesis is a bigger risk
+than declaring this dependency: a silently-wrong normality test is worse
+than a new, explicit dependency. Mann-Whitney
+could have been safely hand-written, but was kept in the same library
+so as not to have a hand-rolled test sitting next to a library
+Shapiro-Wilk. Degrades honestly (`"status": "scipy not installed"`)
+if `scipy` isn't available in the local analysis environment, never
+breaks `consolidate_v8.py`.
 
-## 93. Incidente real: `campaign_up.sh` destruiu 38 recursos reais (8 instâncias) por uma variável de escopo de piloto antiga esquecida em `campaign.vars.local.sh` -- causa raiz corrigida, duas salvaguardas novas no script, nada perdido além de tempo/dinheiro
+## 93. Real incident: `campaign_up.sh` destroyed 38 real resources (8 instances) because of an old pilot-scoping variable forgotten in `campaign.vars.local.sh` -- root cause fixed, two new safeguards added to the script, nothing lost beyond time/money
 
-**Linha do tempo (UTC, horários dos arquivos de log salvos -- não timestamps
-exatos de evento da AWS/Terraform, que não ficaram registrados
-separadamente; aproximação honesta, não um número preciso):**
+**Timeline (UTC, timestamps from the saved log files -- not exact
+AWS/Terraform event timestamps, which were not recorded
+separately; an honest approximation, not a precise figure):**
 
-- **~2026-10-28T01:01:40Z** -- `terraform plan` (leitura, topologia
-  completa) confirmado: 65 a adicionar, 0 a mudar, 0 a destruir.
-- **2026-10-28T01:08:48Z** -- `terraform apply` **aprovado por
-  Luciano** (presente, confirmado nesta conversa) iniciado, direto,
-  variáveis explícitas, sem `MOCKOPIN_ENABLED_CLIENT_SCENARIOS`.
-- **~2026-10-28T01:09:43Z** -- apply aprovado concluído: **"Apply
+- **~2026-10-28T01:01:40Z** -- `terraform plan` (read-only, full
+  topology) confirmed: 65 to add, 0 to change, 0 to destroy.
+- **2026-10-28T01:08:48Z** -- `terraform apply` **approved by
+  Luciano** (present, confirmed in this conversation) started, direct,
+  explicit variables, with no `MOCKOPIN_ENABLED_CLIENT_SCENARIOS`.
+- **~2026-10-28T01:09:43Z** -- the approved apply finished: **"Apply
   complete! Resources: 65 added, 0 changed, 0 destroyed."** 12
-  instâncias reais no ar, nas 7 regiões.
-- **(entre ~01:09:43 e ~01:11:28Z)** -- SEGUNDO apply, NÃO revisado
-  antes de rodar: `./campaign_up.sh campaign.vars.local.sh`, reaproveitando
-  o script (em vez do `terraform apply` direto já aprovado) para copiar
-  chave/inventário/cronograma e verificar SSH/relógio. Esse script faz
-  seu PRÓPRIO `terraform apply -auto-approve` internamente -- e
-  `campaign.vars.local.sh` ainda tinha `MOCKOPIN_ENABLED_CLIENT_SCENARIOS=
-  "L0@sa-east-1 L325@sa-east-1"` (resquício dos pilotos 1/2), nunca
-  limpo. O apply rodou com a topologia ESCOPADA, destruindo tudo que
-  não estava nesse subconjunto.
-- **~2026-10-28T01:11:28Z** -- saída do script interrompida (erro
-  `python3` não encontrado no PATH deste shell, dentro do pipe de
-  redação) -- mas o `terraform apply` destrutivo já tinha rodado e
-  concluído antes disso (confirmado abaixo, não assumido).
+  real instances up, across the 7 regions.
+- **(between ~01:09:43 and ~01:11:28Z)** -- a SECOND apply, NOT reviewed
+  before running: `./campaign_up.sh campaign.vars.local.sh`, reusing
+  the script (instead of the direct `terraform apply` already approved) to copy
+  the key/inventory/schedule and check SSH/the clock. This script runs its
+  OWN `terraform apply -auto-approve` internally -- and
+  `campaign.vars.local.sh` still had `MOCKOPIN_ENABLED_CLIENT_SCENARIOS=
+  "L0@sa-east-1 L325@sa-east-1"` (a leftover from pilots 1/2), never
+  cleaned up. The apply ran with the SCOPED topology, destroying everything
+  not in that subset.
+- **~2026-10-28T01:11:28Z** -- the script's output got interrupted (a
+  `python3` not found on this shell's PATH error, inside the redaction
+  pipe) -- but the destructive `terraform apply` had already run and
+  finished before that (confirmed below, not assumed).
 
-**O que foi destruído de verdade (confirmado por 2 fontes independentes --
-`terraform state list` local E `aws ec2 describe-instances` real, 7
-regiões, sem ID de conta/ARN em nenhuma chamada) -- 38 recursos, todos
-das instalações `us-east-1`, `ap-northeast-1`, e dos 4 clientes remotos
-que não co-localizam com `sa-east-1`:**
-- 8x `aws_instance`, 8x `aws_eip`, 8x `aws_security_group` (módulos
+**What was actually destroyed (confirmed by 2 independent sources --
+local `terraform state list` AND real `aws ec2 describe-instances`, across
+7 regions, no account ID/ARN in any call) -- 38 resources, all of them
+from the `us-east-1`, `ap-northeast-1` installations, and the 4 remote
+clients not colocated with `sa-east-1`:**
+- 8x `aws_instance`, 8x `aws_eip`, 8x `aws_security_group` (modules
   `server_us_east_1`, `server_ap_northeast_1`, `client_l0_us_east_1`,
   `client_l0_ap_northeast_1`, `client_ca_central_1_a`,
   `client_ca_central_1_b`, `client_eu_north_1`, `client_ap_northeast_2`).
-- 14x `aws_vpc_security_group_ingress_rule` (as regras SSH desses 8
-  módulos + as regras de gateway `L0`/`L14`/`L30` de
-  `server_us_east_1`/`server_ap_northeast_1` + as regras de gateway
-  `L123`/`L219` de `server_sa_east_1`, que FICOU de pé mas perdeu essas
-  2 regras específicas).
-- Sobrevivente real, confirmado via `aws ec2 describe-instances` (sem
-  conta/ARN): `sa-east-1` (controle + servidor + `L0`) e
-  `ap-southeast-1` (`L325`) -- exatamente a topologia escopada dos
-  pilotos 1/2, igual ao valor esquecido na variável.
+- 14x `aws_vpc_security_group_ingress_rule` (the SSH rules from those 8
+  modules + the `L0`/`L14`/`L30` gateway rules from
+  `server_us_east_1`/`server_ap_northeast_1` + the `L123`/`L219` gateway
+  rules from `server_sa_east_1`, which STAYED up but lost those
+  2 specific rules).
+- Real survivor, confirmed via `aws ec2 describe-instances` (no
+  account/ARN): `sa-east-1` (control + server + `L0`) and
+  `ap-southeast-1` (`L325`) -- exactly pilots 1/2's scoped
+  topology, matching the value forgotten in the variable.
 
-**Causa raiz, confirmada por leitura direta (não suposição):**
-`campaign.vars.local.sh` (local, gitignored, nunca commitado) linha 16
-tinha `export MOCKOPIN_ENABLED_CLIENT_SCENARIOS="L0@sa-east-1
-L325@sa-east-1"` -- escrito no turno dos pilotos 1/2, nunca removido
-depois. Chamadas à AWS feitas para confirmar o estado real (todas
-leitura, nenhuma escreveu nada, nenhuma imprimiu ID de conta/ARN):
-`aws sts get-caller-identity` (antes do apply aprovado), `aws ec2
-describe-instances` nas 7 regiões (depois do incidente, para confirmar
-o que sobrou de verdade), `terraform state list`/leitura local do
-`.tfstate` (sem chamada à AWS, só arquivo local).
+**Root cause, confirmed by direct reading (not guesswork):**
+`campaign.vars.local.sh` (local, gitignored, never committed) line 16
+had `export MOCKOPIN_ENABLED_CLIENT_SCENARIOS="L0@sa-east-1
+L325@sa-east-1"` -- written during pilots 1/2's turn, never removed
+afterward. AWS calls made to confirm the real state (all
+read-only, none wrote anything, none printed an account ID/ARN):
+`aws sts get-caller-identity` (before the approved apply), `aws ec2
+describe-instances` across the 7 regions (after the incident, to confirm
+what actually remained), `terraform state list`/a local read of the
+`.tfstate` (no AWS call, just a local file).
 
-**Corrigido:**
-1. `campaign.vars.local.sh`: linha removida, substituída por um
-   comentário explicando o incidente -- deixado SEM a variável é o
-   padrão seguro (topologia completa, o default do próprio Terraform).
-2. Procurado e não encontrado nenhum outro valor de piloto antigo: nenhuma
-   outra variável `MOCKOPIN_*` setada no ambiente deste shell, nenhum
-   `*.tfvars` em lugar nenhum do diretório `terraform/`,
-   `campaign.vars.example.sh` só tem a mesma linha como exemplo
-   COMENTADO (nunca executado).
-3. `campaign_up.sh`: duas salvaguardas novas, nenhuma muda o que é
-   medido (puramente infraestrutura/segurança):
-   - Antes de QUALQUER `apply`, roda `terraform plan` primeiro, imprime
-     as variáveis efetivas (sem a IP do operador, sem o conteúdo da
-     chave) e o resumo add/change/destroy, e **ABORTA se houver
-     qualquer destroy** (um replace conta como destroy+add, já cobre
-     os dois) -- a não ser que `--allow-destructive` seja passado
-     explicitamente.
-   - Aborta também se `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` for um
-     subconjunto estrito dos 8 cenários completos, sem a mesma flag --
-     exatamente a condição que causou este incidente.
-   - `python3`/`python` locais trocados por `PYTHON_BIN`, resolvido em
-     tempo de execução checando se o candidato REALMENTE RODA (não só
-     se `command -v` o encontra -- o stub da Microsoft Store do
-     `python` "existe" no PATH deste Windows sem funcionar, foi
-     exatamente isso que mascarou o erro original).
-   - A linha que imprimia o IP do operador em texto puro (regra padrão
-     já violada antes deste incidente, achada ao investigar) também
-     corrigida -- nunca mais impressa.
-4. **Testado em modo plan, de verdade, sem nenhum apply** (duas vezes):
-   (a) config limpa -- mostrou as variáveis corretas (topologia
-   completa), rodou o plan real (38 a adicionar, 0 destruir), seguiu
-   até o prompt de orçamento e abortou lá (entrada não-confirmatória
-   dada de propósito); (b) `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` setada de
-   propósito para o valor escopado, sem a flag -- abortou IMEDIATAMENTE,
-   antes de rodar qualquer `terraform plan`, com a mensagem explicando
-   exatamente por quê.
+**Fixed:**
+1. `campaign.vars.local.sh`: line removed, replaced with a
+   comment explaining the incident -- leaving the variable OUT is the
+   safe default (full topology, Terraform's own default).
+2. Searched for and found no other leftover pilot value: no
+   other `MOCKOPIN_*` variable set in this shell's environment, no
+   `*.tfvars` anywhere in the `terraform/` directory,
+   `campaign.vars.example.sh` only has the same line as a
+   COMMENTED-OUT example (never executed).
+3. `campaign_up.sh`: two new safeguards, neither changes what is
+   measured (purely infrastructure/security):
+   - Before ANY `apply`, it now runs `terraform plan` first, prints
+     the effective variables (without the operator's IP, without the
+     key's content) and the add/change/destroy summary, and **ABORTS if there
+     is any destroy** (a replace counts as destroy+add, already covering
+     both) -- unless `--allow-destructive` is passed
+     explicitly.
+   - It also aborts if `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` is a
+     strict subset of the full 8 scenarios, without the same flag --
+     exactly the condition that caused this incident.
+   - Local `python3`/`python` swapped for `PYTHON_BIN`, resolved at
+     run time by checking whether the candidate ACTUALLY RUNS (not just
+     whether `command -v` finds it -- the Microsoft Store `python`
+     stub "exists" on this Windows's PATH without working, and that is
+     exactly what masked the original error).
+   - The line that printed the operator's IP in plain text (a standing
+     rule already violated before this incident, found while investigating) was also
+     fixed -- never printed again.
+4. **Tested in plan mode, for real, with no apply at all** (twice):
+   (a) a clean config -- showed the correct variables (full
+   topology), ran the real plan (38 to add, 0 to destroy), proceeded
+   to the budget prompt and aborted there (a non-confirming input
+   given on purpose); (b) `MOCKOPIN_ENABLED_CLIENT_SCENARIOS` deliberately
+   set to the scoped value, without the flag -- aborted IMMEDIATELY,
+   before running any `terraform plan`, with the message explaining
+   exactly why.
 
-**Plano de restauração (preparado, NÃO aplicado -- esperando autorização
-explícita de Luciano para o comando exato, conforme pedido):**
-`terraform plan` real, config limpa: **38 a adicionar, 0 a mudar, 0 a
-destruir** -- 8 `aws_instance` + 8 `aws_eip` + 8 `aws_security_group` +
-14 `aws_vpc_security_group_ingress_rule`, distribuídos: `us-east-1` (2
-instâncias) + `ap-northeast-1` (2) + `ca-central-1` (2) + `eu-north-1`
-(1) + `ap-northeast-2` (1) = 8 instâncias novas, mais 2 regras de
-gateway devolvidas a `server_sa_east_1` (que nunca perdeu suas próprias
-instâncias). Estado atual real: 4 instâncias; depois deste plano: 12 --
-bate exato com o que é esperado.
+**Restoration plan (prepared, NOT applied -- awaiting Luciano's explicit
+authorization for the exact command, as requested):**
+real `terraform plan`, clean config: **38 to add, 0 to change, 0 to
+destroy** -- 8 `aws_instance` + 8 `aws_eip` + 8 `aws_security_group` +
+14 `aws_vpc_security_group_ingress_rule`, distributed as: `us-east-1` (2
+instances) + `ap-northeast-1` (2) + `ca-central-1` (2) + `eu-north-1`
+(1) + `ap-northeast-2` (1) = 8 new instances, plus 2 gateway rules
+returned to `server_sa_east_1` (which never lost its own
+instances). Current real state: 4 instances; after this plan: 12 --
+matches exactly what's expected.
 
-**Relógio e custo:** o custo real já incorrido com o incidente (apply
-aprovado + apply destrutivo + o tempo de investigação) soma ao teto de
-US$8 do piloto 3 -- não é descontado. O relógio de 6h, por outro lado,
-**recomeça do zero no momento do novo apply (quando autorizado)** --
-nenhuma medição chegou a começar; nada do que o relógio de 6h protege
-(uma janela de medição em andamento) foi sequer iniciado.
+**Clock and cost:** the real cost already incurred by the incident (the
+approved apply + the destructive apply + the investigation time) adds to pilot
+3's US$8 ceiling -- it is not discounted. The 6h clock, on the other hand,
+**restarts from zero at the moment of the new apply (once authorized)** --
+no measurement had begun yet; nothing the 6h clock protects
+(a measurement window in progress) had even started.
 
-**Atualizado:** `thesis/results/v8/campaign/scripts/campaign_up.sh`
-(salvaguardas), `campaign.vars.local.sh` (variável removida, não
-commitado -- gitignored), `PILOT_RUNBOOK.md` (regra nova: scripts que
-chamam apply/destroy nunca rodam sem o plano e as variáveis efetivas
-serem vistos primeiro).
+**Updated:** `thesis/results/v8/campaign/scripts/campaign_up.sh`
+(safeguards), `campaign.vars.local.sh` (variable removed, not
+committed -- gitignored), `PILOT_RUNBOOK.md` (new rule: scripts that
+call apply/destroy never run without the plan and the effective variables
+being reviewed first).
 
-**Restauração aplicada (2026-10-28), com plano salvo em arquivo, não
-recalculado -- novo procedimento padrão a partir de agora:**
-`terraform plan -out=tfplan` (variáveis explícitas, config limpa),
-resumo real conferido ANTES de qualquer apply (**38 a adicionar, 0 a
-mudar, 0 a destruir**, IP do operador mascarado na saída -- nenhuma
-ocorrência apareceu neste plano específico, já que o módulo `control`
-não mudava), depois `terraform apply tfplan` (o MESMO plano, sem
-recalcular, sem `-auto-approve` -- a aprovação já está no arquivo
-revisado). Toda saída (plan e apply) passou por `redact_aws_errors.py`
-mais um segundo filtro que mascara o IP literal do operador (capturado
-uma vez em variável de ambiente, nunca impresso). `tfplan` apagado
-imediatamente após o apply confirmado; `scan_secrets.sh` rodado de novo
-e confirmou PASS (nunca foi commitado) -- `.gitignore` também corrigido
-nesse meio tempo: o padrão antigo `*.tfplan` nunca cobria o nome
-literal `tfplan` sem extensão que `-out=tfplan` realmente grava (lacuna
-real, achada ao verificar, não assumida corrigida).
+**Restoration applied (2026-10-28), with the plan saved to a file, not
+recalculated -- a new standard procedure from now on:**
+`terraform plan -out=tfplan` (explicit variables, clean config),
+the real summary reviewed BEFORE any apply (**38 to add, 0 to
+change, 0 to destroy**, the operator's IP masked in the output -- no
+occurrence appeared in this specific plan, since the `control` module
+didn't change), then `terraform apply tfplan` (the SAME plan, not
+recalculated, no `-auto-approve` -- the approval is already in the
+reviewed file). All output (plan and apply) went through
+`redact_aws_errors.py` plus a second filter that masks the operator's
+literal IP (captured once in an environment variable, never printed).
+`tfplan` deleted immediately after the apply was confirmed;
+`scan_secrets.sh` run again and confirmed PASS (it was never
+committed) -- `.gitignore` was also fixed in the process: the old
+`*.tfplan` pattern never covered the literal `tfplan` filename with no
+extension that `-out=tfplan` actually writes (a real gap, found while
+verifying, not assumed-then-fixed).
 
-**Resultado: `Apply complete! Resources: 38 added, 0 changed, 0
-destroyed.`** Confirmado por leitura real na AWS (`describe-instances`,
-as 7 regiões, sem conta/ARN): **exatamente 12 instâncias**
+**Result: `Apply complete! Resources: 38 added, 0 changed, 0
+destroyed.`** Confirmed by a real read on AWS (`describe-instances`,
+across the 7 regions, no account/ARN): **exactly 12 instances**
 `pending`/`running` -- sa-east-1:3, us-east-1:2, ap-northeast-1:2,
 ca-central-1:2, eu-north-1:1, ap-southeast-1:1, ap-northeast-2:1.
-Topologia completa restaurada.
+Full topology restored.
 
-**Início do novo relógio de 6h**: `tfplan` foi salvo em
-`2026-10-28T01:24:28Z` (horário do arquivo -- a linha de log com o
-horário exato de início do `apply` em si não chegou a ser capturada
-nesta rodada, um detalhe de como a saída em segundo plano foi
-redirecionada, não algo intencional; reportado com essa imprecisão
-honesta em vez de uma hora falsamente precisa). O apply concluiu até
-`2026-10-28T01:26:05Z` (horário do arquivo de saída). **Usando o lado
-mais cedo e mais conservador da janela, `2026-10-28T01:24:28Z` é o
-início oficial do relógio de 6h do piloto 3** -- nenhuma medição tinha
-começado antes disso.
+**Start of the new 6h clock**: `tfplan` was saved at
+`2026-10-28T01:24:28Z` (the file's timestamp -- the log line with the
+exact start time of the `apply` itself was not captured
+this round, a detail of how the background output was
+redirected, not intentional; reported with this honest imprecision
+rather than a falsely precise time). The apply finished by
+`2026-10-28T01:26:05Z` (the output file's timestamp). **Using the
+earlier, more conservative edge of the window, `2026-10-28T01:24:28Z` is the
+official start of pilot 3's 6h clock** -- no measurement had
+started before that.
 
-**Procedimento adotado daqui em diante para todo apply de campanha**:
-sempre via plano salvo em arquivo (`terraform plan -out=<arquivo>`,
-resumo revisado por um humano, só então `terraform apply <arquivo>`
-sem recalcular) -- nunca mais `terraform apply` recalculando na hora.
-Registrado também em `PILOT_RUNBOOK.md`.
+**Procedure adopted from now on for every campaign apply**:
+always via a plan saved to a file (`terraform plan -out=<file>`,
+summary reviewed by a human, only then `terraform apply <file>`
+without recalculating) -- never again a `terraform apply` that recalculates
+on the spot. Also recorded in `PILOT_RUNBOOK.md`.
 
-**Pausa e teardown final (2026-10-28), por decisão de Luciano, com ele
-presente -- mesmo padrão de plano salvo:**
-`terraform plan -destroy -out=tfdestroy` (mesmas variáveis do apply),
-resumo conferido ANTES de aplicar (**0 a adicionar, 0 a mudar, 65 a
-destruir** -- bate exato com a topologia em pé: 8 `aws_instance`, 8
+**Pause and final teardown (2026-10-28), by Luciano's decision, with him
+present -- the same saved-plan pattern:**
+`terraform plan -destroy -out=tfdestroy` (the same variables as the apply),
+summary reviewed BEFORE applying (**0 to add, 0 to change, 65 to
+destroy** -- matching exactly the standing topology: 8 `aws_instance`, 8
 `aws_eip`, 8 `aws_security_group`, 11 `aws_vpc_security_group_ingress_
-rule` no controle/servidores, 8 `aws_key_pair` incluindo a do operador,
-1 `tls_private_key`), IP do operador/ID de conta/ARN mascarados na saída
-salva. `terraform apply "tfdestroy"` (o mesmo plano, sem recalcular) --
+rule` on control/servers, 8 `aws_key_pair` including the operator's,
+1 `tls_private_key`), operator IP/account ID/ARN masked in the saved
+output. `terraform apply "tfdestroy"` (the same plan, no recalculation) --
 **"Apply complete! Resources: 0 added, 0 changed, 65 destroyed."**
-(início 2026-10-28T02:44:40Z, fim 2026-10-28T02:45:26Z). `tfdestroy`
-apagado logo depois; lacuna real encontrada no `.gitignore` (mesmo
-padrão do incidente original -- `tfplan`/`tfplan.*` nunca cobriam o
-nome literal `tfdestroy`) corrigida antes do commit, embora o arquivo
-já não tivesse sido staged/commitado em nenhum momento (confirmado por
-`git status`/`git log`). `scan_secrets.sh` rodado de novo: PASS.
+(start 2026-10-28T02:44:40Z, end 2026-10-28T02:45:26Z). `tfdestroy`
+deleted right after; a real gap found in `.gitignore` (the same
+pattern as the original incident -- `tfplan`/`tfplan.*` never covered
+the literal `tfdestroy` filename) fixed before the commit, even though the
+file had never been staged/committed at any point (confirmed via
+`git status`/`git log`). `scan_secrets.sh` run again: PASS.
 
-Verificação final, região por região, via `aws ec2
-describe-instances`/`describe-addresses`/`describe-security-groups`/
-`describe-key-pairs`/`describe-volumes` (leitura direta, sem ID de
-conta/ARN em nenhuma chamada) -- **as 7 regiões (`sa-east-1`,
+Final verification, region by region, via direct
+`aws ec2 describe-instances`/`describe-addresses`/`describe-security-groups`/
+`describe-key-pairs`/`describe-volumes` calls (no account ID/ARN in any
+call) -- **all 7 regions (`sa-east-1`,
 `us-east-1`, `ap-northeast-1`, `ca-central-1`, `eu-north-1`,
-`ap-southeast-1`, `ap-northeast-2`) confirmadas com ZERO instâncias, EIPs,
-security groups, key pairs (incluindo a do operador, nome
-`mockopin-pqc-campaign-operator`, verificada à parte por usar um nome
-diferente das demais) e volumes.** Nenhum dado local nem o repositório
-foram apagados.
+`ap-southeast-1`, `ap-northeast-2`) confirmed with ZERO instances, EIPs,
+security groups, key pairs (including the operator's, named
+`mockopin-pqc-campaign-operator`, checked separately since it uses a
+different name from the others) and volumes.** No local data nor the
+repository were deleted.
 
-**Relógio e custo desta pausa:** o relógio de 6h havia recomeçado no
-apply de restauração (~2026-10-28T01:24-01:26Z, aproximado por
-timestamp de arquivo, mesma ressalva de honestidade já usada acima --
-não um evento separadamente registrado) e foi encerrado pela pausa em
-2026-10-28T02:45:26Z -- **~1h19-21min usados dos 6h permitidos, bem
-abaixo do limite.** Custo real estimado usando a referência do próprio
-Luciano (~US$1,15/h para a topologia completa de 12 instâncias) sobre o
-período em que havia instâncias reais em pé (2026-10-28T01:09:43Z a
-02:44:40Z, ~1h35min, com uma janela intermediária de ~13min em
-capacidade reduzida por causa do incidente) -- **estimativa ~US$1,80,
-bem abaixo do teto de US$8 do piloto 3.** Luciano confirma o valor
-exato no console de Billing.
+**This pause's clock and cost:** the 6h clock had restarted at the
+restoration apply (~2026-10-28T01:24-01:26Z, approximated from a file
+timestamp, the same honesty caveat used above --
+not a separately-recorded event) and was ended by the pause at
+2026-10-28T02:45:26Z -- **~1h19-21min used out of the 6h allowed, well
+below the limit.** Estimated real cost using Luciano's own
+reference (~US$1,15/h for the full 12-instance topology) over the
+period during which real instances were up (2026-10-28T01:09:43Z to
+02:44:40Z, ~1h35min, with an intermediate ~13min window at
+reduced capacity because of the incident) -- **estimate ~US$1,80,
+well below pilot 3's US$8 ceiling.** Luciano to confirm the exact
+figure on the Billing console.
 
-**Ponto de retomada (registrado também em `PILOT_RUNBOOK.md`):** apply
-e restauração validados, entrega (etapa 5) validada, pré-flight SSH e
-TCP/443 validados (8/8 clientes, 0 falhas). Falta: confirmar o
-handshake TLS do ponto de vista do cliente remoto real nos 3 perfis
-(tentativa única, perfil hybrid, deu 404 -- diagnosticado como
-limitação do script de teste, não da pilha real, mas NÃO corrigido nem
-reconfirmado ainda), o portão de validação (24 execuções) e a janela de
-medição 1. Infraestrutura totalmente derrubada ao final desta rodada;
-retomar exige um novo apply completo (plano salvo), com Luciano
-presente.
+**Resume point (also recorded in `PILOT_RUNBOOK.md`):** apply
+and restoration validated, delivery (step 5) validated, SSH and
+TCP/443 pre-flight validated (8/8 clients, 0 failures). Still missing: confirming the
+TLS handshake from the real remote client's point of view across the 3 profiles
+(a single attempt, hybrid profile, returned 404 -- diagnosed as a
+limitation of the test script, not of the real stack, but NOT fixed nor
+reconfirmed yet), the validation gate (24 executions), and measurement
+window 1. Infrastructure fully torn down at the end of this round;
+resuming requires a new, complete apply (saved plan), with Luciano
+present.
 
-## 94. Checagem de cobertura contra o artigo do Schardong (CANS 2022) -- um gap real encontrado e corrigido (fração do handshake sobre T_fluxo), um gap real encontrado e NUNCA antes implementado (jitter), estatística do plano de análise (Decision 92) implementada no `consolidate_v8.py`. Sem AWS, sem alterar código de medição.
+## 94. Coverage check against the Schardong paper (CANS 2022) -- one real gap found and fixed (handshake fraction of T_fluxo), one real gap found that had NEVER been implemented before (jitter), the analysis plan's statistics (Decision 92) implemented in `consolidate_v8.py`. No AWS, no change to measurement code.
 
-**Pedido:** confirmar em `METRICS_COVERAGE.md` que v8 cobre o que
-Schardong et al. mediram -- bytes na rede, T_fluxo em latência baixa e
-alta, e a fração do tempo de handshake TLS sobre o tempo total, por
-perfil e cenário; acrescentar ao plano de análise (Decision 92) resumo
-de distribuição/Shapiro-Wilk/Mann-Whitney; confirmar que jitter e perda
-continuam calculados do pcap.
+**Request:** confirm in `METRICS_COVERAGE.md` that v8 covers what
+Schardong et al. measured -- bytes on the network, T_fluxo at low and
+high latency, and the TLS handshake time's fraction of total time, per
+profile and scenario; add to the analysis plan (Decision 92) a
+distribution summary/Shapiro-Wilk/Mann-Whitney; confirm that jitter and
+loss are still computed from the pcap.
 
-**Bytes na rede:** já cobertos (OPINsize e os 4 termos, Decision
-77/78/85/88) -- nada a fazer.
+**Bytes on the network:** already covered (OPINsize and its 4 terms, Decision
+77/78/85/88) -- nothing to do.
 
-**T_fluxo em latência baixa e alta, por perfil/cenário:** já coberto
-estruturalmente -- `consolidate_profile_scenario()` roda por célula
-perfil x servidor x cenário, e cada cenário (`L0`.."L325") É uma RTT
-real diferente, medida (não assumida) em `thesis/results/v8/latency-
-discovery/`. Nenhuma mudança de código necessária, só esta confirmação
-explícita.
+**T_fluxo at low and high latency, per profile/scenario:** already
+covered structurally -- `consolidate_profile_scenario()` runs per
+profile x server x scenario cell, and each scenario (`L0`.."L325") IS a
+different real RTT, measured (not assumed) in `thesis/results/v8/latency-
+discovery/`. No code change needed, just this explicit confirmation.
 
-**Fração do handshake TLS sobre T_fluxo: NÃO estava calculada --
-corrigida.** `handshakeDurationMs` já era logado pelo gateway (mesma
-linha `"mTLS handshake complete"` de `mtlsHandshakeBytes`,
-`mock_mtls/main.go:675`) e já era puxado (`server/run{NN}_gateway.log`,
-mesmo arquivo de sempre) -- só nunca tinha sido agregado, mesmo padrão
-exato do próprio `term_handshake` (Decision -- corrigido em 2026-10-22).
-`consolidate_v8.py` ganhou `handshake_duration_stats()` (mediana por
-run, pareada 1:1 com o T_fluxo daquele MESMO run) e dois campos novos
-por célula: `mtls_handshake_duration_ms` e
-`mtls_handshake_fraction_of_t_fluxo_pct`. Testado contra fixture real
-(pcap+gateway log casados, `test_handshake_gateway_vs_pcap.py`'s própria
-fixture): mediana real do handshake 19,5/18,0/20,0 ms
-(classic/pqc/hybrid); fração real medida contra dados do piloto 1
-(`L0`, co-localizado): ~0,61% do T_fluxo -- número pequeno esperado
-num cenário de baixa latência onde T_fluxo é dominado por chamadas
-HTTP/assinatura, não pela rede; a fração deve crescer nos cenários de
-alta latência (`L325` etc.), ainda não medido contra dado real de alta
-latência fora do piloto 1/2 (que só têm `L0`/`L325`, mas sem este campo
-no histórico -- será populado a partir do piloto 3 em diante).
+**TLS handshake fraction of T_fluxo: was NOT computed --
+fixed.** `handshakeDurationMs` was already logged by the gateway (the same
+`"mTLS handshake complete"` line as `mtlsHandshakeBytes`,
+`mock_mtls/main.go:675`) and was already being pulled (`server/run{NN}_gateway.log`,
+the same file as always) -- it just had never been aggregated, the exact
+same pattern as `term_handshake` itself (Decision -- fixed on 2026-10-22).
+`consolidate_v8.py` gained `handshake_duration_stats()` (median per
+run, paired 1:1 with that SAME run's T_fluxo) and two new fields per
+cell: `mtls_handshake_duration_ms` and
+`mtls_handshake_fraction_of_t_fluxo_pct`. Tested against a real fixture
+(matched pcap+gateway log, `test_handshake_gateway_vs_pcap.py`'s own
+fixture): real handshake median 19,5/18,0/20,0 ms
+(classic/pqc/hybrid); real fraction measured against pilot 1's data
+(`L0`, colocated): ~0,61% of T_fluxo -- a small figure, as expected
+in a low-latency scenario where T_fluxo is dominated by HTTP/signing
+calls, not the network; the fraction should grow in high-latency
+scenarios (`L325` etc.), not yet measured against real high-latency
+data outside pilots 1/2 (which only have `L0`/`L325`, but without this
+field in their history -- it will be populated from pilot 3 onward).
 
-**Jitter: NUNCA esteve implementado -- achado real, não assumido
-corrigido.** Busca em `pcap_utils.py`/`consolidate_v8.py` não encontrou
-nenhuma função de jitter em lugar nenhum -- a única ocorrência da
-palavra era um comentário sobre variação RUN-A-RUN, não jitter de rede.
-Implementado agora, do MESMO pcap já capturado para os termos de
-bytes/perda do handshake, sem nova coleta: `find_all_syn_synack_rtts()`
-(generaliza `find_syn_synack_rtt()` para retornar o RTT de TODAS as
-conexões reais do pcap, não só a primeira -- o primeiro elemento
-confirmado idêntico à função original, testado) e
-`rtt_jitter_seconds()` (diferença média absoluta entre RTTs
-consecutivos -- mesma definição que a RFC 3550 S6.4.1 usa para jitter
-de RTP, adaptada a handshakes TCP já que este projeto não captura
-tráfego RTP). Novo campo `rtt_and_loss.rtt_jitter_ms` por célula.
-Testado contra os pcaps reais do piloto 1 (`L0`): 6 conexões reais
-casadas, jitter mediano real ~0,12ms; e contra a fixture `s256`
-casada (14 conexões reais por execução, jitter sub-milissegundo em
-todos os 3 perfis).
+**Jitter: NEVER had been implemented -- a real finding, not an
+assumed-then-fixed one.** A search in `pcap_utils.py`/`consolidate_v8.py` found
+no jitter function anywhere -- the only occurrence of the
+word was a comment about RUN-TO-RUN variation, not network jitter.
+Implemented now, from the SAME pcap already captured for the
+handshake's bytes/loss terms, with no new collection: `find_all_syn_synack_rtts()`
+(generalizes `find_syn_synack_rtt()` to return the RTT of ALL real
+connections in the pcap, not just the first -- the first element
+confirmed identical to the original function, tested) and
+`rtt_jitter_seconds()` (mean absolute difference between consecutive
+RTTs -- the same definition RFC 3550 S6.4.1 uses for RTP
+jitter, adapted to TCP handshakes since this project doesn't capture
+RTP traffic). A new `rtt_and_loss.rtt_jitter_ms` field per cell.
+Tested against pilot 1's real pcaps (`L0`): 6 matched real
+connections, real median jitter ~0,12ms; and against the matched
+`s256` fixture (14 real connections per execution, sub-millisecond
+jitter across all 3 profiles).
 
-**Estatística do plano de análise (Decision 92 addendum, ver acima):**
-`stats_block()` ganhou quartis/p95/histograma/Shapiro-Wilk (toda
-métrica, não só T_fluxo); nova função `add_cross_profile_t_fluxo_
-comparisons()` roda Mann-Whitney par a par entre os perfis presentes em
-cada célula servidor/cenário, usando as amostras reais (`t_fluxo_raw_
-seconds`, campo novo por célula) -- resultado em `consolidated.json`
-no campo de topo `cross_profile_t_fluxo_comparisons`. Único novo campo
-que também precisou mudar o nível de agregação: Mann-Whitney compara
-amostras de perfis DIFERENTES na mesma célula, então não cabia dentro
-de `consolidate_profile_scenario()` (que só vê um perfil por vez) --
-roda uma vez, depois que `build_consolidated()` já montou os 3 perfis.
+**Analysis-plan statistics (Decision 92 addendum, see above):**
+`stats_block()` gained quartiles/p95/histogram/Shapiro-Wilk (every
+metric, not just T_fluxo); a new `add_cross_profile_t_fluxo_
+comparisons()` function runs pairwise Mann-Whitney between the profiles
+present in each server/scenario cell, using the real samples (`t_fluxo_raw_
+seconds`, a new field per cell) -- the result lands in `consolidated.json`'s
+top-level `cross_profile_t_fluxo_comparisons` field. The only new field
+that also needed a change in aggregation level: Mann-Whitney compares
+samples from DIFFERENT profiles in the same cell, so it didn't fit inside
+`consolidate_profile_scenario()` (which only sees one profile at a time) --
+it runs once, after `build_consolidated()` has already assembled the 3 profiles.
 
-**Testado, não só revisado:** `handshake_duration_stats()`/jitter
-contra as fixtures reais já existentes (pcap+gateway log casados) e
-contra os pcaps reais do piloto 1; `percentile()`/`histogram_buckets()`/
+**Tested, not just reviewed:** `handshake_duration_stats()`/jitter
+against the already-existing real fixtures (matched pcap+gateway log) and
+against pilot 1's real pcaps; `percentile()`/`histogram_buckets()`/
 `shapiro_wilk()`/`mann_whitney_u()`/`add_cross_profile_t_fluxo_
-comparisons()` com testes unitários novos
-(`tests/test_schardong_coverage.py`, 15 casos, todos passando); suíte
-completa de `thesis/results/v8/campaign/scripts/tests/` re-executada
-(49/49 passando, incluindo os 34 testes pré-existentes, nenhuma
-regressão); `consolidate_v8.py` reexecutado ponta a ponta contra o dado
-real do piloto 1 completo (não um fixture sintético) -- confirma os
-números acima e que nada quebrou no pipeline existente. Um caso real de
-borda encontrado e corrigido durante esse teste: `term_pki` tem
-variância zero entre runs (mesmo nº de bytes sempre) -- `scipy.stats.
-shapiro` degrada para `statistic=1.0`/`p=1.0` com um aviso "range zero"
-nesse caso; `shapiro_wilk()` agora detecta variância zero antes de
-chamar o scipy e reporta `"status": "degenerate (zero variance...)"`
-em vez de um "normal" tecnicamente verdadeiro mas sem sentido.
+comparisons()` with new unit tests
+(`tests/test_schardong_coverage.py`, 15 cases, all passing); the full
+`thesis/results/v8/campaign/scripts/tests/` suite re-run
+(49/49 passing, including the 34 pre-existing tests, no
+regression); `consolidate_v8.py` re-run end to end against pilot 1's
+real, complete data (not a synthetic fixture) -- confirming the
+numbers above and that nothing broke in the existing pipeline. One real edge
+case found and fixed during this test: `term_pki` has
+zero variance across runs (always the same byte count) -- `scipy.stats.
+shapiro` degrades to `statistic=1.0`/`p=1.0` with a "zero range" warning
+in that case; `shapiro_wilk()` now detects zero variance before
+calling scipy and reports `"status": "degenerate (zero variance...)"`
+instead of a technically-true but meaningless "normal".
 
-**Nada do código de medição foi alterado** (`opin_flow.py`,
-`campaign_run.py`'s captura, `mock_mtls/main.go`) -- só
-`consolidate_v8.py`/`pcap_utils.py` (pós-processamento, roda localmente
-sobre dados já coletados) e `METRICS_COVERAGE.md`/`DECISIONS.md`. Sem
-AWS tocado.
+**None of the measurement code was changed** (`opin_flow.py`,
+`campaign_run.py`'s capture, `mock_mtls/main.go`) -- only
+`consolidate_v8.py`/`pcap_utils.py` (post-processing, runs locally
+over already-collected data) and `METRICS_COVERAGE.md`/`DECISIONS.md`. No
+AWS touched.
 
-## 95. Correção da fração do handshake sobre T_fluxo (Decision 94): deve ser a SOMA dos N_mTLS handshakes do fluxo, não a mediana de uma única conexão -- achado pelo próprio Luciano, corrigido no mesmo dia, antes de qualquer uso real; valores recalculados. Jitter: definição registrada em uma linha. scipy fixado em 1.16.0 no README. Sem alterar código de medição.
+## 95. Fix to the handshake-over-T_fluxo fraction (Decision 94): it must be the SUM of the flow's N_mTLS handshakes, not the median of a single connection -- found by Luciano himself, fixed the same day, before any real use; values recalculated. Jitter: definition recorded in one line. scipy pinned to 1.16.0 in the README. No change to measurement code.
 
-**Causa raiz do erro:** `handshake_duration_stats()` (Decision 94)
-calculava a MEDIANA das durações das 6 conexões client-facing de um run
-e usava esse valor único no numerador da fração -- Schardong et al.
-definem a fração como o tempo total gasto em TODOS os handshakes do
-fluxo (soma), dividido pelo T_fluxo, não o tempo de uma única conexão.
-Isso subestimava a fração em ~6x (N_mTLS=6).
+**Root cause of the error:** `handshake_duration_stats()` (Decision 94)
+computed the MEDIAN of the durations of a run's 6 client-facing connections
+and used that single value as the fraction's numerator -- Schardong et al.
+define the fraction as the total time spent across ALL of the
+flow's handshakes (a sum), divided by T_fluxo, not the time of a single
+connection. This underestimated the fraction by ~6x (N_mTLS=6).
 
-**Corrigido:** nova função `handshake_duration_sum_ms()` (mesma fonte,
-mesmo filtro client-facing, soma em vez de mediana). A fração
-(`mtls_handshake_fraction_of_t_fluxo_pct`) agora usa a soma; a mediana
-por conexão (`mtls_handshake_duration_ms`) continua existindo, mas
-só como figura informativa separada, nunca mais usada na fração --
-novo campo `mtls_handshake_duration_sum_ms` registra a soma
-explicitamente. Testado contra a fixture real já usada pela Decision
-94 (`test_handshake_gateway_vs_pcap.py`'s própria fixture, pcap+log
-casados): soma real por run 117/102/119 ms (classic/pqc/hybrid, 6
-conexões reais cada) -- novo teste de regressão
+**Fixed:** a new `handshake_duration_sum_ms()` function (same source,
+same client-facing filter, sum instead of median). The fraction
+(`mtls_handshake_fraction_of_t_fluxo_pct`) now uses the sum; the
+per-connection median (`mtls_handshake_duration_ms`) still exists, but
+only as a separate informative figure, never again used in the fraction --
+a new `mtls_handshake_duration_sum_ms` field records the sum
+explicitly. Tested against the real fixture Decision 94 already used
+(`test_handshake_gateway_vs_pcap.py`'s own fixture, matched pcap+log):
+real sum per run 117/102/119 ms (classic/pqc/hybrid, 6
+real connections each) -- a new regression test
 (`test_handshake_duration_sum_ms_real_fixture`,
-`tests/test_schardong_coverage.py`), confirma soma > mediana (a
-distinção que esta correção depende de existir de fato nos dados reais,
-não só em teoria).
+`tests/test_schardong_coverage.py`), confirms sum > median (the
+distinction this fix depends on actually existing in the real data,
+not just in theory).
 
-**Valores recalculados contra o piloto 1 (dado real, não fixture
-sintética):**
+**Values recalculated against pilot 1 (real data, not a
+synthetic fixture):**
 
 | Perfil | L0 (co-localizado) | L325 |
 |---|---|---|
@@ -8484,2290 +8485,2266 @@ sintética):**
 | PQC | 0,37% | 8,59% |
 | Hybrid | 1,43% | 8,44% |
 
-A versão anterior (mediana de 1 conexão) reportava algo da ordem de
-0,6% para `L0` em todos os perfis -- pequeno demais para mostrar
-qualquer diferença real entre cenários. Com a soma, a fração cresce
-claramente de `L0` para `L325` em todos os 3 perfis, como esperado (o
-RTT de rede de cada uma das 6 conexões cresce com o cenário; o tempo de
-HTTP/assinatura do lado do cliente não escala do mesmo jeito) -- o
-padrão que a versão com mediana era pequena demais para evidenciar.
+The previous version (median of 1 connection) reported something on
+the order of 0,6% for `L0` across all profiles -- too small to show
+any real difference between scenarios. With the sum, the fraction clearly
+grows from `L0` to `L325` across all 3 profiles, as expected (the
+network RTT of each of the 6 connections grows with the scenario; the
+client-side HTTP/signing time doesn't scale the same way) -- the
+pattern the median version was too small to reveal.
 
-**Jitter, definição em uma linha (pedido explícito):** jitter = média
-das diferenças absolutas entre RTTs consecutivos (SYN->SYN-ACK) das
-conexões reais de um mesmo run, mesma definição que a RFC 3550 §6.4.1
-usa para jitter de RTP, adaptada aqui a handshakes TCP (não há tráfego
-RTP neste projeto). Perda continua vindo do pcap real
-(`detect_loss_signals()`/`pcap_loss_summary()`), não alterado.
+**Jitter, one-line definition (explicit request):** jitter = the mean
+of the absolute differences between consecutive RTTs (SYN->SYN-ACK) of
+a run's real connections, the same definition RFC 3550 §6.4.1
+uses for RTP jitter, adapted here to TCP handshakes (there is no
+RTP traffic in this project). Loss still comes from the real pcap
+(`detect_loss_signals()`/`pcap_loss_summary()`), unchanged.
 
-**scipy fixado:** `thesis/results/v8/campaign/README.md` agora pede
-`pip install scipy==1.16.0` (a versão real contra a qual este pipeline
-foi testado), não mais uma instalação sem versão.
+**scipy pinned:** `thesis/results/v8/campaign/README.md` now requests
+`pip install scipy==1.16.0` (the real version this pipeline
+was tested against), no longer an unversioned install.
 
-**Testado, não só revisado:** suíte completa de
-`thesis/results/v8/campaign/scripts/tests/` re-executada (50/50
-passando, incluindo o novo teste de regressão da soma);
-`consolidate_v8.py` reexecutado ponta a ponta contra o piloto 1
-completo, novos números conferidos acima diretamente do
-`consolidated.json` gerado, não estimados.
+**Tested, not just reviewed:** the full
+`thesis/results/v8/campaign/scripts/tests/` suite re-run (50/50
+passing, including the new sum regression test);
+`consolidate_v8.py` re-run end to end against the complete pilot 1,
+new figures checked above directly from the generated
+`consolidated.json`, not estimated.
 
-**Nada do código de medição foi alterado** -- só
-`consolidate_v8.py`/`pcap_utils.py` (que não captura nada, só
-reprocessa dados já coletados), `METRICS_COVERAGE.md`,
-`DECISIONS.md` e o README. Sem AWS tocado. Sem apply/destroy nesta
-etapa -- a retomada do piloto 3 (parte 2 do pedido) segue em paradas
-separadas, abaixo.
+**None of the measurement code was changed** -- only
+`consolidate_v8.py`/`pcap_utils.py` (which captures nothing, only
+reprocesses already-collected data), `METRICS_COVERAGE.md`,
+`DECISIONS.md`, and the README. No AWS touched. No apply/destroy at this
+stage -- resuming pilot 3 (part 2 of the request) continues in separate
+stops, below.
 
-## 96. Retomada do piloto 3: apply de plano salvo (65/0/0, início 2026-10-28T21:30:57Z), entrega de imagens/código, pré-flight TCP/handshake nos 3 perfis corrigido (achava 404 por falta de Host header, não por certificado), estágio de validação (24/24 execuções reais, ordem Classic<Hybrid<PQC em T_fluxo em todos os 8 cenários) -- dois bugs reais de orquestração encontrados e corrigidos, registrados aqui, não escondidos
+## 96. Resuming pilot 3: saved-plan apply (65/0/0, start 2026-10-28T21:30:57Z), image/code delivery, TCP/handshake pre-flight across the 3 profiles fixed (was returning 404 due to a missing Host header, not a certificate issue), validation stage (24/24 real executions, T_fluxo order Classic<Hybrid<PQC across all 8 scenarios) -- two real orchestration bugs found and fixed, recorded here, not hidden
 
-**Apply:** `terraform apply tfplan` (plano salvo, sem recalcular) -- **65
-added, 0 changed, 0 destroyed**, início 2026-10-28T21:30:57Z, fim
-21:31:39Z. `tfplan` apagado, scanner confirmou nunca commitado. 12/12
-instâncias confirmadas nas 7 regiões via `aws ec2 describe-instances`
-(minha primeira tentativa usou a tag `Project=mockopin-pqc`, errada --
-a real é `mockopin-pqc-aws` -- corrigida antes de reportar, não depois).
+**Apply:** `terraform apply tfplan` (saved plan, no recalculation) -- **65
+added, 0 changed, 0 destroyed**, start 2026-10-28T21:30:57Z, end
+21:31:39Z. `tfplan` deleted, the scanner confirmed it was never committed. 12/12
+instances confirmed across the 7 regions via `aws ec2 describe-instances`
+(my first attempt used the `Project=mockopin-pqc` tag, wrong --
+the real one is `mockopin-pqc-aws` -- fixed before reporting, not after).
 
-**Bug real #1 (achado, não assumido): `terraform apply` direto pula o
-que `campaign_up.sh` faria depois do seu próprio apply.** `deliver_
-images.sh` falhou na primeira tentativa (`FileNotFoundError:
-/home/ec2-user/inventory.json`) porque a chave de campanha
-(`~/.ssh/campaign_key`) e o `inventory.json` nunca foram copiados para
-o control novo -- `campaign_up.sh` faz essa cópia como parte do seu
-próprio fluxo pós-apply; aplicar o plano salvo diretamente (Decision 93)
-pula essa parte. Corrigido copiando os dois arquivos manualmente
+**Real bug #1 (found, not assumed): a direct `terraform apply` skips
+what `campaign_up.sh` would otherwise do after its own apply.** `deliver_
+images.sh` failed on the first attempt (`FileNotFoundError:
+/home/ec2-user/inventory.json`) because the campaign key
+(`~/.ssh/campaign_key`) and `inventory.json` had never been copied to
+the new control instance -- `campaign_up.sh` does this copy as part of its
+own post-apply flow; applying the saved plan directly (Decision 93)
+skips that part. Fixed by copying both files manually
 (`terraform output -raw campaign_private_key` + `terraform output -json
-inventory`, via scp com a chave do operador). `campaign_schedule.json`
-tinha a mesma lacuna (nunca escrito) -- gerado com a mesma convenção
-padrão de `campaign_up.sh` (janela 1 às 19:00 UTC do dia seguinte) e
-copiado também. Nenhum desses arquivos é segredo (chave de campanha
-gerada pelo Terraform, não a do operador) nem afeta o que é medido --
-só infraestrutura de entrega. Reentregue com sucesso depois: imagens
-(RC=0, ~18min, 6/6, IDs idênticos nos 3 servidores) e código-fonte
-(RC=0, cryptography-50.0.2 confirmada em todos os hosts).
+inventory`, via scp with the operator's key). `campaign_schedule.json`
+had the same gap (never written) -- generated with the same standard
+convention as `campaign_up.sh` (window 1 at 19:00 UTC the following day)
+and copied too. Neither of these files is a secret (the campaign key is
+Terraform-generated, not the operator's) nor does it affect what is
+measured -- it's purely delivery infrastructure. Successfully redelivered
+afterward: images (RC=0, ~18min, 6/6, identical IDs across the 3 servers)
+and source code (RC=0, cryptography-50.0.2 confirmed on every host).
 
-**Pré-flight TCP/443 (8 clientes, 20 amostras, 3 perfis):** 0/20 falhas
-na primeira tentativa, EM TODOS os 8 clientes -- achado real: a
-checagem de TCP rodou ANTES de qualquer gateway subir (`deliver_
-images.sh` só carrega as imagens Docker, nunca inicia o
-`docker-compose`; é `switch_crypto_profile.py` que chama
-`_start_if_exited()`). Refeita depois do primeiro switch de perfil
-(gateways já de pé): **20/20 amostras, 0 falhas, nos 8 clientes**,
-medianas batendo com o esperado (L0 0,14-0,18ms; L123 122,9ms; L14
+**TCP/443 pre-flight (8 clients, 20 samples, 3 profiles):** 0/20 failures
+on the first attempt, ACROSS ALL 8 clients -- a real finding: the TCP
+check ran BEFORE any gateway was up (`deliver_
+images.sh` only loads the Docker images, never starts the
+`docker-compose` stack; it's `switch_crypto_profile.py` that calls
+`_start_if_exited()`). Redone after the first profile switch
+(gateways already up): **20/20 samples, 0 failures, across the 8
+clients**, medians matching expectations (L0 0,14-0,18ms; L123 122,9ms; L14
 15,4ms; L219 219,9ms; L30 32,3ms; L325 330,3ms).
 
-**Handshake TLS, corrigido o 404 do piloto anterior:** diagnosticado
-(não suposto) lendo `opin_flow.py`'s `do_call()` -- o 404 anterior era
-por FALTA do header `Host: auth.local` no script de teste ad hoc, NÃO
-por falta de certificado de cliente (confirmado lendo `get_local_leg_
-cert_paths()`'s própria docstring: o proxy local nunca pede certificado
-nessa perna, a identidade mTLS real é toda estabelecida do lado do
-proxy). Corrigido no script de teste (v3): **24/24 verificações reais
-(8 clientes x 3 perfis) -- todas `ok: true, status: 200`**, com corpo
-JWKS real e correto por perfil (RSA/AKP/HYBRID).
+**TLS handshake, the previous pilot's 404 fixed:** diagnosed
+(not assumed) by reading `opin_flow.py`'s `do_call()` -- the earlier 404 was
+due to a MISSING `Host: auth.local` header in the ad hoc test script, NOT
+a missing client certificate (confirmed by reading `get_local_leg_
+cert_paths()`'s own docstring: the local proxy never requests a certificate
+on that leg, the real mTLS identity is entirely established on the
+proxy's side). Fixed in the test script (v3): **24/24 real checks
+(8 clients x 3 profiles) -- all `ok: true, status: 200`**, with a real,
+correct JWKS body per profile (RSA/AKP/HYBRID).
 
-**Bug real #2 (achado na primeira execução real de `run_validation_
-stage()`, nunca tinha rodado contra AWS real antes): `FileNotFoundError`
-no primeiro write de `calls.jsonl`.** `run_validation_stage()` criava
-só o diretório pai de cada cenário, nunca as subpastas `runs/`/`server/`/
-`client/` que `run_one_execution()` escreve -- `run_window()` (o
-caminho real da campanha) já faz esse mkdir (linha ~2468); a função de
-validação, escrita e testada só localmente/dry-run antes de hoje, nunca
-tinha essa linha. Corrigido espelhando exatamente o mkdir de
-`run_window()`. Testado: suíte completa (50/50) sem regressão; depois,
-real: 24/24 execuções completas sem erro.
+**Real bug #2 (found on the first real execution of `run_validation_
+stage()`, which had never run against real AWS before): `FileNotFoundError`
+on the first write of `calls.jsonl`.** `run_validation_stage()` only
+created each scenario's parent directory, never the `runs/`/`server/`/
+`client/` subfolders that `run_one_execution()` writes to -- `run_window()`
+(the campaign's real path) already does this mkdir (line ~2468); the
+validation function, written and tested only locally/dry-run before
+today, never had that line. Fixed by exactly mirroring `run_window()`'s
+mkdir. Tested: the full suite (50/50) with no regression; then,
+for real: 24/24 executions completed with no error.
 
-**Estágio de validação, 24/24 execuções reais, call_count=44 em todas,
-nenhuma com retry:**
+**Validation stage, 24/24 real executions, call_count=44 across all of
+them, none with a retry:**
 
-| Cenário | Classic (s) | Hybrid (s) | PQC (s) | Ordem esperada? |
+| Scenario | Classic (s) | Hybrid (s) | PQC (s) | Expected order? |
 |---|---|---|---|---|
-| L0@sa-east-1 | 5,96 | 10,01 | 11,33 | sim |
-| L123@sa-east-1 | 12,51 | 16,08 | 17,12 | sim |
-| L219@sa-east-1 | 18,18 | 22,27 | 23,17 | sim |
-| L325@sa-east-1 | 24,28 | 28,83 | 29,44 | sim |
-| L0@us-east-1 | 6,07 | 9,93 | 10,71 | sim |
-| L14@us-east-1 | 6,66 | 10,09 | 11,59 | sim |
-| L0@ap-northeast-1 | 5,73 | 9,65 | 10,97 | sim |
-| L30@ap-northeast-1 | 7,05 | 11,30 | 12,60 | sim |
+| L0@sa-east-1 | 5,96 | 10,01 | 11,33 | yes |
+| L123@sa-east-1 | 12,51 | 16,08 | 17,12 | yes |
+| L219@sa-east-1 | 18,18 | 22,27 | 23,17 | yes |
+| L325@sa-east-1 | 24,28 | 28,83 | 29,44 | yes |
+| L0@us-east-1 | 6,07 | 9,93 | 10,71 | yes |
+| L14@us-east-1 | 6,66 | 10,09 | 11,59 | yes |
+| L0@ap-northeast-1 | 5,73 | 9,65 | 10,97 | yes |
+| L30@ap-northeast-1 | 7,05 | 11,30 | 12,60 | yes |
 
-**Ordem Classic < Hybrid < PQC confirmada em 8/8 cenários** -- ao
-contrário da inversão Hybrid-mais-rápido-que-PQC observada no piloto 2
-(Decision 89, amostra única também). N=1 por célula aqui (amostra de
-fumaça, não os 10 runs/perfil/cenário reais) -- não conclusivo
-estatisticamente, mas um sinal direto, não interpretado além disso.
+**Order Classic < Hybrid < PQC confirmed in 8/8 scenarios** -- contrary
+to the Hybrid-faster-than-PQC inversion observed in pilot 2
+(Decision 89, also a single sample). N=1 per cell here (a smoke
+sample, not the 10 real runs/profile/scenario) -- not statistically
+conclusive, but a direct signal, not interpreted beyond that.
 
-**Parado aqui, como instruído: processo real (`campaign_run.py`, PID
-17600 no control) confirmado sentado em `wait_for_operator_gate(
-"validation_stage")`, aguardando o marcador do operador -- 24/24
-`run01.json` reais confirmados em disco, nenhum erro, a janela de
-medição NÃO foi iniciada.** Nenhum marcador foi criado por mim.
+**Stopped here, as instructed: the real process (`campaign_run.py`, PID
+17600 on control) confirmed sitting at `wait_for_operator_gate(
+"validation_stage")`, waiting for the operator's marker -- 24/24
+real `run01.json` files confirmed on disk, no error, the measurement
+window was NOT started.** No marker was created by me.
 
-**Relógio e custo:** apply em 21:30:57Z; validação completa por volta
-de 2026-10-29T00:1x:xxZ (log parou de crescer logo após o 24º ping,
-processo confirmado ocioso em `ps aux`, não travado) -- aproximadamente
-2h40min dos 6h usados, bem abaixo de 80%. Custo estimado seguindo a
-mesma referência já usada (~US$1,15/h para a topologia de 12
-instâncias): ~US$3,05, dentro do teto de US$8.
+**Clock and cost:** apply at 21:30:57Z; validation completed around
+2026-10-29T00:1x:xxZ (the log stopped growing right after the 24th ping,
+the process confirmed idle via `ps aux`, not stuck) -- approximately
+2h40min of the 6h used, well below 80%. Estimated cost following the
+same reference already used (~US$1,15/h for the 12-instance
+topology): ~US$3,05, within the US$8 ceiling.
 
-**Atualizado:** `campaign_run.py` (dois bugs reais corrigidos, ver
-acima), `thesis/results/v8/campaign/scripts/tests/` sem regressão
-(50/50). Nenhum código de MEDIÇÃO alterado (`opin_flow.py`, `mock_
-mtls/main.go`, `tls_kem_proxy/main.go`) -- só o orquestrador
-(infraestrutura de execução) e o script de diagnóstico local.
+**Updated:** `campaign_run.py` (two real bugs fixed, see
+above), `thesis/results/v8/campaign/scripts/tests/` with no regression
+(50/50). No MEASUREMENT code changed (`opin_flow.py`, `mock_
+mtls/main.go`, `tls_kem_proxy/main.go`) -- only the orchestrator
+(execution infrastructure) and the local diagnostic script.
 
-## 97. Decomposição real de T_fluxo (L0/L325, dado do portão de validação, sem coleta nova) -- verificação custa o MESMO (~490ms) nos 3 perfis, muito acima do benchmark nativo (<1ms): artefato de implementação do despachante de assinatura/verificação, não do algoritmo; a inversão Hybrid<PQC é um resíduo extra específico de PQC, reproduzido em 2/2 cenários
+## 97. Real T_fluxo decomposition (L0/L325, data from the validation gate, no new collection) -- verification costs the SAME (~490ms) across all 3 profiles, far above the native benchmark (<1ms): an implementation artifact of the signing/verification dispatcher, not of the algorithm; the Hybrid<PQC inversion is a PQC-specific extra residual, reproduced in 2/2 scenarios
 
-**Dados usados:** os 6 `run01.json` reais do portão de validação
+**Data used:** the 6 real `run01.json` files from the validation gate
 (classic/pqc/hybrid x L0/L325, sa-east-1) -- `phase_accounting`,
-`verification_timings` (7/execução), `signing_timings` (8/execução), já
-coletados; `server/w00_run01_gateway.log` para bytes/duração de
-handshake (`consolidate_v8.py`'s `term_handshake()`/`handshake_
-duration_sum_ms()`, reusados, não reimplementados). Nenhuma coleta nova,
-nenhum código alterado.
+`verification_timings` (7/execution), `signing_timings` (8/execution), already
+collected; `server/w00_run01_gateway.log` for handshake bytes/duration
+(`consolidate_v8.py`'s `term_handshake()`/`handshake_
+duration_sum_ms()`, reused, not reimplemented). No new collection,
+no code changed.
 
-### 1. Decomposição da diferença de T_fluxo
+### 1. Decomposing the T_fluxo difference
 
-`checksum` = soma dos termos decompostos (handshake+assinatura+
-verificação+setup+rede+resíduo); pequena diferença para `total` é o
-`explicit_wait_seconds` (sempre ~0) e arredondamento.
+`checksum` = sum of the decomposed terms (handshake+signing+
+verification+setup+network+residual); the small difference from `total` is
+`explicit_wait_seconds` (always ~0) and rounding.
 
-| L0 | Total | Handshake (bytes) | Handshake (tempo) | Assinatura | Verificação | Setup | Rede (http_calls) | Resíduo |
+| L0 | Total | Handshake (bytes) | Handshake (time) | Signature | Verification | Setup | Network (http_calls) | Residual |
 |---|---|---|---|---|---|---|---|---|
 | PQC−Classic | +5,369s | +104.568 B | −0,068s | **+3,923s** | −0,032s | −0,515s | −0,000s | **+1,993s** |
 | Hybrid−Classic | +4,054s | +83.028 B | +0,000s | **+3,929s** | +0,035s | −0,012s | +0,080s | +0,022s |
 | Hybrid−PQC | **−1,315s** | −21.540 B | +0,068s | +0,006s | +0,067s | +0,503s | +0,080s | **−1,971s** |
 
-| L325 | Total | Handshake (bytes) | Handshake (tempo) | Assinatura | Verificação | Setup | Rede (http_calls) | Resíduo |
+| L325 | Total | Handshake (bytes) | Handshake (time) | Signature | Verification | Setup | Network (http_calls) | Residual |
 |---|---|---|---|---|---|---|---|---|
 | PQC−Classic | +5,159s | +104.568 B | −0,079s | **+3,690s** | +0,061s | −0,429s | +0,121s | **+1,716s** |
 | Hybrid−Classic | +4,555s | +83.028 B | −0,011s | **+3,753s** | +0,168s | +0,000s | +0,957s | −0,324s |
 | Hybrid−PQC | **−0,604s** | −21.540 B | +0,068s | +0,063s | +0,106s | +0,429s | +0,836s | **−2,039s** |
 
-**Leitura:** PQC−Classic e Hybrid−Classic são dominados quase
-inteiramente por ASSINATURA (73-97% do delta), não por handshake, rede
-ou verificação (todos ~0 nos dois casos). O handshake em BYTES cresce
-exatamente como esperado (Classic<Hybrid<PQC, igual ao OPINsize), mas o
-handshake em TEMPO não acompanha -- nos dois cenários o tempo de
-handshake é estatisticamente igual entre perfis (diferenças de
-±10-80ms, sem padrão), porque o TEMPO do handshake é dominado pelo RTT
-de rede (6 round-trips fixos por conexão), não pelo tamanho do payload
-dentro do MTU -- a diferença de bytes não se traduz em diferença de
-tempo de handshake nesta escala.
+**Reading:** PQC−Classic and Hybrid−Classic are dominated almost
+entirely by SIGNATURE (73-97% of the delta), not by handshake, network,
+or verification (all ~0 in both cases). The handshake in BYTES grows
+exactly as expected (Classic<Hybrid<PQC, matching OPINsize), but the
+handshake in TIME doesn't follow -- in both scenarios handshake time
+is statistically equal across profiles (differences of
+±10-80ms, no pattern), because handshake TIME is dominated by network
+RTT (6 fixed round-trips per connection), not by payload size
+within the MTU -- the byte difference doesn't translate into a handshake
+time difference at this scale.
 
-### 2. Como cada verificação é implementada
+### 2. How each verification is implemented
 
-**TODAS as verificações, nos 3 perfis** (`opin_flow.py`'s `verify_jwt()`/
-`decrypt_and_verify_jwt()`), passam pelo MESMO despachante:
+**ALL verifications, across the 3 profiles** (`opin_flow.py`'s `verify_jwt()`/
+`decrypt_and_verify_jwt()`), go through the SAME dispatcher:
 `_run_verifier()` -> `thesis/scripts/pqc-signer/signer_core.mjs`'s
-`verify_jwt` dispatch, em **JavaScript/Node.js**, via `server.mjs` (um
-serviço HTTP de vida longa, iniciado uma vez por bloco perfil/instalação
--- `start_pqc_signer_service()`) OU, se esse serviço não estiver de pé,
-um `docker run --rm -i` NOVO por chamada (fallback em `_run_verifier()`,
-linha 630). Isso é deliberado mesmo para Classic (que poderia verificar
-PS256 com `pyjwt` localmente) -- "para que uma diferença de tempo medida
-reflita o algoritmo, não 'Python em processo' vs 'processo separado'"
-(docstring de `start_pqc_signer_service()`).
+`verify_jwt` dispatch, in **JavaScript/Node.js**, via `server.mjs` (a
+long-lived HTTP service, started once per profile/installation block
+-- `start_pqc_signer_service()`) OR, if that service isn't up, a
+NEW `docker run --rm -i` per call (the `_run_verifier()` fallback,
+line 630). This is deliberate even for Classic (which could verify
+PS256 locally with `pyjwt`) -- "so that a measured time difference
+reflects the algorithm, not 'Python in-process' vs. 'separate process'"
+(`start_pqc_signer_service()`'s own docstring).
 
-**Assinatura é diferente por perfil:** Classic assina PS256 via
-`pyjwt.encode()` **em processo, Python puro**, sem tocar o despachante.
-PQC/Hybrid assinam a parte ML-DSA-65 via `_run_pqc_signer()`, o MESMO
-despachante Node.js/HTTP-ou-docker-por-chamada da verificação.
+**Signing differs per profile:** Classic signs PS256 via
+`pyjwt.encode()` **in-process, pure Python**, without touching the dispatcher.
+PQC/Hybrid sign the ML-DSA-65 part via `_run_pqc_signer()`, the SAME
+Node.js/HTTP-or-docker-per-call dispatcher used for verification.
 
-**Medido (média, 7-8 chamadas/execução, L0):**
+**Measured (mean, 7-8 calls/execution, L0):**
 
-| Operação | Classic | PQC | Hybrid | Benchmark nativo (Go, assinatura) |
+| Operation | Classic | PQC | Hybrid | Native benchmark (Go, signing) |
 |---|---|---|---|---|
-| Assinatura (ms/op) | 2,3ms (pyjwt, em processo) | 492,7ms (despachante) | 493,4ms (despachante) | RSA-4096: 6,624ms / ML-DSA-65: 0,713ms |
-| Verificação (ms/op) | 492,5ms (despachante) | 487,9ms (despachante) | 497,4ms (despachante) | (sem benchmark nativo de verificação registrado) |
+| Signature (ms/op) | 2,3ms (pyjwt, in-process) | 492,7ms (dispatcher) | 493,4ms (dispatcher) | RSA-4096: 6,624ms / ML-DSA-65: 0,713ms |
+| Verification (ms/op) | 492,5ms (dispatcher) | 487,9ms (dispatcher) | 497,4ms (dispatcher) | (no native verification benchmark recorded) |
 
-**A verificação custa o MESMO (~488-497ms) nos 3 perfis, independente
-do algoritmo** -- Classic verifica RSA e paga o mesmo preço que PQC
-verificando ML-DSA-65. Isso por si só já é evidência direta de que o
-custo medido não é da operação criptográfica (que o benchmark nativo
-mostra ser sub-milissegundo para os dois algoritmos): é do MECANISMO de
-despacho. Mesma conclusão para assinatura PQC/Hybrid: ~493ms, ~690x o
-benchmark nativo ML-DSA-65 (0,713ms) -- e ~215x mais lento que a própria
-assinatura Classic em processo (2,3ms), que por sua vez já é compatível
-com a ordem de grandeza do benchmark nativo RSA-4096 (6,624ms,
-PS256/RSA-pyjwt sendo razoavelmente mais rápido, esperado por ser uma
-chave/implementação diferente mas do mesmo algoritmo).
+**Verification costs the SAME (~488-497ms) across the 3 profiles,
+regardless of algorithm** -- Classic verifies RSA and pays the same
+price as PQC verifying ML-DSA-65. This alone is already direct evidence
+that the measured cost is not the cryptographic operation's own cost
+(which the native benchmark shows to be sub-millisecond for both
+algorithms): it's the dispatch MECHANISM's cost. Same conclusion for
+PQC/Hybrid signing: ~493ms, ~690x the native ML-DSA-65 benchmark
+(0,713ms) -- and ~215x slower than Classic's own in-process signing
+(2,3ms), which in turn is already consistent with the order of
+magnitude of the native RSA-4096 benchmark (6,624ms,
+PS256/RSA-pyjwt being reasonably faster, expected since it's a
+different key/implementation but of the same algorithm).
 
-### 3. Conclusão: **(b) artefato de implementação do despachante, não diferença real de algoritmo**
+### 3. Conclusion: **(b) a dispatcher implementation artifact, not a real algorithm difference**
 
-Mesma classe de problema já documentada e corrigida nesta tese para o
-assinador da v7 (um `docker run --rm -i` novo por chamada custando
-~0,79s/spawn, ~94% do delta PQC/Híbrido medido então) -- aqui o custo
-medido (~450-550ms/chamada) está na MESMA ordem de grandeza daquele
-problema antigo, não na ordem de grandeza que o "serviço persistente"
-(`server.mjs`, já implementado para corrigir exatamente isso) deveria
-produzir (uma chamada HTTP local + JSON pequeno + operação
-sub-milissegundo deveria custar poucos ms, não ~500ms). Duas hipóteses
-concretas, não aplicadas, propostas para verificação:
-1. **O serviço persistente pode não estar realmente em uso nestas
-   execuções reais da AWS** (regressão silenciosa para o fallback
-   `docker run --rm -i` por chamada, mesmo padrão do bug antigo) --
-   diagnóstico: logar explicitamente, em `_run_verifier()`/`_run_pqc_
-   signer()`, qual dos dois caminhos foi usado em cada chamada
-   (`_PQC_SIGNER_SERVICE_URL is not None` ou não), sem mudar o
-   comportamento. Custo: ~15min de código + teste local, sem AWS.
-2. **Se o serviço persistente estiver mesmo em uso**, o custo de
-   ~450-550ms está dentro do próprio `server.mjs`/do round-trip HTTP
-   local -- precisa de profiling direto do servidor Node (tempo de
-   parse/dispatch/resposta) para achar o que, dentro dele, custa ~500ms
-   a mais que a operação criptográfica em si. Custo: variável, depende
-   do que o profiling achar; não estimável sem medir.
-Nenhuma das duas foi aplicada -- proposta registrada, aguardando decisão
-de Luciano sobre qual investigar primeiro.
+The same class of problem already documented and fixed in this thesis for
+v7's signer (a new `docker run --rm -i` per call costing
+~0,79s/spawn, ~94% of the PQC/Hybrid delta measured back then) -- here the
+measured cost (~450-550ms/call) is in the SAME order of magnitude as
+that old problem, not the order of magnitude the "persistent
+service" (`server.mjs`, already implemented to fix exactly this)
+should produce (a local HTTP call + small JSON + a sub-millisecond
+operation should cost a few ms, not ~500ms). Two concrete hypotheses,
+not applied, proposed for verification:
+1. **The persistent service may not actually be in use in these
+   real AWS executions** (a silent regression to the per-call
+   `docker run --rm -i` fallback, the same pattern as the old bug) --
+   diagnosis: explicitly log, in `_run_verifier()`/`_run_pqc_
+   signer()`, which of the two paths was used on each call
+   (`_PQC_SIGNER_SERVICE_URL is not None` or not), without changing
+   behavior. Cost: ~15min of code + a local test, no AWS.
+2. **If the persistent service really is in use**, the ~450-550ms cost
+   lies inside `server.mjs` itself/the local HTTP round trip --
+   needs direct profiling of the Node server (parse/dispatch/response
+   time) to find what, inside it, costs ~500ms
+   more than the cryptographic operation itself. Cost: variable, depends
+   on what the profiling finds; not estimable without measuring.
+Neither was applied -- the proposal is recorded, awaiting Luciano's
+decision on which to investigate first.
 
-### 4. Por que Hybrid ficou mais rápido que PQC (mesma decomposição)
+### 4. Why Hybrid came out faster than PQC (same decomposition)
 
-Assinatura, verificação e handshake são **estatisticamente iguais**
-entre PQC e Hybrid nos dois cenários (deltas de ±0,01-0,10s, ruído, não
-um padrão) -- ou seja, usar ML-DSA-65 dentro do esquema Hybrid custa o
-MESMO que usá-lo sozinho no PQC. **A inversão Hybrid<PQC é inteiramente
-explicada pelo RESÍDUO**: PQC carrega um resíduo extra de +1,99s (L0) e
-+1,72s (L325) sobre o Classic que o Hybrid NÃO carrega (resíduo do
-Hybrid fica a ±0,3s do Classic, nos dois cenários) -- reproduzido em
-2/2 cenários reais, não um evento isolado. Esse resíduo não está
-atribuído a nenhuma fase nomeada (`phase_accounting`'s própria definição
-de "resíduo": o que sobra depois de http/assinatura/verificação/setup/
-espera) -- não root-causado ainda a uma linha de código específica;
-hipótese mais provável, dado que Hybrid faz TRABALHO ADICIONAL (duas
-assinaturas: ML-DSA bruta + RSA do JWT externo) e ainda assim NÃO
-carrega esse resíduo, é que a causa é específica de algo no caminho
-PQC-apenas (ex.: conversão/formatação de chave bruta ML-DSA-65 só para
-esse modo), não do algoritmo ML-DSA-65 em si. **N=1 por célula aqui
-(amostra do portão de validação, não os 10 runs/perfil/cenário reais)
--- o padrão é consistente nos 2 cenários testados, mas não é
-estatisticamente conclusivo; seria resolvido com certeza pela janela de
-medição real (N=10).**
+Signature, verification, and handshake are **statistically equal**
+between PQC and Hybrid in both scenarios (deltas of ±0,01-0,10s, noise, not
+a pattern) -- in other words, using ML-DSA-65 inside the Hybrid scheme
+costs the SAME as using it alone in PQC. **The Hybrid<PQC inversion is
+entirely explained by the RESIDUAL**: PQC carries an extra residual of
++1,99s (L0) and +1,72s (L325) over Classic that Hybrid does NOT carry
+(Hybrid's residual stays within ±0,3s of Classic, in both scenarios) --
+reproduced in 2/2 real scenarios, not an isolated event. This residual
+isn't attributed to any named phase (`phase_accounting`'s own definition
+of "residual": what's left after http/signing/verification/setup/
+wait) -- not yet root-caused to a specific line of code;
+the most likely hypothesis, given that Hybrid does ADDITIONAL WORK (two
+signatures: raw ML-DSA + the external JWT's RSA) and still does NOT
+carry this residual, is that the cause is specific to something in the
+PQC-only path (e.g. raw ML-DSA-65 key conversion/formatting only used
+in that mode), not the ML-DSA-65 algorithm itself. **N=1 per cell here
+(a sample from the validation gate, not the 10 real runs/profile/scenario)
+-- the pattern is consistent across the 2 scenarios tested, but is not
+statistically conclusive; it would be settled with certainty by the real
+measurement window (N=10).**
 
-## 98. Intervenção (correção de artefato de implementação, não do algoritmo medido) -- serviço persistente de assinatura/verificação nunca era iniciado no caminho real da campanha (SSHExecutor); corrigido, código entregue, as 24 execuções do portão de validação invalidadas e serão refeitas
+## 98. Intervention (fixing an implementation artifact, not the measured algorithm) -- the persistent signing/verification service was never started on the campaign's real path (SSHExecutor); fixed, code delivered, the validation gate's 24 executions invalidated and will be redone
 
-**Confirmação em 15 minutos, por código E por evidência ao vivo (pedido
-explícito, item 1):** `SSHExecutor.start_block_proxies()` só chamava
-`opin_flow.start_tls_kem_proxy()`, NUNCA `opin_flow.start_pqc_signer_
-service()` -- confirmado lendo o código (`campaign_run.py`, a versão de
-`start_block_proxies()` da classe `LocalExecutor` chama os dois; a
-versão da `SSHExecutor`, usada de verdade na campanha real, só chamava
-um). Confirmado também ao vivo: `docker ps -a --filter
-name=pqc_signer_service_run` num cliente real (L0@sa-east-1, usado nos
-3 perfis durante as 24 execuções) não mostrou NENHUM container com esse
-nome, vivo ou morto -- o serviço persistente nunca existiu em nenhuma
-das 24 execuções do portão de validação, em nenhum perfil.
+**Confirmed in 15 minutes, both by code AND by live evidence (explicit
+request, item 1):** `SSHExecutor.start_block_proxies()` only called
+`opin_flow.start_tls_kem_proxy()`, NEVER `opin_flow.start_pqc_signer_
+service()` -- confirmed by reading the code (`campaign_run.py`: the
+`LocalExecutor` class's version of `start_block_proxies()` calls both; the
+`SSHExecutor` version, the one actually used in the real campaign, only called
+one). Also confirmed live: `docker ps -a --filter
+name=pqc_signer_service_run` on a real client (L0@sa-east-1, used across
+the 3 profiles during the 24 executions) showed NO container with that
+name, alive or dead -- the persistent service never existed in any
+of the validation gate's 24 executions, in any profile.
 
-**Hora UTC:** confirmação e correção entre 2026-10-29T00:3xZ e
-2026-10-29T00:53:31Z (este registro). **Commit:** `2cf7374` (código:
+**UTC time:** confirmation and fix between 2026-10-29T00:3xZ and
+2026-10-29T00:53:31Z (this entry). **Commit:** `2cf7374` (code:
 `thesis/scripts/opin_flow.py`, `thesis/results/v8/campaign/scripts/
-campaign_run.py`). **Motivo:** achado real durante a análise de
-decomposição (Decision 97) -- verificação custando o mesmo (~490ms) nos
-3 perfis, muito acima do benchmark nativo, apontou para um artefato do
-despachante, não do algoritmo; confirmado como descrito acima.
-**Execuções afetadas:** as 24 execuções do portão de validação
-(sa-east-1/us-east-1/ap-northeast-1, 3 perfis, N=1/célula) -- **todas
-invalidadas** (mediram o custo do `docker run` por chamada, não o
-algoritmo) e serão refeitas com o código corrigido antes de qualquer
-liberação do portão. Nenhuma janela de medição real (N=10) chegou a
-rodar -- nada além da amostra de validação é afetado.
+campaign_run.py`). **Reason:** a real finding during the decomposition
+analysis (Decision 97) -- verification costing the same (~490ms) across the
+3 profiles, far above the native benchmark, pointed to a dispatcher
+artifact, not the algorithm; confirmed as described above.
+**Affected executions:** the validation gate's 24 executions
+(sa-east-1/us-east-1/ap-northeast-1, 3 profiles, N=1/cell) -- **all
+invalidated** (they measured the per-call `docker run` cost, not the
+algorithm) and will be redone with the fixed code before the gate is
+released. No real measurement window (N=10) had run yet -- nothing
+beyond the validation sample is affected.
 
-**Correção aplicada (item 2):**
-- `opin_flow.py`: `_run_pqc_signer()`/`_run_verifier()` não têm mais
-  recuo silencioso para `docker run --rm -i` por chamada -- se
-  `start_pqc_signer_service()` não foi chamado no processo, a chamada
-  levanta `PqcSignerServiceNotStarted` imediatamente, com mensagem clara.
-  As funções one-shot (`_run_pqc_signer_oneshot()`/`_run_verifier_
-  oneshot()`) continuam existindo, só não são mais alcançadas por
-  acidente. Cada entrada de `signing_timings`/`verification_timings`
-  passa a gravar `dispatch` ("in_process_pyjwt" para PS256,
-  "persistent_service" para ML-DSA-65 puro, "persistent_service+in_
-  process_pyjwt" para hybrid).
-- `campaign_run.py`: `SSHExecutor.start_block_proxies()` agora também
-  inicia `start_pqc_signer_service()` em cada cliente, no MESMO comando
-  remoto que já inicia o proxy TLS, ANTES de qualquer execução (inclusive
-  o aquecimento, que já reusa `start_block_proxies()`/`stop_block_
-  proxies()` -- um único ponto de correção cobre aquecimento, portão de
-  validação e janelas reais). `start_pqc_signer_service()` já bloqueia
-  até `/healthz` responder (`_wait_for_pqc_signer_service_ready()`,
-  código pré-existente, não alterado) -- isso É a validação pedida no
-  item 2 ("o aquecimento valida isso"): um serviço que não sobe a tempo
-  aborta o bloco na hora, antes de qualquer fluxo real rodar.
-  `stop_block_proxies()` derruba o serviço junto com o proxy.
+**Fix applied (item 2):**
+- `opin_flow.py`: `_run_pqc_signer()`/`_run_verifier()` no longer have a
+  silent fallback to a per-call `docker run --rm -i` -- if
+  `start_pqc_signer_service()` was not called in the process, the call
+  immediately raises `PqcSignerServiceNotStarted`, with a clear message.
+  The one-shot functions (`_run_pqc_signer_oneshot()`/`_run_verifier_
+  oneshot()`) still exist, they just can no longer be reached by
+  accident. Every `signing_timings`/`verification_timings` entry now
+  also records `dispatch` ("in_process_pyjwt" for PS256,
+  "persistent_service" for pure ML-DSA-65, "persistent_service+in_
+  process_pyjwt" for hybrid).
+- `campaign_run.py`: `SSHExecutor.start_block_proxies()` now also
+  starts `start_pqc_signer_service()` on each client, in the SAME remote
+  command that already starts the TLS proxy, BEFORE any execution (including
+  the warm-up, which already reuses `start_block_proxies()`/`stop_block_
+  proxies()` -- a single fix point covers warm-up, the validation
+  gate, and real windows). `start_pqc_signer_service()` already blocks
+  until `/healthz` responds (`_wait_for_pqc_signer_service_ready()`,
+  pre-existing code, unchanged) -- this IS the validation requested in
+  item 2 ("the warm-up validates this"): a service that doesn't come up in
+  time aborts the block immediately, before any real flow runs.
+  `stop_block_proxies()` tears down the service along with the proxy.
 
-**Isto é correção de artefato de implementação, não mudança do
-algoritmo medido:** mesmas chaves, mesmos algoritmos (PS256/ML-DSA-65),
-mesmo formato de wire, mesma lógica de verificação dentro de
-`signer_core.mjs`. Muda só COMO o cliente invoca esse código (processo
-persistente de verdade, em vez de um novo container por chamada) --
-exatamente a mesma classe de correção já registrada para o assinador da
-v7.
+**This is a fix to an implementation artifact, not a change to the
+measured algorithm:** same keys, same algorithms (PS256/ML-DSA-65),
+same wire format, same verification logic inside
+`signer_core.mjs`. The only thing that changes is HOW the client invokes
+that code (a genuinely persistent process, instead of a new container per
+call) -- exactly the same class of fix already recorded for v7's
+signer.
 
-**Testado antes de entregar:** `PqcSignerServiceNotStarted` confirmada
-sendo levantada localmente (`_run_pqc_signer('{}')`/`_run_verifier('{}')`
-sem serviço ativo); suíte completa de
-`thesis/results/v8/campaign/scripts/tests/` re-executada (50/50,
-nenhuma regressão -- nenhum teste dependia da string exata do comando
-remoto antigo). Entregue a 3 servidores + 8 clientes
-(`deliver_source.sh`, RC=0) antes de qualquer nova execução.
+**Tested before delivering:** `PqcSignerServiceNotStarted` confirmed to be
+raised locally (`_run_pqc_signer('{}')`/`_run_verifier('{}')`
+with no active service); the full
+`thesis/results/v8/campaign/scripts/tests/` suite re-run (50/50,
+no regression -- no test depended on the old remote command's exact
+string). Delivered to 3 servers + 8 clients
+(`deliver_source.sh`, RC=0) before any new execution.
 
-**Addendum (2026-10-29T01:05Z, commit `07ab033`): a primeira correção
-acima estava ela mesma errada -- achado real, não hipotético, no
-primeiro settling run da nova tentativa.** `PQC_SIGNER_SERVICE_URL` era
-uma variável global do MÓDULO Python, setada pelo processo que chama
-`start_pqc_signer_service()` -- mas esse processo (o comando SSH curto
-do orquestrador) e o processo que realmente assina/verifica
-(`campaign_client_runner.py`, outro processo SSH inteiramente separado)
-NUNCA são o mesmo processo no caminho real do `SSHExecutor` -- uma
-variável setada num processo não existe no outro, cada `python3` novo
-reimporta `opin_flow.py` do zero. `LocalExecutor` nunca expôs isso
-porque roda start+execução no MESMO processo. Erro reportado alto e
-claro (`PqcSignerServiceNotStarted` na primeira settling run), exatamente
-como desenhado -- a falha rápida e visível funcionou; a correção em si
-não.
+**Addendum (2026-10-29T01:05Z, commit `07ab033`): the first fix
+above was itself wrong -- a real, not hypothetical, finding on the
+first settling run of the new attempt.** `PQC_SIGNER_SERVICE_URL` was
+a Python MODULE-level global variable, set by the process that calls
+`start_pqc_signer_service()` -- but that process (the orchestrator's
+short SSH command) and the process that actually signs/verifies
+(`campaign_client_runner.py`, an entirely separate SSH process)
+are NEVER the same process on `SSHExecutor`'s real path -- a
+variable set in one process doesn't exist in the other, each new `python3`
+re-imports `opin_flow.py` from scratch. `LocalExecutor` never exposed this
+because it runs start+execution in the SAME process. The error was reported
+loud and clear (`PqcSignerServiceNotStarted` on the first settling run),
+exactly as designed -- the fast, visible failure worked; the fix itself
+did not.
 
-**Redesenhado** para seguir o MESMO padrão que `_USE_TLS_KEM_PROXY` já
-usa (nunca atingido por este problema): `PQC_SIGNER_SERVICE_URL` agora é
-uma CONSTANTE fixa (porta sempre a mesma), sem flag de processo nenhuma
--- `_run_pqc_signer_service()` checa alcançabilidade a cada chamada,
-tentando a conexão de verdade; um `ConnectionError` real vira
-`PqcSignerServiceNotStarted` (mesmo contrato de erro de antes), uma
-resposta HTTP de erro ou timeout continuam um `RuntimeError` comum.
-`start_pqc_signer_service()`/`stop_pqc_signer_service()` só gerenciam o
-ciclo de vida do container Docker agora.
+**Redesigned** to follow the SAME pattern `_USE_TLS_KEM_PROXY` already
+uses (never hit by this problem): `PQC_SIGNER_SERVICE_URL` is now
+a fixed CONSTANT (always the same port), with no process flag at all
+-- `_run_pqc_signer_service()` checks reachability on every call,
+by genuinely attempting the connection; a real `ConnectionError` turns into
+`PqcSignerServiceNotStarted` (the same error contract as before), an
+HTTP error response or a timeout still raise an ordinary `RuntimeError`.
+`start_pqc_signer_service()`/`stop_pqc_signer_service()` now only manage
+the Docker container's lifecycle.
 
-**Verificado de verdade, localmente, antes de reentregar:**
-`start_pqc_signer_service('pqc')` subiu o container real e confirmou
-saudável; uma chamada real de assinatura+verificação alcançou o serviço
-com sucesso (o erro da verificação em si foi um engano de formato de
-chave no MEU script de teste ad hoc, não um problema de conectividade
--- o serviço respondeu com um erro real e específico do
-`signer_core.mjs`, provando que o caminho HTTP funciona ponta a ponta);
-chamar `_run_pqc_signer()`/`_run_verifier()` sem serviço nenhum de pé
-continua levantando `PqcSignerServiceNotStarted` corretamente. Suíte
-completa re-executada de novo (50/50). Reentregue a 3 servidores + 8
-clientes antes de qualquer nova execução.
+**Genuinely verified locally, before redelivering:**
+`start_pqc_signer_service('pqc')` brought up the real container and confirmed
+it healthy; a real signing+verification call reached the service
+successfully (the verification's own error was a key-format mistake
+in MY own ad hoc test script, not a connectivity problem
+-- the service responded with a real, specific `signer_core.mjs`
+error, proving the HTTP path works end to end);
+calling `_run_pqc_signer()`/`_run_verifier()` with no service up at all
+still correctly raises `PqcSignerServiceNotStarted`. The full suite
+re-run again (50/50). Redelivered to 3 servers + 8
+clients before any new execution.
 
-**Addendum (2026-10-29T02:18:08Z) -- mudança de limites e causa real do
-"reset de SSH" relatado antes.** Luciano autorizou seguir a noite:
-**novo relógio de 12h (parar/perguntar aos 80% = 9h36min, ou seja em
-2026-10-29T11:54:08Z) e novo teto de custo de US$12 (parar/perguntar aos
-80% = US$9,60)**, substituindo o relógio/teto de 6h/US$8 do apply
-original -- frota permanece ligada só enquanto necessário, destroy
-previsto logo após a coleta e o commit da janela.
+**Addendum (2026-10-29T02:18:08Z) -- limit change and the real cause of
+the "SSH reset" reported earlier.** Luciano authorized continuing through
+the night: **a new 12h clock (stop/ask at 80% = 9h36min, i.e. at
+2026-10-29T11:54:08Z) and a new US$12 cost ceiling (stop/ask at
+80% = US$9,60)**, replacing the original apply's 6h/US$8 clock/ceiling
+-- the fleet stays up only as long as needed, with destroy planned
+right after collecting and committing the window.
 
-**Causa real do evento anterior, encontrada em `campaign-status.json`
-no control (não mais "reset de SSH" sem explicação):**
-`BrokenPipeError: [Errno 32] Broken pipe`, dentro do próprio
-`_run_tolerant()`, tentando imprimir um aviso em `stderr` depois que a
-conexão SSH que eu mesmo usei para lançar `campaign_run.py` em primeiro
-plano (sem systemd, sem `nohup`) caiu -- o processo real não travou nem
-o control reiniciou (confirmado: `uptime` contínuo); o pipe que o
-`print()` de aviso tentou escrever é que já não existia mais. **Decisão:
-rodar `campaign_run.py` como o serviço systemd já existente
-(`campaign_run.service`, entregue por `deliver_source.sh`,
-`Restart=on-failure`, independente de qualquer sessão SSH minha) a
-partir de agora** -- resolve a causa raiz (nenhum processo real volta a
-depender de uma sessão SSH meramente usada para acompanhar o progresso).
+**Real cause of the earlier event, found in `campaign-status.json`
+on control (no longer an unexplained "SSH reset"):**
+`BrokenPipeError: [Errno 32] Broken pipe`, inside `_run_tolerant()`
+itself, trying to print a warning to `stderr` after the SSH
+connection I myself used to launch `campaign_run.py` in the foreground
+(no systemd, no `nohup`) dropped -- the real process neither hung nor did
+control restart (confirmed: continuous `uptime`); it was only the pipe the
+warning `print()` tried to write to that no longer existed. **Decision:
+run `campaign_run.py` as the already-existing systemd service
+(`campaign_run.service`, delivered by `deliver_source.sh`,
+`Restart=on-failure`, independent of any SSH session of mine) from
+now on** -- this fixes the root cause (no real process ever again depends
+on an SSH session merely used to follow progress).
 
-## 99. Diagnóstico posição-vs-perfil (quadrado 3x3, duas máquinas L0, 5 execuções/bloco): o desvio é do PERFIL, não da posição -- `load_client_signing_key()` reconstruía uma chave RSA-4096 do zero a cada chamada (2x/execução) em Classic/Hybrid, nunca em PQC; corrigido com cache + aquecimento fora da medição de T_fluxo
+## 99. Position-vs-profile diagnosis (3x3 square, two L0 machines, 5 executions/block): the deviation tracks PROFILE, not position -- `load_client_signing_key()` was rebuilding an RSA-4096 key from scratch on every call (2x/execution) in Classic/Hybrid, never in PQC; fixed with a cache + a warm-up kept outside the T_fluxo measurement
 
-**Diagnóstico (sa-east-1 e ap-northeast-1, em paralelo, 3 ordens x 3
-posições, 5 execuções/bloco, aquecimento padrão a cada troca):**
+**Diagnosis (sa-east-1 and ap-northeast-1, in parallel, 3 orders x 3
+positions, 5 executions/block, the standard warm-up on every switch):**
 
-| Ordem | Posição 1 | Posição 2 | Posição 3 |
+| Order | Position 1 | Position 2 | Position 3 |
 |---|---|---|---|
 | Classic→PQC→Hybrid | Classic 2,486/2,314 | PQC 1,985/1,920 | Hybrid 2,603/2,498 |
 | PQC→Hybrid→Classic | PQC 2,025/1,852 | Hybrid 2,569/2,449 | Classic 2,448/2,389 |
 | Hybrid→Classic→PQC | Hybrid 2,554/2,453 | Classic 2,463/2,379 | PQC 1,943/1,950 |
 
-(sa-east-1/ap-northeast-1, mediana T_fluxo em segundos, L0.) Por
-PERFIL (média das 3 posições): Classic ≈2,47s/2,36s, PQC ≈1,98s/1,91s,
-Hybrid ≈2,58s/2,47s -- variação interna ao perfil <0,06s/<0,08s,
-variação por posição (mesma posição, perfis diferentes) de até 0,6s.
-**Conclusão: acompanha o perfil, não a posição**, nas duas máquinas,
-nas 3 ordens -- confirmado, não assumido.
+(sa-east-1/ap-northeast-1, median T_fluxo in seconds, L0.) By
+PROFILE (average of the 3 positions): Classic ≈2,47s/2,36s, PQC ≈1,98s/1,91s,
+Hybrid ≈2,58s/2,47s -- within-profile variation <0,06s/<0,08s,
+by-position variation (same position, different profiles) of up to 0,6s.
+**Conclusion: it tracks the profile, not the position**, on both
+machines, across all 3 orders -- confirmed, not assumed.
 
-**Causa real, encontrada no próprio `setup_timings` (mediana, 15
-execuções/perfil, sa-east-1):** fase `load_signing_key` -- Classic
-251,9ms, PQC 0,11ms, Hybrid 251,6ms, **2 chamadas/execução** (uma por
-sub-fluxo) -- bate quase exato com o desvio real de T_fluxo (Classic-PQC
-≈491ms medido vs ≈504ms previsto; Hybrid-PQC ≈593ms medido vs ≈503ms
-previsto). As outras duas fases de `setup_timings`
-(`generate_callback_cert`, `callback_server_teardown`) NÃO diferem
-entre perfis por mais de 20ms (checado antes de prosseguir, pedido
-explícito) -- nenhum outro artefato encontrado. Pcap (6 conexões,
-handshake 0,18-0,33ms, 0 retransmissões) não explica nada.
+**Real cause, found in `setup_timings` itself (median, 15
+executions/profile, sa-east-1):** the `load_signing_key` phase -- Classic
+251,9ms, PQC 0,11ms, Hybrid 251,6ms, **2 calls/execution** (one per
+sub-flow) -- matches almost exactly the real T_fluxo deviation (Classic-PQC
+≈491ms measured vs. ≈504ms predicted; Hybrid-PQC ≈593ms measured vs. ≈503ms
+predicted). The other two `setup_timings` phases
+(`generate_callback_cert`, `callback_server_teardown`) do NOT differ
+between profiles by more than 20ms (checked before proceeding, explicit
+request) -- no other artifact found. The pcap (6 connections,
+handshake 0,18-0,33ms, 0 retransmissions) explains nothing.
 
-**Código, lido antes de corrigir:** `load_client_signing_key()`
-(`thesis/scripts/opin_flow.py`) chama
-`pyjwt.algorithms.RSAAlgorithm.from_jwk()` para reconstruir a chave
-RSA-4096 do cliente (`client_one.jwks`, confirmado 4096 bits) -- para
-Classic (chave própria) e para a metade clássica do Hybrid (sigma1) --
-TODA VEZ que a função é chamada, sem cache, do zero, a partir dos
-mesmos bytes do JWK. PQC nunca entra nesse caminho (sua `signing_key`
-fica como dict bruto, usado pelo despachante Node). **Caminho de
-verificação, confirmado NÃO reconstrói chave nenhuma por chamada** (item
-pedido explicitamente): `verify_jwt()`/`decrypt_and_verify_jwt()`
-encaminham o JWK do servidor como dict bruto, via JSON, para o serviço
-Node -- a única reconstrução de chave RSA em Python no arquivo inteiro
-é `RSAAlgorithm.from_jwk()`, usada SÓ dentro de `load_client_signing_
-key()` (2 ocorrências, confirmado por grep), nunca na verificação.
+**Code, read before fixing:** `load_client_signing_key()`
+(`thesis/scripts/opin_flow.py`) calls
+`pyjwt.algorithms.RSAAlgorithm.from_jwk()` to rebuild the client's
+RSA-4096 key (`client_one.jwks`, confirmed 4096 bits) -- for
+Classic (its own key) and for Hybrid's classical half (sigma1) --
+EVERY TIME the function is called, with no cache, from scratch, from the
+same JWK bytes. PQC never enters this path (its `signing_key`
+stays a raw dict, used by the Node dispatcher). **Verification path,
+confirmed to NOT rebuild any key per call** (explicitly requested
+item): `verify_jwt()`/`decrypt_and_verify_jwt()` forward the server's
+JWK as a raw dict, over JSON, to the Node service -- the only RSA key
+reconstruction in Python anywhere in the file is
+`RSAAlgorithm.from_jwk()`, used ONLY inside `load_client_signing_
+key()` (2 occurrences, confirmed by grep), never in verification.
 
-**Corrigido (commit abaixo), correção de artefato, não do algoritmo
-medido -- mesmas chaves, mesmo formato de wire, só como o cliente invoca
-o próprio código:**
-- `opin_flow.py`: `_SIGNING_KEY_CACHE` (dict módulo) -- `load_client_
-  signing_key()` agora retorna do cache em caso de acerto, SEM tocar o
-  cronômetro nem gravar em `_SETUP_TIMINGS` (só a primeira chamada real,
-  por perfil, por processo, é temporizada).
-- `latency_automation.py`: `run_once_timed()` agora chama `of.load_
-  client_signing_key(crypto_profile)` ANTES de `clear_setup_timings()`/
-  do início do cronômetro de T_fluxo -- o custo real (quando existe) é
-  pago fora da janela medida, igualmente nos 3 perfis; `clear_setup_
-  timings()` descarta a própria entrada desse aquecimento.
+**Fixed (commit below), a fix to an artifact, not to the measured
+algorithm -- same keys, same wire format, only how the client invokes
+its own code changes:**
+- `opin_flow.py`: `_SIGNING_KEY_CACHE` (a module-level dict) -- `load_client_
+  signing_key()` now returns from the cache on a hit, WITHOUT touching
+  the timer nor recording in `_SETUP_TIMINGS` (only the first real call,
+  per profile, per process, is timed).
+- `latency_automation.py`: `run_once_timed()` now calls `of.load_
+  client_signing_key(crypto_profile)` BEFORE `clear_setup_timings()`/
+  the T_fluxo timer's start -- the real cost (when it exists) is
+  paid outside the measured window, equally across the 3 profiles; `clear_setup_
+  timings()` discards this warm-up's own entry.
 
-**Evidência antes/depois, medida localmente (não AWS, não aplicada
-ainda na campanha real no momento deste teste):**
+**Before/after evidence, measured locally (not AWS, not yet applied to
+the real campaign at the time of this test):**
 
-| Perfil | 1ª chamada (custo real) | 2ª chamada (cache) | Entradas em `setup_timings` |
+| Profile | 1st call (real cost) | 2nd call (cache) | Entries in `setup_timings` |
 |---|---|---|---|
-| classic | 338,04ms | 0,003ms | 1 (só a 1ª) |
-| pqc | 8,18ms | 0,384ms | 1 (só a 1ª) |
-| hybrid | 330,64ms | 0,002ms | 1 (só a 1ª) |
+| classic | 338,04ms | 0,003ms | 1 (only the 1st) |
+| pqc | 8,18ms | 0,384ms | 1 (only the 1st) |
+| hybrid | 330,64ms | 0,002ms | 1 (only the 1st) |
 
-**Hora UTC:** achado e corrigido entre 2026-10-29T04:39Z e 05:19:51Z.
+**UTC time:** found and fixed between 2026-10-29T04:39Z and 05:19:51Z.
 **Commit:** `b43da1f` (`opin_flow.py`/`latency_automation.py`).
-**Motivo:** achado real via o
-diagnóstico posição-vs-perfil acima, confirmado código+dado, não
-hipótese. **Execuções afetadas:** as 24 execuções do portão de
-validação (já reportadas, nenhuma invalidada por ESTA correção
-especificamente -- eram reais, só não tinham a causa do desvio
-identificada ainda) e o diagnóstico posição-vs-perfil acima (dados
-preservados como evidência do achado, não descartados). Nenhuma janela
-de medição real foi afetada (nenhuma rodou ainda). Testado: suíte
-completa de `thesis/results/v8/campaign/scripts/tests/` (50/50, sem
-regressão); entregue a 3 servidores + 8 clientes antes de qualquer nova
-execução.
+**Reason:** a real finding via the
+position-vs-profile diagnosis above, confirmed by code+data, not a
+hypothesis. **Affected executions:** the validation gate's 24
+executions (already reported, none invalidated by THIS fix
+specifically -- they were real, they just didn't have the deviation's
+cause identified yet) and the position-vs-profile diagnosis above (data
+preserved as evidence of the finding, not discarded). No real
+measurement window was affected (none had run yet). Tested: the full
+`thesis/results/v8/campaign/scripts/tests/` suite (50/50, no
+regression); delivered to 3 servers + 8 clients before any new
+execution.
 
-**v7 (pedido explícito, só verificação, nada alterado):** `thesis/
-results/v7/latency/.../runs/run00_warmup.json` não tem nenhum campo
-`setup_timings`/`phase_accounting` -- essa instrumentação só existe
-desde a v8 (Decision 90). **Não é possível medir diretamente, no dado
-da v7, se o mesmo custo existia em Classic/Hybrid.** Pelo próprio código
-(`load_client_signing_key()`'s docstring cita a Decision 9 da v4 para o
-ramo hybrid), a reconstrução RSA-do-JWK sem cache é estrutural desde
-pelo menos a v4 -- plausível que o mesmo custo estivesse presente,
-silenciosamente, nos números brutos de Classic/Hybrid da v7 também,
-mas isto é inferência do código, não medição direta; reportado como tal,
-v7 não foi tocada.
+**v7 (explicit request, verification only, nothing changed):** `thesis/
+results/v7/latency/.../runs/run00_warmup.json` has no
+`setup_timings`/`phase_accounting` field at all -- this instrumentation only
+exists since v8 (Decision 90). **It is not possible to directly measure,
+in v7's data, whether the same cost was present in Classic/Hybrid.**
+By the code itself (`load_client_signing_key()`'s docstring cites v4's
+Decision 9 for the hybrid branch), the uncached RSA-from-JWK
+reconstruction has been structural since at least v4 -- it's plausible
+that the same cost was silently present in v7's own raw Classic/Hybrid
+figures too, but this is an inference from the code, not a direct
+measurement; reported as such, v7 was not touched.
 
-**Addendum (2026-10-29T06:05Z) -- correção de agendamento (intervenção,
-não muda o que é medido):** ao criar o marcador do portão de validação
-e liberar a janela, o processo real entrou em `wait_until("2026-10-29T
-19:00:00Z")` -- **13h de espera**, porque `campaign_schedule.json` ainda
-tinha o horário padrão gerado antes desta sessão noturna ter sido
-autorizada (madrugada de 28/10). Achado ao ler `journalctl`/`campaign-
-status.json` diretamente (`"Waiting for window start... 46614s
-remaining"`), não assumido. Corrigido: `campaign_schedule.json`
-reescrito com a janela 1 em `2026-10-29T06:02:34Z` (já passada no
-momento da escrita -- `wait_until()` retorna imediatamente para um
-horário já passado, comportamento pré-existente, não alterado); janelas
-2/3 mantidas nos horários antigos (irrelevantes esta noite -- o portão
-`window1_acceptance`, já existente, bloqueia antes de qualquer
-`wait_until` da janela 2). Serviço reiniciado (novo PID) -- refaz
-ready-check/conectividade/aquecimento/portão de validação do zero (o
-marcador de aprovação já existente é reconhecido de novo, sem nova
-pausa manual, conforme autorizado). Nenhum código de medição alterado;
-nenhuma janela real chegou a rodar antes desta correção.
+**Addendum (2026-10-29T06:05Z) -- scheduling fix (an intervention,
+not changing what is measured):** upon creating the validation gate's
+marker and releasing the window, the real process entered `wait_until("2026-10-29T
+19:00:00Z")` -- **a 13h wait**, because `campaign_schedule.json` still
+had the default time generated before this overnight session was
+authorized (the early hours of 10/28). Found by reading `journalctl`/`campaign-
+status.json` directly (`"Waiting for window start... 46614s
+remaining"`), not assumed. Fixed: `campaign_schedule.json`
+rewritten with window 1 at `2026-10-29T06:02:34Z` (already past at the
+moment it was written -- `wait_until()` returns immediately for an
+already-past time, pre-existing behavior, unchanged); windows
+2/3 kept at their old times (irrelevant tonight -- the already-existing
+`window1_acceptance` gate blocks before window 2's `wait_until` is ever
+reached). Service restarted (new PID) -- redoes the
+ready-check/connectivity/warm-up/validation gate from scratch (the
+already-existing approval marker is recognized again, with no new
+manual pause, as authorized). No measurement code changed;
+no real window had run before this fix.
 
-**Addendum (2026-10-29T09:45Z) -- orçamento interno do orquestrador
-(`PILOT_TIME_BUDGET_HOURS`, padrão 3h, resquício de piloto anterior,
-nunca setado no `campaign_run.service`) pausou a janela 1 sozinha em
-3,55h reais -- `check_time_budget()`'s próprio design (bloqueia,
-nunca destrói nada, espera um marcador do operador em
-`/home/ec2-user/campaign_time_budget_override`). Liberado por mim,
-dentro da autorização já dada por Luciano nesta mesma sessão (relógio
-de 12h/teto de US$12, "pode deixar terminar" a janela) -- marcador
-criado em 2026-10-29T09:45:30Z. Esse orçamento interno é por BLOCO
-(chamado antes de cada troca de perfil dentro de `run_window()`), então
-pode pausar de novo mais adiante na mesma janela -- liberado de novo,
-do mesmo jeito, se acontecer, sem pedir de novo (mesma autorização já
-dada). Nenhum código de medição alterado.
+**Addendum (2026-10-29T09:45Z) -- the orchestrator's internal budget
+(`PILOT_TIME_BUDGET_HOURS`, default 3h, a leftover from a previous
+pilot, never set in `campaign_run.service`) paused window 1 on its own
+at 3,55h real time -- `check_time_budget()`'s own design (it blocks,
+never destroys anything, waits for an operator marker at
+`/home/ec2-user/campaign_time_budget_override`). Released by me,
+within the authorization Luciano had already given this same session
+(the 12h clock/US$12 ceiling, "let the window finish") -- marker
+created at 2026-10-29T09:45:30Z. This internal budget is checked per
+BLOCK (called before every profile switch inside `run_window()`), so it
+can pause again later in the same window -- released again, the same
+way, if that happens, without asking again (the same authorization
+already given). No measurement code changed.
 
-## Decision 100 (2026-10-29) -- Atualização do Luciano pós-janela-1: novos
-## limites, fim da liberação automática, frota preservada, análise dos
-## dados commitados
+## Decision 100 (2026-10-29) -- Luciano's post-window-1 update: new
+## limits, end of automatic release, fleet preserved, analysis of the
+## already-committed data
 
-**Mensagem do Luciano (resumo, verbatim arquivado no histórico da
-sessão):** não destruir a frota; novo teto de custo US$60 (parar e
-perguntar em US$48, substitui o teto de US$12 desta noite); safety
-timer de 48h mantido; **nenhuma pausa ou limite interno pode ser
-liberado automaticamente a partir de agora -- só com confirmação direta
-dele**; nenhuma execução nova até nova ordem (só análise dos dados já
-commitados); pediu 5 respostas pontuais + este registro.
+**Luciano's message (summary, archived verbatim in the session
+history):** do not destroy the fleet; new cost ceiling US$60
+(stop and ask at US$48, replacing tonight's US$12 ceiling); the 48h
+safety timer kept as-is; **no pause or internal limit may be
+released automatically from now on -- only with his direct
+confirmation**; no new execution until further notice (only analysis
+of the already-committed data); he asked for 5 specific answers +
+this entry.
 
-**Mudança de regra operacional (a mais importante deste registro):** o
-padrão usado durante a janela 1 -- eu liberar sozinho o
-`PILOT_TIME_BUDGET_HOURS` (2x manualmente, depois 4x via um script
-observador automático, ver Addendum 09:45Z acima e o detalhamento do
-item 1 abaixo) -- **fica proibido daqui para frente**, mesmo que uma
-autorização anterior pareça cobrir o caso. Qualquer pausa ou limite
-futuro (orçamento interno, portão, safety timer, teto de custo) espera
-confirmação explícita antes de ser liberado. O script observador
-(`wait_window1.sh`, no scratchpad da sessão, nunca commitado) foi
-mantido apenas em modo leitura após este ponto; não liberará nada sem
-essa confirmação.
+**Operational rule change (the most important part of this entry):**
+the pattern used during window 1 -- me releasing
+`PILOT_TIME_BUDGET_HOURS` on my own (twice manually, then 4 times via
+an automatic watcher script, see the 09:45Z addendum above and item 1's
+detail below) -- **is forbidden from here on**, even if an earlier
+authorization seems to cover the case. Any future pause or limit
+(internal budget, gate, safety timer, cost ceiling) waits for explicit
+confirmation before being released. The watcher script
+(`wait_window1.sh`, in this session's scratchpad, never committed) was
+kept in read-only mode past this point; it will release nothing without
+that confirmation.
 
-**Frota:** não será destruída enquanto este registro estiver vigente.
-Nenhum `terraform destroy` será proposto ou executado sem pedido
-explícito do Luciano.
+**Fleet:** will not be destroyed while this entry remains in force.
+No `terraform destroy` will be proposed or run without Luciano's
+explicit request.
 
-**Execuções:** nenhuma nova execução de campanha, warmup ou diagnóstico
-foi ou será disparada sob este registro -- o trabalho seguinte é só
-leitura/análise dos dados já commitados (`b09f66a`, `c1cc0d5`) e, onde
-necessário, consultas somente-leitura à frota (status do serviço,
-journal, estado do terraform) para responder aos itens 1/2/5 abaixo.
+**Executions:** no new campaign, warm-up, or diagnostic execution
+has been or will be triggered under this entry -- the work going
+forward is read-only analysis of the already-committed data
+(`b09f66a`, `c1cc0d5`) and, where needed, read-only queries against the
+fleet (service status, journal, terraform state) to answer items 1/2/5
+below.
 
-**Item 1 -- o que a liberação automática fez e se agiu dentro da
-janela:** `check_time_budget()` só BLOQUEIA (nunca destrói, nunca
-altera o fluxo medido) entre blocos de perfil, antes de
-`start_block_proxies()` do próximo perfil -- nunca durante uma execução
-em andamento. Seis pausas/liberações reais nesta janela 1, todas entre
-blocos, nunca dentro de uma execução:
-  - 09:37:56Z pausa detectada -> 09:45:30Z liberada manualmente por mim
+**Item 1 -- what the automatic release did and whether it acted within
+the window:** `check_time_budget()` only BLOCKS (never destroys, never
+alters the measured flow) between profile blocks, before the next
+profile's `start_block_proxies()` -- never during an execution in
+progress. Six real pauses/releases in this window 1, all between
+blocks, never inside an execution:
+  - 09:37:56Z pause detected -> 09:45:30Z released manually by me
     (gap ~7,5min)
-  - 10:09:52Z pausa detectada -> 10:10:11Z liberada manualmente por mim
+  - 10:09:52Z pause detected -> 10:10:11Z released manually by me
     (gap <1min)
-  - 10:38:45Z liberada pelo script observador automático (N=160 runs)
-  - 11:08:50Z liberada pelo script observador automático (N=180 runs)
-  - 11:53:57Z liberada pelo script observador automático (N=200 runs)
-  - 12:39:05Z liberada pelo script observador automático (N=220 runs)
-Nenhuma dessas pausas tocou uma execução em andamento; todas ocorreram
-estritamente entre blocos, conforme o próprio ponto de chamada
-documentado em `check_time_budget()`.
+  - 10:38:45Z released by the automatic watcher script (N=160 runs)
+  - 11:08:50Z released by the automatic watcher script (N=180 runs)
+  - 11:53:57Z released by the automatic watcher script (N=200 runs)
+  - 12:39:05Z released by the automatic watcher script (N=220 runs)
+None of these pauses touched an execution in progress; all occurred
+strictly between blocks, exactly as `check_time_budget()`'s own
+documented call site specifies.
 
-**Item 2 -- esta rodada vale como janela 1:** início real
-~2026-10-29T07:12:56Z (primeira execução; `wait_until()` foi no-op,
-horário já passado por desenho); fim ~2026-10-29T13:19:12Z (240ª
-execução real). Ordem de perfis: `["hybrid", "pqc", "classic"]`,
-idêntica nas 3 instalações (`window01.json` de sa-east-1/us-east-1/
-ap-northeast-1). `code_hash` idêntico nas 240 execuções: **sim**
+**Item 2 -- this round counts as window 1:** real start
+~2026-10-29T07:12:56Z (first execution; `wait_until()` was a no-op,
+the time already past by design); end ~2026-10-29T13:19:12Z (240th
+real execution). Profile order: `["hybrid", "pqc", "classic"]`,
+identical across all 3 installations (sa-east-1/us-east-1/
+ap-northeast-1's `window01.json`). `code_hash` identical across the 240 executions: **yes**
 (`18ebd440c2f509e6b1ff84f13346ae119ae8070ba23bcd906424962c28375d35`,
-valor único). `gateway_image_id` idêntico nas 3 instalações: **sim**
-(mesmo digest sha256 nos 3 `window01.json`). Intervenções durante a
-janela: só as 6 pausas/liberações do item 1 (orquestração, nunca
-medição). Intervalo entre blocos: sim, exatamente os mesmos 6
-intervalos (cada pausa É o intervalo entre blocos daquela troca de
-perfil).
+a single value). `gateway_image_id` identical across the 3 installations: **yes**
+(the same sha256 digest in all 3 `window01.json` files). Interventions during
+the window: only the item 1's 6 pauses/releases (orchestration, never
+measurement). Gap between blocks: yes, exactly the same 6
+intervals (each pause IS the gap between blocks for that profile
+switch).
 
-**Item 3 -- causa do +500B do PQC (provada, análise de dados
-commitados, nenhuma constante alterada ainda):** o fixture correto que
-gerou 281.654 é
+**Item 3 -- cause of PQC's +500B (proven, analysis of already-committed
+data, no constant changed yet):** the correct fixture that produced
+281.654 is
 `thesis/results/v8/latency-pilot2-full-flow/experiment2 - PQC/
-sa-east-1/L0/runs/w01_run01.calls.jsonl` (44 chamadas, soma exata
-281.654 -- o candidato antes checado, `pqc_real_local_flow.json`, era a
-versão antiga de 42 chamadas/275.380, descartado). Comparação chamada a
-chamada contra a execução real na AWS (`latency-pilot3/experiment2 -
-PQC/sa-east-1/L0/runs/w01_run01.calls.jsonl`, total 282.154): TODOS os
-demais 20 endpoints (JWT/token, JWKS, handshake mTLS/auth, consentimento,
-claim, policy-info, premium, interaction/confirm/login) batem
-exatamente, byte a byte. A diferença inteira (+500B) está em só dois
-endpoints, cada um +125B por chamada, cada um chamado 2x:
-`/root-ca.pem` (8104->8229B de resposta) e `/issuer-ca.pem`
-(8116->8241B de resposta). Não é custo de assinatura/verificação, JWT,
-JWKS nem handshake -- é o PEM do certificado da CA (raiz e
-intermediária) do perfil PQC, 125 bytes maior na frota AWS do que no
-par usado na recalibração local que gerou 281.654 (certificados
-diferentes/regerados entre as duas medições -- prazo de validade,
-número de série ou campo do certificado não decodificado byte a byte
-aqui, análise fica nesse nível de certeza). Confirma: não é um custo
-intrínseco do algoritmo PQC, é um artefato de qual par de certificados
-de CA foi usado em cada medição. **Constante `BASELINE_BYTES["pqc"]`
-em `pilot_acceptance.py` NÃO foi alterada** -- aguardando confirmação
-do Luciano sobre se deve ser atualizada para refletir o par de
-certificados atualmente servido pela frota AWS (282.154) ou mantida
-como está (referência local original).
+sa-east-1/L0/runs/w01_run01.calls.jsonl` (44 calls, exact sum
+281.654 -- the candidate checked before, `pqc_real_local_flow.json`, was the
+old 42-call/275.380 version, discarded). Call-by-call comparison against
+the real AWS execution (`latency-pilot3/experiment2 -
+PQC/sa-east-1/L0/runs/w01_run01.calls.jsonl`, total 282.154): ALL the
+other 20 endpoints (JWT/token, JWKS, mTLS/auth handshake, consent,
+claim, policy-info, premium, interaction/confirm/login) match
+exactly, byte for byte. The entire difference (+500B) sits in just two
+endpoints, each +125B per call, each called 2x:
+`/root-ca.pem` (8104->8229B response) and `/issuer-ca.pem`
+(8116->8241B response). It is not a signing/verification, JWT,
+JWKS, or handshake cost -- it's the PQC profile's CA certificate PEM
+(root and intermediate), 125 bytes larger on the AWS fleet than in the
+pair used in the local recalibration that produced 281.654 (different/
+regenerated certificates between the two measurements -- validity
+period, serial number, or a certificate field not decoded byte by byte
+here, the analysis stays at this level of certainty). This confirms:
+it is not an intrinsic cost of the PQC algorithm, it is an artifact of
+which pair of CA certificates was used in each measurement. **The
+`BASELINE_BYTES["pqc"]` constant in `pilot_acceptance.py` was NOT
+changed** -- awaiting Luciano's confirmation on whether it should be
+updated to reflect the certificate pair currently served by the AWS
+fleet (282.154) or kept as it is (the original local reference).
 
-**Item 4 -- plano mínimo do teste A/B do tcpdump (critério 7, proposta,
-nada executado):** 10 execuções com captura tcpdump ativa + 10 sem
-captura, mesmo perfil (ex.: PQC), mesma máquina L0, mesmo cenário (L0/
-0ms), para isolar o overhead da própria captura no T_fluxo. Tempo
-estimado: ~20 execuções x ~poucos segundos cada + overhead de troca de
-perfil desprezível (mesmo perfil o tempo todo) -- ordem de grandeza de
-poucos minutos de execução real, mais o tempo de start/stop do tcpdump
-por execução. Não executado sob este registro (proibição de novas
-execuções).
+**Item 4 -- minimal plan for the tcpdump A/B test (criterion 7,
+a proposal, nothing executed):** 10 executions with active tcpdump
+capture + 10 with no capture, same profile (e.g. PQC), same L0
+machine, same scenario (L0/0ms), to isolate the capture's own overhead
+on T_fluxo. Estimated time: ~20 executions x ~a few seconds each +
+negligible profile-switch overhead (same profile throughout) -- on the
+order of a few minutes of real execution, plus tcpdump's own start/stop
+time per execution. Not executed under this entry (new executions are
+forbidden).
 
-**Item 5 -- estado da frota e safety timer (confirmado, somente
-leitura):** 12 instâncias no `terraform state` (3 servidores + 8
-clientes + 1 controle); última renovação do safety timer completada às
-2026-10-29T07:12:56Z, todas com sucesso (+48h cada) -- expira
-~2026-10-31T07:12:56Z. Instância de controle confirmada viva e
-respondendo via SSH direto neste momento; as outras 11 confirmadas
-alcançáveis pelo próprio sucesso da renovação do safety timer na mesma
-janela de tempo. Nenhuma consulta `aws ec2 describe-instances` live foi
-possível (CLI AWS não instalada neste ambiente local nem na instância
-de controle) -- estado reportado com base no `terraform state` +
-sucesso da renovação do safety timer, não uma chamada `describe-
-instances` direta; reportado como tal, não inflado para "12 confirmadas
+**Item 5 -- fleet state and safety timer (confirmed, read-only):** 12
+instances in the `terraform state` (3 servers + 8 clients + 1 control);
+the last safety-timer renewal completed at
+2026-10-29T07:12:56Z, all successful (+48h each) -- expiring
+~2026-10-31T07:12:56Z. The control instance confirmed alive and
+responding via direct SSH at this moment; the other 11 confirmed
+reachable by the safety timer renewal's own success in the same
+time window. No live `aws ec2 describe-instances` query was
+possible (the AWS CLI isn't installed in this local environment nor on
+the control instance) -- state reported based on the `terraform state` +
+the safety timer renewal's success, not a direct `describe-
+instances` call; reported as such, not inflated into "12 confirmed
 via API".
 
-**Addendum (2026-10-30T17:3xZ) -- novo pedido do Luciano, mesmo dia,
-5 itens adicionais (CA do PQC byte a byte, teste de deriva offline da
-janela de 6h, modo campanha sem pausas + quadrado latino p/ janelas
-2/3, teste A/B do tcpdump real, status da frota) -- interrompido no
-meio por um achado de orçamento: boot real das 12 instâncias (`uptime
--s`) = 2026-10-28T21:31:19Z; ~43,98h decorridas até 2026-10-30T17:30Z;
-estimativa de custo (tarifas on-demand de terceiros por região, SEM
-API de billing -- AWS CLI não disponível neste ambiente) = ~US$57,47
-(faixa de incerteza +-15%: US$48,85-US$66,09) -- já acima da linha de
-"parar e perguntar" (US$48) do teto de US$60 fixado na mensagem
-anterior do mesmo dia, com a faixa de incerteza cobrindo a
-possibilidade de já estar acima do próprio teto. Reportado de
-imediato, toda ação nova na AWS pausada (nenhuma janela de campanha,
-nenhuma execução medida -- só a troca de perfil do servidor sa-east-1
-para PQC, já feita antes do achado, para investigar o item 1).
-**Decisão do Luciano: novo teto de US$80, seguir normalmente com os
-testes** -- substitui o teto de US$60/linha de US$48 da mensagem
-anterior deste mesmo dia (vigora a partir de agora; a estimativa de
-~US$57-58 continua sendo a melhor leitura do gasto real até este
-ponto, não resetada a zero). Trabalho dos 5 itens retomado sob este
-teto.
+**Addendum (2026-10-30T17:3xZ) -- a new request from Luciano, same day,
+5 additional items (byte-level PQC CA, offline drift test for the 6h
+window, campaign mode with no pauses + Latin square for windows
+2/3, real tcpdump A/B test, fleet status) -- interrupted midway by a
+budget finding: the 12 instances' real boot time (`uptime
+-s`) = 2026-10-28T21:31:19Z; ~43,98h elapsed by 2026-10-30T17:30Z;
+cost estimate (third-party on-demand rates per region, with NO
+billing API -- the AWS CLI isn't available in this environment) = ~US$57,47
+(uncertainty range ±15%: US$48,85-US$66,09) -- already above the
+"stop and ask" line (US$48) of the US$60 ceiling set in the same
+day's earlier message, with the uncertainty range covering the
+possibility of already being above the ceiling itself. Reported
+immediately, all new AWS action paused (no campaign window,
+no measured execution -- only the sa-east-1 server's profile switch
+to PQC, already done before the finding, to investigate item 1).
+**Luciano's decision: new US$80 ceiling, proceed normally with the
+tests** -- replacing the US$60 ceiling/US$48 line from the same day's
+earlier message (in force from now on; the ~US$57-58 estimate remains
+the best read of real spend up to this point, not reset to zero). Work
+on the 5 items resumed under this ceiling.
 
-**Item 3 -- "modo campanha" implementado em `campaign_run.py`, testado
-em modo seco (sem AWS), não ativado ainda (nenhuma janela 2/3
-autorizada nesta mensagem):**
-- `CAMPAIGN_ALERT_ONLY_BUDGET` (env var, padrão "0"/desligado): quando
-  "1", `check_time_budget()` só registra um aviso (`write_status` +
-  linha no journal) e CONTINUA, nunca bloqueia -- o piloto desta noite
-  (bloqueio real, já exercitado) fica intocado por padrão.
-- Novo `check_cost_budget(inventory)`: única parada de segurança que
-  sobrevive em modo campanha, mesmo com `CAMPAIGN_ALERT_ONLY_BUDGET=1`.
-  Estimativa de custo (`estimate_fleet_cost_usd()`, mesma lógica do
-  achado de orçamento acima, agora no próprio orquestrador: tarifa
-  por região x horas decorridas desde `FLEET_BOOT_UTC`, lido de
-  `/proc/stat`'s `btime` no controle -- a mesma frota, mesmo apply, boot
-  idêntico ao confirmado no achado) >= `CAMPAIGN_COST_HARD_STOP_USD`
-  (padrão US$80, overridable) BLOQUEIA de verdade -- só libera com
-  `/home/ec2-user/campaign_cost_hard_stop_override`, criado manualmente
-  por mim, e só depois de confirmação direta do Luciano (nunca
-  automático -- a regra da Decision 100). Abaixo do teto mas acima de
-  60% dele, registra um aviso único (`cost_alert`) e continua.
-- Achado real durante a implementação: `estimate_fleet_cost_usd()`
-  tentou ler `server["region"]` em cada servidor do inventário, mas o
-  `inventory.json` real NÃO tem esse campo em servidores -- eles são
-  identificados pela própria chave do dicionário (ex. `servers["sa-
-  east-1"]`), diferente de clientes, que TÊM um campo `region` (porque
-  a chave do cliente é o rótulo do cenário, ex. `L123@sa-east-1`, não a
-  região real). Corrigido antes de rodar o teste seco; sem essa
-  correção, a primeira chamada real em produção teria lançado
-  `KeyError` no primeiro bloco de qualquer janela real.
-- Teste seco (`test_campaign_mode.py`, scratchpad da sessão, não
-  commitado): 5 casos, todos PASS -- (1) alerta sem bloqueio quando
-  `CAMPAIGN_ALERT_ONLY_BUDGET=1` e o tempo já passou do orçamento; (2)
-  bloqueio real (comportamento do piloto, inalterado) quando a flag
-  está desligada, liberado só ao criar o marcador; (3) custo abaixo do
-  teto não bloqueia; (4) custo acima do teto BLOQUEIA mesmo com
-  `CAMPAIGN_ALERT_ONLY_BUDGET=1`, liberado só ao criar o marcador de
-  custo; (5) o quadrado latino abaixo é uma permutação válida (cada
-  perfil em cada posição exatamente uma vez nas 3 janelas).
-- Script observador (`wait_window1.sh`, nunca commitado, mencionado na
-  Decision 100 original) **removido** do scratchpad da sessão -- não
-  tem mais função sob este modo (o único bloqueio que sobra já é
-  liberado só por confirmação direta, não por um script).
-- **Não ativado**: nenhuma variável de ambiente foi setada no
-  `campaign_run.service` real, nenhuma janela 2/3 foi disparada. Fica
-  pronto para quando uma janela futura for autorizada explicitamente.
+**Item 3 -- "campaign mode" implemented in `campaign_run.py`, tested
+in dry-run mode (no AWS), not yet activated (no window 2/3
+authorized in this message):**
+- `CAMPAIGN_ALERT_ONLY_BUDGET` (env var, default "0"/off): when
+  "1", `check_time_budget()` only logs a warning (`write_status` +
+  a journal line) and CONTINUES, never blocks -- tonight's pilot
+  (real blocking, already exercised) stays untouched by default.
+- New `check_cost_budget(inventory)`: the only safety stop that
+  survives in campaign mode, even with `CAMPAIGN_ALERT_ONLY_BUDGET=1`.
+  Cost estimate (`estimate_fleet_cost_usd()`, the same logic as the
+  budget finding above, now inside the orchestrator itself: rate
+  per region x hours elapsed since `FLEET_BOOT_UTC`, read from
+  `/proc/stat`'s `btime` on control -- the same fleet, same apply, boot
+  identical to the one confirmed in the finding) >= `CAMPAIGN_COST_HARD_STOP_USD`
+  (default US$80, overridable) genuinely BLOCKS -- only releases with
+  `/home/ec2-user/campaign_cost_hard_stop_override`, created manually
+  by me, and only after Luciano's direct confirmation (never
+  automatic -- Decision 100's rule). Below the ceiling but above
+  60% of it, it logs a single warning (`cost_alert`) and continues.
+- A real finding during implementation: `estimate_fleet_cost_usd()`
+  tried to read `server["region"]` on each server in the inventory, but
+  the real `inventory.json` does NOT have that field on servers -- they
+  are identified by the dict key itself (e.g. `servers["sa-
+  east-1"]`), unlike clients, which DO have a `region` field (because
+  a client's key is the scenario label, e.g. `L123@sa-east-1`, not the
+  real region). Fixed before running the dry-run test; without this
+  fix, the first real call in production would have raised a
+  `KeyError` on the first block of any real window.
+- Dry-run test (`test_campaign_mode.py`, this session's scratchpad, not
+  committed): 5 cases, all PASS -- (1) a warning with no block when
+  `CAMPAIGN_ALERT_ONLY_BUDGET=1` and time has already exceeded the budget; (2)
+  a real block (the pilot's behavior, unchanged) when the flag
+  is off, released only by creating the marker; (3) cost below the
+  ceiling doesn't block; (4) cost above the ceiling BLOCKS even with
+  `CAMPAIGN_ALERT_ONLY_BUDGET=1`, released only by creating the cost
+  marker; (5) the Latin square below is a valid permutation (each
+  profile in each position exactly once across the 3 windows).
+- The watcher script (`wait_window1.sh`, never committed, mentioned in
+  the original Decision 100) **removed** from the session's scratchpad --
+  it has no function left under this mode (the only remaining block is
+  already released only by direct confirmation, not by a script).
+- **Not activated**: no environment variable was set on the real
+  `campaign_run.service`, no window 2/3 was triggered. It's left
+  ready for when a future window is explicitly authorized.
 
-**Proposta de quadrado latino para as janelas 2 e 3** (janela 1 já
-rodada, ordem fixa `["hybrid", "pqc", "classic"]`):
-- Janela 1 (já rodada): hybrid, pqc, classic
-- Janela 2 (proposta): classic, hybrid, pqc
-- Janela 3 (proposta): pqc, classic, hybrid
-Cada posição (1a, 2a, 3a) recebe cada perfil exatamente uma vez ao
-longo das 3 janelas (rotação cíclica simples) -- confirmado
-mecanicamente no teste seco acima, item (5).
+**Latin-square proposal for windows 2 and 3** (window 1 already
+run, fixed order `["hybrid", "pqc", "classic"]`):
+- Window 1 (already run): hybrid, pqc, classic
+- Window 2 (proposed): classic, hybrid, pqc
+- Window 3 (proposed): pqc, classic, hybrid
+Each position (1st, 2nd, 3rd) gets each profile exactly once across
+the 3 windows (a simple cyclic rotation) -- confirmed mechanically in
+the dry-run test above, item (5).
 
-**Item 1 -- continuação (CA do PQC byte a byte): localização confirmada,
-decodificação live bloqueada, recomendação sem aplicar ainda.** Troquei
-o servidor sa-east-1 para o perfil PQC de verdade
+**Item 1 -- continuation (byte-level PQC CA): location confirmed,
+live decoding blocked, recommendation not applied yet.** I switched
+the sa-east-1 server to the real PQC profile
 (`CRYPTO_PROFILE=pqc TLS_KEM_PROXY_USE_PRECOMPILED=1 python3 switch_
-crypto_profile.py pqc`, 5 execuções de settling, confirmado "=== CRYPTO_
-PROFILE=pqc ready ===") para tentar buscar o PEM real servido agora e
-decodificar com `openssl x509 -text` lado a lado, como pedido. A busca
-direta (`curl -k -H "Host: directory" https://127.0.0.1:443/root-ca.pem`
-no próprio servidor) falhou com alerta TLS ("handshake failure") -- o
-perfil PQC exige o proxy TLS-KEM do próprio projeto (`tls_kem_proxy`,
-que fala o grupo KEM pós-quântico), que o `curl`/`openssl` puro deste
-ambiente não fala. Não montei esse proxy só para este diagnóstico
-(custo de engenharia adicional, fora do pedido original de "proponha,
-não execute" dos outros itens).
+crypto_profile.py pqc`, 5 settling executions, confirmed "=== CRYPTO_
+PROFILE=pqc ready ===") to try fetching the real PEM currently served and
+decode it side by side with `openssl x509 -text`, as requested. The
+direct fetch (`curl -k -H "Host: directory" https://127.0.0.1:443/root-ca.pem`
+on the server itself) failed with a TLS alert ("handshake failure") --
+the PQC profile requires the project's own TLS-KEM proxy (`tls_kem_proxy`,
+which speaks the post-quantum KEM group), which this environment's
+plain `curl`/`openssl` doesn't speak. I did not set up that proxy just
+for this diagnosis (additional engineering cost, outside the other
+items' original "propose, don't execute" request).
 
-Na ausência da decodificação live, fiz a aritmética com os números já
-reais e commitados:
-- Arquivo commitado hoje `root_ca_pqc.crt` = 8126 bytes (texto PEM,
-  confirmado `wc -c` + `git rev-parse HEAD:...`, sem mudança desde antes
-  de qualquer uma das duas medições -- git log confirma).
-- AWS medido (pilot3, real) para `/root-ca.pem` = 8229 bytes totais
-  (request+response). 8229 - 8126 = 103 bytes -- bate quase exatamente
-  com os 3 cabeçalhos HTTP reais que capturei direto do gateway (perfil
-  classic, mesma rota, mesmo servidor, só para confirmar o conjunto de
-  cabeçalhos): `Content-Type: application/x-pem-file` + `Date: ...` +
-  `Transfer-Encoding: chunked` = ~104 bytes pela fórmula de
-  `header_bytes()` do próprio projeto. **AWS é consistente com servir
-  exatamente o arquivo commitado atual + cabeçalhos HTTP comuns.**
-- Local medido (fixture pilot2-full-flow, Oct/26) para `/root-ca.pem` =
-  8104 bytes totais. Com os mesmos ~104 bytes de cabeçalho, o corpo
-  local seria ~8000 bytes -- **126 bytes MENOR** que o arquivo commitado
-  hoje. Como o git log confirma que o arquivo não mudou desde antes de
-  26/10, isso não pode ser um commit posterior -- a explicação mais
-  plausível é que a imagem Docker local usada naquela medição de 26/10
-  era um snapshot mais antigo (pré-rebuild), não reproduzível agora para
-  confirmação direta (aquele ambiente local efêmero não existe mais).
+Lacking the live decoding, I did the arithmetic with the already real,
+committed numbers:
+- Today's committed `root_ca_pqc.crt` file = 8126 bytes (PEM text,
+  confirmed via `wc -c` + `git rev-parse HEAD:...`, unchanged since
+  before either of the two measurements -- confirmed by git log).
+- AWS measured (pilot3, real) for `/root-ca.pem` = 8229 total bytes
+  (request+response). 8229 - 8126 = 103 bytes -- matching almost
+  exactly the 3 real HTTP headers I captured directly from the gateway
+  (classic profile, same route, same server, just to confirm the header
+  set): `Content-Type: application/x-pem-file` + `Date: ...` +
+  `Transfer-Encoding: chunked` = ~104 bytes by the project's own
+  `header_bytes()` formula. **AWS is consistent with serving exactly
+  the currently committed file + common HTTP headers.**
+- Local measured (pilot2-full-flow fixture, Oct 26) for `/root-ca.pem` =
+  8104 total bytes. With the same ~104 header bytes, the local body
+  would be ~8000 bytes -- **126 bytes SMALLER** than today's committed
+  file. Since git log confirms the file hasn't changed since before
+  10/26, this can't be a later commit -- the most plausible explanation
+  is that the local Docker image used in that 10/26 measurement was
+  an older snapshot (pre-rebuild), not reproducible now for direct
+  confirmation (that ephemeral local environment no longer exists).
 
-**Conclusão:** o +500B não é custo de assinatura/verificação, JWT, JWKS
-nem handshake (todas as outras 42 chamadas bateram exato) -- é
-especificamente o PEM da CA do PQC, e a medição da AWS é consistente com
-o artefato CORRETO e atualmente commitado; a medição local antiga é que
-parece refletir um estado desatualizado. **Recomendação (não aplicada):
-atualizar `BASELINE_BYTES["pqc"]` para 282.154, tratando a medição AWS
-como a referência correta** -- mas isto não é a prova decodificada
-campo a campo que foi pedida (bloqueada pela incompatibilidade TLS/PQC
-do curl), então a constante continua INTOCADA até confirmação direta do
-Luciano.
+**Conclusion:** the +500B is not a signing/verification, JWT, JWKS,
+or handshake cost (all other 42 calls matched exactly) -- it is
+specifically the PQC CA's PEM, and the AWS measurement is consistent
+with the CORRECT, currently committed artifact; it's the old local
+measurement that appears to reflect a stale state. **Recommendation
+(not applied): update `BASELINE_BYTES["pqc"]` to 282.154, treating the
+AWS measurement as the correct reference** -- but this is not the
+field-by-field decoded proof that was requested (blocked by curl's
+TLS/PQC incompatibility), so the constant remains UNTOUCHED pending
+Luciano's direct confirmation.
 
-**Item 2 -- teste de deriva da janela de 6h (offline, dados já
-commitados, nenhuma execução nova):**
-- **Inclinação do T_fluxo dentro de cada bloco:** TODOS os 9 blocos
-  (3 instalações x 3 perfis) têm inclinação NEGATIVA (T_fluxo cai ao
-  longo das 10 execuções do bloco) -- um padrão consistente, não ruído
-  aleatório. 3 blocos têm correlação de Spearman forte (|rho|>=0.7,
-  limiar declarado): sa-east-1/classic (rho=-0.806), sa-east-1/hybrid
-  (rho=-0.903), us-east-1/hybrid (rho=-0.842). Possível resíduo de
-  settling mesmo depois dos 5 execuções de aquecimento por bloco.
-- **Primeira execução pós-pausa vs. resto do bloco:** 4 blocos foram
-  precedidos por uma das 6 pausas/liberações (us-east-1/pqc,
+**Item 2 -- 6h-window drift test (offline, already-committed data,
+no new execution):**
+- **T_fluxo slope within each block:** ALL 9 blocks
+  (3 installations x 3 profiles) have a NEGATIVE slope (T_fluxo drops
+  across the block's 10 executions) -- a consistent pattern, not random
+  noise. 3 blocks have a strong Spearman correlation (|rho|>=0.7,
+  the declared threshold): sa-east-1/classic (rho=-0.806), sa-east-1/hybrid
+  (rho=-0.903), us-east-1/hybrid (rho=-0.842). A possible settling
+  residual even after the 5 warm-up executions per block.
+- **First execution after a pause vs. the rest of the block:** 4 blocks
+  were preceded by one of the 6 pauses/releases (us-east-1/pqc,
   us-east-1/classic, ap-northeast-1/pqc, ap-northeast-1/classic) --
-  todos com diferença POSITIVA pequena (+3,1% a +5,2%), nenhum passou do
-  limiar declarado de 20%. Sem outlier por este critério.
-- **RTT (jitter)/perda/steal por bloco:** jitter mediano 0,09-0,15ms em
-  todos os 9 blocos (mesma ordem de grandeza); perda por sinais de pcap
-  0,05%-0,39%; steal% (recalculado aqui a partir do delta bruto de
-  `/proc/stat` entre a primeira e a última amostra de cada execução --
-  achado: `load_cpu_mem()` do `consolidate_v8.py` espera um campo "cpu"
-  pré-processado que o sampler real nunca escreveu, então
-  `cpu_steal_pct_mean` nunca foi populado em `consolidated.json` para
-  nenhum bloco -- reportado aqui, não corrigido no pipeline, por ser só
-  análise offline) muito baixo em geral (<0,03%), sem padrão temporal
-  claro.
-- **Rede do início vs. fim (por instalação, primeiro bloco cronológico
-  vs. último):** jitter e perda do primeiro e do último bloco de cada
-  instalação ficam na mesma ordem de grandeza (ex. sa-east-1: jitter
-  0,111ms->0,100ms; us-east-1: 0,102ms->0,111ms; ap-northeast-1:
-  0,149ms->0,153ms) -- **sim, é a mesma rede**, sem deriva evidente
-  entre início e fim da janela de 6h.
-- **VEREDITO: FALHA** -- critério declarado (nenhum bloco com
-  |rho|>=0,7 E nenhuma primeira-execução-pós-pausa com diferença >20%)
-  não passa, por causa da inclinação consistente dentro dos blocos (3
-  de 9 excedem o limiar). A causa mais provável é o próprio padrão de
-  settling, não a rede nem as pausas -- nenhuma conclusão sobre perfis
-  tirada daqui, como pedido.
+  all with a small POSITIVE difference (+3,1% to +5,2%), none exceeding
+  the declared 20% threshold. No outlier by this criterion.
+- **RTT (jitter)/loss/steal per block:** median jitter 0,09-0,15ms across
+  all 9 blocks (same order of magnitude); loss from pcap signals
+  0,05%-0,39%; steal% (recomputed here from the raw `/proc/stat` delta
+  between the first and last sample of each execution --
+  a finding: `consolidate_v8.py`'s `load_cpu_mem()` expects a pre-processed
+  "cpu" field that the real sampler never wrote, so
+  `cpu_steal_pct_mean` was never populated in `consolidated.json` for
+  any block -- reported here, not fixed in the pipeline, since this is
+  offline analysis only) generally very low (<0,03%), with no clear
+  temporal pattern.
+- **Network at the start vs. the end (per installation, the first
+  chronological block vs. the last):** jitter and loss from each
+  installation's first and last block stay in the same order of
+  magnitude (e.g. sa-east-1: jitter 0,111ms->0,100ms; us-east-1:
+  0,102ms->0,111ms; ap-northeast-1: 0,149ms->0,153ms) -- **yes, it's the
+  same network**, with no evident drift between the start and end of
+  the 6h window.
+- **VERDICT: FAIL** -- the declared criterion (no block with
+  |rho|>=0,7 AND no first-execution-after-pause with a >20% difference)
+  does not pass, because of the consistent slope within blocks (3
+  of 9 exceed the threshold). The most likely cause is the settling
+  pattern itself, not the network nor the pauses -- no conclusion about
+  profiles drawn from this, as requested.
 
-**Item 4 -- teste A/B do tcpdump, executado de verdade (critério 7),
-L0@sa-east-1, 3 perfis, 10+10 execuções alternadas (ABAB):** reusei o
-mecanismo já existente no próprio orquestrador (`CAMPAIGN_TCPDUMP_AB_
-TEST`/`_tcpdump_enabled_for_run()`, criado para este critério mas nunca
-exercitado de ponta a ponta até agora) em vez de reimplementar.
+**Item 4 -- tcpdump A/B test, genuinely executed (criterion 7),
+L0@sa-east-1, 3 profiles, 10+10 alternating executions (ABAB):** I
+reused the mechanism already present in the orchestrator itself
+(`CAMPAIGN_TCPDUMP_AB_TEST`/`_tcpdump_enabled_for_run()`, created for
+this criterion but never exercised end to end until now) instead of
+reimplementing it.
 
-**Bug real encontrado e corrigido antes de rodar de verdade:**
-`run_one_execution()`'s própria leitura do arquivo `.iface` (metadado
-de interface de rede) era incondicional, mas esse arquivo só é
-ESCRITO como efeito colateral do comando de start do tcpdump -- toda
-execução SEM captura (a metade "B" do teste) tentava ler um arquivo
-que nunca existiu e crashava com "No such file or directory". Primeira
-tentativa real crashou na 2a execução (classic, run 2). Corrigido
-rodando o mesmo trecho de detecção de interface, sozinho, mesmo quando
-a captura é pulada -- `campaign_run.py` corrigido e commitado junto com
-este registro. Segunda tentativa: 60/60 execuções completas, sem
-crash.
+**Real bug found and fixed before the genuine run:**
+`run_one_execution()`'s own read of the `.iface` file (network
+interface metadata) was unconditional, but that file is only
+WRITTEN as a side effect of tcpdump's start command -- every execution
+WITHOUT capture (the "B" half of the test) tried to read a file that
+never existed and crashed with "No such file or directory". The first
+real attempt crashed on the 2nd execution (classic, run 2). Fixed by
+running the same interface-detection snippet on its own, even when
+capture is skipped -- `campaign_run.py` fixed and committed along with
+this entry. Second attempt: 60/60 executions completed, no crash.
 
-**Resultado (mediana com margem de erro, bootstrap 95% CI, 10000
-reamostragens, n=10 por braço):**
-| perfil  | mediana COM captura | mediana SEM captura | diferença | IC 95% |
+**Result (median with margin of error, bootstrap 95% CI, 10000
+resamples, n=10 per arm):**
+| profile | median WITH capture | median WITHOUT capture | difference | 95% CI |
 |---------|---------------------|----------------------|-----------|--------|
 | classic | 1,8923s | 1,8969s | -4,6ms | [-68,3; +95,0]ms |
 | pqc     | 1,9105s | 1,8936s | +16,9ms | [-58,1; +119,8]ms |
 | hybrid  | 1,9630s | 2,0097s | -46,7ms | [-98,5; +44,4]ms |
 
-Os 3 intervalos de confiança incluem zero -- **nenhuma diferença
-estatisticamente detectável** entre rodar com ou sem captura tcpdump
-simultânea, em nenhum dos 3 perfis, com este tamanho de amostra
-(n=10/braço). Dados brutos (pcaps, cpu_mem, run*.json, summary.json)
-commitados em `thesis/results/v8/latency-pilot3/tcpdump-ab-test/`,
-escaneados (scan de texto padrão + descompactação manual dos 60 pcaps
-contra o IP real do autor e o ID da conta AWS, 0 hits) antes do commit.
+All 3 confidence intervals include zero -- **no statistically
+detectable difference** between running with or without simultaneous
+tcpdump capture, in any of the 3 profiles, at this sample size
+(n=10/arm). Raw data (pcaps, cpu_mem, run*.json, summary.json)
+committed to `thesis/results/v8/latency-pilot3/tcpdump-ab-test/`,
+scanned (standard text scan + manual decompression of all 60 pcaps
+against the author's real IP and the AWS account ID, 0 hits) before
+the commit.
 
-## Decision 101 (2026-10-30) -- safety timer renovado, novo teto de
-## US$80/linha de US$65, teste de deriva refeito por célula, causa real
-## do +500B provada (CRLF/LF) e constante atualizada
+## Decision 101 (2026-10-30) -- safety timer renewed, new US$80 ceiling/
+## US$65 line, drift test redone per cell, the +500B's real cause proven
+## (CRLF/LF), and the constant updated
 
-**Item 1 -- safety timer renovado:** `renew_safety_timers()` chamado
-diretamente (mesma função que o orquestrador usa, sem disparar
-janela), sucesso nas 11 máquinas (3 servidores + 8 clientes) às
-2026-10-30T19:50:50Z aproximadamente. Nova expiração: **~2026-11-01T
-19:50Z** (+48h a partir de agora).
+**Item 1 -- safety timer renewed:** `renew_safety_timers()` called
+directly (the same function the orchestrator uses, without triggering a
+window), succeeded on all 11 machines (3 servers + 8 clients) at
+approximately 2026-10-30T19:50:50Z. New expiration: **~2026-11-01T
+19:50Z** (+48h from now).
 
-**Item 2 -- orçamento:** novo teto US$80, parar e perguntar em
-US$65 (substitui a linha de US$48 anterior). Custo real estimado desde
-o apply (mesmo método do achado anterior: boot real via `uptime -s`/
-`/proc/stat`, tarifas on-demand de terceiros por região):
-**46,33h decorridas, ~US$60,53 estimado** (faixa de incerteza ±15%:
-US$51,45-US$69,61 -- o teto de US$65 está dentro dessa faixa, mas a
-estimativa central ainda está abaixo). Ainda não cruzou a linha de
-parar-e-perguntar pela estimativa central.
+**Item 2 -- budget:** new US$80 ceiling, stop and ask at
+US$65 (replacing the previous US$48 line). Real cost estimated since
+the apply (the same method as the earlier finding: real boot via `uptime -s`/
+`/proc/stat`, third-party on-demand rates per region):
+**46,33h elapsed, ~US$60,53 estimated** (uncertainty range ±15%:
+US$51,45-US$69,61 -- the US$65 ceiling falls within this range, but the
+central estimate is still below it). Has not yet crossed the
+stop-and-ask line by the central estimate.
 
-**Item 3 -- teste de deriva refeito POR CÉLULA (correção de um erro
-real da minha análise anterior):** a análise anterior (mesmo
-registro, item 2 do pedido de 2026-10-29) usou SÓ o cenário L0,
-tratando-o como "o bloco inteiro" -- na verdade cada bloco (instalação
-x perfil) roda em ROUND-ROBIN por várias cenários (`SCENARIO_ROTATION`):
-sa-east-1 tem 4 (L0/L123/L219/L325, ordem da janela 1: crescente por
-RTT), us-east-1 e ap-northeast-1 têm 2 cada (L0/L14 e L0/L30) -- 24
-células reais no total (12+6+6), cada uma com suas próprias 10
-execuções. A ordem de execução real é "execução 1 de TODOS os
-cenários, depois execução 2 de todos, ..." (round-robin, não
-sequencial por cenário) -- confirmado no próprio código
-(`run_window()`, comentário "Decision 56, supersedes Decision 40").
+**Item 3 -- drift test redone PER CELL (fixing a real error in my
+earlier analysis):** the earlier analysis (same entry, item 2 of the
+2026-10-29 request) used ONLY the L0 scenario, treating it as "the
+whole block" -- in reality each block (installation x profile) runs in
+ROUND-ROBIN across several scenarios (`SCENARIO_ROTATION`):
+sa-east-1 has 4 (L0/L123/L219/L325, window 1's order: ascending by
+RTT), us-east-1 and ap-northeast-1 have 2 each (L0/L14 and L0/L30) -- 24
+real cells in total (12+6+6), each with its own 10
+executions. The real execution order is "execution 1 of ALL
+scenarios, then execution 2 of all, ..." (round-robin, not
+sequential per scenario) -- confirmed in the code itself
+(`run_window()`, comment "Decision 56, supersedes Decision 40").
 
-Mann-Kendall (normalizado pela mediana de cada célula), por célula:
-**10 de 24 células (41,7%) com tendência significativa (p<0,05)**,
-todas na mesma direção (queda) -- nenhuma subida significativa. Isso é
-mais robusto que o achado anterior (3/9 blocos), não menos: a mesma
-direção aparece em todas as 24 células analisadas uma a uma. Primeira
-execução (pós-aquecimento do próprio cenário) vs. as demais 9: maior
-desvio observado +9,7% (sa-east-1/pqc/L0), nenhuma célula passa do
-limiar de 20%. **O declínio do bloco inteiro (achado anterior, só L0)
-NÃO decorre da ordem de intercalação dos cenários** -- a série usada
-para L0 é só as 10 execuções do próprio L0 (run_index 1..10 dentro do
-cenário), nunca mistura valores de L123/L219/L325 nela; os outros
-cenários rodam ENTRE as repetições de L0 no relógio de parede, mas
-isso não entra na série analisada.
+Mann-Kendall (normalized by each cell's median), per cell:
+**10 of 24 cells (41,7%) with a significant trend (p<0,05)**,
+all in the same direction (decreasing) -- no significant upward
+trend. This is more robust than the earlier finding (3/9 blocks), not
+less: the same direction shows up in every one of the 24 cells analyzed
+individually. First execution (after that scenario's own warm-up) vs.
+the other 9: largest deviation observed +9,7% (sa-east-1/pqc/L0), no
+cell exceeds the 20% threshold. **The whole block's decline (the
+earlier finding, L0 only) does NOT stem from the scenarios'
+interleaving order** -- the series used for L0 is only L0's own 10
+executions (run_index 1..10 within the scenario), never mixing in
+values from L123/L219/L325; the other scenarios run BETWEEN L0's
+repetitions on the wall clock, but that never enters the analyzed
+series.
 
-**VEREDITO: FALHA** (critério: <20% das células com tendência
-significativa E direção não-consistente E nenhum outlier de
-aquecimento >20%) -- falha pela fração (41,7%>20%) e pela consistência
-de direção (100% das significativas na mesma direção), não pelo
-aquecimento. Mesma conclusão do item 2 anterior, agora com evidência
-mais completa (24 células em vez de 9) e sem nenhuma conclusão sobre
-perfis (como pedido nas duas vezes).
+**VERDICT: FAIL** (criterion: <20% of cells with a significant
+trend AND inconsistent direction AND no warm-up outlier >20%) -- fails
+on the fraction (41,7%>20%) and on direction consistency (100% of the
+significant ones in the same direction), not on warm-up. Same
+conclusion as the earlier item 2, now with more complete evidence
+(24 cells instead of 9) and with no conclusion drawn about profiles
+(as requested both times).
 
-**Item 4 -- causa real do +500B, provada byte a byte (git log +
-aritmética exata, não mais inferência):**
-- `git log` nos dois arquivos (`mock-service-os/certs/root_ca_pqc.crt`/
-  `issuer_ca_pqc.crt`): última mudança de CONTEÚDO real foi no commit
+**Item 4 -- the +500B's real cause, proven byte by byte (git log +
+exact arithmetic, no longer inference):**
+- `git log` on both files (`mock-service-os/certs/root_ca_pqc.crt`/
+  `issuer_ca_pqc.crt`): the last real CONTENT change was in commit
   `478bda5` (2026-09-29, "fix: make PQC's certificate chain post-
-  quantum end-to-end") -- subiu de 4048/4052 bytes (versão anterior,
-  ML-DSA-65 envolvida numa assinatura classic/RSA do emissor) para
-  8001/8013 bytes (versão atual, self-signed/encadeada 100% ML-DSA-65).
-  Nenhuma mudança desde então -- confirma o que já tinha sido
-  verificado antes.
-- **Mas o blob do git (8001/8013, LF) NÃO é o que eu media com `wc -c`
-  no disco (8126/8138) -- descoberta real nesta rodada**: o arquivo no
-  disco desta máquina Windows tem exatamente 125 terminações CRLF (0
-  LF solto) em cada um dos dois arquivos -- `core.autocrlf` convertendo
-  no checkout, sem regra em `.gitattributes` para `*.crt` (só `*.sh
-  text eol=lf` existia). 125 bytes extra por arquivo = exatamente o
-  "+125B" que vínhamos investigando, nos dois arquivos, provando a
-  causa.
-- **Prova aritmética exata (bate byte a byte, os dois arquivos):**
-  corpo LF (8001/8013) + ~103 bytes de cabeçalhos HTTP reais =
-  8104/8116 = **exatamente** a medição local antiga (a que gerou
-  281.654). Corpo CRLF (8126/8138) + os mesmos ~103 bytes = 8229/8241 =
-  **exatamente** a medição real da AWS no pilot3 (a que deu 282.154).
-  **A medição local usou a cópia correta (LF); o que foi entregue à
-  frota AWS usou uma cópia convertida para CRLF** (quem fez o deploy
-  leu o arquivo de um checkout Windows, provavelmente esta mesma
-  máquina, em vez de reclonar/normalizar em Linux). Não é custo de
-  assinatura, JWT, JWKS nem handshake -- é terminação de linha do PEM.
-- **Corrigido na raiz**: `.gitattributes` ganhou `*.crt`/`*.key`/`*.pem
-  text eol=lf`; arquivos re-checkout'ados (voltaram a 8001/8013 nesta
-  working tree). Nenhum checkout futuro deve reintroduzir a deriva.
-- **Constante atualizada, como pedido**: `BASELINE_BYTES["pqc"]` em
-  `pilot_acceptance.py` de `281_654` para `282_154` -- adotando o valor
-  real da frota AWS (o que de fato é servido hoje) como referência,
-  com nota no próprio arquivo explicando a causa raiz provada acima
-  (não uma recaptura local, que o próprio comentário do arquivo pede
-  como método padrão -- este caso é diferente, uma causa raiz provada,
-  registrada explicitamente como excepcional).
+  quantum end-to-end") -- it went from 4048/4052 bytes (the earlier
+  version, with ML-DSA-65 involved in a still-classical/RSA issuer
+  signature) to 8001/8013 bytes (the current version, fully
+  self-signed/chained in ML-DSA-65). No change since then -- confirming
+  what had already been verified before.
+- **But the git blob (8001/8013, LF) is NOT what I measured with `wc -c`
+  on disk (8126/8138) -- a real discovery this round**: the file on
+  this Windows machine's disk has exactly 125 CRLF line endings (0
+  stray LF) in each of the two files -- `core.autocrlf` converting on
+  checkout, with no `.gitattributes` rule for `*.crt` (only `*.sh
+  text eol=lf` existed). 125 extra bytes per file = exactly the
+  "+125B" we had been investigating, in both files, proving the cause.
+- **Exact arithmetic proof (matches byte for byte, both files):**
+  LF body (8001/8013) + ~103 real HTTP-header bytes =
+  8104/8116 = **exactly** the old local measurement (the one that
+  produced 281.654). CRLF body (8126/8138) + the same ~103 bytes = 8229/8241 =
+  **exactly** the real AWS measurement in pilot3 (the one that gave 282.154).
+  **The local measurement used the correct (LF) copy; what was
+  delivered to the AWS fleet used a copy converted to CRLF** (whoever
+  did the deploy read the file from a Windows checkout, probably this
+  same machine, instead of re-cloning/normalizing on Linux). It is not
+  a signing, JWT, JWKS, or handshake cost -- it's the PEM's line
+  ending.
+- **Fixed at the root**: `.gitattributes` gained `*.crt`/`*.key`/`*.pem
+  text eol=lf`; files re-checked-out (back to 8001/8013 in this
+  working tree). No future checkout should reintroduce the drift.
+- **Constant updated, as requested**: `BASELINE_BYTES["pqc"]` in
+  `pilot_acceptance.py` from `281_654` to `282_154` -- adopting the
+  AWS fleet's real value (what is actually served today) as the
+  reference, with a note in the file itself explaining the root cause
+  proven above (not a local recapture, which the file's own comment
+  asks for as the standard method -- this case is different, a proven
+  root cause, explicitly recorded as exceptional).
 
-## Decision 102 (2026-10-30) -- correção da Decision 101: 282.154 era o
-## artefato CRLF, não a verdade; varredura completa da árvore entregue;
-## tamanho do efeito e política de aquecimento; calendário das 3
-## janelas; preparação (sem executar) da reentrega; piloto 3 ≠ janela
-## oficial
+## Decision 102 (2026-10-30) -- correcting Decision 101: 282.154 was the
+## CRLF artifact, not the truth; full sweep of the delivered tree;
+## effect size and warm-up policy; calendar for the 3 windows;
+## preparation (without executing) of redelivery; pilot 3 ≠ the
+## official window
 
-**Item 1 -- BASELINE_BYTES revertido, causa confirmada, árvore inteira
-varrida:** `BASELINE_BYTES["pqc"]` voltou de `282_154` para
-`281_654` -- a Decision 101 tinha adotado o número da AWS como "a
-verdade atual", mas isso estava invertido: 281.654 é o valor CORRETO
-(a cópia LF, que é o que o blob do git de fato contém); 282.154 era o
-artefato do checkout Windows com CRLF entregue à frota. O lado que
-precisa de correção é a ENTREGA à AWS, não a constante de referência.
+**Item 1 -- BASELINE_BYTES reverted, cause confirmed, the whole tree
+swept:** `BASELINE_BYTES["pqc"]` went back from `282_154` to
+`281_654` -- Decision 101 had adopted the AWS number as "the current
+truth," but that was inverted: 281.654 is the CORRECT value
+(the LF copy, which is what the git blob actually contains); 282.154 was
+the artifact from the Windows CRLF checkout delivered to the fleet.
+The side that needs fixing is the DELIVERY to AWS, not the reference
+constant.
 
-`.gitattributes` ampliado para `*.pem`/`*.crt`/`*.key`/`*.json`/
+`.gitattributes` extended to `*.pem`/`*.crt`/`*.key`/`*.json`/
 `*.jwks`/`*.py`/`*.yml`/`*.yaml`/`*.conf`/`*.service`/`Dockerfile`/
-`go.mod`/`go.sum`/`*.go`, todos `eol=lf` (mais `*.p12`/`*.pfx` como
-`binary`, por precaução, já que estão na mesma árvore). `git add
---renormalize .` só pegou 2 arquivos fora do escopo deste pedido
-(`insurance-server-lambdas/gradlew.bat`, um artefato de resultados da
-v7) -- revertidos, fora do escopo ("árvore entregue às máquinas").
+`go.mod`/`go.sum`/`*.go`, all `eol=lf` (plus `*.p12`/`*.pfx` as
+`binary`, as a precaution, since they live in the same tree). `git add
+--renormalize .` only caught 2 files outside this request's scope
+(`insurance-server-lambdas/gradlew.bat`, a v7 results artifact) --
+reverted, out of scope ("the tree delivered to the machines").
 
-Varredura completa da árvore que `deliver_source.sh` de fato
-empacota (mesmo tarball para os 3 perfis -- `mock-service-os/certs/`
-contém os certificados dos 3 perfis juntos) contra o blob do HEAD:
-**67 arquivos entregues, 26 com deriva de CRLF antes da correção
-(conteúdo idêntico ao blob, só terminação de linha), 0 depois.**
-Lista completa dos 26 (todos corrigidos, re-checkout forçado):
+Full sweep of the tree `deliver_source.sh` actually
+packages (the same tarball for all 3 profiles -- `mock-service-os/certs/`
+holds the certificates for all 3 profiles together) against the HEAD
+blob: **67 files delivered, 26 with CRLF drift before the fix
+(content identical to the blob, only the line ending), 0 after.**
+Full list of the 26 (all fixed, forced re-checkout):
 `docker-compose.yml`, `participants.json`, `software_statement.json`,
 `certs/Dockerfile`, `certs/client_one.key`, `certs/client_one_pqc.crt`,
 `certs/client_one_pqc.jwks`, `certs/client_one_pqc_pub.jwks`,
 `certs/client_two.key`, `certs/go.mod`, `certs/go.sum`,
 `certs/issuer_ca.key`, `certs/mongo.crt`, `certs/mongo.key`,
-`certs/mongo.pem`, `certs/mtls.key`, **`certs/mtls_pqc.crt`** (certificado
-que participa de handshake mTLS real, não só o PEM de simulação de
-CA-download), `certs/op.key`, `certs/postgres.crt`,
+`certs/mongo.pem`, `certs/mtls.key`, **`certs/mtls_pqc.crt`** (a certificate
+that takes part in a real mTLS handshake, not just the CA-download
+simulation PEM), `certs/op.key`, `certs/postgres.crt`,
 `certs/postgres.key`, `certs/root_ca.key`, `ssa/jwks.json`,
 `ssa/private_jwk.json`, `thesis/scripts/campaign_client_runner.py`,
 `thesis/scripts/latency_automation.py`, **`thesis/scripts/opin_flow.py`**
-(+2475 bytes de deriva -- o maior de todos). Scripts Python com CRLF
-ainda executam (Python aceita ambos), mas isso não é limpo nem
-reprodutível -- corrigido na raiz.
+(+2475 bytes of drift -- the largest of all). Python scripts with CRLF
+still run (Python accepts both), but this is neither clean nor
+reproducible -- fixed at the root.
 
-**Item 2 -- tamanho do efeito (1o terço vs. último terço, 24 células) e
-política de aquecimento:**
-- Mediana da variação entre as 24 células: **-1,3%**; média: **-2,3%**.
-  Maiores quedas: sa-east-1/hybrid/L0 -8,5% (IC95% [-9,9%,-1,9%]),
-  sa-east-1/classic/L0 -7,1% (IC95% [-10,3%,-1,4%]) -- ambas com IC
-  que não cruza zero. Várias células (ex. L123/L219/L325 em
-  sa-east-1) têm variação pequena e não significativa (<1,2%, IC
-  cruzando zero) -- o efeito é mais forte nas células de latência
-  menor/mais próxima (L0), não uniforme.
-- **Onde estabiliza:** menor K (execuções extras descartadas, a partir
-  do início da célula) tal que Mann-Kendall nas execuções restantes
-  deixe de ser significativo -- mediana K=0, máximo K=5 (sa-east-1/
-  pqc/L123). Distribuição: K=0 em 14/24 células (58%), K<=2 em 20/24
-  (83%), K<=3 em 21/24 (87,5%), K<=4 em 23/24 (95,8%), K<=5 em 24/24
-  (100%).
-- **Comparação com a v7:** a v7 usou exatamente 1 execução de
-  aquecimento por célula (`run00_warmup.json`), igual ao padrão atual
-  da v8 (`run_warmup()`, uma vez por cenário por bloco) -- confirmado
-  em `thesis/results/v7/DECISIONS.md`. O achado aqui é que **1 execução
-  não é suficiente** para eliminar a tendência numa fração relevante
-  de células.
-- **Proposta de política (declarada antes da coleta, como pedido): K=3
-  execuções extras descartadas por célula**, além da já existente -- 
-  cobre 87,5% das células sem resíduo de tendência. Para quem quiser
-  garantia total (0% de resíduo), **K=5**. Não aplicado ainda --
-  proposta para a próxima janela oficial.
+**Item 2 -- effect size (first third vs. last third, 24 cells) and
+warm-up policy:**
+- Median variation across the 24 cells: **-1,3%**; mean: **-2,3%**.
+  Largest drops: sa-east-1/hybrid/L0 -8,5% (95% CI [-9,9%,-1,9%]),
+  sa-east-1/classic/L0 -7,1% (95% CI [-10,3%,-1,4%]) -- both with a CI
+  that doesn't cross zero. Several cells (e.g. L123/L219/L325 in
+  sa-east-1) have small, non-significant variation (<1,2%, CI
+  crossing zero) -- the effect is stronger in the closer/lower-latency
+  cells (L0), not uniform.
+- **Where it stabilizes:** the smallest K (extra executions discarded,
+  starting from the beginning of the cell) such that Mann-Kendall on
+  the remaining executions stops being significant -- median K=0,
+  maximum K=5 (sa-east-1/pqc/L123). Distribution: K=0 in 14/24 cells
+  (58%), K<=2 in 20/24 (83%), K<=3 in 21/24 (87,5%), K<=4 in 23/24
+  (95,8%), K<=5 in 24/24 (100%).
+- **Comparison with v7:** v7 used exactly 1 warm-up execution
+  per cell (`run00_warmup.json`), the same as v8's current
+  standard (`run_warmup()`, once per scenario per block) -- confirmed
+  in `thesis/results/v7/DECISIONS.md`. The finding here is that **1
+  execution isn't enough** to eliminate the trend in a relevant
+  fraction of cells.
+- **Policy proposal (declared before collection, as requested): K=3
+  extra executions discarded per cell**, in addition to the existing
+  one -- covers 87,5% of cells with no trend residual. For anyone wanting
+  full assurance (0% residual), **K=5**. Not applied yet --
+  proposed for the next official window.
 
-**Item 3 -- calendário das 3 janelas compactas, sem pausas:**
-`campaign_run.service` roda com `CAMPAIGN_ALERT_ONLY_BUDGET=1`
-(Decision 100) -- sem pausas internas de orçamento/tempo, só o teto de
-custo de verdade.
-| janela | horário UTC | ordem de perfis |
+**Item 3 -- calendar for the 3 compact windows, no pauses:**
+`campaign_run.service` runs with `CAMPAIGN_ALERT_ONLY_BUDGET=1`
+(Decision 100) -- no internal budget/time pauses, only the real cost
+ceiling.
+| window | UTC time | profile order |
 |--------|-------------|------------------|
 | 1 | 23:00 | classic, hybrid, pqc |
-| 2 | 07:00 (dia seguinte) | hybrid, pqc, classic |
-| 3 | 15:00 (mesmo dia) | pqc, classic, hybrid |
+| 2 | 07:00 (next day) | hybrid, pqc, classic |
+| 3 | 15:00 (same day) | pqc, classic, hybrid |
 
-Quadrado latino válido (cada perfil em cada posição exatamente uma
-vez). **Duração esperada**: soma pura de T_fluxo das 240 execuções do
-piloto 3 foi só 27,7min -- o resto das 6h06m reais foi overhead (SSH
-por execução, settling, aquecimento, e as 6 pausas agora eliminadas em
-modo campanha). Sem pausas, uma estimativa honesta fica entre ~1,5h
-(otimista) e as 6h06m do piloto (pessimista, caso o overhead de SSH se
-repita igual) -- **não tenho uma medição direta de uma janela sem
-pausas ainda**, então não finjo uma precisão que não tenho; recomendo
-tratar a primeira das 3 janelas como a medição real desse tempo.
-**Custo estimado**: 3 janelas x ~3h (ponto médio da faixa) = 9h de
-frota adicionais x ~US$1,31/h (mesma tarifa já usada) ≈ **+US$11,76**,
-total acumulado ≈ **US$72,3** -- dentro do teto de US$80, mas
-**cruzando a linha de parar-e-perguntar de US$65 durante a janela 2 ou
-3**. Isso deve ser reportado quando acontecer, mesmo sem pausa
-automática.
+A valid Latin square (each profile in each position exactly once).
+**Expected duration**: the pure sum of T_fluxo across pilot 3's 240
+executions was only 27,7min -- the rest of the real 6h06m was overhead
+(SSH per execution, settling, warm-up, and the 6 pauses now eliminated
+in campaign mode). With no pauses, an honest estimate falls between
+~1,5h (optimistic) and the pilot's 6h06m (pessimistic, if the SSH
+overhead repeats identically) -- **I don't have a direct measurement of
+a pause-free window yet**, so I won't fake a precision I don't have; I
+recommend treating the first of the 3 windows as the real measurement
+of that time. **Estimated cost**: 3 windows x ~3h (the range's
+midpoint) = 9 additional fleet-hours x ~US$1,31/h (the same rate
+already used) ≈ **+US$11,76**, accumulated total ≈ **US$72,3** -- within
+the US$80 ceiling, but **crossing the US$65 stop-and-ask line during
+window 2 or 3**. This should be reported when it happens, even with no
+automatic pause.
 
-**Item 4 -- reentrega preparada, NÃO executada:** comando pronto --
+**Item 4 -- redelivery prepared, NOT executed:** command ready --
 `bash thesis/results/v8/campaign/scripts/deliver_source.sh
-thesis/results/v8/campaign/campaign.vars.local.sh` (reempacota com os
-arquivos já corrigidos em LF, já que o `.gitattributes` agora garante
-isso em qualquer checkout novo). Validação curta proposta (sem
-executar): para cada um dos 2 PEMs da CA do PQC, em cada uma das 3
-instalações, `sha256sum` do arquivo entregue remotamente comparado
-contra `git show HEAD:mock-service-os/certs/root_ca_pqc.crt | sha256sum`
-(e o mesmo para `issuer_ca_pqc.crt`) -- script de ~10 linhas, pronto
-para rodar quando autorizado, não disparado agora.
+thesis/results/v8/campaign/campaign.vars.local.sh` (repackages with the
+files already fixed to LF, since `.gitattributes` now guarantees this
+on any new checkout). A short validation is proposed (not executed):
+for each of the 2 PQC CA PEMs, on each of the 3 installations,
+`sha256sum` of the remotely delivered file compared
+against `git show HEAD:mock-service-os/certs/root_ca_pqc.crt | sha256sum`
+(and the same for `issuer_ca_pqc.crt`) -- a ~10-line script, ready
+to run once authorized, not triggered now.
 
-**Item 5 -- piloto 3 não é janela oficial:** registrado -- o que até
-aqui foi chamado de "janela 1" (240 execuções reais, 2026-10-29,
-ordem hybrid/pqc/classic, dados em `latency-pilot3/`) passa a ser
-**Piloto 3**, uma repetição de validação, não a primeira janela
-oficial da campanha. As 3 janelas oficiais (classic/hybrid/pqc,
-hybrid/pqc/classic, pqc/classic/hybrid) ainda não rodaram -- o
-calendário do item 3 é para elas, começando do zero.
+**Item 5 -- pilot 3 is not the official window:** recorded -- what has
+been called "window 1" up to this point (240 real executions, 2026-10-29,
+order hybrid/pqc/classic, data in `latency-pilot3/`) now becomes
+**Pilot 3**, a validation repeat, not the campaign's first official
+window. The 3 official windows (classic/hybrid/pqc,
+hybrid/pqc/classic, pqc/classic/hybrid) have not run yet -- item 3's
+calendar is for them, starting from zero.
 
-## Decision 103 (2026-10-30) -- K=5 fixado, calendário fixo cancelado
-## (avanço automático + janelas de 30min), projeção de duração/custo,
-## varredura sha256 na frota real, go/no-go
+## Decision 103 (2026-10-30) -- K=5 fixed, the fixed calendar canceled
+## (automatic advance + 30min gaps), duration/cost projection, sha256
+## sweep on the real fleet, go/no-go
 
-**Item 1 -- K=5 fixado e implementado:** `campaign_run.py` ganhou
-`run_extra_warmups()` (SSHExecutor e LocalExecutor) + `extra_warmup_
-done()` -- 5 execuções extras por célula, gravadas em `warmup/
-w{janela:02d}_warm{01..05}.json`, nunca em `runs/`, chamadas uma vez
-por cenário por bloco, logo após o aquecimento único já existente
-(`run_warmup()`, mantido, não substituído). `EXTRA_WARMUP_RUNS_PER_
+**Item 1 -- K=5 fixed and implemented:** `campaign_run.py` gained
+`run_extra_warmups()` (SSHExecutor and LocalExecutor) + `extra_warmup_
+done()` -- 5 extra executions per cell, recorded in `warmup/
+w{window:02d}_warm{01..05}.json`, never in `runs/`, called once
+per scenario per block, right after the already-existing single
+warm-up (`run_warmup()`, kept, not replaced). `EXTRA_WARMUP_RUNS_PER_
 CELL=5` (env var `CAMPAIGN_EXTRA_WARMUP_RUNS_PER_CELL`, overridable).
-Testado em modo seco (SSHExecutor com `dry_run=True`, sem SSH real) --
-não crasha, grava o diretório `warmup/` corretamente. `ANALYSIS_PLAN.md`
-criado (novo arquivo), declarando a política e a comparação com a v7
-(1 execução) ANTES de qualquer coleta oficial.
+Tested in dry-run mode (SSHExecutor with `dry_run=True`, no real SSH) --
+doesn't crash, writes the `warmup/` directory correctly. `ANALYSIS_PLAN.md`
+created (a new file), declaring the policy and the comparison with v7
+(1 execution) BEFORE any official collection.
 
-**Item 2 -- calendário fixo cancelado; avanço automático + janelas de
-30min implementados:** horários 23:00/07:00/15:00 UTC descartados.
-Implementado em `campaign_run.py`: depois de cada janela (exceto a
-última), `compute_window_health()` conta erros reais (arquivo de
-execução faltando ou com `retries` não-vazio) e calcula steal% médio
-(delta real de `/proc/stat`, servidor+cliente, mesma lógica do achado
-de steal da Decision 101). Se **zero erros E steal médio < 5%**:
-espera `WINDOW_GAP_MINUTES=30` (só para puxar dados/manifesto/scanner/
-commit, sem tráfego de coleta) e a próxima janela começa sozinha. Caso
-contrário: cai no portão manual já existente (`wait_for_operator_
-gate()`), nunca avança sozinho sobre um problema real. Testado em modo
-seco com dados sintéticos: célula limpa -> avança sozinho; uma
-execução faltando -> cai no portão manual (ambos confirmados). Teto de
-custo: `COST_HARD_STOP_USD=80` (inalterado), mas a linha de
-parar-e-perguntar deveria subir de US$48 para **US$72** -- ainda não
-há um mecanismo de ALERTA separado do hard-stop no código (só o
-`COST_ALERT_RATIO` interno, hoje 0,6 = US$48); **ajustado aqui para
-0,9 = US$72**, consistente com o pedido.
+**Item 2 -- fixed calendar canceled; automatic advance + 30min gaps
+implemented:** the 23:00/07:00/15:00 UTC times were dropped.
+Implemented in `campaign_run.py`: after each window (except the
+last), `compute_window_health()` counts real errors (a missing
+execution file, or one with non-empty `retries`) and computes the mean
+steal% (a real `/proc/stat` delta, server+client, the same logic as
+Decision 101's steal finding). If **zero errors AND mean steal < 5%**:
+it waits `WINDOW_GAP_MINUTES=30` (only to pull data/manifest/scan/
+commit, with no collection traffic) and the next window starts on its
+own. Otherwise: it falls back to the already-existing manual gate
+(`wait_for_operator_gate()`), never advancing on its own over a real
+problem. Tested in dry-run mode with synthetic data: a clean cell
+-> advances on its own; a missing execution -> falls to the manual
+gate (both confirmed). Cost ceiling: `COST_HARD_STOP_USD=80`
+(unchanged), but the stop-and-ask line should rise from US$48 to
+**US$72** -- there still isn't a separate ALERT mechanism from the
+hard-stop in the code (only the internal `COST_ALERT_RATIO`, today
+0,6 = US$48); **adjusted here to 0,9 = US$72**, consistent with the
+request.
 
-**Cost Explorer via CLI:** tentado, não disponível -- `aws` CLI existe
-em control (`/usr/bin/aws`, v2.36.47) mas sem credenciais
-configuradas (`NoCredentials`); tentei também via `boto3` local (já
-instalado), mesmo resultado (as credenciais que o Terraform usa não
-ficam expostas de um jeito que o `boto3`/`aws` CLI padrão encontre).
-Não tentei contornar isso lendo o IMDS da instância diretamente --
-bloqueado pelo próprio classificador de segurança do meu ambiente como
-"Containment Escape" (acesso a metadados/credenciais da instância), e
-mesmo que não estivesse bloqueado, não seria a forma certa de obter
-isso. **Gasto real pela API de billing continua indisponível**; a
-estimativa por tarifa on-demand x horas (já em uso desde a Decision
-100) continua sendo a melhor leitura possível neste ambiente.
+**Cost Explorer via CLI:** tried, not available -- the `aws` CLI
+exists on control (`/usr/bin/aws`, v2.36.47) but with no credentials
+configured (`NoCredentials`); I also tried via local `boto3` (already
+installed), same result (the credentials Terraform uses aren't
+exposed in a way the standard `boto3`/`aws` CLI can find). I did not
+try to work around this by reading the instance's IMDS directly --
+blocked by my own environment's security classifier as a
+"Containment Escape" (access to instance metadata/credentials), and
+even if it weren't blocked, that wouldn't be the right way to obtain
+it. **Real spend via the billing API remains unavailable**; the
+on-demand-rate x hours estimate (already in use since Decision
+100) remains the best reading possible in this environment.
 
-**Item 3 -- duração líquida do piloto 3 e projeção das janelas
-oficiais:**
-- 6 pausas reais, durações exatas (do journal, não aproximadas):
-  8min, 1min, 5min, 6min, 6min, 6min = **32min de pausa total**.
-- Janela bruta (piloto 3): 07:12:56Z -> 13:19:12Z = 366,3min.
-- **Duração líquida (bruta - pausas): 334,3min = 5h34min.**
-- Projeção por janela oficial (K=5, sem pausas): custo marginal de
-  cada execução extra de aquecimento estimado entre 0,33min (menos SSH
-  que uma execução contada) e 1,1min (igual à média real medida de
-  uma execução contada completa, bloco sa-east-1/pqc, 40 execuções
-  reais, 43,86min/40=1,097min/execução) -- 24 células x 5 extras x
-  esse intervalo = 72-132min adicionais por janela. **Projeção por
-  janela: 6,2-7,8h.**
-- 3 janelas + 2 intervalos de 30min: **19,7-24,3h de frota adicionais
-  necessárias.**
-- Custo adicional (tarifa combinada ~US$1,31/h): **US$25,73-US$31,77.**
-- Custo acumulado total (atual ~US$60,53 + projeção): **US$86,26-
+**Item 3 -- pilot 3's net duration and the official windows'
+projection:**
+- 6 real pauses, exact durations (from the journal, not approximated):
+  8min, 1min, 5min, 6min, 6min, 6min = **32min total pause time.**
+- Gross window (pilot 3): 07:12:56Z -> 13:19:12Z = 366,3min.
+- **Net duration (gross - pauses): 334,3min = 5h34min.**
+- Projection per official window (K=5, no pauses): marginal cost of
+  each extra warm-up execution estimated between 0,33min (less SSH
+  than a counted execution) and 1,1min (equal to the real measured
+  average of a full counted execution, sa-east-1/pqc block, 40 real
+  executions, 43,86min/40=1,097min/execution) -- 24 cells x 5 extra x
+  that interval = 72-132min additional per window. **Projection per
+  window: 6,2-7,8h.**
+- 3 windows + 2 gaps of 30min: **19,7-24,3h of additional fleet-time
+  needed.**
+- Additional cost (blended rate ~US$1,31/h): **US$25,73-US$31,77.**
+- Total accumulated cost (current ~US$60,53 + projection): **US$86,26-
   US$93,08.**
-- **Cabe em US$80? NÃO, nem no cenário otimista.** Este é um achado
-  real e deve ser resolvido antes de autorizar qualquer janela:
-  reduzir K, reduzir o número de células por janela, ou elevar o
-  teto -- não vou propor qual, é uma decisão do Luciano.
+- **Does it fit within US$80? NO, not even in the optimistic scenario.**
+  This is a real finding and must be resolved before authorizing any
+  window: reducing K, reducing the number of cells per window, or
+  raising the ceiling -- I won't propose which, that's Luciano's
+  decision.
 
-**Item 4 -- sha256 dos 67 arquivos entregues contra o git, na frota
-real (amostra: servidor sa-east-1, ainda sem reentrega):** **27 dos 28
-arquivos testados com hash diferente do blob do git** (o 28º,
-`campaign_run.py`, não pôde ser comparado por um problema de
-mapeamento de caminho no meu próprio script de comparação, não um
-achado real -- já confirmado antes, por outro caminho, que esse
-arquivo específico não tinha deriva). Os 27 incluem os mesmos dois
-PEMs da CA do PQC (ainda COM a corrupção CRLF na frota real -- a
-correção local da Decision 102 nunca foi reentregue) mais todos os 26
-já identificados antes. **Confirma que a corrupção está ativa na frota
-agora**, consistente com a análise, nada novo além da confirmação
-direta. Reentrega continua não executada, como pedido.
+**Item 4 -- sha256 of the 67 delivered files against git, on the real
+fleet (sample: the sa-east-1 server, still not redelivered):** **27 of
+28 files tested have a hash different from the git blob** (the 28th,
+`campaign_run.py`, could not be compared due to a path-mapping issue
+in my own comparison script, not a real finding -- it had already
+been confirmed before, by another path, that this specific file had no
+drift). The 27 include the same two PQC CA PEMs (still WITH the
+CRLF corruption on the real fleet -- Decision 102's local fix was
+never redelivered) plus all 26 already identified before. **Confirms
+the corruption is active on the fleet right now**, consistent with
+the analysis, nothing new beyond the direct confirmation. Redelivery
+remains not executed, as requested.
 
 **Item 5 -- go/no-go:**
-| item | status | evidência |
+| item | status | evidence |
 |------|--------|-----------|
-| Árvore v8 (latency por perfil/servidor/cenário) | PASSA | `latency-pilot3/experimentN - X/<instalação>/<cenário>/` confirmado |
-| Tamanho derivado (OPINsize) | PASSA | `consolidated.json`'s `opinsize` por célula, já populado |
-| `artifacts/` | **FALHA** | não existe em v8 (v7 tinha `thesis/results/v7/artifacts/`, v8 não tem equivalente ainda) |
-| `_campaign-control/` | PASSA | `environment/gates/instance_warmup/validation_stage/windows` confirmados |
-| Consolidação por perfil | PASSA | `consolidated.json`'s `profiles -> perfil -> instalação -> cenário` |
-| Consolidação cruzada/global | PASSA | `cross_profile_t_fluxo_comparisons` (não é um "global" separado, cobre o mesmo papel) |
-| `report_data_v8.json` + tabelas do artigo automáticas | **FALHA** | não existe -- só `thesis/results/v7/report_data_v7.json`/`compute_v7_report_data.py`; não há equivalente v8 |
-| Ensaio completo do consolidate com dados do piloto 3 | PASSA | já rodado e commitado (`b09f66a`/`c1cc0d5`, antes desta sessão de hoje) |
-| `ANALYSIS_PLAN.md` commitado com tag `v8-prereg` | **PARCIAL** | arquivo criado agora; tag ainda não criada (farei no commit deste registro) |
-| Scripts de captura de artefatos reais + decomposição por participante | PASSA | `bytes_by_participant()` já existe e já roda dentro da consolidação normal, não é um script pendente |
-| Checagem da v7 sobre `load_signing_key` | **ATENÇÃO** | v7 e v8 compartilham o mesmo `opin_flow.py`/`load_client_signing_key()` -- o cache que a Decision 99 adicionou não existia quando a v7 foi medida; **plausível que o mesmo custo de ~252ms/chamada estivesse nos números brutos da v7 também, mas isso é inferência do código, não medição direta** (já registrado como tal na própria Decision 99) -- v7 não foi remedida, permanece oficial como está |
+| v8 tree (latency per profile/server/scenario) | PASS | `latency-pilot3/experimentN - X/<installation>/<scenario>/` confirmed |
+| Derived size (OPINsize) | PASS | `consolidated.json`'s `opinsize` per cell, already populated |
+| `artifacts/` | **FAIL** | doesn't exist in v8 (v7 had `thesis/results/v7/artifacts/`, v8 has no equivalent yet) |
+| `_campaign-control/` | PASS | `environment/gates/instance_warmup/validation_stage/windows` confirmed |
+| Per-profile consolidation | PASS | `consolidated.json`'s `profiles -> profile -> installation -> scenario` |
+| Cross/global consolidation | PASS | `cross_profile_t_fluxo_comparisons` (not a separate "global" field, but covers the same role) |
+| `report_data_v8.json` + automatic thesis tables | **FAIL** | doesn't exist -- only `thesis/results/v7/report_data_v7.json`/`compute_v7_report_data.py`; there is no v8 equivalent |
+| Full consolidate dry run with pilot 3 data | PASS | already run and committed (`b09f66a`/`c1cc0d5`, before today's session) |
+| `ANALYSIS_PLAN.md` committed with the `v8-prereg` tag | **PARTIAL** | file created now; tag not yet created (will do so in this entry's commit) |
+| Real-artifact capture scripts + per-participant decomposition | PASS | `bytes_by_participant()` already exists and already runs inside the normal consolidation, not a pending script |
+| v7 check regarding `load_signing_key` | **ATTENTION** | v7 and v8 share the same `opin_flow.py`/`load_client_signing_key()` -- the cache Decision 99 added didn't exist when v7 was measured; **it's plausible that the same ~252ms/call cost was present in v7's own raw figures too, but this is an inference from the code, not a direct measurement** (already recorded as such in Decision 99 itself) -- v7 was not remeasured, remains official as it stands |
 
-**Veredito geral: NÃO PASSA ainda** -- 2 itens em FALHA real
-(`artifacts/`, `report_data_v8.json`) e 1 parcial (tag ainda não
-criada, resolvido neste commit). Nenhum dos dois itens em falha
-bloqueia uma janela oficial de RODAR, mas bloqueiam a tese de
-CONSUMIR os dados automaticamente depois -- recomendo resolver antes
-da janela 3, não necessariamente antes da janela 1.
+**Overall verdict: NOT YET PASSING** -- 2 items in real FAIL
+(`artifacts/`, `report_data_v8.json`) and 1 partial (tag not yet
+created, resolved in this commit). Neither failing item blocks an
+official window from RUNNING, but they block the thesis from
+automatically CONSUMING the data afterward -- I recommend resolving
+them before window 3, not necessarily before window 1.
 
-## Decision 104 (2026-10-30) -- destroy confirmado e verificado, decomposição
-## do overhead por execução, os 2 FALHAs do go/no-go fechados offline,
-## roteiro de resubida
+## Decision 104 (2026-10-30) -- destroy confirmed and verified, per-execution
+## overhead decomposition, the go/no-go's 2 FAILs closed offline,
+## re-launch roadmap
 
-**Item 1 -- destroy executado e verificado, com o Luciano presente:**
-Pré-condição confirmada antes de qualquer destroy: `git status`
-limpo, `git push origin main` (6 commits, incluindo as Decisions
-100-103 e todos os dados do piloto 3) -- `main...origin/main` sem
-divergência depois do push. `terraform plan -destroy -out=tfdestroy`:
-**`Plan: 0 to add, 0 to change, 65 to destroy`** -- exatamente os 65
-esperados. `terraform apply "tfdestroy"` (só o plano salvo, sem
-recalcular): **`Apply complete! Resources: 0 added, 0 changed, 65
-destroyed`**. Plano apagado (`rm tfdestroy`) depois. Confirmação
-região a região (chamada real à API da AWS, não só `terraform
-state`, usando o profile `MOCKOPIN_AWS_PROFILE` que o próprio
-Terraform já usava -- descoberto nesta investigação que `aws`
-CLI/`boto3` sem esse profile explícito não acham credencial nenhuma):
+**Item 1 -- destroy executed and verified, with Luciano present:**
+Precondition confirmed before any destroy: a clean `git status`,
+`git push origin main` (6 commits, including Decisions
+100-103 and all of pilot 3's data) -- `main...origin/main` with no
+divergence after the push. `terraform plan -destroy -out=tfdestroy`:
+**`Plan: 0 to add, 0 to change, 65 to destroy`** -- exactly the 65
+expected. `terraform apply "tfdestroy"` (the saved plan only, no
+recalculation): **`Apply complete! Resources: 0 added, 0 changed, 65
+destroyed`**. The plan deleted (`rm tfdestroy`) afterward. Region-by-region
+confirmation (a real AWS API call, not just `terraform
+state`, using the `MOCKOPIN_AWS_PROFILE` profile Terraform itself was
+already using -- discovered during this investigation that the `aws`
+CLI/`boto3` without that explicit profile find no credential at all):
 **sa-east-1, us-east-1, ap-northeast-1, ca-central-1, eu-north-1,
-ap-northeast-2, ap-southeast-1 -- as 7, 0 instâncias cada uma.**
-`terraform state list` também confirma 0 recursos. Frota destruída e
-verificada em dois níveis independentes.
+ap-northeast-2, ap-southeast-1 -- all 7, 0 instances each.**
+`terraform state list` also confirms 0 resources. Fleet destroyed and
+verified at two independent levels.
 
-**Item 2 -- decomposição do overhead por execução (offline, dados do
-piloto 3):**
-- Overhead real medido (gap entre o fim de uma execução e o início da
-  próxima, excluindo o próprio T_fluxo do fluxo): média 53,7s,
-  mediana 49,4s, **p90 = 80,0s** -- bate com a estimativa de "~76s"
-  do Luciano (ele está olhando a cauda superior, não a média).
-- **Achado real, concreto**: o `ping -c 10` de referência (cliente ->
-  servidor) dentro de cada execução **está sempre bloqueado (ICMP
-  bloqueado pelo security group, confirmado nesta mesma sessão) e
-  sempre espera os ~9,3s completos sem nunca ter sucesso** --
-  `rtt_avg_ms` já vem `null` em todo lugar por causa disso (acha
-  do na Decision 101). Remover ou encurtar este ping não perde
-  NENHUMA informação (já não tinha nenhuma) e não toca no que é
-  medido.
-- Enumerados os ~19 SSH + 2 SCP por execução (tcpdump start/stop x2
-  lados, verify, sampler de CPU start/stop/fetch x2, chrony x2, iface
-  fetch x2, log do gateway, scp do pcap x2, mais o próprio ping) --
-  cada round-trip SSH/SCP real custa em média ~2-3,5s; o resto do
-  overhead (fora o ping) vem daí, não de um único vilão.
-- **(a) Execuções extras de aquecimento sem pcap/coletores** (só o
-  JSON do fluxo): é exatamente o que `run_extra_warmups()` já faz
-  (Decision 103) -- não toca no que é medido, porque aquecimento
-  nunca entrou na estatística.
-- **(b) Esperas fixas só de orquestração**: o `ping -c 10` bloqueado é
-  o caso claro -- não toca no que é medido (a métrica que ele
-  alimentaria já vinha nula). Os polls de 60s de orçamento (Decision
-  100/103) já saem do caminho em modo campanha, não somam aqui.
-- **(c) Rodar as 3 instalações em paralelo** (servidores e clientes
-  independentes, nunca dois clientes diferentes contra o mesmo
-  servidor ao mesmo tempo): **seguro e não toca no que é medido** --
-  cada instalação já tem seu próprio servidor dedicado (confirmado no
-  inventário), e o lock `_SERVER_LOCKS[installation]` já impede duas
-  execuções simultâneas NO MESMO servidor; paralelismo por instalação
-  nunca viola essa regra, porque cada instalação é um servidor
-  diferente.
-- **Projeções (janela única, K=5, sem pausas, meta <=10h de frota)**:
+**Item 2 -- per-execution overhead decomposition (offline, pilot 3
+data):**
+- Real overhead measured (the gap between one execution's end and the
+  next one's start, excluding the flow's own T_fluxo): mean 53,7s,
+  median 49,4s, **p90 = 80,0s** -- matching Luciano's "~76s"
+  estimate (he's looking at the upper tail, not the mean).
+- **A real, concrete finding**: the reference `ping -c 10` (client ->
+  server) inside every execution **is always blocked (ICMP blocked by
+  the security group, confirmed this same session) and always waits
+  the full ~9,3s with no success, ever** --
+  `rtt_avg_ms` already comes out `null` everywhere because of this
+  (found in Decision 101). Removing or shortening this ping loses
+  NO information (it already had none) and doesn't touch what is
+  measured.
+- Enumerated the ~19 SSH + 2 SCP calls per execution (tcpdump start/stop x2
+  sides, verify, CPU sampler start/stop/fetch x2, chrony x2, iface
+  fetch x2, gateway log, pcap scp x2, plus the ping itself) --
+  each real SSH/SCP round trip costs ~2-3,5s on average; the rest of
+  the overhead (besides the ping) comes from there, not from a single
+  culprit.
+- **(a) Extra warm-up executions with no pcap/collectors** (just the
+  flow's JSON): this is exactly what `run_extra_warmups()` already
+  does (Decision 103) -- doesn't touch what is measured, because
+  warm-up never entered the statistics.
+- **(b) Fixed, orchestration-only waits**: the blocked `ping -c 10` is
+  the clear case -- doesn't touch what is measured (the metric it would
+  feed was already null). The 60s budget polls (Decision
+  100/103) already drop out of the path in campaign mode, so they don't add here.
+- **(c) Running the 3 installations in parallel** (independent servers
+  and clients, never two different clients against the same
+  server at the same time): **safe and doesn't touch what is
+  measured** -- each installation already has its own dedicated server
+  (confirmed in the inventory), and the `_SERVER_LOCKS[installation]`
+  lock already prevents two simultaneous executions on the SAME
+  server; parallelism across installations never violates this rule,
+  because each installation is a different server.
+- **Projections (single window, K=5, no pauses, target <=10h of fleet
+  time)**:
 
-| combinação | duração/janela | frota total (3 janelas+2 gaps) | custo adicional | acumulado | cabe em 10h? |
+| combination | duration/window | total fleet time (3 windows+2 gaps) | additional cost | accumulated | fits in 10h? |
 |---|---|---|---|---|---|
-| K=5 sequencial, sem outras mudanças | 7,00h | 22,01h | +US$28,75 | US$89,28 | NÃO |
-| + remover o ping bloqueado | 6,38h | 20,14h | +US$26,32 | US$86,85 | NÃO |
-| + paralelizar as 3 instalações | 3,19h | 10,57h | +US$13,81 | US$74,34 | quase (10,57h) |
+| K=5 sequential, no other changes | 7,00h | 22,01h | +US$28,75 | US$89,28 | NO |
+| + remove the blocked ping | 6,38h | 20,14h | +US$26,32 | US$86,85 | NO |
+| + parallelize the 3 installations | 3,19h | 10,57h | +US$13,81 | US$74,34 | almost (10,57h) |
 
-  Combinando as 3 reduções chega muito perto da meta de 10h (10,57h) --
-  um corte adicional pequeno (ex. unificar chrony+iface num único SSH,
-  ou aceitar K=4 em vez de K=5, que já cobre 95,8% das células) fecharia
-  a diferença. **Nada disto foi implementado** -- só a análise, como
-  pedido.
+  Combining all 3 reductions gets very close to the 10h target
+  (10,57h) -- one more small cut (e.g. merging chrony+iface into a
+  single SSH call, or accepting K=4 instead of K=5, which already covers
+  95,8% of cells) would close the gap. **None of this was implemented**
+  -- only the analysis, as requested.
 
-**Item 3 -- os 2 FALHAs do go/no-go, fechados offline com dados do
-piloto 3:**
-- `report_data_v8.json` + tabelas automáticas: novo
-  `generate_report_data.py`, chamado automaticamente de dentro do
-  próprio `consolidate_v8.py` (não é mais um passo manual separado) --
-  ensaiado do zero contra os dados reais do piloto 3: `consolidate_v8.py`
-  rodou e produziu os 4 arquivos (`consolidated.json`,
-  `CONSOLIDATED_REPORT.md`, `report_data_v8.json` com 24 linhas,
-  `REPORT_TABLES.md`) numa única chamada. **FALHA fechada, evidência:
-  ensaio completo rodou sem erro.**
-- Scripts de captura de artefatos reais: novo
-  `capture_real_artifacts.sh`, por perfil (certificado do cliente, log
-  de handshake do gateway) -- mesmo papel de `thesis/results/v7/
-  artifacts/`. **Preparado, NÃO executado** (frota já destruída pelo
-  item 1 desta mesma decisão -- não existe onde rodar agora; pronto
-  para a próxima campanha, depois das janelas oficiais e antes do
-  destroy final, como pedido). Decomposição por participante: já
-  fechada antes (`bytes_by_participant()` já roda dentro da
-  consolidação normal).
+**Item 3 -- the go/no-go's 2 FAILs, closed offline with pilot 3
+data:**
+- `report_data_v8.json` + automatic tables: new
+  `generate_report_data.py`, called automatically from inside
+  `consolidate_v8.py` itself (no longer a separate manual step) --
+  dry-run tested from scratch against pilot 3's real data: `consolidate_v8.py`
+  ran and produced the 4 files (`consolidated.json`,
+  `CONSOLIDATED_REPORT.md`, `report_data_v8.json` with 24 rows,
+  `REPORT_TABLES.md`) in a single call. **FAIL closed, evidence:
+  the full dry run ran with no error.**
+- Real-artifact capture scripts: new
+  `capture_real_artifacts.sh`, per profile (the client certificate, the
+  gateway's handshake log) -- the same role as `thesis/results/v7/
+  artifacts/`. **Prepared, NOT executed** (the fleet was already
+  destroyed by item 1 of this same decision -- there's nowhere to run
+  it right now; ready for the next campaign, after the official windows
+  and before the final destroy, as requested). Per-participant
+  decomposition: already closed before
+  (`bytes_by_participant()` already runs inside the normal
+  consolidation).
 
-**Item 4 -- roteiro de resubida, preparado:**
-1. `terraform apply` de plano salvo (`terraform plan -out=tfup` +
-   revisão + `terraform apply tfup`) -- ~10-15min para os 65 recursos
-   em 7 regiões (mesma ordem de grandeza do apply original).
-2. `deliver_images.sh` + `deliver_source.sh` -- agora a partir da
-   árvore corrigida em LF (Decision 102); **conferência de sha256 dos
-   67 arquivos entregues contra `git show HEAD:<arquivo>`** em pelo
-   menos uma instalação (mesmo método do item 4 da Decision 103,
-   repetido depois da entrega para confirmar 0 divergências, não só
-   antes) -- ~15-20min (inclui a cópia dos tarballs de imagem Docker,
-   que são os maiores arquivos).
-3. Pré-flight TCP (conectividade cliente->gateway na porta 443, por
-   instalação) -- ~5min; não existe como script dedicado ainda
-   (foi feito manualmente na sessão original, não salvo) -- a
-   verificação em si é simples (uma tentativa de conexão TCP por
-   cliente), proponho escrevê-la como script antes da próxima
-   resubida, não durante.
-4. Validação curta de 24 execuções (`run_validation_stage()`, já
-   existente, 1 execução/perfil x 8 cenários) -- ~10-15min, inclui as
-   trocas de perfil.
-- **Duração estimada total: ~40-55min (~1h).**
-- **Custo estimado: ~US$1,31** (1h x tarifa combinada de frota já
-  usada, ~US$1,31/h) -- desprezível frente ao teto de US$80.
+**Item 4 -- re-launch roadmap, prepared:**
+1. `terraform apply` of a saved plan (`terraform plan -out=tfup` +
+   review + `terraform apply tfup`) -- ~10-15min for the 65 resources
+   across 7 regions (the same order of magnitude as the original apply).
+2. `deliver_images.sh` + `deliver_source.sh` -- now from the
+   tree fixed to LF (Decision 102); **sha256 check of the 67
+   delivered files against `git show HEAD:<file>`** on at least one
+   installation (the same method as Decision 103's item 4,
+   repeated after delivery to confirm 0 divergences, not just
+   before) -- ~15-20min (includes copying the Docker image tarballs,
+   which are the largest files).
+3. TCP pre-flight (client->gateway connectivity on port 443, per
+   installation) -- ~5min; doesn't exist as a dedicated script yet
+   (it was done manually in the original session, not saved) -- the
+   check itself is simple (one TCP connection attempt per
+   client), I propose writing it as a script before the next
+   re-launch, not during.
+4. Short 24-execution validation (`run_validation_stage()`, already
+   existing, 1 execution/profile x 8 scenarios) -- ~10-15min, including the
+   profile switches.
+- **Estimated total duration: ~40-55min (~1h).**
+- **Estimated cost: ~US$1,31** (1h x the already-used blended fleet
+  rate, ~US$1,31/h) -- negligible against the US$80 ceiling.
 
-## Decision 105 (2026-10-30) -- as 3 reduções aprovadas, implementadas em
-## modo campanha (nada subido ainda); validação paralela com critério de
-## aceite e fallback automático; custo incremental separado do
-## acumulado; checagem da v7 sobre load_signing_key
+## Decision 105 (2026-10-30) -- the 3 reductions approved, implemented in
+## campaign mode (nothing launched yet); parallel validation with an
+## acceptance criterion and automatic fallback; incremental cost kept
+## separate from the accumulated one; v7 check regarding load_signing_key
 
-**Aprovação do Luciano, com ele presente**: (a) aquecimentos extras
-sem pcap/coletores, (b) remoção do ping de referência, (c) as 3
-instalações em paralelo. Implementadas em `campaign_run.py`, **nada
-executado** (frota ainda destruída, "não suba sem meu comando").
+**Luciano's approval, with him present**: (a) extra warm-ups
+with no pcap/collectors, (b) removing the reference ping, (c) the 3
+installations in parallel. Implemented in `campaign_run.py`, **nothing
+executed** (the fleet still destroyed, "don't launch without my
+go-ahead").
 
-**Item 1 -- as 3 implementadas, com o dado que justifica cada uma:**
-- (a) já existia desde a Decision 103 (`run_extra_warmups()`) -- só
-  confirmado aqui que já satisfaz a aprovação, nenhum código novo.
-- (b) `run_one_execution()` não chama mais `ping -c 10` nem grava
-  `{label}_ping.json` (SSHExecutor e LocalExecutor). Dado que
-  justifica: achado da Decision 104, ICMP sempre bloqueado, `ping -c
-  10` sempre esperava os ~9,3s completos sem nunca retornar RTT real
-  (`rtt_avg_ms` já vinha `null` por isso em 100% das execuções reais).
-  Novo `preflight_tcp.py` (porta 443, uma vez por cliente, a partir do
-  PRÓPRIO cliente via SSH -- não de control, que não tem o mesmo
-  caminho de rede) substitui a função de "confirmar conectividade" que
-  o ping também cumpria, sem o custo por execução.
-- (c) nova flag `CAMPAIGN_PARALLEL_INSTALLATIONS` (padrão desligado) --
-  `threading.Thread` por instalação, tanto no laço de janelas do
-  `main()` quanto em `run_validation_stage()`. Dado que justifica:
-  cada instalação tem servidor próprio e dedicado (confirmado no
-  `inventory.json` real), e `_SERVER_LOCKS[installation]` (já existia,
-  `threading.Lock` real) já impede duas execuções simultâneas no MESMO
-  servidor -- paralelizar por instalação não pode violar essa regra
-  por construção.
-- `ANALYSIS_PLAN.md` atualizado com as 3, antes de qualquer coleta
-  oficial (seção "Reduções de overhead aprovadas"). Testado a seco:
-  (1) nenhuma referência residual a `ping_output`/escrita de
-  `_ping.json`; (2) 3 threads de 0,3s cada rodaram em 0,30s total, não
-  0,9s -- paralelismo confirmado funcionando; (3)/(4)
-  `validation_stage_health()` aceita quando as 24 células sintéticas
-  caem dentro do IC95% e rejeita quando uma cai fora -- os 2 casos
-  testados.
-- Tag `v8-prereg-2` criada (mantendo `v8-prereg`), apontando para este
+**Item 1 -- all 3 implemented, with the data justifying each one:**
+- (a) already existed since Decision 103 (`run_extra_warmups()`) -- just
+  confirmed here that it already satisfies the approval, no new code.
+- (b) `run_one_execution()` no longer calls `ping -c 10` nor writes
+  `{label}_ping.json` (SSHExecutor and LocalExecutor). Data that
+  justifies it: Decision 104's finding, ICMP always blocked, `ping -c
+  10` always waited the full ~9,3s without ever returning a real RTT
+  (`rtt_avg_ms` already came out `null` because of this in 100% of real
+  executions). A new `preflight_tcp.py` (port 443, once per client, from
+  the client ITSELF via SSH -- not from control, which doesn't have the
+  same network path) replaces the "confirm connectivity" role the
+  ping also served, without the per-execution cost.
+- (c) a new `CAMPAIGN_PARALLEL_INSTALLATIONS` flag (off by default) --
+  a `threading.Thread` per installation, both in `main()`'s window
+  loop and in `run_validation_stage()`. Data that justifies it:
+  each installation has its own dedicated server (confirmed in the
+  real `inventory.json`), and `_SERVER_LOCKS[installation]` (already
+  existed, a real `threading.Lock`) already prevents two simultaneous
+  executions on the SAME server -- parallelizing by installation
+  cannot violate this rule by construction.
+- `ANALYSIS_PLAN.md` updated with all 3, before any official
+  collection (the "Approved overhead reductions" section). Tested dry: (1)
+  no residual reference to `ping_output`/writing
+  `_ping.json`; (2) 3 threads of 0,3s each ran in 0,30s total, not
+  0,9s -- parallelism confirmed working; (3)/(4)
+  `validation_stage_health()` accepts when the 24 synthetic cells
+  fall within the 95% CI and rejects when one falls outside -- both
+  cases tested.
+- The `v8-prereg-2` tag created (keeping `v8-prereg`), pointing at this
   commit.
 
-**Item 2 -- validação paralela com critério de aceite e fallback
-automático:** `run_validation_stage(..., parallel=True)` roda as 3
-instalações em threads; ao final, `validation_stage_health()` compara
-a amostra única de cada uma das 24 células contra
-`PILOT3_T_FLUXO_CI95` (hardcoded a partir do `consolidated.json` real
-do piloto 3 -- comparação deliberadamente estrita, um IC de mediana de
-10 amostras é mais estreito que o espalhamento natural de uma única
-amostra nova, escolha explícita do Luciano como teste de fumaça para
-viés introduzido pelo paralelismo, não um teste de hipótese formal).
-Zero erros E todas as 24 dentro do IC -> `main()` mantém
-`CAMPAIGN_PARALLEL_INSTALLATIONS=True` para as janelas reais. Qualquer
-outro resultado -> `main()` desarma a flag automaticamente (sem
-intervenção manual) e imprime a projeção recalculada para modo
-sequencial (os números da própria Decision 104: ~6,38h/janela,
-~20,14h de frota, +US$26,32, em vez de ~3,19h/janela, ~10,57h,
-+US$13,81 do modo paralelo).
+**Item 2 -- parallel validation with an acceptance criterion and
+automatic fallback:** `run_validation_stage(..., parallel=True)` runs
+the 3 installations in threads; at the end, `validation_stage_health()`
+compares each of the 24 cells' single sample against
+`PILOT3_T_FLUXO_CI95` (hardcoded from pilot 3's real
+`consolidated.json` -- a deliberately strict comparison, since a
+10-sample median's CI is narrower than a single new sample's natural
+spread, Luciano's explicit choice as a smoke test for bias introduced
+by parallelism, not a formal hypothesis test).
+Zero errors AND all 24 within the CI -> `main()` keeps
+`CAMPAIGN_PARALLEL_INSTALLATIONS=True` for the real windows. Any
+other result -> `main()` disarms the flag automatically (no
+manual intervention) and prints the recalculated projection for
+sequential mode (Decision 104's own numbers: ~6,38h/window,
+~20,14h of fleet time, +US$26,32, instead of parallel mode's
+~3,19h/window, ~10,57h, +US$13,81).
 
-**Item 3 -- custo incremental, separado do acumulado, com a base
-explicitada:**
-- **Base dos US$86-93 anteriores (Decision 104)**: projeção
-  SEQUENCIAL (sem paralelismo, sem remover o ping) -- duração líquida
-  do piloto 3 (334,3min, K=1 já incluso) + overhead do K=5 extra
-  (72-144min) x 3 janelas + 2 intervalos de 30min, à tarifa combinada
-  de frota ~US$1,31/h, somado ao custo já acumulado (~US$60,53,
-  46,33h desde o apply original).
-- **Custo incremental agora (depois das 3 reduções aprovadas)**:
-  resubida (~1h) + validação paralela (~10min, mais rápida que antes
-  por não ter mais o ping nem rodar sequencial) + 3 janelas oficiais
-  com K=5/sem ping/paralelas (~10,57h, projeção da Decision 104) +
-  captura de artefatos (~15min) = **~11,99h de frota**.
-  **Custo incremental: ~US$15,66 (sem margem) / ~US$17,23 (+10%).**
-- **Acumulado total**: US$60,53 + incremental = **~US$76,19 (sem
-  margem) / ~US$77,76 (+10%)** -- **cruza a linha de parar-e-perguntar
-  de US$72** (ambos os cenários), mas fica dentro do teto de US$80.
-  Reportado explicitamente, como a regra pede, mesmo sem pausa
-  automática.
+**Item 3 -- incremental cost, kept separate from the accumulated one,
+with its basis made explicit:**
+- **Basis of the earlier US$86-93 (Decision 104)**: a SEQUENTIAL
+  projection (no parallelism, ping not removed) -- pilot 3's net
+  duration (334,3min, K=1 already included) + the extra K=5's overhead
+  (72-144min) x 3 windows + 2 gaps of 30min, at the blended fleet
+  rate ~US$1,31/h, added to the already-accumulated cost (~US$60,53,
+  46,33h since the original apply).
+- **Incremental cost now (after the 3 approved reductions)**:
+  re-launch (~1h) + parallel validation (~10min, faster than before
+  since it no longer has the ping nor runs sequentially) + 3 official
+  windows with K=5/no ping/parallel (~10,57h, Decision 104's
+  projection) + artifact capture (~15min) = **~11,99h of fleet
+  time.**
+  **Incremental cost: ~US$15,66 (no margin) / ~US$17,23 (+10%).**
+- **Total accumulated**: US$60,53 + incremental = **~US$76,19 (no
+  margin) / ~US$77,76 (+10%)** -- **crosses the US$72
+  stop-and-ask line** (both scenarios), but stays within the US$80
+  ceiling. Reported explicitly, as the rule requires, even with no
+  automatic pause.
 
-**Item 4 -- checagem da v7 sobre `load_signing_key` em Classic e
-Hybrid (só relatório, nenhuma remedição):** a própria docstring da
-Decision 99 (`opin_flow.py`, `load_client_signing_key()`) já responde
-isso diretamente, não é mais inferência: "for classic and hybrid
+**Item 4 -- v7 check regarding `load_signing_key` in Classic and
+Hybrid (report only, no remeasurement):** Decision 99's own docstring
+(`opin_flow.py`, `load_client_signing_key()`) already answers this
+directly, it's no longer inference: "for classic and hybrid
 (never for pqc, whose signing_key stays a raw dict) -- the measured
 cause of ~500ms of classic/hybrid's own T_fluxo that PQC never paid,
 confirmed call-for-call against the diagnostic's own real
-setup_timings (median classic/hybrid ~252ms x2, pqc ~0ms x2)". Como a
-v7 usa o MESMO `opin_flow.py`/`load_client_signing_key()` (código
-compartilhado entre versões, não uma cópia por versão -- confirmado
-antes) e o cache da Decision 99 só existe desde esta sessão (muito
-depois da v7 ter sido medida), **é de alta confiança que a v7 pagou
-esse mesmo custo (~252ms x2 = ~500ms) em Classic e Hybrid, e não em
-PQC** -- mesmo mecanismo, mesmo código, sem variação de dados entre
-versões que explicasse diferença. Isto NÃO é uma remedição direta da
-v7 (nenhum teste A/B cache-vs-sem-cache foi rodado contra a
-infraestrutura real da v7 na época) -- é confiança alta por mecanismo
-confirmado, não medição direta repetida. v7 permanece oficial, como
-está, sem mudança.
+setup_timings (median classic/hybrid ~252ms x2, pqc ~0ms x2)". Since v7
+uses the SAME `opin_flow.py`/`load_client_signing_key()` (code shared
+across versions, not a per-version copy -- already confirmed) and
+Decision 99's cache has only existed since this session (long
+after v7 was measured), **it is highly plausible that v7 paid this same
+cost (~252ms x2 = ~500ms) in Classic and Hybrid, and not in
+PQC** -- the same mechanism, the same code, with no data variation
+between versions that would explain a difference. This is NOT a direct
+remeasurement of v7 (no cache-vs-no-cache A/B test was run against
+v7's real infrastructure at the time) -- it is high confidence from a
+confirmed mechanism, not a repeated direct measurement. v7 remains
+official, as it stands, unchanged.
 
-## Decision 107 (2026-10-30) -- análise offline dos 16 desvios da validação
-## paralela; critério de autodecisão aplicado: NÃO disparar a janela 1
+## Decision 107 (2026-10-30) -- offline analysis of the parallel validation's 16 deviations; self-decision criterion applied: do NOT trigger window 1
 
-**Item 1a -- N por célula e crítica do critério:** piloto 3 tem N=10
-por célula (não 30 -- 30 seria o total ao fim de 3 janelas, 10/janela;
-piloto 3 é só uma janela). Comparar 1 execução nova contra o IC95% da
-MEDIANA de 10 é rigoroso demais, como já documentado no próprio
-código (`PILOT3_T_FLUXO_CI95`'s docstring). Reavaliado com o
-percentil 5-95 das 10 amostras BRUTAS do piloto 3 (banda real de
-dispersão, não IC da mediana): **8/24 (33%) ficam fora, não 16/24
-(67%)** -- menos da metade do que o critério estrito indicava, mas
-ainda uma fração real, não desprezível.
+**Item 1a -- N per cell and a critique of the criterion:** pilot 3 has
+N=10 per cell (not 30 -- 30 would be the total after 3 windows, 10/
+window; pilot 3 is only one window). Comparing 1 new execution against
+the 95% CI of a MEDIAN of 10 is too strict, as already documented in
+the code itself (`PILOT3_T_FLUXO_CI95`'s docstring). Reassessed using
+the 5-95 percentile of pilot 3's RAW 10 samples (a real spread
+band, not the median's CI): **8/24 (33%) fall outside, not 16/24
+(67%)** -- less than half of what the strict criterion indicated, but
+still a real, non-negligible fraction.
 
-**Item 1b -- magnitude/sinal e razões entre perfis:** desvio
-mediano +0,66%, médio +0,67% -- pequeno, consistente com uma
-diferença real (mas pequena) de rede entre esta subida e a do piloto
-3 (instâncias/IPs novos). 16/24 células mais lentas, 8/24 mais
-rápidas -- sem sinal uniforme forte, mas levemente concentrado em
-"mais lento". **Razão Hybrid/Classic e PQC/Classic, válido x
-piloto 3, por instalação/cenário**: PQC/Classic sempre dentro de
-±2,7% -- ok. **Hybrid/Classic excede 5% em 2 de 8 combinações**:
-us-east-1/L14 (+5,95%) e sa-east-1/L0 (+5,01%, na borda) -- Hybrid
-especificamente rodou um pouco mais lento, relativo a Classic, do que
-no piloto 3, nessas 2 rotas.
+**Item 1b -- magnitude/sign and cross-profile ratios:** median
+deviation +0,66%, mean +0,67% -- small, consistent with a real
+(but small) network difference between this launch and pilot
+3's (new instances/IPs). 16/24 cells slower, 8/24
+faster -- no strong uniform signal, but slightly concentrated in
+"slower". **Hybrid/Classic and PQC/Classic ratio, checked against
+pilot 3, per installation/scenario**: PQC/Classic always within
+±2,7% -- ok. **Hybrid/Classic exceeds 5% in 2 of 8 combinations**:
+us-east-1/L14 (+5,95%) and sa-east-1/L0 (+5,01%, borderline) -- Hybrid
+specifically ran a bit slower, relative to Classic, than it did
+in pilot 3, on these 2 routes.
 
-**Item 1c -- checagens de artefato (todas rodadas de verdade, nenhuma
-assumida):**
-- Signer persistente, sem fallback: **PASSA** -- os únicos valores de
-  `dispatch` vistos nas 24 execuções são `persistent_service`,
-  `in_process_pyjwt` e a combinação dos dois; nenhum indício de
-  fallback para `docker run` por chamada.
-- Cache da chave RSA ativo: **PASSA** -- `load_signing_key` não
-  aparece em nenhum `setup_timings` das 24 execuções (o pré-warm da
-  Decision 99 roda ANTES do timer, por desenho -- ausência aqui é o
-  resultado esperado quando o cache funciona, não evidência de
-  problema).
-- `code_hash`: difere do piloto 3 (esperado -- código genuinamente
-  mudou, Decisions 100-106), mas **consistente internamente** (um só
-  valor nas 24 execuções, confirmando entrega sem mistura de
-  versões).
-- Digest da imagem do gateway: **igual ao piloto 3**
-  (`sha256:0839...341901`), confirmado nos 3 servidores reais via
+**Item 1c -- artifact checks (all genuinely run, none assumed):**
+- Persistent signer, no fallback: **PASS** -- the only `dispatch`
+  values seen across the 24 executions are `persistent_service`,
+  `in_process_pyjwt`, and the combination of the two; no sign of a
+  fallback to a per-call `docker run`.
+- RSA key cache active: **PASS** -- `load_signing_key` doesn't
+  appear in any of the 24 executions' `setup_timings` (Decision 99's
+  pre-warm runs BEFORE the timer, by design -- its absence here is
+  the expected result when the cache works, not evidence of a
+  problem).
+- `code_hash`: differs from pilot 3 (expected -- the code genuinely
+  changed, Decisions 100-106), but **internally consistent** (a single
+  value across the 24 executions, confirming delivery with no mixing
+  of versions).
+- Gateway image digest: **same as pilot 3**
+  (`sha256:0839...341901`), confirmed on the 3 real servers via
   `docker inspect`.
-- Ordem dos perfis / quadrado latino: `build_latin_square_profile_
-  orders(seed=0)` produz exatamente as 3 linhas que o Luciano
-  especificou (janela 1 = classic/hybrid/pqc, janela 2 = hybrid/pqc/
-  classic, janela 3 = pqc/classic/hybrid) -- confirmado rodando a
-  função de verdade. `seed=0` será usado se a janela 1 rodar.
+- Profile order / Latin square: `build_latin_square_profile_
+  orders(seed=0)` produces exactly the 3 rows Luciano
+  specified (window 1 = classic/hybrid/pqc, window 2 = hybrid/pqc/
+  classic, window 3 = pqc/classic/hybrid) -- confirmed by genuinely
+  running the function. `seed=0` will be used if window 1 runs.
 
-**Item 2 -- critério de autodecisão, aplicado:** dos 4 critérios
-exigidos (sem sinal de artefato; desvio/razões dentro de 5%; 0 erros;
-steal <5%), **3 passam e 1 falha**: a razão Hybrid/Classic excede 5%
-em 2 das 8 rotas (us-east-1/L14 +5,95%, claramente acima; sa-east-1/
-L0 +5,01%, na borda). Como o próprio critério exige que TODOS passem,
-e um deles não passa, **a decisão correta é parar, não disparar**,
-exatamente como instruído ("se algum falhar, PARE e relate sem
-disparar").
+**Item 2 -- self-decision criterion, applied:** of the 4 required
+criteria (no artifact signal; deviations/ratios within 5%; 0 errors;
+steal <5%), **3 pass and 1 fails**: the Hybrid/Classic ratio exceeds 5%
+on 2 of the 8 routes (us-east-1/L14 +5,95%, clearly above; sa-east-1/
+L0 +5,01%, borderline). Since the criterion itself requires ALL of
+them to pass, and one does not, **the correct decision is to stop, not
+trigger**, exactly as instructed ("if any fails, STOP and report
+without triggering").
 
-**VEREDITO: NÃO disparada a janela 1.** Nenhum sinal de artefato real
-encontrado (todas as checagens de (c) limpas ou explicadas) -- a
-causa mais provável do desvio é variação real, pequena, de rede entre
-esta subida da frota e a do piloto 3, concentrada na razão Hybrid/
-Classic especificamente, não um problema de medição. Reportado como
-achado, sem decidir sozinho além do que o critério permite.
+**VERDICT: window 1 NOT triggered.** No sign of a real artifact
+found (all of (c)'s checks clean or explained) -- the most likely
+cause of the deviation is real, small network variation between this
+fleet launch and pilot 3's, concentrated specifically in the Hybrid/
+Classic ratio, not a measurement problem. Reported as a finding, with
+no decision made beyond what the criterion allows.
 
-**Itens 3 e 4**: as 24 execuções já estão em `_campaign-control/
-validation_stage/` (nunca em `runs/` real) -- já satisfaz o pedido,
-nenhuma ação adicional. Item 4 (fim da janela 1: pull/commit/scan/
-consolidate+drift) não se aplica -- nenhuma janela rodou.
+**Items 3 and 4**: the 24 executions are already in `_campaign-control/
+validation_stage/` (never in the real `runs/`) -- already satisfies
+the request, no further action. Item 4 (end of window 1: pull/commit/
+scan/consolidate+drift) doesn't apply -- no window ran.
 
-## Decision 108 (2026-10-30) -- correção do critério de 5%: rígido
-## demais para N=1 contra piloto de N=10; autorizada a campanha das 3
-## janelas oficiais, com travas automáticas novas
+## Decision 108 (2026-10-30) -- fixing the 5% criterion: too strict for
+## N=1 against a pilot of N=10; the 3-window official campaign
+## authorized, with new automatic locks
 
-**Correção do critério (pedido explícito do Luciano, com ele
-presente):** o limiar de 5% na razão Hybrid/Classic (Decision 107)
-era rígido demais para comparar UMA execução nova contra a razão de
-medianas de N=10 do piloto 3 -- o mesmo problema estrutural já
-documentado para o IC95% da mediana (uma amostra única tem dispersão
-natural maior que qualquer estatística agregada de 10). As outras 3
-de 4 verificações (sem sinal de artefato, 0 erros, steal<5%) já
-tinham passado; com a correção do 4º critério, as checagens no
-conjunto são aceitas. **Autorizadas as 3 janelas oficiais.**
+**Fixing the criterion (Luciano's explicit request, with him
+present):** the 5% threshold on the Hybrid/Classic ratio (Decision 107)
+was too strict for comparing ONE new execution against pilot 3's
+N=10 median ratio -- the same structural problem already documented
+for the median's 95% CI (a single sample has more natural spread than
+any aggregated statistic from 10). The other 3 of 4 checks (no artifact
+signal, 0 errors, steal<5%) had already passed; with the 4th
+criterion fixed, the checks as a whole are accepted. **The 3 official
+windows are authorized.**
 
-Travas automáticas NOVAS, implementadas antes de disparar (não
-existiam no código até este registro): `check_artifact_health()` --
-checa, a cada bloco (mesmo ponto de `check_time_budget()`/`check_cost_
-budget()`, não só entre janelas): (1) `CODE_HASH` do processo contra
-`REGISTERED_CODE_HASH` (travado no valor confirmado pela validação
-desta mesma subida, Decision 107 -- consistência DENTRO desta
-campanha, não contra o piloto 3, que teve código diferente por
-desenho); (2) digest da imagem do gateway nos 3 servidores, via SSH,
-contra `REGISTERED_IMAGE_DIGEST` (o mesmo confirmado na Decision 107);
-(3) sinal de fallback do signer persistente (dispatch != persistent_
-service/in_process_pyjwt) na última execução real escrita; (4) sinal
-de cache RSA inativo (`load_signing_key` aparecendo dentro de
-`setup_timings` de uma execução real, o que só acontece se o pré-warm
-falhar). Qualquer uma falhando -> `RuntimeError`, mesmo tratamento de
-"saída não-zero, sem destruir nada" que o resto do orquestrador já
-usa (A.4) -- nunca uma pausa esperando liberação, como pedido.
-`COST_HARD_STOP_USD=40` para esta subida especificamente (substitui o
-teto de US$80 só para esta campanha -- "US$40 acumulados desde esta
-subida", um número menor e mais apertado que o teto geral).
+NEW automatic locks, implemented before triggering (they didn't
+exist in the code before this entry): `check_artifact_health()` --
+checks, at every block (the same call site as `check_time_budget()`/`check_cost_
+budget()`, not just between windows): (1) the process's `CODE_HASH`
+against `REGISTERED_CODE_HASH` (locked to the value confirmed by this
+same launch's validation, Decision 107 -- consistency WITHIN this
+campaign, not against pilot 3, which by design had different code);
+(2) the gateway image digest on the 3 servers, via SSH,
+against `REGISTERED_IMAGE_DIGEST` (the same one confirmed in Decision 107);
+(3) a fallback signal from the persistent signer (dispatch != persistent_
+service/in_process_pyjwt) in the last real execution written; (4) a
+signal that the RSA cache is inactive (`load_signing_key` appearing inside
+a real execution's `setup_timings`, which only happens if the pre-warm
+fails). Any one failing -> `RuntimeError`, the same "non-zero exit,
+destroy nothing" handling the rest of the orchestrator already
+uses (A.4) -- never a pause waiting for release, as requested.
+`COST_HARD_STOP_USD=40` for this launch specifically (replacing the
+US$80 ceiling just for this campaign -- "US$40 accumulated since this
+launch," a smaller, tighter number than the general ceiling).
 
-## Decision 109 (2026-10-31) -- confirmado: os pcaps da janela 1 capturam
-## o handshake completo, RTT derivável (item 1, não bloqueou a janela 2)
+## Decision 109 (2026-10-31) -- confirmed: window 1's pcaps capture the complete handshake, RTT derivable (item 1, did not block window 2)
 
-**Pergunta:** os pcaps contêm SYN e SYN-ACK das 6 conexões mTLS por
-execução, com RTT derivável? Checado com um leitor pcap mínimo em
-Python puro (sem scapy/tshark/tcpdump disponíveis localmente) --
-parseia Ethernet/SLL -> IP -> TCP, isola SYN e SYN-ACK por par de
-endpoints.
+**Question:** do the pcaps contain the SYN and SYN-ACK of the 6 mTLS
+connections per execution, with a derivable RTT? Checked with a minimal
+pure-Python pcap reader (no scapy/tshark/tcpdump available locally) --
+parses Ethernet/SLL -> IP -> TCP, isolating SYN and SYN-ACK per
+endpoint pair.
 
-**Resultado: SIM**, confirmado em 3 arquivos reais e independentes:
-- sa-east-1/L0 (pqc, colocado): 6/6 conexões com SYN+SYN-ACK, RTT
+**Result: YES**, confirmed in 3 real, independent files:
+- sa-east-1/L0 (pqc, colocated): 6/6 connections with SYN+SYN-ACK, RTT
   0,14-0,40ms.
-- sa-east-1/L325 (pqc, maior RTT do conjunto): 6/6, RTT 328-343ms.
+- sa-east-1/L325 (pqc, the set's highest RTT): 6/6, RTT 328-343ms.
 - us-east-1/L14 (classic): 6/6, RTT 14,4-15,2ms.
 
-Nenhuma correção necessária -- a janela 2 seguiu sem atraso, como
-instruído ("se SIM, não toque em nada").
+No fix needed -- window 2 proceeded without delay, as
+instructed ("if YES, don't touch anything").
 
-## Decision 110 (2026-10-31) -- RTT real dos pcaps, perda corrigida,
-## decomposição do residual, modelo T_fluxo=T0+k.RTT, delta vs. Classic,
-## ordem entre perfis, CPU no L0, setup/teardown -- janela 1, análise
-## paralela (cópia, nenhum script da campanha alterado)
+## Decision 110 (2026-10-31) -- real RTT from the pcaps, loss fixed, residual decomposition, the T_fluxo=T0+k.RTT model, delta vs. Classic, order between profiles, CPU at L0, setup/teardown -- window 1, parallel analysis (a copy, no campaign script altered)
 
-Trabalho feito numa cópia (`consolidate_v8_rtt_experimental.py` +
-scripts de apoio, scratchpad da sessão, nenhum commitado ainda) e um
-leitor de pcap mínimo em Python puro (sem scapy/tshark/tcpdump
-localmente) que também decodifica os cabeçalhos TLS (não
-criptografados: tipo/versão/tamanho do record) para achar o último
-record de handshake e o primeiro de dados de aplicação, sem precisar
-de chaves. Tudo sobre os dados já commitados da janela 1 -- nenhuma
-execução nova.
+Work done on a copy (`consolidate_v8_rtt_experimental.py` +
+support scripts, this session's scratchpad, none committed yet) and a
+minimal pure-Python pcap reader (no scapy/tshark/tcpdump
+locally) that also decodes the TLS headers (unencrypted:
+record type/version/size) to find the last handshake
+record and the first application-data one, with no keys needed. All
+on window 1's already-committed data -- no new execution.
 
-**Item 3 -- RTT medido por célula** (mediana das 6 conexões,
-SYN->SYN-ACK, todas as 10 execuções, IC95% bootstrap): bate com o RTT
-nominal esperado por cenário -- L0 ~0,2-0,3ms (colocado), L30/L14
-~14-32ms, L123 ~122,6ms, L219 ~219,6ms, L325 ~330ms. Todos os 24
-valores reportados na íntegra no log desta decisão (não reproduzidos
-aqui por espaço).
+**Item 3 -- RTT measured per cell** (median of the 6 connections,
+SYN->SYN-ACK, all 10 executions, bootstrap 95% CI): matches the
+nominal expected RTT per scenario -- L0 ~0,2-0,3ms (colocated), L30/L14
+~14-32ms, L123 ~122,6ms, L219 ~219,6ms, L325 ~330ms. All 24
+values reported in full in this decision's log (not reproduced here
+for space).
 
-**Item 4 -- perda corrigida, achado real**: `detect_loss_signals()`
-(`pcap_utils.py`) já separa `retransmissions`/`out_of_order`/
-`duplicate_ack_events` em campos próprios, mas `pcap_loss_summary()`
-(`consolidate_v8.py`) soma os três em `loss_events` antes de dividir
-por `total_segments` -- a "perda" reportada até aqui é na verdade
-retransmissão+fora-de-ordem+ACK-duplicado combinados, não só perda
-real. Recalculado SÓ com retransmissões: **0,0000% em 23 das 24
-células, 0,0250% na 24a (hybrid/ap-northeast-1/L0, 1 retransmissão em
-3993 segmentos)** -- a "perda" antiga reportada (0,04%-0,55%) era
-inteiramente ACK duplicado, não perda real. **Não corrigido no
-`consolidate_v8.py` real** (seria alterar um script que a campanha já
-está usando) -- guardado para aplicar retroativamente depois da
-janela 3, como instruído.
+**Item 4 -- loss fixed, a real finding**: `detect_loss_signals()`
+(`pcap_utils.py`) already separates `retransmissions`/`out_of_order`/
+`duplicate_ack_events` into their own fields, but `pcap_loss_summary()`
+(`consolidate_v8.py`) sums all three into `loss_events` before dividing
+by `total_segments` -- the "loss" reported so far is actually
+retransmissions+out-of-order+duplicate-ACK combined, not just real
+loss. Recalculated with ONLY retransmissions: **0,0000% in 23 of 24
+cells, 0,0250% in the 24th (hybrid/ap-northeast-1/L0, 1 retransmission in
+3993 segments)** -- the old "loss" reported (0,04%-0,55%) was
+entirely duplicate ACKs, not real loss. **Not fixed in the real
+`consolidate_v8.py`** (that would mean changing a script the campaign
+is already using) -- kept to apply retroactively after
+window 3, as instructed.
 
-**Item 5 -- decomposição do residual** (soma de TCP connect + último
-record de handshake TLS, das 6 conexões, por execução): explica entre
-4% (PQC, cenários de baixíssimo RTT) e 65% (cenários de RTT alto,
-L123-L325) do residual reportado pelo `phase_accounting` existente.
-Ex.: classic/sa-east-1/L325: residual=6,128s, handshake total das 6
-conexões=3,987s (65% explicado, ~12,1 RTTs). **Não fecha perto de
-zero** -- fecha bem mais que antes (0% explicado), mas ~35% do
-residual nos cenários de RTT alto ainda não tem causa identificada
-aqui (hipóteses não testadas: tempo de fechamento de conexão/FIN,
-serialização na abertura de conexões novas). Achado real, reportado
-honestamente, não uma decomposição completa.
+**Item 5 -- residual decomposition** (sum of TCP connect + the last
+TLS handshake record, across the 6 connections, per execution):
+explains between 4% (PQC, very-low-RTT scenarios) and 65% (high-RTT
+scenarios, L123-L325) of the residual reported by the existing
+`phase_accounting`. E.g. classic/sa-east-1/L325: residual=6,128s, total
+handshake across the 6 connections=3,987s (65% explained, ~12,1
+RTTs). **Doesn't close to near zero** -- it closes much more than
+before (0% explained), but ~35% of the residual in the high-RTT
+scenarios still has no cause identified here (hypotheses not tested:
+connection-close/FIN time, serialization when opening new
+connections). A real finding, reported honestly, not a complete
+decomposition.
 
-**Item 6 -- T_fluxo = T0 + k·RTT_medido, por perfil** (OLS entre as 8
-rotas de cada perfil, IC95% bootstrap de k): **k=55,84 (classic),
-55,87 (pqc), 55,91 (hybrid)** -- os 3 ICs se sobrepõem fortemente
-(nenhuma diferença detectável entre perfis), e os 3 ficam muito
-próximos de 56 (44 chamadas + 2x6 conexões), exatamente como você
-previu.
+**Item 6 -- T_fluxo = T0 + k·measured_RTT, per profile** (OLS across the
+8 routes of each profile, bootstrap 95% CI for k): **k=55,84 (classic),
+55,87 (pqc), 55,91 (hybrid)** -- the 3 CIs overlap strongly
+(no detectable difference between profiles), and all 3 land very
+close to 56 (44 calls + 2x6 connections), exactly as predicted.
 
-**Item 7 -- delta vs. Classic**: Hybrid sempre mais lento (+0,46% a
-+5,47% dependendo da rota); PQC misto (-1,97% a +1,63%, incluindo 2
-rotas onde PQC é mais RÁPIDO que Classic). Ajuste delta=a+b·RTT:
-**Hybrid tem componente fixo real e significativo (a=+69,57ms,
-IC95%=[+48,30,+90,32]ms, não cruza zero)** -- um custo de CPU
-genuíno, não dependente de distância; **PQC não tem componente fixo
-detectável** (IC=[-28,20,+37,17]ms, cruza zero). Nenhum dos dois tem
-`b` (crescimento com RTT) detectável -- o IC de ambos cruza zero.
+**Item 7 -- delta vs. Classic**: Hybrid always slower (+0,46% to
++5,47% depending on the route); PQC mixed (-1,97% to +1,63%, including 2
+routes where PQC is FASTER than Classic). Fit delta=a+b·RTT:
+**Hybrid has a real, significant fixed component (a=+69,57ms,
+95% CI=[+48,30,+90,32]ms, not crossing zero)** -- a genuine CPU
+cost, not distance-dependent; **PQC has no detectable fixed
+component** (CI=[-28,20,+37,17]ms, crosses zero). Neither has a
+detectable `b` (growth with RTT) -- both their CIs cross zero.
 
-**Item 8 -- ordem entre perfis, Mann-Whitney + teste do sinal (8
-rotas)**: **Hybrid > Classic em 8/8 rotas, Hybrid > PQC em 8/8** --
-ordem consistente e forte. **PQC > Classic em só 6/8 rotas, e só
-2/8 com p<0,05** -- "diferença não detectável" entre PQC e Classic na
-maioria das rotas, relatado como tal, sem forçar uma ordem.
+**Item 8 -- order between profiles, Mann-Whitney + sign test (8
+routes)**: **Hybrid > Classic in 8/8 routes, Hybrid > PQC in 8/8** --
+a consistent, strong order. **PQC > Classic in only 6/8 routes, and only
+2/8 with p<0,05** -- an "undetectable difference" between PQC and
+Classic on most routes, reported as such, with no order forced.
 
-**Item 9 -- decomposição de CPU no L0, ms/execução**: signing
+**Item 9 -- CPU decomposition at L0, ms/execution**: signing
 classic~16ms, pqc~27ms (+~70%), hybrid~43ms (~2,7x classic,
-assinatura dupla); verification similar nos 3 (~24-29ms); http
-~344-425ms, sem padrão claro por perfil.
+double signature); verification similar across all 3 (~24-29ms); http
+~344-425ms, with no clear pattern per profile.
 
-**Item 10 -- setup/teardown fixo**: ~1058-1105ms nos 3 perfis e nas 3
-instalações -- confirmado como componente fixo e igual entre perfis,
-como esperado (2 esperas de 500ms do servidor de callback).
+**Item 10 -- fixed setup/teardown**: ~1058-1105ms across all 3 profiles
+and all 3 installations -- confirmed as a fixed component, equal
+across profiles, as expected (2 waits of 500ms from the callback
+server).
 
-**Status**: análise completa para a janela 1, numa cópia, nenhum
-script da campanha tocado. Será estendida às janelas 2 e 3 e aplicada
-retroativamente (substituindo o `consolidate_v8.py` real só depois da
-janela 3), como instruído no item 2.
+**Status**: complete analysis for window 1, on a copy, no campaign
+script touched. Will be extended to windows 2 and 3 and applied
+retroactively (replacing the real `consolidate_v8.py` only after
+window 3), as instructed in item 2.
 
-## Decision 111 (2026-10-31) -- pré-registro confirmatório (tag
-## `v8-prereg-3`): as 5 previsões da janela 1, antes de olhar as
-## janelas 2 e 3
+## Decision 111 (2026-10-31) -- confirmatory pre-registration (tag `v8-prereg-3`): window 1's 5 predictions, before looking at windows 2 and 3
 
-As 5 previsões abaixo foram derivadas EXPLORATORIAMENTE da janela 1
-(Decision 110) -- agora pré-registradas, antes de qualquer análise dos
-dados das janelas 2/3, como critérios CONFIRMATÓRIOS. Cada uma será
-checada separadamente contra a janela 2, separadamente contra a janela
-3, e depois combinada (1+2+3). Registrado também em
-`ANALYSIS_PLAN.md`, seção "Pré-registro confirmatório", commitado com
-a nova tag `v8-prereg-3` (mantendo `v8-prereg` e `v8-prereg-2`).
+The 5 predictions below were derived EXPLORATORILY from window 1
+(Decision 110) -- now pre-registered, before any analysis of
+windows 2/3's data, as CONFIRMATORY criteria. Each will be
+checked separately against window 2, separately against window
+3, and then combined (1+2+3). Also recorded in
+`ANALYSIS_PLAN.md`, "Confirmatory pre-registration" section, committed with
+the new `v8-prereg-3` tag (keeping `v8-prereg` and `v8-prereg-2`).
 
-1. k = 56 ± 1 nos três perfis -- IC95% de k contém 56.
-2. Hybrid: custo fixo `a` > 0 -- IC95% de `a` não cruza zero.
-3. PQC: `a` indistinguível de zero -- IC95% de `a` cruza zero.
-4. `b` indistinguível de zero nos dois -- IC95% de `b` cruza zero;
-   limite superior reportado em viagens extras por execução (a própria
-   unidade de `b`, segundos-de-delta/segundos-de-RTT, já é um número de
-   RTTs): **PQC até +0,50 viagem extra, Hybrid até +0,46 viagem extra**
-   -- limites superiores, não achados, já que o IC cruza zero.
-5. Ordem: Hybrid > Classic nas 8/8 rotas (teste do sinal); PQC vs.
-   Classic sem direção fixa -- não forçar uma ordem onde o teste não
-   sustentar uma.
+1. k = 56 ± 1 across all three profiles -- k's 95% CI contains 56.
+2. Hybrid: fixed cost `a` > 0 -- `a`'s 95% CI doesn't cross zero.
+3. PQC: `a` indistinguishable from zero -- `a`'s 95% CI crosses zero.
+4. `b` indistinguishable from zero for both -- `b`'s 95% CI crosses zero;
+   upper bound reported in extra trips per execution (`b`'s own
+   unit, seconds-of-delta/seconds-of-RTT, is already a number of
+   RTTs): **PQC up to +0,50 extra trip, Hybrid up to +0,46 extra trip**
+   -- upper bounds, not findings, since the CI crosses zero.
+5. Order: Hybrid > Classic across 8/8 routes (sign test); PQC vs.
+   Classic with no fixed direction -- not forcing an order where the
+   test doesn't support one.
 
-**Rótulos para o consolidate** (cópia experimental agora, retroativo
-depois da janela 3): `v8-prereg` (critérios originais, antes de
-qualquer coleta), `exploratorio-janela1` (a origem das 5 previsões,
-nunca tratado como confirmação), `v8-prereg-3` (a checagem
-confirmatória em si, esta decisão).
+**Labels for the consolidate** (the experimental copy now, retroactive
+after window 3): `v8-prereg` (the original criteria, before any
+collection), `exploratory-window1` (the origin of the 5 predictions,
+never treated as confirmation), `v8-prereg-3` (the confirmatory
+check itself, this decision).
 
-## Decision 112 (2026-10-31) -- handshake em viagens confirma 12 nos 3
-## perfis; hipótese do resíduo de ~6 viagens NÃO ATRIBUÍDA (30min,
-## offline, nada tocado na campanha)
+## Decision 112 (2026-10-31) -- the handshake in trips confirms 12 across all 3 profiles; the hypothesis for the ~6-trip residual NOT ATTRIBUTED (30min, offline, nothing in the campaign touched)
 
-**Item 1 -- handshake em viagens (soma das 6 conexões ÷ RTT medido),
-L123/L219/L325, mediana por célula, IC95% bootstrap:**
+**Item 1 -- handshake in trips (sum of the 6 connections ÷ measured RTT),
+L123/L219/L325, median per cell, bootstrap 95% CI:**
 - classic: L123=12,33 [12,32;12,34], L219=12,20 [12,19;12,21],
   L325=12,10 [12,07;12,13]
 - pqc: L123=12,07 [12,06;28,07*], L219=12,03 [12,03;12,04],
   L325=12,03 [12,00;12,11]
 - hybrid: L123=12,35 [12,34;16,30*], L219=12,20 [12,19;12,20],
   L325=12,19 [12,13;19,43*]
-(*cauda superior do bootstrap puxada por 1 execução com handshake mais
-longo -- a mediana em si é limpa e consistente nos 9 casos)
+(*the bootstrap's upper tail pulled by 1 execution with a longer
+handshake -- the median itself is clean and consistent in all 9 cases)
 
-**Conclusão: todos muito perto de 12, sem diferença real entre
-perfis** -- confirma diretamente que certificados/chaves maiores
-(PQC/Hybrid) não custam viagens extras de handshake. Isto é o
-complemento direto do item 6 da Decision 110 (k igual nos 3 perfis).
+**Conclusion: all very close to 12, with no real difference between
+profiles** -- directly confirming that larger certificates/keys
+(PQC/Hybrid) don't cost extra handshake trips. This is the direct
+complement of Decision 110's item 6 (k equal across all 3 profiles).
 
-**Item 2 -- hipótese barata para o resíduo de ~6 viagens (L325,
-timeline real de uma conexão, perfil classic, 30min de orçamento):**
-montada a timeline completa (SYN/handshake/dados/FIN) de uma das 6
-conexões reais. Achado real: em TLS 1.3, só o ClientHello/ServerHello
-inicial usa o tipo de record "handshake" (22) sem criptografia -- TUDO
-depois (EncryptedExtensions, Certificate, CertificateVerify, Finished,
-E os dados de aplicação reais) usa o tipo "application_data" (23),
-indistinguível a olho sem decifrar. Gaps reais e grandes encontrados
-na timeline (~4 RTTs entre 1,01s e 2,32s; ~10,8 RTTs entre 4,76s e
-8,32s) parecem mais ligados a sequenciamento do lado cliente (as 6
-conexões não ficam ocupadas continuamente nem correm em paralelo) do
-que a viagens de rede extras dentro do handshake de uma única conexão.
-**NÃO ATRIBUÍDO** -- não consegui isolar com confiança uma causa
-específica para as ~6 viagens do resíduo dentro do orçamento de 30
-minutos; registrado como tal, não forçada uma explicação.
+**Item 2 -- a cheap hypothesis for the ~6-trip residual (L325,
+real timeline of one connection, classic profile, 30min budget):**
+assembled the complete timeline (SYN/handshake/data/FIN) of one of the
+6 real connections. Real finding: in TLS 1.3, only the initial
+ClientHello/ServerHello uses the "handshake" record type (22) with no
+encryption -- EVERYTHING after (EncryptedExtensions, Certificate,
+CertificateVerify, Finished, AND the real application data) uses the
+"application_data" type (23), indistinguishable by eye without
+decrypting. Real, large gaps found in the timeline (~4 RTTs between
+1,01s and 2,32s; ~10,8 RTTs between 4,76s and 8,32s) seem more tied
+to client-side sequencing (the 6 connections are neither continuously
+busy nor run in parallel) than to extra network trips within a single
+connection's handshake.
+**NOT ATTRIBUTED** -- I could not confidently isolate a specific
+cause for the residual's ~6 trips within the 30-minute budget;
+recorded as such, with no explanation forced.
 
-## Decision 113 (2026-10-31) -- janela 2 completa; checagem
-## confirmatória (v8-prereg-3) contra a janela 2: PQC não replica as
-## previsões 3 e 4
+## Decision 113 (2026-10-31) -- window 2 complete; confirmatory check (v8-prereg-3) against window 2: PQC does not replicate predictions 3 and 4
 
-**Janela 2 (hybrid/pqc/classic)**: 240/240, 0 erros, steal 0,01%.
-Pull+scan+commit+consolidate feitos dentro do intervalo de 30min,
-antes da janela 3. Drift Mann-Kendall: 4/24 (16,7%), todas em queda --
-similar à janela 1 (3/24).
+**Window 2 (hybrid/pqc/classic)**: 240/240, 0 errors, steal 0,01%.
+Pull+scan+commit+consolidate done within the 30min gap,
+before window 3. Mann-Kendall drift: 4/24 (16,7%), all decreasing --
+similar to window 1 (3/24).
 
-**As 5 previsões da Decision 111, checadas separadamente contra a
-janela 2:**
-1. k=56±1 nos 3 perfis: classic 56,04 [55,89;56,58], pqc 56,25
-   [55,99;56,39], hybrid 56,07 [55,87;56,22] -- **PASSOU** (os 3 IC
-   contêm 56).
-2. Hybrid `a`>0: +110,56ms, IC95%=[+79,50;+143,41]ms -- **PASSOU**
-   (não cruza zero).
-3. PQC `a` indistinguível de zero: +32,33ms, IC95%=[+15,34;+53,14]ms
-   -- **FALHOU** (não cruza zero nesta janela -- na janela 1 cruzava).
-4. `b` indistinguível de zero nos dois: Hybrid -0,0988
-   IC95%=[-0,5336;+0,0293] -- passou (cruza zero); **PQC -0,1611
-   IC95%=[-0,2860;-0,0277] -- FALHOU** (não cruza zero, e o sinal é
-   NEGATIVO -- PQC fica relativamente mais rápido que Classic quanto
-   maior o RTT, o oposto do que a Decision 111 previa como limite
-   superior).
-5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8 (ainda sem
-   direção forte e consistente, mas mais perto de uma do que na
-   janela 1).
+**Decision 111's 5 predictions, checked separately against window 2:**
+1. k=56±1 across the 3 profiles: classic 56,04 [55,89;56,58], pqc 56,25
+   [55,99;56,39], hybrid 56,07 [55,87;56,22] -- **PASSED** (all 3 CIs
+   contain 56).
+2. Hybrid `a`>0: +110,56ms, 95% CI=[+79,50;+143,41]ms -- **PASSED**
+   (doesn't cross zero).
+3. PQC `a` indistinguishable from zero: +32,33ms, 95% CI=[+15,34;+53,14]ms
+   -- **FAILED** (doesn't cross zero in this window -- it did in
+   window 1).
+4. `b` indistinguishable from zero for both: Hybrid -0,0988
+   95% CI=[-0,5336;+0,0293] -- passed (crosses zero); **PQC -0,1611
+   95% CI=[-0,2860;-0,0277] -- FAILED** (doesn't cross zero, and the
+   sign is NEGATIVE -- PQC becomes relatively faster than Classic as
+   RTT grows, the opposite of what Decision 111 predicted as an upper
+   bound).
+5. Order: Hybrid>Classic 8/8 (passed); PQC>Classic 7/8 (still no
+   strong, consistent direction, but closer to one than in
+   window 1).
 
-**Achado real, reportado sem forçar a narrativa da janela 1 sobre os
-dados da janela 2**: PQC não se comporta igual nas duas janelas --
-na janela 1 não tinha custo fixo detectável nem tendência com RTT; na
-janela 2 tem os dois, e o sinal do `b` é inesperado (negativo). Pode
-ser ruído real de amostra (n=8 rotas por janela é pouco para um
-coeficiente de regressão) ou uma diferença real entre janelas (rede,
-hardware, ou efeito de ordem dos perfis -- janela 1 rodou classic
-antes, janela 2 rodou hybrid/pqc antes). Não investigado a fundo
-agora -- a combinação formal das 3 janelas (depois da janela 3) é o
-lugar certo para julgar isso com mais poder estatístico, não uma
-leitura isolada de 2 janelas.
+**A real finding, reported without forcing window 1's narrative onto
+window 2's data**: PQC does not behave the same way in the two
+windows -- in window 1 it had no detectable fixed cost nor RTT
+trend; in window 2 it has both, and `b`'s sign is unexpected
+(negative). This could be real sample noise (n=8 routes per window is
+little for a regression coefficient) or a real difference between
+windows (network, hardware, or a profile-order effect -- window 1 ran
+classic earlier, window 2 ran hybrid/pqc earlier). Not investigated
+in depth now -- the formal combination of all 3 windows (after window
+3) is the right place to judge this with more statistical power, not
+an isolated reading of 2 windows.
 
-## Decision 114 (2026-10-31) -- janela 3 completa; checagem
-## confirmatória (v8-prereg-3) contra a janela 3 isolada E combinada
-## (janelas 1+2+3); campanha de 3 janelas oficiais concluída
+## Decision 114 (2026-10-31) -- window 3 complete; confirmatory check (v8-prereg-3) against window 3 in isolation AND combined (windows 1+2+3); the 3-window official campaign concluded
 
-**Janela 3 (pqc/classic/hybrid)**: 240/240, 0 erros, steal médio
-0,01%. Pull via tar+scp, sha256 verificado em ambos os lados
+**Window 3 (pqc/classic/hybrid)**: 240/240, 0 errors, mean steal
+0,01%. Pulled via tar+scp, sha256 verified on both sides
 (`d5953a08e41246a070ead2b2c5372c3d1f4b9927ce9615997c387e7b4d722db`),
-escaneado por segredos (texto staged + histórico completo + 480
-pcaps descomprimidos manualmente, 0 hits em todos) -- commit
-`18985107` em `main`. Drift Mann-Kendall: 3/24 (12,5%), todas em
-queda -- semelhante às janelas 1 (3/24) e 2 (4/24).
+scanned for secrets (staged text + full history + 480
+pcaps manually decompressed, 0 hits across all of them) -- commit
+`18985107` on `main`. Mann-Kendall drift: 3/24 (12,5%), all
+decreasing -- similar to windows 1 (3/24) and 2 (4/24).
 
-**As 5 previsões da Decision 111, checadas separadamente contra a
-janela 3 isolada (10 execuções/célula):**
-1. k=56±1 nos 3 perfis: classic 56,23 [56,12;56,60] -- **FALHOU**
-   (fora por pouco); pqc 56,16 [56,01;56,83] -- **FALHOU** (fora por
-   pouco); hybrid 55,81 [55,60;56,81] -- **PASSOU**.
-2. Hybrid `a`>0: +80,78ms, IC95%=[+62,09;+101,42]ms -- **PASSOU**.
-3. PQC `a` indistinguível de zero: -1,66ms, IC95%=[-19,77;+16,47]ms
-   -- **PASSOU** (volta a cruzar zero, diferente da janela 2).
-4. `b` indistinguível de zero nos dois: Hybrid +0,1383
-   IC95%=[-0,1412;+0,2735] -- **PASSOU**; PQC +0,2682
-   IC95%=[-0,0131;+0,4149] -- **PASSOU** (cruza zero por pouco,
-   diferente da janela 2 onde o sinal era negativo e significativo).
-5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8.
+**Decision 111's 5 predictions, checked separately against window 3
+in isolation (10 executions/cell):**
+1. k=56±1 across the 3 profiles: classic 56,23 [56,12;56,60] -- **FAILED**
+   (just outside); pqc 56,16 [56,01;56,83] -- **FAILED** (just
+   outside); hybrid 55,81 [55,60;56,81] -- **PASSED**.
+2. Hybrid `a`>0: +80,78ms, 95% CI=[+62,09;+101,42]ms -- **PASSED**.
+3. PQC `a` indistinguishable from zero: -1,66ms, 95% CI=[-19,77;+16,47]ms
+   -- **PASSED** (crosses zero again, unlike window 2).
+4. `b` indistinguishable from zero for both: Hybrid +0,1383
+   95% CI=[-0,1412;+0,2735] -- **PASSED**; PQC +0,2682
+   95% CI=[-0,0131;+0,4149] -- **PASSED** (crosses zero narrowly,
+   unlike window 2 where the sign was negative and significant).
+5. Order: Hybrid>Classic 8/8 (passed); PQC>Classic 7/8.
 
-**Checagem COMBINADA (janelas 1+2+3 pooled, 30 execuções/célula,
-24 células) -- a análise com mais poder estatístico, a que importa
-para a conclusão final:**
-1. k=56±1: classic 56,03 [55,91;56,37] -- **PASSOU**; pqc 56,13
-   [56,03;56,58] -- **FALHOU** (fora por pouco, mesmo com 30
-   execuções); hybrid 55,99 [55,90;56,52] -- **PASSOU**.
-2. Hybrid `a`>0: +87,88ms, IC95%=[+79,85;+96,27]ms -- **PASSOU**.
-3. PQC `a` indistinguível de zero: +13,74ms,
-   IC95%=[-1,26;+31,20]ms -- **PASSOU** (cruza zero no combinado).
-4. `b` indistinguível de zero nos dois: Hybrid +0,0550
-   IC95%=[-0,1301;+0,1298] -- **PASSOU**; PQC +0,2094
-   IC95%=[-0,0658;+0,3354] -- **PASSOU**.
-5. Ordem: Hybrid>Classic 8/8 (passou); PQC>Classic 7/8 (sem direção
-   fixa consistente, como a Decision 111 já previa para este par).
+**COMBINED check (windows 1+2+3 pooled, 30 executions/cell,
+24 cells) -- the analysis with more statistical power, the one that
+matters for the final conclusion:**
+1. k=56±1: classic 56,03 [55,91;56,37] -- **PASSED**; pqc 56,13
+   [56,03;56,58] -- **FAILED** (just outside, even with 30
+   executions); hybrid 55,99 [55,90;56,52] -- **PASSED**.
+2. Hybrid `a`>0: +87,88ms, 95% CI=[+79,85;+96,27]ms -- **PASSED**.
+3. PQC `a` indistinguishable from zero: +13,74ms,
+   95% CI=[-1,26;+31,20]ms -- **PASSED** (crosses zero in the combined check).
+4. `b` indistinguishable from zero for both: Hybrid +0,0550
+   95% CI=[-0,1301;+0,1298] -- **PASSED**; PQC +0,2094
+   95% CI=[-0,0658;+0,3354] -- **PASSED**.
+5. Order: Hybrid>Classic 8/8 (passed); PQC>Classic 7/8 (no
+   consistent fixed direction, as Decision 111 already predicted for
+   this pair).
 
-**Conclusão honesta, sem forçar consistência entre janelas**: das 5
-previsões, 4/5 passam no combinado (2, 3, 4, 5); a previsão 1 (k=56)
-passa para Classic e Hybrid mas fica marginalmente fora para PQC
-mesmo com 30 execuções -- k_pqc=56,13 contra um IC que exclui 56 por
-apenas 0,13 unidades, a margem mais estreita das três. Isso é
-consistente com um k real ligeiramente mais alto para PQC (talvez
-por alguma chamada extra de verificação não contabilizada nas 56
-esperadas) ou com ruído residual de amostra -- não investigado a
-fundo aqui, registrado como achado aberto. PQC oscilou entre janelas
-no custo fixo (`a`) e na inclinação (`b`): sem custo fixo detectável
-nas janelas 1 e 3, com custo fixo pequeno só na janela 2; no
-combinado, o efeito da janela 2 é diluído e `a`/`b` voltam a cruzar
-zero. Isso sugere que o achado da janela 2 (Decision 113) era mais
-provavelmente ruído de amostra (n=8 rotas por janela) do que um
-efeito real e estável do PQC -- mas o combinado também não teve
-poder suficiente pra confirmar k=56 pro PQC, então a história não
-está completamente fechada.
+**Honest conclusion, with no consistency forced across windows**: of
+the 5 predictions, 4/5 pass in the combined check (2, 3, 4, 5); prediction
+1 (k=56) passes for Classic and Hybrid but falls marginally outside for
+PQC even with 30 executions -- k_pqc=56,13 against a CI that excludes
+56 by only 0,13 units, the narrowest margin of the three. This is
+consistent with a real k slightly higher for PQC (perhaps due
+to some extra verification call not accounted for in the 56
+expected) or with residual sample noise -- not investigated
+in depth here, recorded as an open finding. PQC oscillated between
+windows in fixed cost (`a`) and slope (`b`): no detectable fixed cost
+in windows 1 and 3, with a small fixed cost only in window 2; in the
+combined check, window 2's effect is diluted and `a`/`b` cross
+zero again. This suggests that window 2's finding (Decision 113) was more
+likely sample noise (n=8 routes per window) than a real, stable
+PQC effect -- but the combined check also didn't have enough
+power to confirm k=56 for PQC, so the story isn't completely
+closed.
 
-**Campanha de 3 janelas oficiais concluída: 720 execuções reais
-(janelas 1+2+3), 0 erros em qualquer janela, nenhuma trava de
-segurança acionada (`check_artifact_health`, custo, steal) em
-nenhum momento.** Próximo passo: captura de artefatos reais
-(`capture_real_artifacts.sh`), confirmação da decomposição por
-participante, tag `v8-official-data` -- sem destruir a frota (reservado
-para o autor, presente).
+**The 3-window official campaign concluded: 720 real executions
+(windows 1+2+3), 0 errors in any window, no safety lock
+triggered (`check_artifact_health`, cost, steal) at any
+point.** Next step: real artifact capture
+(`capture_real_artifacts.sh`), confirming the per-participant
+decomposition, the `v8-official-data` tag -- without destroying the
+fleet (reserved for the author, present).
 
-## Decision 115 (2026-10-31) -- pré-destroy: introspecção TLS
-## independente, inventário de completude, consolidate novo (por
-## perfil e global, RTT/perda corrigidas/k/deltas), teste de
-## heterogeneidade do PQC, tabela de deriva de 72 células, plano de
-## destroy salvo (NÃO aplicado)
+## Decision 115 (2026-10-31) -- pre-destroy: independent TLS introspection, completeness inventory, new consolidate (per-profile and global, fixed RTT/loss/k/deltas), PQC heterogeneity test, 72-cell drift table, saved destroy plan (NOT applied)
 
-Frota ainda de pé, sem nenhuma execução oficial tocada. Seis itens,
-nesta ordem, antes do destroy:
+Fleet still up, no official execution touched. Six items, in
+this order, before the destroy:
 
-**1. Introspecção TLS independente por perfil** -- `openssl s_client`
-real contra o gateway de `sa-east-1` (troca de perfil + 5 settling
-runs por perfil, mesma mecânica de qualquer troca já feita).
-Classic e Hybrid confirmados por sonda independente: grupo negociado
+**1. Independent per-profile TLS introspection** -- a real `openssl
+s_client` against `sa-east-1`'s gateway (profile switch + 5 settling
+runs per profile, the same mechanics as any switch already done).
+Classic and Hybrid confirmed by an independent probe: negotiated group
 (`secp384r1`/`SecP384r1MLKEM1024`), TLS 1.3, `TLS_AES_128_GCM_SHA256`,
-assinatura `rsa_pss_rsae_sha256` -- batem exatamente com
-`_CLIENT_EXPECTED_CURVE`. **PQC não negociou com OpenSSL puro**
-(handshake failure, grupo `mlkem1024` reconhecido pelo nome mas sem
-interoperar com o `crypto/tls` do Go) -- achado real de
-interoperabilidade entre bibliotecas, não um bug do projeto;
-confirmado em vez disso pelo próprio log real do gateway durante a
-execução 21 da janela 3 (`curveID:"MLKEM1024"`, já commitado).
-Detalhe completo em `thesis/results/v8/artifacts/item1_tls_
+`rsa_pss_rsae_sha256` signature -- matching exactly
+`_CLIENT_EXPECTED_CURVE`. **PQC did not negotiate with plain OpenSSL**
+(handshake failure, the `mlkem1024` group recognized by name but not
+interoperating with Go's `crypto/tls`) -- a real cross-library
+interoperability finding, not a project bug;
+confirmed instead by the gateway's own real log during
+execution 21 of window 3 (`curveID:"MLKEM1024"`, already committed).
+Full detail in `thesis/results/v8/artifacts/item1_tls_
 introspection.md`.
 
-**2. Inventário de completude**: 720 execuções, 360 aquecimentos
-(K=5 x 24 células x 3 janelas), 744 pcaps/744 cpu.jsonl por lado
-(720 oficiais + 24 do aquecimento único por célula `w00_run01`,
-capturado uma vez antes da janela 1 e corretamente presente só na
-pasta da janela 1) -- controle (`~/campaign-data`) e repositório
-local batem exatamente, nada existia só nas instâncias. Puxados e
-commitados os 6 arquivos de log/snapshot do control que nunca tinham
-sido pulados (`campaign-status.json`, `delivered_images_manifest.
+**2. Completeness inventory**: 720 executions, 360 warm-ups
+(K=5 x 24 cells x 3 windows), 744 pcaps/744 cpu.jsonl per side
+(720 official + 24 from the single per-cell warm-up `w00_run01`,
+captured once before window 1 and correctly present only in
+window 1's folder) -- control (`~/campaign-data`) and the
+local repository match exactly, nothing existed only on the instances.
+Pulled and committed the 6 control log/snapshot files that had never
+been pulled before (`campaign-status.json`, `delivered_images_manifest.
 json`, `inventory.json`, `official_campaign.log`, `preflight_tcp_
-result.json`, `validation_parallel.log`) -- escaneados, sem segredos
-(IPs públicos das instâncias EC2 presentes em `inventory.json`, não o
-IP do operador; nenhum padrão do scanner disparou). Manifesto sha256
-de cada arquivo das 3 janelas gerado e commitado em
+result.json`, `validation_parallel.log`) -- scanned, no secrets
+(public IPs of the EC2 instances present in `inventory.json`, not the
+operator's IP; no scanner pattern triggered). An sha256 manifest of
+every file across the 3 windows generated and committed to
 `_campaign-control/sha256_manifest.txt`.
 
-**3. Consolidate novo, por perfil e global**: `consolidate_v8_new.py`
-(cópia de `consolidate_v8.py`, nunca substitui o original) adiciona
-RTT medido de pcap (`rtt_measured_ms`, SYN/SYN-ACK real, não mais o
-ping sempre nulo) e um bloco `models` (k, delta=a+b·RTT vs. Classic,
-teste do sinal) a cada consolidação. Rodado para as 3 janelas
-separadamente (`janela{N}/_v2/`) e uma vez combinado (30 execuções/
-célula, árvore mesclada por hardlink em `janela_combined`, resultado
-em `global_v2/`). Três linhas de exemplo (janela 1, sa-east-1/L0/
+**3. New consolidate, per-profile and global**: `consolidate_v8_new.py`
+(a copy of `consolidate_v8.py`, never replacing the original) adds
+RTT measured from the pcap (`rtt_measured_ms`, real SYN/SYN-ACK, no
+longer the always-null ping) and a `models` block (k, delta=a+b·RTT
+vs. Classic, sign test) to every consolidation. Run for the 3
+windows separately (`window{N}/_v2/`) and once combined (30
+executions/cell, a tree merged by hardlink into `window_combined`,
+result in `global_v2/`). Three example lines (window 1, sa-east-1/L0/
 classic):
 ```
 - RTT measured (pcap SYN/SYN-ACK, median of per-execution medians): 0.29ms (bootstrap 95% CI (0.196, 0.322))
 - Packet loss (retransmissions/segments, TCP pcap evidence, 10 executions, 2544 segments): 0 retransmissions observed -- upper bound 0.1179% (rule of three)
 - Out-of-order (own field, NOT packet loss): 0.0% (0 segments); Duplicate-ACK (own field, NOT packet loss): 0.4324% (11 events)
 ```
-A tag `v8-official-data` NÃO foi movida -- estes são arquivos NOVOS,
-paralelos aos oficiais, nunca os substituindo.
+The `v8-official-data` tag was NOT moved -- these are NEW files,
+parallel to the official ones, never replacing them.
 
-**4. PQC -- k com as duas leituras + teste de heterogeneidade**:
-combinado (30 execuções/célula), k_pqc=56,13, IC95%=[56,03;57,52] --
-**IC não contém 56** (FALHOU por essa leitura) **mas k está dentro de
-56±1** (PASSOU pela leitura mais permissiva); ambas reportadas, Classic
-e Hybrid passam nas duas. Teste de heterogeneidade do custo fixo `a`
-entre as 3 janelas (Z par a par + Cochran's Q): janela2 vs. janela3
-**Z=+2,63, p=0,0086 -- SIGNIFICATIVO**; Q=7,160, df=2, **p=0,0279**
-(omnibus, significativo). **Correção à Decision 114**: a frase "a
-janela 2 era mais provavelmente ruído de amostra" não é sustentada por
-este teste -- a variação do custo fixo do PQC entre janelas é
-estatisticamente detectável, causa não identificada, registrado como
-achado aberto. Detalhe completo em `global_v2/item4_pqc_heterogeneity.md`.
+**4. PQC -- k with both readings + a heterogeneity test**:
+combined (30 executions/cell), k_pqc=56,13, 95% CI=[56,03;57,52] --
+**the CI doesn't contain 56** (FAILED by this reading) **but k falls
+within 56±1** (PASSED by the more permissive reading); both reported,
+Classic and Hybrid pass both. Heterogeneity test of the fixed cost `a`
+across the 3 windows (pairwise Z + Cochran's Q): window2 vs. window3
+**Z=+2,63, p=0,0086 -- SIGNIFICANT**; Q=7,160, df=2, **p=0,0279**
+(omnibus, significant). **Correction to Decision 114**: the statement
+"window 2 was more likely sample noise" is not supported by
+this test -- the PQC fixed cost's variation across windows is
+statistically detectable, cause not identified, recorded as an
+open finding. Full detail in `global_v2/item4_pqc_heterogeneity.md`.
 
-**5. Tabela de deriva, 72 células** (24 x 3 janelas, Mann-Kendall):
-10/72 (13,9%) significativas, todas em queda -- por janela: 3/24
-(12,5%), 4/24 (16,7%), 3/24 (12,5%), consistente entre si. CSV completo
-em `thesis/results/v8/drift_table_72cells.csv`, para a seção de
-Limitações.
+**5. Drift table, 72 cells** (24 x 3 windows, Mann-Kendall):
+10/72 (13,9%) significant, all decreasing -- per window: 3/24
+(12,5%), 4/24 (16,7%), 3/24 (12,5%), consistent with each other. Full
+CSV in `thesis/results/v8/drift_table_72cells.csv`, for the
+Limitations section.
 
-**6. Plano de destroy salvo, NÃO aplicado**: `terraform plan -destroy
+**6. Destroy plan saved, NOT applied**: `terraform plan -destroy
 -out=tfdestroy` -- **Plan: 0 to add, 0 to change, 65 to destroy**
-(bate com o esperado). Arquivo `tfdestroy` fica fora do git (mesma
-regra de Decision 49 para artefatos do Terraform), local em `thesis/
-results/v8/campaign/terraform/tfdestroy`. Aplicar é decisão do autor,
-presente.
+(matches expectations). The `tfdestroy` file stays out of git (the
+same rule as Decision 49 for Terraform artifacts), local at `thesis/
+results/v8/campaign/terraform/tfdestroy`. Applying it is the author's
+decision, present.
 
-## Decision 116 (2026-10-31) -- auditoria final pré-destroy: matriz de
-## camadas por perfil, verificação criptográfica independente do PQC,
-## matriz promessa-evidência contra o parecer técnico (tempo-box 60min)
+## Decision 116 (2026-10-31) -- final pre-destroy audit: per-profile layer matrix, independent PQC cryptographic verification, promise-evidence matrix against the technical opinion (60min time-box)
 
-Frota ainda de pé, nenhuma campanha nova. Três itens, detalhados em
-`thesis/results/v8/artifacts/item1_layer_matrix.md` e `item3_promise_
+Fleet still up, no new campaign. Three items, detailed in
+`thesis/results/v8/artifacts/item1_layer_matrix.md` and `item3_promise_
 evidence_matrix.md`:
 
-**1. Matriz de camadas (7 camadas x 3 perfis)**: troca de chaves TLS,
-autenticação (servidor/cliente), cadeia de certificados, assinatura
-JWT, JWE, conexão interna AS→RS, Diretório/PKI -- cada célula com
-algoritmo real, evidência arquivo:linha, e se foi verificado
-criptograficamente. **Achados reais que não são o que o rótulo
-sugere**: (a) JWE do id_token é RSA-OAEP/A256GCM IDÊNTICO nos 3
-perfis -- limitação já declarada em código (`opin_flow.py:798-802`),
-não um gap silencioso; (b) o header `alg` de um JWT Hybrid lê "PS256"
-mesmo quando a assinatura real é dupla (Strong Nesting PS256+ML-DSA-65)
--- documentado mas visualmente enganoso para quem não olhar a segunda
-assinatura; (c) o certificado do servidor sob Hybrid mantém a chave
-RSA-4096 base, só soma uma extensão ML-DSA-65 -- não troca de chave.
-**Achado que RESOLVE uma pendência do parecer**: a cadeia PQC (raiz
-`root_ca_pqc.crt` + emissora `issuer_ca_pqc.crt`) e o Diretório/PKI
-mock estão, confirmado agora ao vivo (`openssl x509 -noout -text`),
-assinados em ML-DSA-65 -- não mais classicamente assinados como na
-v7. Isso fecha a assimetria do parecer (item 4.3/Rec. 2): só o mTLS
-tinha sido corrigido antes; agora a cadeia completa também está.
+**1. Layer matrix (7 layers x 3 profiles)**: TLS key exchange,
+authentication (server/client), certificate chain, JWT signature, JWE,
+internal AS→RS connection, Directory/PKI -- each cell with the real
+algorithm, file:line evidence, and whether it was cryptographically
+verified. **Real findings that aren't what the label
+suggests**: (a) the id_token's JWE is IDENTICAL RSA-OAEP/A256GCM
+across all 3 profiles -- a limitation already declared in the code
+(`opin_flow.py:798-802`), not a silent gap; (b) a Hybrid JWT's `alg`
+header reads "PS256" even when the real signature is double
+(Strong Nesting PS256+ML-DSA-65) -- documented but visually
+misleading to anyone who doesn't look at the second
+signature claims; (c) the server certificate under Hybrid keeps its
+base RSA-4096 key, only adding an ML-DSA-65 extension -- not a key
+swap. **A finding that RESOLVES an item still open in the technical
+opinion**: the PQC chain (root `root_ca_pqc.crt` + issuer
+`issuer_ca_pqc.crt`) and the mock Directory/PKI are, now confirmed
+live (`openssl x509 -noout -text`), signed in ML-DSA-65 -- no longer
+classically signed as in v7. This closes the opinion's asymmetry
+(item 4.3/Rec. 2): only mTLS had been fixed before; now the complete
+chain is too.
 
-**2. Verificação criptográfica independente do PQC, rodada agora**:
-`mock-service-os/certs/main.go -verify-pqc-cert client_one_pqc` e
+**2. Independent PQC cryptographic verification, run now**:
+`mock-service-os/certs/main.go -verify-pqc-cert client_one_pqc` and
 `-verify-hybrid client_one` (via `docker run golang:1.27-rc-alpine`,
-no próprio servidor `sa-east-1`, certs/chaves reais já em disco) --
-**RESULT: verificado** nos dois casos (desafio assinado e checado
-contra a SubjectPublicKeyInfo real do certificado, não apenas um
-campo do tamanho/OID esperado). Saída completa em `artifacts/pqc/
-verify_pqc_cert_output.txt` e `artifacts/hybrid/verify_hybrid_cert_
-output.txt` -- antes, `artifacts/pqc/` só tinha o log do gateway e o
-certificado estático, sem essa verificação independente.
+on the `sa-east-1` server itself, real certs/keys already on disk) --
+**RESULT: verified** in both cases (a signed challenge checked
+against the certificate's real SubjectPublicKeyInfo, not just a
+size/OID field matching expectations). Full output in `artifacts/pqc/
+verify_pqc_cert_output.txt` and `artifacts/hybrid/verify_hybrid_cert_
+output.txt` -- before, `artifacts/pqc/` only had the gateway log and
+the static certificate, with no such independent verification.
 
-**3. Matriz promessa-evidência**: contra o parecer técnico (nota
-importante: o parecer -- Manuel Matos, 2026-09-28 -- avalia uma
-versão ANTERIOR/menor do relatório, 7 páginas, não a v8 atual),
-`ANALYSIS_PLAN.md`, `METRICS_COVERAGE.md`, `DECISIONS.md`. Itens 4.2,
-4.3, 4.4, 4.6a, 4.6c, 4.6e, Rec. 1-8, mais as promessas do orientador
-(cobertura Schardong 2022, estatística de distribuição, aviso final)
--- status FEITO/LIMITAÇÃO DECLARADA/NÃO FEITO, cada um com evidência
-citada. **6 itens NÃO FEITO, nenhum depende da frota** (são redação/
-análise sobre dados já coletados, ou pedem infraestrutura fora de
-escopo de 60min): 4.6a (unidade de medida única), 4.6c (conformidade
-do perfil Clássico contra a norma OPIN), Rec. 1 (4º perfil), Rec. 6
-(navegador real), Rec. 7 (reformular texto de custo fixo), aviso de
-limitações consolidado no relatório final -- aguardando decisão do
-Luciano, nenhum executado sem autorização.
+**3. Promise-evidence matrix**: against the technical opinion
+(important note: the opinion -- Manuel Matos, 2026-09-28 -- evaluates
+an EARLIER/shorter version of the report, 7 pages, not the current
+v8), `ANALYSIS_PLAN.md`, `METRICS_COVERAGE.md`, `DECISIONS.md`. Items 4.2,
+4.3, 4.4, 4.6a, 4.6c, 4.6e, Rec. 1-8, plus the advisor's own promises
+(Schardong 2022 coverage, distribution statistics, a final notice)
+-- status DONE/LIMITATION DECLARED/NOT DONE, each with cited
+evidence. **6 items NOT DONE, none depend on the fleet** (they are
+writing/analysis over already-collected data, or require
+infrastructure outside this 60min scope): 4.6a (a single unit of
+measurement), 4.6c (the Classic profile's conformance against the
+OPIN standard), Rec. 1 (a 4th profile), Rec. 6
+(a real browser), Rec. 7 (rewording the fixed-cost text), a
+limitations notice consolidated in the final report -- awaiting
+Luciano's decision, none executed without authorization.
 
-Frota NÃO destruída -- aplicar `tfdestroy` é decisão do autor, presente.
+Fleet NOT destroyed -- applying `tfdestroy` is the author's decision, present.
 
-## Decision 117 (2026-10-31) -- destroy final da frota v8, autorizado pelo
-## autor presente; confirmado pela API real da AWS nas 7 regiões; horas
-## e custo totais da frota registrados
+## Decision 117 (2026-10-31) -- v8 fleet's final destroy, authorized by the author present; confirmed via the real AWS API across the 7 regions; total fleet hours and cost recorded
 
-**Nota de numeração**: as três rodadas de revisão do relatório final
-(correções de N_JWK/decomposição por participante; diagnóstico do
-interop PQC/OpenSSL e modelo conjunto; diagnóstico do EKU/purpose e
-distinção autenticação-TLS-vs-mensagem) foram descritas nas mensagens
-de commit como Decisions 117-119, mas nunca foram escritas como
-entradas separadas aqui -- o número 117 é reaproveitado agora para o
-destroy real, que é o próximo evento efetivamente registrado neste
-arquivo. O conteúdo técnico de cada rodada de revisão está preservado
-nas mensagens de commit correspondentes (`git log`), não perdido --
-só não duplicado aqui por restrição de tempo.
+**Numbering note**: the three final-report review rounds
+(N_JWK/per-participant decomposition fixes; the PQC/OpenSSL interop
+diagnosis and joint model; the EKU/purpose diagnosis and the
+TLS-authentication-vs-message distinction) were described in the
+commit messages as Decisions 117-119, but were never written up as
+separate entries here -- the number 117 is reused now for the real
+destroy, which is the next event actually recorded in this
+file. Each review round's technical content is preserved
+in its corresponding commit message (`git log`), not lost --
+simply not duplicated here due to time constraints.
 
-**Snapshot final antes do destroy** (capturado com a frota ainda viva,
-via `estimate_fleet_cost_usd()`, o mesmo estimador usado durante toda
-a campanha -- AWS Cost Explorer continua indisponível para o usuário
-IAM deste projeto):
-- Boot da frota: 2026-10-30T21:08:56Z.
-- Horas totais de frota até o pedido de destroy: **22,45 horas**.
-- Custo estimado total: **≈ US$29,34**.
-- Pedido de destroy (presença confirmada do autor): 2026-10-31T19:36:11Z.
+**Final snapshot before the destroy** (captured while the fleet was
+still alive, via `estimate_fleet_cost_usd()`, the same estimator used
+throughout the campaign -- AWS Cost Explorer remains unavailable to
+this project's IAM user):
+- Fleet boot: 2026-10-30T21:08:56Z.
+- Total fleet hours up to the destroy request: **22,45 hours**.
+- Total estimated cost: **≈ US$29,34**.
+- Destroy request (author's presence confirmed): 2026-10-31T19:36:11Z.
 
-**Apply do plano salvo** (`terraform apply "tfdestroy"`, sem
-recalcular, exatamente o plano já revisado e commitado como artefato
-local fora do git): `Apply complete! Resources: 0 added, 0 changed,
-65 destroyed` -- bate exatamente com o esperado (Decision 116, item 6).
+**Apply of the saved plan** (`terraform apply "tfdestroy"`, with no
+recalculation, exactly the plan already reviewed and committed as a
+local artifact outside git): `Apply complete! Resources: 0 added, 0 changed,
+65 destroyed` -- matching exactly what was expected (Decision 116, item 6).
 
-**Confirmação pela API real da AWS, não apenas pelo código de saída do
-Terraform** -- `boto3`, localmente (o control, que antes relaiava
-esses comandos, já foi destruído nesta mesma operação):
-- `describe_instances` (filtro `tag:Project=mockopin-pqc-aws`, estados
-  pending/running/stopping/stopped) nas 7 regiões usadas pela campanha:
-  **0 instâncias remanescentes em cada uma das 7**.
-- `describe_key_pairs` (`mockopin-pqc-campaign*`) e `describe_security_
-  groups` (mesma tag) nas mesmas 7 regiões: **0 em cada uma**.
-- **Checagem adicional (pedido do autor, antes da rodada 4)**: `describe_volumes`/`describe_addresses`/`describe_snapshots`/`describe_images`/`describe_nat_gateways` (com e sem filtro de tag) e `describe_vpcs`/`describe_subnets` (com o filtro de tag do projeto) nas mesmas 7 regiões -- **0 volumes EBS, IPs elásticos, snapshots, AMIs, NAT gateways, VPCs ou subnets criados por este projeto em qualquer uma das 7** (nenhum desses tipos de recurso jamais existiu como `resource` próprio no Terraform desta campanha -- só volume raiz efêmero por instância, sem IP elástico, sem VPC/subnet própria, todos já cobertos pelos 65 recursos já destruídos).
+**Confirmation via the real AWS API, not just Terraform's own exit
+code** -- `boto3`, locally (control, which previously relayed these
+commands, had already been destroyed in this same operation):
+- `describe_instances` (filter `tag:Project=mockopin-pqc-aws`, states
+  pending/running/stopping/stopped) across the 7 regions the campaign used:
+  **0 remaining instances in each of the 7**.
+- `describe_key_pairs` (`mockopin-pqc-campaign*`) and `describe_security_
+  groups` (same tag) across the same 7 regions: **0 in each**.
+- **Additional check (the author's request, before round 4)**: `describe_volumes`/`describe_addresses`/`describe_snapshots`/`describe_images`/`describe_nat_gateways` (with and without the tag filter) and `describe_vpcs`/`describe_subnets` (with the project's tag filter) across the same 7 regions -- **0 EBS volumes, elastic IPs, snapshots, AMIs, NAT gateways, VPCs, or subnets created by this project in any of the 7** (none of these resource types ever existed as this campaign's own Terraform `resource` -- only an ephemeral root volume per instance, with no elastic IP, no VPC/subnet of its own, all already covered by the 65 resources already destroyed).
 
-Nenhum account ID, ARN ou IP é impresso neste registro, por instrução
-explícita. A frota v8 está completamente destruída e confirmada limpa
-nas 7 regiões.
+No account ID, ARN, or IP is printed in this entry, per explicit
+instruction. The v8 fleet is completely destroyed and confirmed clean
+across the 7 regions.
 
-## Decision 120 (2026-10-31) -- rodada 4 de revisão, só texto e análise
-## offline sobre dados já coletados (frota já destruída, Decision 117);
-## sem tag nova, por instrução explícita
+## Decision 120 (2026-10-31) -- review round 4, text only and offline analysis over already-collected data (the fleet already destroyed, Decision 117); no new tag, per explicit instruction
 
-1. **Direção do mTLS, dita explicitamente**: o cliente nunca verifica o
-   certificado do servidor, em nenhum perfil (`InsecureSkipVerify: true`,
-   `tls_kem_proxy/main.go:212`). O servidor também nunca executa a
-   verificação DEFAULT do Go para o certificado do cliente (mesma flag,
-   `mock_mtls/main.go:500`) -- depende inteiramente do seu próprio
-   `VerifyPeerCertificate`, que é um no-op em Classic/PQC e, em Hybrid,
-   checa só a extensão ML-DSA-65 `AltSignatureValue` (não a assinatura
-   RSA primária, apesar da mensagem de log do wrapper sugerir o
-   contrário). Microbenchmark offline (certificados/chaves reais locais,
-   mesma imagem `golang:1.27-rc-alpine` usada em toda a campanha, n=2000):
-   validação de cadeia 157-241µs/conexão; assinatura RSA-4096 5,94ms vs.
-   ML-DSA-65 0,69ms -- ambos reportados como estimativa acrescentada, não
-   medida durante a campanha real. Fonte completa:
+1. **mTLS direction, stated explicitly**: the client never verifies the
+   server's certificate, in any profile (`InsecureSkipVerify: true`,
+   `tls_kem_proxy/main.go:212`). The server also never runs Go's
+   DEFAULT verification for the client certificate (same flag,
+   `mock_mtls/main.go:500`) -- it relies entirely on its own
+   `VerifyPeerCertificate`, which is a no-op in Classic/PQC and, in Hybrid,
+   checks only the ML-DSA-65 `AltSignatureValue` extension (not the
+   primary RSA signature, despite the wrapper's log message suggesting
+   otherwise). Offline microbenchmark (real local certificates/keys,
+   the same `golang:1.27-rc-alpine` image used throughout the campaign, n=2000):
+   chain validation 157-241µs/connection; RSA-4096 signing 5,94ms vs.
+   ML-DSA-65 0,69ms -- both reported as an added estimate, not
+   measured during the real campaign. Full source:
    `thesis/results/v8/artifacts/item1_chain_verification_and_signing_benchmarks.md`.
-2. **Setup/teardown decomposto por fase, perfil e janela**:
-   `callback_server_teardown` é genuinamente constante (<0,02ms de
-   espalhamento); o aparente "+24ms do PQC" em `generate_callback_cert`
-   é um artefato de UMA única célula de referência (sa-east-1/L0) -- com
-   todas as 8 rotas e as 3 janelas reunidas (n=480/perfil), a diferença
-   real é de ~1ms e não é significativa (Mann-Whitney p=0,14/0,22). Não
-   explica, com confiança, o efeito de +23,6ms do PQC na regressão
-   (Seção 7/Predição 3).
-3. **Seção 3**: uma unidade por termo, dita explicitamente; o valor de
-   1.330,82 bytes do `JWT_size` (Classic) é a mediana, nas 30 execuções
-   da célula de referência, do total por execução somado sobre os 28
-   JWTs do fluxo, dividido por 28 -- não o tamanho de um token isolado.
-4. **Seção 6**: RSA-4096 confirmado como contribuinte real e consistente
-   em direção para o custo do handshake de Classic/Hybrid, mas qualificado
-   -- explica ~16% do gap Classic-menos-PQC no handshake em sa-east-1/L0,
-   não a maioria dele. "12 round trips" qualificado na rota de menor RTT
-   (us-east-1/L14, RTT~14ms), onde a razão ms÷RTT é visivelmente menos
-   estável.
-5. Detalhes: `/auth` agora reportado como `n/a` (nunca foi cronometrado,
-   não é um zero real); título da tabela de handshake-em-round-trips
-   agora cita o próprio aviso ms÷RTT; os 360 bytes de diferença
-   `handshake_bytes` contra a v7 decompostos por conexão (60 bytes/
-   conexão) com a constatação honesta de que uma decomposição por
-   mensagem TLS não é possível a partir dos dados salvos de nenhuma das
-   duas versões (v7 nunca teve pcaps); contas de 744 e 48 pcaps
-   reconciliadas explicitamente (48 = 24 do lado cliente + 24 do lado
-   servidor do estágio de validação); item 4.2 da Seção 9 alterado para
-   "Closed, com exceção do PQC".
-6. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Commit e push realizados; nenhuma tag nova criada,
-   por instrução explícita desta rodada.
+2. **Setup/teardown decomposed by phase, profile, and window**:
+   `callback_server_teardown` is genuinely constant (<0,02ms
+   spread); the apparent "+24ms for PQC" in `generate_callback_cert`
+   is an artifact of a SINGLE reference cell (sa-east-1/L0) -- with
+   all 8 routes and all 3 windows pooled (n=480/profile), the real
+   difference is ~1ms and is not significant (Mann-Whitney p=0,14/0,22). This
+   does not confidently explain PQC's +23,6ms effect in the regression
+   (Section 7/Prediction 3).
+3. **Section 3**: one unit per term, stated explicitly; the `JWT_size`
+   figure of 1.330,82 bytes (Classic) is the median, across the
+   reference cell's 30 executions, of the per-execution total summed
+   over the flow's 28 JWTs, divided by 28 -- not the size of a single
+   isolated token.
+4. **Section 6**: RSA-4096 confirmed as a real contributor, consistent
+   in direction, to Classic/Hybrid's handshake cost, but qualified
+   -- it explains ~16% of the Classic-minus-PQC gap in the handshake
+   at sa-east-1/L0, not most of it. "12 round trips" qualified on the
+   lowest-RTT route (us-east-1/L14, RTT~14ms), where the ms÷RTT ratio
+   is visibly less stable.
+5. Details: `/auth` now reported as `n/a` (never timed, not a real
+   zero); the handshake-in-round-trips table's title now cites the
+   ms÷RTT caveat itself; the 360-byte `handshake_bytes` difference
+   against v7 decomposed per connection (60 bytes/
+   connection) with the honest note that a per-TLS-message
+   decomposition isn't possible from either version's saved data
+   (v7 never had pcaps); the 744 and 48 pcap counts
+   reconciled explicitly (48 = 24 from the client side + 24 from the
+   server side of the validation stage); Section 9's item 4.2 changed to
+   "Closed, with a PQC exception".
+6. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets scanner:
+   clean. Commit and push done; no new tag created,
+   per this round's explicit instruction.
 
-## Decision 121 (2026-10-31) -- correção de uma afirmação errada da
-## Decision 120 (item 1), encontrada ao responder às perguntas de
-## evidência do autor; sem tag nova
+## Decision 121 (2026-10-31) -- fixing a wrong statement from Decision 120 (item 1), found while answering the author's evidence questions; no new tag
 
-**O item 1 da Decision 120 estava ERRADO quanto ao lado do servidor.**
-Ao responder com evidência de código (arquivo e linha, a pedido do
-autor) se o servidor valida ou não a cadeia do certificado do cliente,
-a leitura do código-fonte real do `crypto/tls` do Go 1.27rc mostrou que
-`InsecureSkipVerify` é uma flag **exclusiva do lado cliente**: aparece
-só em `handshake_client.go` (nunca em `handshake_server.go` ou
-`handshake_server_tls13.go`, confirmado por grep em todo o pacote). A
-verificação da cadeia do certificado do CLIENTE pelo SERVIDOR
-(`processCertsFromClient()`, `handshake_server.go:970-990`) roda
-`certs[0].Verify()` contra `ClientCAs` sempre que
-`ClientAuth>=VerifyClientCertIfGiven` -- sem nenhuma referência a
-`InsecureSkipVerify`. Como `mock_mtls/main.go:502` define exatamente
-`ClientAuth: tls.VerifyClientCertIfGiven`, **o servidor verifica
-realmente a cadeia do certificado do cliente, nos três perfis** -- a
-afirmação anterior ("sob Classic e PQC, o servidor não faz nenhuma
-verificação criptográfica do certificado do cliente") estava errada e
-foi removida/corrigida na Seção 2 (item 5), nas Limitações e na Seção
-6 (que agora conta a assinatura RSA-4096 dos DOIS lados do handshake
-TLS 1.3 -- servidor E cliente, já que `CertificateVerify` é enviado
-pelos dois quando o cliente apresenta certificado -- e soma o custo
-real, não hipotético, da verificação de cadeia já feita pelo servidor).
-A estimativa de contribuição do RSA-4096 para o gap Classic-menos-PQC
-no handshake subiu de ~16% (uma única operação) para ~32% (as duas
-assinaturas + a diferença real de verificação de cadeia), ainda
-qualificada como contribuinte real, não explicação completa. O que
-permanece correto, sem alteração: o CLIENTE nunca verifica o servidor,
-em nenhum perfil (essa parte da Decision 120 estava certa). Seção 7
-também ganhou uma frase explícita (pedido do autor): o efeito de
-+23,6ms do PQC na regressão é dito como pequeno, não nulo, e não
-atribuído a nenhuma fase medida isoladamente com confiança.
-`audit_v8_from_raw.py` reexecutado após a correção: **0 divergências**.
-Scanner de segredos: limpo. Sem tag nova.
+**Decision 120's item 1 was WRONG about the server side.**
+While answering, with code evidence (file and line, at the author's
+request), whether the server does or does not validate the client
+certificate's chain, reading Go 1.27rc's real `crypto/tls` source
+code showed that `InsecureSkipVerify` is a flag **exclusive to the
+client side**: it appears only in `handshake_client.go` (never in
+`handshake_server.go` or `handshake_server_tls13.go`, confirmed by a
+grep across the whole package). The SERVER's verification of the
+CLIENT certificate's chain (`processCertsFromClient()`,
+`handshake_server.go:970-990`) runs `certs[0].Verify()` against
+`ClientCAs` whenever `ClientAuth>=VerifyClientCertIfGiven` -- with no
+reference to `InsecureSkipVerify` at all. Since `mock_mtls/main.go:502`
+sets exactly `ClientAuth: tls.VerifyClientCertIfGiven`, **the server
+genuinely verifies the client certificate's chain, in all three
+profiles** -- the earlier statement ("under Classic and PQC, the
+server performs no cryptographic verification of the client
+certificate") was wrong and has been removed/corrected in Section 2
+(item 5), in Limitations, and in Section 6 (which now counts the
+RSA-4096 signature on BOTH sides of the TLS 1.3 handshake -- server
+AND client, since `CertificateVerify` is sent by both when the client
+presents a certificate -- and adds the real, not hypothetical, cost
+of the chain verification the server was already doing).
+The estimate of RSA-4096's contribution to the Classic-minus-PQC gap
+in the handshake rose from ~16% (a single operation) to ~32% (both
+signatures + the real chain-verification difference), still
+qualified as a real contributor, not a complete explanation. What
+remains correct, unchanged: the CLIENT never verifies the server,
+in any profile (that part of Decision 120 was right). Section 7
+also gained an explicit sentence (the author's request): PQC's
++23,6ms effect in the regression is stated as small, not null, and not
+confidently attributed to any single measured phase.
+`audit_v8_from_raw.py` re-run after the fix: **0 divergences**.
+Secrets scanner: clean. No new tag.
 
-## Decision 122 (2026-10-31) -- rodada 5: prova viva local (pilha v7, não
-## AWS) do item 1 da Decision 121; certificado de cliente opcional na
-## camada TLS e divergência de perfil registrada; mediana + custo do
-## ML-DSA-65 do Hybrid acrescentados à tabela de verificação de cadeia;
-## sem tag nova
+## Decision 122 (2026-10-31) -- round 5: a local live proof (v7 stack, not AWS) of Decision 121's item 1; optional client certificate at the TLS layer and a profile divergence recorded; Hybrid's ML-DSA-65 median + cost added to the chain-verification table; no new tag
 
-1. **Teste local, 3 perfis x 4 casos**, pilha `insurance-server-lambdas`
-   local (CRYPTO_PROFILE alternado via `docker compose --profile main up
-   -d --force-recreate --no-deps mtls`), sondado por um cliente Go
-   `crypto/tls` mínimo (mesmas `CurvePreferences` por perfil do
-   `tls_kem_proxy` real), para `host.docker.internal:443`:
+1. **Local test, 3 profiles x 4 cases**, the local
+   `insurance-server-lambdas` stack (CRYPTO_PROFILE switched via
+   `docker compose --profile main up
+   -d --force-recreate --no-deps mtls`), probed by a minimal Go
+   `crypto/tls` client (the same per-profile `CurvePreferences` as the
+   real `tls_kem_proxy`), against `host.docker.internal:443`:
 
    | Caso | Classic | PQC | Hybrid |
    |---|---|---|---|
    | CA errada | REJECTED (unknown CA) | REJECTED (unknown CA) | REJECTED (unknown CA) |
-   | Expirado | REJECTED (expired) | REJECTED (expired) | REJECTED (expired) |
-   | Sem certificado | ACCEPTED (anônimo) | ACCEPTED (anônimo) | ACCEPTED (anônimo) |
-   | Válido | ACCEPTED | ACCEPTED | ACCEPTED |
+   | Expired | REJECTED (expired) | REJECTED (expired) | REJECTED (expired) |
+   | No certificate | ACCEPTED (anonymous) | ACCEPTED (anonymous) | ACCEPTED (anonymous) |
+   | Valid | ACCEPTED | ACCEPTED | ACCEPTED |
 
-   **Nenhum resultado contradisse o item 5 da Seção 2; nenhuma correção
-   de texto foi necessária a partir deste teste.** Dois bugs reais foram
-   encontrados e corrigidos na própria sonda (não no gateway) antes deste
-   resultado final: (a) o handshake TLS 1.3 do lado cliente conclui sem
-   nunca ler de volta o resultado do servidor -- foi preciso um round-trip
-   HTTP real após o `Dial()` para expor o alerta; (b) o próprio
-   `getClientCertificate()` do Go filtra silenciosamente um certificado
-   cujo emissor não está entre as `AcceptableCAs` anunciadas pelo
-   servidor, enviando um certificado VAZIO em vez do certificado
-   defeituoso -- foi preciso forçar o envio via `GetClientCertificate`
-   para realmente testar o servidor. Fonte completa, com os dois bugs
-   documentados: `thesis/results/v8/artifacts/item2_mtls_local_probe.md`.
-2. **Certificado de cliente é opcional na camada TLS**
-   (`ClientAuth: VerifyClientCertIfGiven`), confirmado agora pelo teste
-   vivo acima. A presença É exigida, condicionalmente, uma camada acima:
-   `verifyCertificateThumbprint()` (`mock_mtls/main.go:1004`), chamada a
-   partir da introspecção de token (`mock_mtls/main.go:948`) quando o
-   token carrega `cnf.x5t#S256` -- rejeita a requisição se
-   `req.TLS.PeerCertificates` estiver vazio. Registrado como divergência
-   do próprio perfil de segurança declarado do OPIN (que exige a
-   apresentação do certificado de cliente incondicionalmente na camada
-   TLS), ligada ao item 4.6c, não como um limitador novo e separado.
-   Troca terminológica aplicada onde o sentido literal importa: "mTLS" ->
-   "certificado verificado quando apresentado" na Seção 2 item 5 e no
-   bullet correspondente das Limitações.
-3. **Tabela de verificação de cadeia (Seção 2)**: mediana acrescentada ao
-   lado da média; nova linha "Hybrid (extra)" com o custo isolado da
-   verificação do `AltSignatureValue` ML-DSA-65
-   (`verifyHybridClientCert()`, reproduzido byte a byte do código real) --
-   não incluído na linha "Hybrid" original, que mede só a cadeia RSA
-   padrão. Custo total real do Hybrid, somando as duas linhas: ~450,8µs,
-   o dobro de Classic/PQC isolados.
-4. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Commit e push realizados; nenhuma tag nova criada.
-   Pilha local do `mtls` restaurada ao seu perfil original
-   (`CRYPTO_PROFILE=pqc`) ao final do teste.
+   **No result contradicted Section 2's item 5; no text correction was
+   needed based on this test.** Two real bugs were found and fixed in
+   the probe itself (not the gateway) before this final result: (a) the
+   client-side TLS 1.3 handshake completes without ever reading back the
+   server's result -- a real HTTP round trip after `Dial()` was needed to
+   surface the alert; (b) Go's own `getClientCertificate()` silently
+   filters out a certificate whose issuer isn't among the
+   `AcceptableCAs` the server announced, sending an EMPTY certificate
+   instead of the flawed one -- sending had to be forced via
+   `GetClientCertificate` to actually test the server. Full source, with
+   both bugs documented: `thesis/results/v8/artifacts/item2_mtls_local_probe.md`.
+2. **The client certificate is optional at the TLS layer**
+   (`ClientAuth: VerifyClientCertIfGiven`), now confirmed by the live
+   test above. Its presence IS required, conditionally, one layer up:
+   `verifyCertificateThumbprint()` (`mock_mtls/main.go:1004`), called
+   from token introspection (`mock_mtls/main.go:948`) when the
+   token carries `cnf.x5t#S256` -- rejecting the request if
+   `req.TLS.PeerCertificates` is empty. Recorded as a divergence
+   from OPIN's own declared security profile (which requires the
+   client certificate to be presented unconditionally at the TLS
+   layer), tied to item 4.6c, not as a new, separate limitation.
+   Terminology swap applied where the literal meaning matters: "mTLS" ->
+   "certificate verified when presented" in Section 2 item 5 and in the
+   corresponding Limitations bullet.
+3. **Chain-verification table (Section 2)**: median added alongside
+   the mean; a new "Hybrid (extra)" row with the isolated cost of
+   verifying the ML-DSA-65 `AltSignatureValue`
+   (`verifyHybridClientCert()`, reproduced byte for byte from the real code) --
+   not included in the original "Hybrid" row, which measures only the
+   standard RSA chain. Hybrid's real total cost, adding both rows: ~450,8µs,
+   double Classic/PQC in isolation.
+4. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. Commit and push done; no new tag created.
+   The local `mtls` stack restored to its original profile
+   (`CRYPTO_PROFILE=pqc`) at the end of the test.
 
-## Decision 123 (2026-10-31) -- rodada 6: reconciliação Hybrid-no-TLS,
-## decomposição completa do setup/teardown (sem fase oculta), teste real
-## de signing substituindo referência inexistente, limpeza de linguagem
-## de rascunho/rodada, correções de formatação; sem tag nova
+## Decision 123 (2026-10-31) -- round 6: Hybrid-in-TLS reconciliation, complete setup/teardown decomposition (no hidden phase), real signing test replacing a non-existent reference, draft/round language cleanup, formatting fixes; no new tag
 
-1. **Hybrid no TLS, regra única aplicada em todos os lugares** (Seção 2
-   itens 4/5, linha "TLS client certificate" da tabela, Limitação
-   correspondente, resumo executivo): a assinatura ML-DSA-65 do
-   certificado do SERVIDOR nunca é verificada (cliente com
-   `InsecureSkipVerify`); a do certificado do CLIENTE É verificada pelo
-   servidor (`hybridVerifyPeerCertificateFunc()`, além da verificação RSA
-   padrão). A Seção 2 item 4 e a Limitação correspondente diziam
-   incorretamente que NENHUM dos dois lados verificava a extensão
-   ML-DSA-65 -- corrigido para a assimetria real, por direção.
-2. **Seção 6, setup/teardown, decomposição completa** (sa-east-1/L0,
-   n=30/perfil): não existe fase oculta -- `generate_callback_cert` e
-   `callback_server_teardown` ocorrem CADA UMA duas vezes por execução; a
-   soma das duas ocorrências de cada fase, por execução, fecha
-   exatamente com os 1.071,2/1.095,2/1.071,6ms da tabela original. Teste
-   Mann-Whitney na célula L0 específica: `generate_callback_cert` PQC vs.
-   Classic U=329,0 p=0,0736 (limítrofe, mais próximo da significância que
-   o teste pooled em todas as rotas, p=0,1425). Conclusão reescrita para
-   "inconclusivo", sem afirmar que o setup não explica o efeito do PQC na
-   regressão antes dessa decomposição.
-3. **Seção 6, teste real de signing**: a referência a um "sign test da
-   Seção 8" sobre signing, que não existe, foi substituída pelo teste
-   real (Mann-Whitney, `signing_seconds`, as 720 execuções): PQC e Hybrid
-   são maiores que Classic em TODOS os pares (separação completa, p <
-   0,0001 nos dois casos).
-4. **Seção 3**: 4.6a e "uma unidade por termo" tornadas coerentes --
-   `JWT_size` é serialização compacta base64url; `JWK_PK_size` (256,
-   1.952, 2.208) é o tamanho BRUTO (decodificado) da chave pública, NÃO
-   base64url; `PKI_bytes` é o corpo PEM. Frase "the equation above uses
-   the raw size" removida (contradizia a própria seção).
-5. Linguagem de rascunho/rodada/revisor removida do texto científico
-   ("earlier draft", "this round", "round 5", "correcting Decision
-   115/116", "per Luciano's review" e variantes) -- conteúdo técnico e
-   referências a Decisions preservados; o histórico de rodadas continua
-   só aqui no DECISIONS.md.
-6. Correções de formatação: "U=108.901,0, 0,1425" -> "U=108.901,0,
-   p=0,1425"; negrito sem fechar na Seção 6 ("...at every RTT scale");
-   parêntese e negrito sem fechar nas Limitações (item de verificação
-   unidirecional); `v8-official-data-3` incluída na lista de tags da
-   Seção 11.
-7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Sem tag nova.
+1. **Hybrid in TLS, a single rule applied everywhere** (Section 2
+   items 4/5, the table's "TLS client certificate" row, the
+   corresponding Limitation, the executive summary): the ML-DSA-65
+   signature of the SERVER certificate is never verified (the client
+   has `InsecureSkipVerify`); the CLIENT certificate's IS verified by
+   the server (`hybridVerifyPeerCertificateFunc()`, in addition to the
+   standard RSA verification). Section 2 item 4 and the corresponding
+   Limitation incorrectly said that NEITHER side verified the
+   ML-DSA-65 extension -- fixed to reflect the real, direction-dependent
+   asymmetry.
+2. **Section 6, setup/teardown, complete decomposition** (sa-east-1/L0,
+   n=30/profile): there is no hidden phase -- `generate_callback_cert` and
+   `callback_server_teardown` each occur twice per execution; the
+   sum of each phase's two occurrences, per execution, closes
+   exactly with the original table's 1.071,2/1.095,2/1.071,6ms. Mann-Whitney
+   test on the specific L0 cell: `generate_callback_cert` PQC vs.
+   Classic U=329,0 p=0,0736 (borderline, closer to significance than
+   the pooled test across all routes, p=0,1425). Conclusion rewritten to
+   "inconclusive," without stating that setup doesn't explain PQC's effect in
+   the regression before this decomposition.
+3. **Section 6, real signing test**: the reference to a "Section 8
+   sign test" on signing, which doesn't exist, was replaced by the real
+   test (Mann-Whitney, `signing_seconds`, the 720 executions): PQC and
+   Hybrid are greater than Classic in EVERY pair (complete separation,
+   p < 0,0001 in both cases).
+4. **Section 3**: 4.6a and "one unit per term" made consistent --
+   `JWT_size` is compact base64url serialization; `JWK_PK_size` (256,
+   1.952, 2.208) is the RAW (decoded) public key size, NOT
+   base64url; `PKI_bytes` is the PEM body. The sentence "the equation above uses
+   the raw size" removed (it contradicted the section itself).
+5. Draft/round/reviewer language removed from the scientific text
+   ("earlier draft," "this round," "round 5," "correcting Decision
+   115/116," "per Luciano's review," and variants) -- technical content
+   and Decision references preserved; the round-by-round history stays
+   only here in DECISIONS.md.
+6. Formatting fixes: "U=108.901,0, 0,1425" -> "U=108.901,0,
+   p=0,1425"; an unclosed bold span in Section 6 ("...at every RTT scale");
+   an unclosed parenthesis and bold span in Limitations (the
+   one-directional verification item); `v8-official-data-3` added to
+   Section 11's tag list.
+7. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. No new tag.
 
-## Decision 124 (2026-10-31) -- rodada 7: Seção 6 corrigida para a
-## assimetria do ML-DSA-65 do Hybrid; análise de sensibilidade da
-## regressão conjunta com T_fluxo menos setup/teardown; sem tag nova,
-## sem dados novos
+## Decision 124 (2026-10-31) -- round 7: Section 6 fixed for Hybrid's ML-DSA-65 asymmetry; joint-regression sensitivity analysis with T_fluxo minus setup/teardown; no new tag, no new data
 
-1. **Seção 6** ("RSA-4096 signing as a contributor..."): a frase "the
-   handshake itself never checks" o `AltSignatureValue` reescrita para
-   refletir a assimetria já estabelecida na Seção 2 -- só o certificado
-   do SERVIDOR nunca tem o ML-DSA-65 verificado (cliente nunca verifica
-   o servidor); o do CLIENTE É verificado pelo servidor
-   (`hybridVerifyPeerCertificateFunc()`). A comparação de custo de
-   assinatura que segue é explicitamente sobre o lado do servidor.
-2. **Análise de sensibilidade (Seção 7)**: mesmo modelo conjunto
-   (profile+route+position+window), mesma semente (779), mesmas 10.000
-   reamostragens, 720 execuções -- variável resposta T_fluxo MENOS
-   setup/teardown (as duas ocorrências de `callback_server_teardown` +
-   `generate_callback_cert`, a mesma soma por execução que a tabela de
-   reconciliação da Seção 6 usa). Resultado, reportado ao lado do
-   original, sem substituí-lo:
+1. **Section 6** ("RSA-4096 signing as a contributor..."): the
+   sentence "the handshake itself never checks" the `AltSignatureValue`
+   rewritten to reflect the asymmetry already established in Section 2
+   -- only the SERVER certificate never has its ML-DSA-65 verified
+   (the client never verifies the server); the CLIENT's IS verified by
+   the server (`hybridVerifyPeerCertificateFunc()`). The signing-cost
+   comparison that follows is explicitly about the server side.
+2. **Sensitivity analysis (Section 7)**: the same joint model
+   (profile+route+position+window), the same seed (779), the same 10.000
+   resamples, 720 executions -- response variable T_fluxo MINUS
+   setup/teardown (the two occurrences of `callback_server_teardown` +
+   `generate_callback_cert`, the same per-execution sum Section 6's
+   reconciliation table uses). Result, reported alongside the
+   original, not replacing it:
 
-   | Termo | T_fluxo original (ms) | IC original | T_fluxo menos setup/teardown (ms) | IC menos-setup |
+   | Term | Original T_fluxo (ms) | Original CI | T_fluxo minus setup/teardown (ms) | Minus-setup CI |
    |---|---:|---:|---:|---:|
    | profile_pqc | 23,6 | [9,0;38,1] | 18,3 | [5,1;31,4] |
    | profile_hybrid | 91,8 | [75,9;107,8] | 89,4 | [74,8;104,4] |
 
-   O efeito do PQC encolhe (23,6 -> 18,3ms) mas o IC continua excluindo
-   zero; o do Hybrid muda pouco (91,8 -> 89,4ms). Nenhum dos dois efeitos
-   depende de o setup/teardown estar incluído na resposta.
-3. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Sem tag nova.
+   PQC's effect shrinks (23,6 -> 18,3ms) but the CI still excludes
+   zero; Hybrid's changes little (91,8 -> 89,4ms). Neither effect
+   depends on whether setup/teardown is included in the response.
+3. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. No new tag.
 
-## Decision 125 (2026-11-02) -- rodada 8: auditoria independente externa
-## -- IC por t do k, F-test de rota, heterogeneidade entre janelas
-## reproduzida com SE correto, Mann-Whitney sem correção de continuidade
-## declarado, N_mTLS=6 corrigido para 719/720, duplicata RSA do /jwks do
-## Hybrid explicada e quantificada, sensibilidade estendida; sem tag
-## nova, sem dados novos
+## Decision 125 (2026-11-02) -- round 8: independent external audit -- t-based CI for k, route F-test, between-window heterogeneity reproduced with the correct SE, Mann-Whitney without continuity correction declared, N_mTLS=6 fixed to 719/720, Hybrid's /jwks RSA duplicate explained and quantified, sensitivity extended; no new tag, no new data
 
-1. **k, IC por t sobre as 8 medianas de rota (df=6)**: reproduzido com o
-   quantil exato de Student (scipy, já dependência fixada do projeto) --
-   contém 56 nos 3 perfis, inclusive PQC ([55,94;56,33]), diferente do IC
-   por reamostragem (3.000 iterações) que fica inteiramente acima de 56
-   só para o PQC. "k do PQC acima de 56" rebaixado, no resumo e nas
-   Seções 7/9/10/11, para "resultado dependente do método de intervalo;
-   k ≈ 56 nos 3 perfis" -- mantendo intacto o achado robusto, não
-   contestado, de que a 240 execuções/perfil ambos os métodos (bootstrap
-   e t) concordam que o IC do PQC exclui 56. F-test (RTT + 7 dummies de
-   rota vs. RTT isolado, 240 execuções/perfil, comparação encaixada real):
-   significativo nos 3 perfis (p entre 4,9e-11 e 1,7e-8) -- rota carrega
-   poder explicativo real além do RTT medido por execução, para todos os
-   perfis, não só o PQC.
-2. **Heterogeneidade entre janelas**: a figura antiga (Q=7,160, p=0,0279)
-   não pôde ser rastreada a nenhum script salvo -- o SE usado é
-   desconhecido. Reproduzido do zero com o SE correto por mínimos
-   quadrados (t, df=6, mesmo ajuste do item 1): Cochran Q=5,304 (p=0,070,
-   não significativo no limiar convencional); o teste par a par janela 2
-   vs. 3 isoladamente SEGUE significativo (Z=2,176, p=0,030). Um
-   contraponto independente, não paramétrico (Kruskal-Wallis sobre o
-   delta PQC-menos-Classic ajustado por rota e janela, sem SE de teoria
-   normal) não encontra diferença alguma entre janelas (H=0,839,
-   p=0,657, medianas 24,1/28,7/16,7ms). Os três testes discordam entre
-   si -- achado reescrito como "não robusto", uma questão aberta, não
-   mais um efeito estatisticamente confirmado.
-3. **Mann-Whitney sem correção de continuidade**: declarado
-   explicitamente na Seção 8. Comparado contra a versão com correção do
-   próprio scipy em 32 testes deste relatório -- maior divergência
-   encontrada: 0,00568 (p=0,78446 sem correção vs. 0,79014 com ela), num
-   teste já claramente não significativo dos dois jeitos; nenhuma
-   conclusão de significância deste relatório muda com a correção.
-4. **N_mTLS=6, verificado em TODAS as 720 execuções via pcap do cliente,
-   não assumido**: 719/720 mostram exatamente 6 conexões TCP reais
-   (SYN+SYN-ACK); exatamente uma (Hybrid, janela 3, sa-east-1/L0,
-   `w03_run30.pcap.gz`) mostra 7 -- a conexão extra foi a um destino de
-   rede diferente (público, não o IP privado da VPC) das outras seis e
-   nunca completou um handshake mTLS logado no gateway, então o `N_mTLS`
-   OFICIAL (fonte: log do gateway, não a pcap) permanece 6 mesmo para
-   essa execução -- o OPINsize não é afetado. A causa exata, no nível da
-   aplicação, não pode mais ser determinada com a frota destruída --
-   registrada como não atribuída. Nenhum account ID, ARN ou IP é
-   impresso neste registro, por instrução já vigente.
-5. **`/jwks` do Hybrid, duplicata RSA 'sig' de 256B**: explicada (mesma
-   chave do componente clássico da chave HYBRID composta, republicada
-   para compatibilidade de descoberta de um consumidor JWKS padrão --
-   já documentado e corretamente excluído em `term_jwk()` desde
-   2026-10-25) e quantificada a partir dos dados reais: contá-la de
-   qualquer forma somaria +512 bytes (+0,14%) ao OPINsize do Hybrid --
-   pequeno, e excluído por um motivo de princípio (uma única chave,
-   contada uma vez), não só porque o efeito é pequeno.
-6. **Sensibilidade sem setup/teardown, estendida**: `window_2` e
-   `position_1` agora também reportados ao lado de `profile_pqc`/
-   `profile_hybrid`. `window_2` deixa de cruzar zero quando o
-   setup/teardown é removido (efeito real que estava mascarado);
-   `position_1` continua cruzando zero, mas com margem mais estreita --
-   "sem efeito de posição detectável" ajustado para refletir essa
-   margem, sem reverter a conclusão.
-7. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Sem tag nova.
+1. **k, t-based CI over the 8 route medians (df=6)**: reproduced with
+   the exact Student quantile (scipy, already a fixed project
+   dependency) -- contains 56 across all 3 profiles, including PQC
+   ([55,94;56,33]), unlike the resampling-based CI (3.000 iterations),
+   which lands entirely above 56 only for PQC. "PQC's k above 56"
+   downgraded, in the summary and in Sections 7/9/10/11, to "a
+   result that depends on the interval method; k ≈ 56 across all 3
+   profiles" -- keeping intact the robust, uncontested finding that
+   at 240 executions/profile both methods (bootstrap and t) agree that
+   PQC's CI excludes 56. F-test (RTT + 7 route dummies vs. RTT alone,
+   240 executions/profile, a real nested comparison): significant
+   across all 3 profiles (p between 4,9e-11 and 1,7e-8) -- route carries
+   real explanatory power beyond per-execution measured RTT, for all
+   profiles, not just PQC.
+2. **Between-window heterogeneity**: the old figure (Q=7,160, p=0,0279)
+   could not be traced to any saved script -- the SE used is
+   unknown. Reproduced from scratch with the correct least-squares SE
+   (t, df=6, the same fit as item 1): Cochran Q=5,304 (p=0,070,
+   not significant at the conventional threshold); the pairwise window 2
+   vs. 3 test in isolation REMAINS significant (Z=2,176, p=0,030). An
+   independent, non-parametric counterpoint (Kruskal-Wallis over the
+   PQC-minus-Classic delta adjusted by route and window, with no
+   normal-theory SE) finds no difference at all between windows (H=0,839,
+   p=0,657, medians 24,1/28,7/16,7ms). The three tests disagree with
+   each other -- the finding rewritten as "not robust," an open
+   question, no longer a statistically confirmed effect.
+3. **Mann-Whitney without continuity correction**: declared
+   explicitly in Section 8. Compared against scipy's own
+   corrected version across 32 tests in this report -- the largest
+   divergence found: 0,00568 (p=0,78446 without correction vs. 0,79014
+   with it), in a test already clearly not significant either way; no
+   significance conclusion in this report changes with the correction.
+4. **N_mTLS=6, verified across ALL 720 executions via the client's
+   pcap, not assumed**: 719/720 show exactly 6 real TCP connections
+   (SYN+SYN-ACK); exactly one (Hybrid, window 3, sa-east-1/L0,
+   `w03_run30.pcap.gz`) shows 7 -- the extra connection went to a
+   different network destination (public, not the VPC's private IP)
+   than the other six and never completed an mTLS handshake logged by
+   the gateway, so the OFFICIAL `N_mTLS` (source: the gateway log, not
+   the pcap) remains 6 even for that execution -- OPINsize is
+   unaffected. The exact, application-level cause can no longer be
+   determined with the fleet destroyed -- recorded as unattributed.
+   No account ID, ARN, or IP is printed in this entry, per the
+   already-standing instruction.
+5. **Hybrid's `/jwks`, a 256B RSA 'sig' duplicate**: explained (the
+   same key as the composed HYBRID key's classical component,
+   republished for discovery compatibility with a standard JWKS
+   consumer -- already documented and correctly excluded in
+   `term_jwk()` since 2026-10-25) and quantified from the real data:
+   counting it anyway would add +512 bytes (+0,14%) to Hybrid's
+   OPINsize -- small, and excluded on a matter of principle (a single
+   key, counted once), not merely because the effect is small.
+6. **Sensitivity without setup/teardown, extended**: `window_2` and
+   `position_1` now also reported alongside `profile_pqc`/
+   `profile_hybrid`. `window_2` stops crossing zero when
+   setup/teardown is removed (a real effect that had been masked);
+   `position_1` still crosses zero, but with a narrower margin --
+   "no detectable position effect" adjusted to reflect this
+   margin, without reversing the conclusion.
+7. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. No new tag.
 
-## Decision 126 (2026-11-02) -- rodada 9: ajuste de consistência -- o IC
-## de k por execução (n=240) que exclui 56 para o PQC não pode ser
-## tratado como confirmação, dado o lack-of-fit real de rota (F-test);
-## linguagem de heterogeneidade entre janelas alinhada em todo o
-## relatório; sem tag nova, sem dados novos
+## Decision 126 (2026-11-02) -- round 9: consistency fix -- the per-execution CI for k (n=240) that excludes 56 for PQC cannot be treated as confirmation, given the route's real lack-of-fit (F-test); between-window heterogeneity language aligned throughout the report; no new tag, no new data
 
-1. **Resumo executivo e Seção 7 (k por execução, n=240)**: reescrito --
-   o desvio do PQC em relação a 56 é pequeno (0,155 viagem, ~51ms em
-   ~20s na rota mais longa do projeto, ~0,25%), e tanto o IC por
-   reamostragem quanto o IC por t (n=240) vêm de um modelo que ajusta só
-   T_fluxo ~ RTT, ignorando rota como fator próprio -- o mesmo F-test de
-   rota (Decision 125) já mostra que essa omissão é uma falta de ajuste
-   real e significativa, nos 3 perfis. Um IC estreito vindo de um
-   modelo mal especificado não é confirmação de nada; a conclusão
-   correta é "k ≈ 56 nos 3 perfis; a exclusão de 56 pelo PQC depende do
-   método de intervalo e não é confirmada por nenhum teste que leve em
-   conta a falta de ajuste de rota" -- não mais "confirmado com um
-   teste paramétrico, não só bootstrap."
-2. **Seção 9, item 4.2**: "mostra variação real, estatisticamente
-   detectável, entre as 3 janelas" removido; agora "variação entre as 3
-   janelas que não é robusta entre testes (Seção 7/10)."
-3. **Limitações**: "the heterogeneity found for PQC's fixed cost across
-   windows" trocado por "the possible, non-robust variation in PQC's
+1. **Executive summary and Section 7 (k per execution, n=240)**:
+   rewritten -- PQC's deviation from 56 is small (0,155 trips, ~51ms over
+   ~20s on the project's longest route, ~0,25%), and both the
+   resampling-based CI and the t-based CI (n=240) come from a model
+   that fits only T_fluxo ~ RTT, ignoring route as its own factor -- the
+   same route F-test (Decision 125) already shows that this omission is
+   a real, significant lack of fit, across all 3 profiles. A narrow CI
+   coming from a misspecified model confirms nothing; the
+   correct conclusion is "k ≈ 56 across all 3 profiles; PQC's exclusion
+   of 56 depends on the interval method and is not confirmed by any
+   test that accounts for the route's lack of fit" -- no longer
+   "confirmed with a parametric test, not just bootstrap."
+2. **Section 9, item 4.2**: "shows real, statistically
+   detectable variation across the 3 windows" removed; now "variation
+   across the 3 windows that is not robust across tests (Section 7/10)."
+3. **Limitations**: "the heterogeneity found for PQC's fixed cost across
+   windows" swapped for "the possible, non-robust variation in PQC's
    fixed cost across windows."
-4. Varredura nas Seções 1, 7, 9, 10 e 11 por qualquer outra frase que
-   ainda tratasse a heterogeneidade entre janelas como "real" ou
-   "estatisticamente detectável" -- nenhuma encontrada além das já
-   corrigidas na Decision 125; linguagem já alinhada.
-5. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Sem tag nova.
+4. Swept Sections 1, 7, 9, 10, and 11 for any other sentence that
+   still treated the between-window heterogeneity as "real" or
+   "statistically detectable" -- none found beyond the ones already
+   fixed in Decision 125; language already aligned.
+5. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. No new tag.
 
-## Decision 127 (2026-11-03) -- rodada 10: N_JWK 2->4 reconciliado como
-## mudança de fluxo (não erro de v7); respostas sobre regiões AWS,
-## client_cert_der_bytes, N_JWT 26->28, Node.js/BouncyCastle, diff de
-## fluxo v7->v8; sem tag nova, sem dados novos
+## Decision 127 (2026-11-03) -- round 10: N_JWK 2->4 reconciled as a flow change (not a v7 error); answers on AWS regions, client_cert_der_bytes, N_JWT 26->28, Node.js/BouncyCastle, the v7->v8 flow diff; no new tag, no new data
 
-1. **Seção 1.1 e Seção 3 reescritas**: a frase "v7's own published
-   Classic OPINsize undercounts N_JWK the same way this report's own
-   first draft did" estava errada -- v7 usou `N_JWK=2` corretamente
-   para o PRÓPRIO fluxo da v7 (2 chamadas a `/jwks`, 42 chamadas totais
-   por execução, confirmado nos dados brutos da v7); o fluxo da v8
-   bateu exatamente esse mesmo número (mesmo N_JWK=2, mesmas 42
-   chamadas) até uma etapa posterior do desenvolvimento da v8
-   acrescentar uma capacidade de verificação que a v7 nunca teve: checar
-   as respostas assinadas pelo RS, o que exige buscar o `/jwks` do
-   PRÓPRIO RS, uma vez por sub-fluxo (Decision 87/88,
-   `METRICS_COVERAGE.md`). Essa adição -- 2 chamadas novas, uma por
-   sub-fluxo -- é o que leva `N_JWK` de 2 para 4 e a contagem de
-   chamadas de 42 para 44. Reescrito como mudança de fluxo documentada,
-   não como correção de um erro da v7; a reconciliação de 872 bytes
-   (512 do N_JWK + 360 do handshake_bytes) permanece idêntica, só a
-   narrativa mudou.
-2. **Respostas (consulta, sem alteração de código de medição):**
-   (a) Região AWS do cliente remoto por rota: `sa-east-1` servidor -> L0
-   cliente em `sa-east-1` (co-localizado), L123 em `ca-central-1`, L219
-   em `eu-north-1`, L325 em `ap-southeast-1`; `us-east-1` servidor -> L0
-   cliente em `us-east-1` (co-localizado), L14 em `ca-central-1`
-   (instância separada da de L123); `ap-northeast-1` servidor -> L0
-   cliente em `ap-northeast-1` (co-localizado), L30 em `ap-northeast-2`
-   (tabela de Decision 41/53).
-   (b) `client_cert_der_bytes` por perfil na v8: Classic 1.494 B, PQC
-   5.879 B, Hybrid 6.859 B -- medido direto do DER dos certificados do
-   cliente atualmente usados (`mock-service-os/certs/client_one*.crt`)
-   e confirmado contra `PROFILE_ATTESTATION.md` (Classic/Hybrid) e
-   `apply_pqc_ca_postquantum_correction.py` (PQC, pós-correção
-   ML-DSA-65 end-to-end).
-   (c) N_JWT 26->28: mudança da PRÓPRIA v7 (Decision 11, v7), não algo
-   que mudou entre v7 e v8 -- um JARM real (token assinado do AS,
-   `response=` do callback) existia no fluxo mas nunca era contado;
-   achado por revisão externa, corrigido na v7, e a v8 já herda o
-   N_JWT=28 corrigido sem nenhuma correção adicional do lado da v8
-   (`METRICS_COVERAGE.md`).
-   (d) Versões do assinador: Node.js 24 (`node:24-alpine`, fixado por
-   digest `sha256:d32cdf619f63...`, exigido >=24.7 pelo suporte nativo
-   a ML-DSA-65 em `node:crypto`, ao qual `jose` v6 delega) para o
-   assinador/verificador do lado AS (`thesis/scripts/pqc-signer/
+1. **Section 1.1 and Section 3 rewritten**: the sentence "v7's own
+   published Classic OPINsize undercounts N_JWK the same way this
+   report's own first draft did" was wrong -- v7 correctly used
+   `N_JWK=2` for v7's OWN flow (2 calls to `/jwks`, 42 total calls
+   per execution, confirmed in v7's raw data); v8's flow matched that
+   exact same number (same N_JWK=2, same 42
+   calls) until a later stage of v8's development
+   added a verification capability v7 never had: checking
+   the responses signed by the RS, which requires fetching the RS's
+   OWN `/jwks`, once per sub-flow (Decision 87/88,
+   `METRICS_COVERAGE.md`). This addition -- 2 new calls, one per
+   sub-flow -- is what takes `N_JWK` from 2 to 4 and the call
+   count from 42 to 44. Rewritten as a documented flow change,
+   not as fixing a v7 error; the 872-byte reconciliation
+   (512 from N_JWK + 360 from handshake_bytes) remains identical, only
+   the narrative changed.
+2. **Answers (a lookup, with no change to measurement code):**
+   (a) Remote client's AWS region per route: `sa-east-1` server -> L0
+   client in `sa-east-1` (colocated), L123 in `ca-central-1`, L219
+   in `eu-north-1`, L325 in `ap-southeast-1`; `us-east-1` server -> L0
+   client in `us-east-1` (colocated), L14 in `ca-central-1`
+   (a separate instance from L123's); `ap-northeast-1` server -> L0
+   client in `ap-northeast-1` (colocated), L30 in `ap-northeast-2`
+   (Decision 41/53's table).
+   (b) `client_cert_der_bytes` per profile in v8: Classic 1.494 B, PQC
+   5.879 B, Hybrid 6.859 B -- measured directly from the DER of the
+   client certificates currently in use
+   (`mock-service-os/certs/client_one*.crt`)
+   and confirmed against `PROFILE_ATTESTATION.md` (Classic/Hybrid) and
+   `apply_pqc_ca_postquantum_correction.py` (PQC, post-correction,
+   end-to-end ML-DSA-65).
+   (c) N_JWT 26->28: a change in v7 ITSELF (Decision 11, v7), not
+   something that changed between v7 and v8 -- a real JARM (a signed
+   token from the AS, the callback's `response=`) existed in the flow
+   but was never counted; found through external review, fixed in v7,
+   and v8 already inherits the corrected N_JWT=28 with no additional
+   fix needed on v8's side (`METRICS_COVERAGE.md`).
+   (d) Signer versions: Node.js 24 (`node:24-alpine`, pinned by
+   digest `sha256:d32cdf619f63...`, requiring >=24.7 for native
+   ML-DSA-65 support in `node:crypto`, which `jose` v6 delegates to) for
+   the AS-side signer/verifier (`thesis/scripts/pqc-signer/
    signer_core.mjs`); BouncyCastle `bcpkix-jdk18on:1.79`
-   (`insurance-server-lambdas/build.gradle`) para o assinador Java do
-   lado RS (`ResponseSigningService.java`).
-   (e) O que mudou no fluxo entre v7 e v8, além do `/jwks` do RS
-   (Decision 87): v7 nunca verificava nenhum artefato assinado que o
-   cliente recebia (`verify_signature=False` em todo `opin_flow.py`); a
-   v8 tornou o fluxo completo ponta a ponta -- id_token (após
-   decriptar o JWE), JARM, corpos de resposta assinados pelo RS, e a
-   cadeia de CA (`verify_ca_chain()`, nova) passam a ser verificados
-   de verdade, nos 3 perfis, pelo MESMO mecanismo uniforme (serviço
-   Node persistente, `verify_jwt()`/`decrypt_and_verify_jwt()`), com
-   testes negativos reais provando que um artefato adulterado/com
-   chave ou algoritmo errado é de fato rejeitado -- não só que um
-   artefato correto passa (Decision 87).
-3. `audit_v8_from_raw.py` reexecutado: **0 divergências**. Scanner de
-   segredos: limpo. Sem tag nova.
+   (`insurance-server-lambdas/build.gradle`) for the RS-side Java signer
+   (`ResponseSigningService.java`).
+   (e) What changed in the flow between v7 and v8, besides the RS's
+   `/jwks` (Decision 87): v7 never verified any signed artifact the
+   client received (`verify_signature=False` throughout `opin_flow.py`);
+   v8 made the full flow genuinely end-to-end -- the id_token (after
+   decrypting the JWE), the JARM, RS-signed response bodies, and the
+   CA chain (`verify_ca_chain()`, new) are now genuinely verified,
+   across all 3 profiles, by the SAME uniform mechanism (the persistent
+   Node service, `verify_jwt()`/`decrypt_and_verify_jwt()`), with
+   real negative tests proving that a tampered artifact, or one with
+   the wrong key or algorithm, is indeed rejected -- not just that a
+   correct artifact passes (Decision 87).
+3. `audit_v8_from_raw.py` re-run: **0 divergences**. Secrets
+   scanner: clean. No new tag.
 
